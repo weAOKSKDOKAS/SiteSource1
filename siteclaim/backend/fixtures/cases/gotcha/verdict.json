@@ -1,11 +1,17 @@
 {
-  "summary": "Extraction is well supported. Note for audit: email service is asserted without an agreement on record.",
+  "summary": "Extraction is well supported by the source; both the contracting party and the served party are stated. (Whether they are the same legal entity is a question of law for the rules engine, not extraction.)",
   "assessments": [
     {
-      "field": "service.method",
+      "field": "parties.respondent",
       "supported": true,
-      "adjusted_confidence": 0.9,
-      "note": "Source says the claim was emailed."
+      "adjusted_confidence": 0.95,
+      "note": "Source: subcontract is with Dragon Build (Kowloon) Ltd."
+    },
+    {
+      "field": "service.served_on",
+      "supported": true,
+      "adjusted_confidence": 0.95,
+      "note": "Source: served on Dragon Build Ltd."
     },
     {
       "field": "claimed_amount",

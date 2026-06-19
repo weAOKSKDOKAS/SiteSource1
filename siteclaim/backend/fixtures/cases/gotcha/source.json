@@ -9,7 +9,7 @@
         "sha256": null
       },
       {
-        "filename": "sent_email.pdf",
+        "filename": "delivery_receipt.pdf",
         "content_type": "application/pdf",
         "size_bytes": null,
         "storage_ref": null,
@@ -17,7 +17,7 @@
       }
     ]
   },
-  "description": "Payment claim for rebar fixing to grid C–F, February 2026, under our subcontract with BigBuild Main Contractor Ltd (main contract HK$8,000,000). Reference date 28 Feb 2026, amount HK$1,250,000.00. We emailed the claim to BigBuild's project mailbox on 2 Mar 2026 and have the sent email. (No written agreement that email is a permitted method of service.)",
+  "description": "Payment claim for rebar fixing to grid C–F, February 2026. Our subcontract is with Dragon Build (Kowloon) Ltd (main contract HK$8,000,000). Reference date 28 Feb 2026, amount HK$1,250,000.00. We served the claim by hand on 2 Mar 2026 on Dragon Build Ltd and kept the signed delivery receipt.",
   "case_id": "gotcha",
   "submitted_by": null,
   "submitted_at": null

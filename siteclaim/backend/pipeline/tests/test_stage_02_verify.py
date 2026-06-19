@@ -49,11 +49,21 @@ def test_fields_for_review_only_flags_present_low_confidence_fields(load_case):
     assert "parties.respondent" not in {f.field for f in flags}
 
 
-def test_the_gotcha_extracts_cleanly_and_passes_stage_02(load_case, today):
-    # Extraction is confident; the latent notice/timeline defect is for Stage 04.
+def test_the_gotcha_extracts_cleanly_but_is_invalid_on_wrong_party(load_case, today):
+    # Clean extraction (high confidence, no review) BUT a latent LEGAL defect: the
+    # claim was served on a different legal entity than the contracting party, so
+    # notice.correct_party is FATAL and the report is INVALID. The judge does not
+    # flag it — it only checks whether facts are supported by the source.
     source = load_case("gotcha")
     facts = extract_facts(source)
     review = verify_extraction(source, facts)
-    assert review.review_flags == []
+    assert review.review_flags == []  # extraction quality is fine
+    assert review.disputed_fields == []  # both party names are supported by the source
+
     _, report = run_stage_02(source, facts, today)
-    assert report.is_valid
+    assert report.has_fatal and not report.is_valid
+    correct_party = next(c for c in report.checks if c.name == "notice.correct_party")
+    assert correct_party.severity.value == "fatal" and not correct_party.passed
+    # The single fatal stays crisp — service method is a clean INFO, no competing warning.
+    method = next(c for c in report.checks if c.name == "notice.method")
+    assert method.severity.value == "info"

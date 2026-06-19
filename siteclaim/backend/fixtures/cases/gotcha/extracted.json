@@ -27,7 +27,7 @@
     },
     "respondent": {
       "value": {
-        "name": "BigBuild Main Contractor Ltd",
+        "name": "Dragon Build (Kowloon) Ltd",
         "role": "main contractor",
         "address": null,
         "contact": null
@@ -87,12 +87,12 @@
   },
   "service": {
     "method": {
-      "value": "email_if_agreed",
-      "confidence": 0.9,
+      "value": "personal_delivery",
+      "confidence": 0.95,
       "source_span": "test-fixture"
     },
     "served_on": {
-      "value": "BigBuild Main Contractor Ltd",
+      "value": "Dragon Build Ltd",
       "confidence": 0.95,
       "source_span": "test-fixture"
     },

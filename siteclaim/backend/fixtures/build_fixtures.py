@@ -6,8 +6,9 @@ Stage-02 LLM-as-judge JudgeVerdict):
 
   - ``clean``  : a compliant claim, all high confidence (no review, no fatal)
   - ``messy``  : ambiguous source, several low-confidence fields (triggers review)
-  - ``gotcha`` : extracts cleanly but served by email without an agreement on record
-                 — a latent notice defect for Stage 04 to catch later
+  - ``gotcha`` : extracts cleanly (high confidence, no review) but the claim was
+                 served on the WRONG legal entity (a near-miss of the contracting
+                 party) — notice.correct_party returns FATAL, so the report is INVALID
 
 Reuses ``rules_engine.tests._helpers.make_compliant_facts`` (Phase 1) rather than
 duplicating a fixture builder. Run from anywhere:  ``python fixtures/build_fixtures.py``.
@@ -26,6 +27,7 @@ from schemas.models import (  # noqa: E402
     ExtractedFacts,
     FieldAssessment,
     JudgeVerdict,
+    Party,
     ShipmentDocs,
     SourceMaterial,
     UploadedFile,
@@ -102,20 +104,24 @@ def build_gotcha() -> None:
     source = SourceMaterial(
         case_id="gotcha",
         description=(
-            "Payment claim for rebar fixing to grid C–F, February 2026, under our subcontract with "
-            "BigBuild Main Contractor Ltd (main contract HK$8,000,000). Reference date 28 Feb 2026, "
-            "amount HK$1,250,000.00. We emailed the claim to BigBuild's project mailbox on 2 Mar 2026 "
-            "and have the sent email. (No written agreement that email is a permitted method of service.)"
+            "Payment claim for rebar fixing to grid C–F, February 2026. Our subcontract is with "
+            "Dragon Build (Kowloon) Ltd (main contract HK$8,000,000). Reference date 28 Feb 2026, "
+            "amount HK$1,250,000.00. We served the claim by hand on 2 Mar 2026 on Dragon Build Ltd "
+            "and kept the signed delivery receipt."
         ),
-        docs=_docs("invoice_42.pdf", "sent_email.pdf"),
+        docs=_docs("invoice_42.pdf", "delivery_receipt.pdf"),
     )
     extracted = make_compliant_facts()
-    # Extracts cleanly (high confidence) but served by email — a latent notice issue.
-    extracted.service.method = ff("email_if_agreed", 0.9)
+    # Extracts cleanly and is served by a clean method (personal_delivery, INFO).
+    # The LEGAL defect: served on a DIFFERENT legal entity than the contracting party
+    # (a near-miss) — notice.correct_party returns FATAL in the existing engine.
+    extracted.parties.respondent = ff(Party(name="Dragon Build (Kowloon) Ltd", role="main contractor"))
+    extracted.service.served_on = ff("Dragon Build Ltd")  # wrong entity — near-miss
     verdict = JudgeVerdict(
-        summary="Extraction is well supported. Note for audit: email service is asserted without an agreement on record.",
+        summary="Extraction is well supported by the source; both the contracting party and the served party are stated. (Whether they are the same legal entity is a question of law for the rules engine, not extraction.)",
         assessments=[
-            FieldAssessment(field="service.method", supported=True, adjusted_confidence=0.90, note="Source says the claim was emailed."),
+            FieldAssessment(field="parties.respondent", supported=True, adjusted_confidence=0.95, note="Source: subcontract is with Dragon Build (Kowloon) Ltd."),
+            FieldAssessment(field="service.served_on", supported=True, adjusted_confidence=0.95, note="Source: served on Dragon Build Ltd."),
             FieldAssessment(field="claimed_amount", supported=True, adjusted_confidence=0.95, note="HK$1,250,000.00 stated."),
         ],
     )
