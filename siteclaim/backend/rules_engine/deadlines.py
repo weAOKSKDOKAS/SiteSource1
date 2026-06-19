@@ -3,8 +3,8 @@
 Computes the statutory clock for a claim from its reference / service dates using
 the constants in :mod:`rules_engine.sopo_config`. Calendar-day windows (e.g. the
 s.20 payment-response period) are added with calendar arithmetic; "business days
-remaining" is counted in working days honoring weekends + HK public holidays
-(``sopo_config.PUBLIC_HOLIDAYS`` — UNVERIFIED).
+remaining" is counted in working days honoring weekends + HK general holidays
+(``sopo_config.PUBLIC_HOLIDAYS`` — SOURCED, 2026 gazette).
 
 No statutory number is hard-coded here; every value is imported from config.
 """
@@ -19,9 +19,10 @@ from . import business_days, sopo_config
 
 
 def hk_public_holidays() -> set[date]:
-    """HK public holidays from config as ``date`` objects.
+    """HK general holidays from config as ``date`` objects.
 
-    Source: ``sopo_config.PUBLIC_HOLIDAYS`` (best-effort 2025–2026, UNVERIFIED).
+    Source: ``sopo_config.PUBLIC_HOLIDAYS`` (2026 HK General Holidays — SOURCED,
+    gazette 16 May 2025). Note: only 2026 is currently loaded.
     """
     return {date.fromisoformat(s) for s in sopo_config.PUBLIC_HOLIDAYS}
 

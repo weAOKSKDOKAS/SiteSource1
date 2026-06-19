@@ -19,8 +19,8 @@ the ``mode`` argument:
 ``weather_suspension_dates`` (black rainstorm / gale-warning days) is injectable
 and defaults to empty. Those warnings are issued dynamically in real time, so a
 production system must feed in the actual suspension dates; treating it as empty
-is a known demo limitation. General/public holidays come in via ``holidays`` —
-see ``sopo_config.PUBLIC_HOLIDAYS`` (currently empty, UNVERIFIED).
+is a known demo limitation. General holidays come in via ``holidays`` —
+see ``sopo_config.PUBLIC_HOLIDAYS`` (2026 gazette, SOURCED).
 """
 
 from collections.abc import Iterable

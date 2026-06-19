@@ -11,6 +11,7 @@ from datetime import date
 import pytest
 
 from rules_engine import business_days as bd
+from rules_engine import sopo_config
 
 FRIDAY = date(2026, 6, 19)
 SATURDAY = date(2026, 6, 20)
@@ -86,3 +87,17 @@ def test_add_working_days_rejects_negative() -> None:
 def test_unknown_mode_raises() -> None:
     with pytest.raises(ValueError):
         bd.add_working_days(FRIDAY, 1, mode="bogus")  # type: ignore[arg-type]
+
+
+def test_part4_mode_excludes_a_saturday_general_holiday() -> None:
+    # This is exactly why Saturday general holidays are kept in the SOURCED list:
+    # part4 normally counts Saturdays, so a Saturday that IS a general holiday must
+    # still be excluded when the gazetted holidays are supplied.
+    holidays = {date.fromisoformat(s) for s in sopo_config.PUBLIC_HOLIDAYS}
+    sat_holiday = date(2026, 4, 4)  # "day following Good Friday" — a Saturday
+    assert sat_holiday in holidays and sat_holiday.weekday() == 5
+    assert bd.is_working_day(sat_holiday, holidays=holidays, mode="part4") is False
+    # Control: a non-holiday Saturday DOES count as a working day under part4.
+    plain_saturday = date(2026, 4, 11)
+    assert plain_saturday.weekday() == 5 and plain_saturday not in holidays
+    assert bd.is_working_day(plain_saturday, holidays=holidays, mode="part4") is True

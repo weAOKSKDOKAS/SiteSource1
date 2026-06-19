@@ -75,48 +75,33 @@ STATUTORY_WARNING: Final[str] = (
 # business_days mode='part4' (Saturdays count there).
 WEEKEND_DAYS: Final[tuple[int, ...]] = (5, 6)  # SOURCED (CIC FAQ Q36) — adjudication working days exclude Saturdays, general holidays (incl. Sundays), and black rainstorm/gale days
 
-# Hong Kong general holidays, best-effort 2025–2026 (ISO date strings), consumed
-# by deadlines.business_days_between for working-day arithmetic.
-# ⚠️ UNVERIFIED — confirm EVERY date against the official Government Gazette / GLD
-# list before relying on a computed deadline. Lunar-calendar-derived and
-# "observed/shifted" dates (marked CONFIRM) are especially error-prone.
+# Hong Kong General Holidays for 2026 (ISO date strings), consumed by
+# deadlines.business_days_between for working-day arithmetic. These are the
+# "general holidays" SOPO's working-day definition excludes. All 17 are listed —
+# INCLUDING those falling on a Saturday — because the part4 working-day mode
+# otherwise counts Saturdays, so a Saturday general holiday must still be excluded.
+# Sundays are general holidays too, but are handled by WEEKEND_DAYS (weekday 6),
+# not listed here. Black rainstorm / gale-warning days remain DYNAMIC and are
+# supplied separately via business_days(..., weather_suspension_dates=...).
 PUBLIC_HOLIDAYS: Final[tuple[str, ...]] = (
-    # --- 2025 ---
-    "2025-01-01",  # The first day of January
-    "2025-01-29",  # Lunar New Year's Day
-    "2025-01-30",  # Second day of Lunar New Year
-    "2025-01-31",  # Third day of Lunar New Year
-    "2025-04-04",  # Ching Ming Festival
-    "2025-04-18",  # Good Friday
-    "2025-04-19",  # Day following Good Friday
-    "2025-04-21",  # Easter Monday
-    "2025-05-01",  # Labour Day
-    "2025-05-05",  # Birthday of the Buddha
-    "2025-05-31",  # Tuen Ng (Dragon Boat) Festival
-    "2025-07-01",  # HKSAR Establishment Day
-    "2025-10-01",  # National Day
-    "2025-10-07",  # Day following the Chinese Mid-Autumn Festival
-    "2025-10-29",  # Chung Yeung Festival
-    "2025-12-25",  # Christmas Day
-    "2025-12-26",  # First weekday after Christmas Day
-    # --- 2026 (provisional — CONFIRM gazetted dates, esp. observed shifts) ---
-    "2026-01-01",  # The first day of January
-    "2026-02-17",  # Lunar New Year's Day — CONFIRM
-    "2026-02-18",  # Second day of Lunar New Year — CONFIRM
-    "2026-02-19",  # Third day of Lunar New Year — CONFIRM
+    "2026-01-01",  # New Year's Day
+    "2026-02-17",  # Lunar New Year's Day
+    "2026-02-18",  # 2nd day of Lunar New Year
+    "2026-02-19",  # 3rd day of Lunar New Year
     "2026-04-03",  # Good Friday
-    "2026-04-04",  # Day following Good Friday
-    "2026-04-06",  # Easter Monday (Ching Ming 5 Apr falls on a Sunday) — CONFIRM observed shift
+    "2026-04-04",  # day following Good Friday
+    "2026-04-06",  # day following Ching Ming (substitution)
+    "2026-04-07",  # day following Easter Monday (additional substitution)
     "2026-05-01",  # Labour Day
-    "2026-05-24",  # Birthday of the Buddha — CONFIRM
-    "2026-06-19",  # Tuen Ng (Dragon Boat) Festival — CONFIRM
+    "2026-05-25",  # day following Birthday of the Buddha (substitution)
+    "2026-06-19",  # Tuen Ng Festival
     "2026-07-01",  # HKSAR Establishment Day
-    "2026-09-26",  # Day following the Chinese Mid-Autumn Festival — CONFIRM
+    "2026-09-26",  # day following Mid-Autumn
     "2026-10-01",  # National Day
-    "2026-10-18",  # Chung Yeung Festival — CONFIRM
+    "2026-10-19",  # day following Chung Yeung (substitution)
     "2026-12-25",  # Christmas Day
-    "2026-12-26",  # Boxing Day
-)  # UNVERIFIED — confirm against the official HK Government Gazette
+    "2026-12-26",  # first weekday after Christmas Day
+)  # SOURCED (HK govt gazette, 16 May 2025) — General Holidays Ordinance (Cap. 149)
 
 # ---------------------------------------------------------------------------
 # SOURCED time bars — payment mechanism (CALENDAR days)

@@ -18,6 +18,13 @@ def test_business_days_between_excludes_a_hk_public_holiday():
     assert business_days_between(date(2025, 12, 31), date(2026, 1, 2)) == 1
 
 
+def test_business_days_between_excludes_a_2026_general_holiday():
+    # Tuen Ng 2026-06-19 (Fri) is a gazetted general holiday: Thu 06-18 -> Mon 06-22
+    # crosses the holiday + weekend, leaving exactly 1 working day (Mon).
+    assert "2026-06-19" in sopo_config.PUBLIC_HOLIDAYS
+    assert business_days_between(date(2026, 6, 18), date(2026, 6, 22)) == 1
+
+
 def test_the_payment_response_window_is_30_calendar_days_after_service(compliant_facts, today):
     ds = compute_deadlines(compliant_facts, today)
     d = by_name(ds.deadlines, "payment_response_due")
