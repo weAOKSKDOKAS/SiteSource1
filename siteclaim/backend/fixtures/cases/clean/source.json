@@ -1,0 +1,24 @@
+{
+  "docs": {
+    "files": [
+      {
+        "filename": "invoice_42.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": null,
+        "storage_ref": null,
+        "sha256": null
+      },
+      {
+        "filename": "site_diary_feb.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": null,
+        "storage_ref": null,
+        "sha256": null
+      }
+    ]
+  },
+  "description": "Payment claim for rebar fixing to grid C–F carried out in February 2026 under our subcontract with BigBuild Main Contractor Ltd (main contract ~HK$8,000,000). Reference date 28 Feb 2026. We claim HK$1,250,000.00 per the attached invoice and site diary. The claim was served by hand on BigBuild on 2 Mar 2026; we kept the signed delivery receipt. BigBuild served a payment response the same day.",
+  "case_id": "clean",
+  "submitted_by": null,
+  "submitted_at": null
+}

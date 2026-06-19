@@ -1,0 +1,17 @@
+{
+  "docs": {
+    "files": [
+      {
+        "filename": "scan_invoice.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": null,
+        "storage_ref": null,
+        "sha256": null
+      }
+    ]
+  },
+  "description": "We did some rebar work around February, think the invoice was about 1.25 million? Contract is roughly 8 mil I believe. Served the main contractor but I'm not 100% sure of the exact date — sometime early March. Don't have all the paperwork to hand.",
+  "case_id": "messy",
+  "submitted_by": null,
+  "submitted_at": null
+}

@@ -1,0 +1,23 @@
+{
+  "summary": "Source is vague; figures are approximate and the service date is unstated.",
+  "assessments": [
+    {
+      "field": "contract_sum",
+      "supported": false,
+      "adjusted_confidence": 0.3,
+      "note": "'roughly 8 mil' — approximate, not a stated contract sum."
+    },
+    {
+      "field": "reference_date",
+      "supported": false,
+      "adjusted_confidence": 0.25,
+      "note": "Only 'around February' — no reference date stated."
+    },
+    {
+      "field": "claim_served_date",
+      "supported": false,
+      "adjusted_confidence": 0.35,
+      "note": "'sometime early March' — exact service date unknown."
+    }
+  ]
+}

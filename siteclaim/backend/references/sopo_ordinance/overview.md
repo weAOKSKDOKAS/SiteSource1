@@ -2,11 +2,12 @@
 
 > ⚠️ **Reference material, not legal advice.** Plain-language summary written to
 > ground drafting and validation. It is **not a substitute for the enacted text**.
-> Two provenance tiers are used below:
-> - **SOURCED (law-firm summary)** — grounded in a secondary law-firm summary;
->   cross-check against the e-legislation Cap.652 text before relying on it.
-> - **`# UNVERIFIED — confirm with Cap.652 text/QS`** — anything beyond that
->   summary; not yet confirmed.
+> Provenance tiers used below:
+> - **SOURCED (CIC FAQ ...)** — grounded in the official CIC SOPO FAQ (cic.hk).
+> - **SOURCED (law-firm summary)** — grounded in a secondary law-firm summary.
+>   Both are secondary; cross-check against the e-legislation Cap.652 text.
+> - **`# UNVERIFIED — confirm with Cap.652 text/QS`** — anything beyond those;
+>   not yet confirmed.
 >
 > Authoritative numbers live in `backend/rules_engine/sopo_config.py` (same tiers).
 
@@ -30,9 +31,10 @@ SOURCED (law-firm summary) — cross-check against Cap.652 text:
   - **main contract for construction work: above HK$5,000,000**;
   - **related goods/services: above HK$500,000**.
 
-> Whether/how subcontracts beneath a qualifying main contract are covered, and how
-> the thresholds interact across the contractual chain, is **# UNVERIFIED — confirm
-> with Cap.652 text/QS**.
+> **Subcontracts** within a covered contractual chain have **no minimum value** —
+> they are covered regardless of their own contract value. SOURCED (CIC FAQ Q5/Q11)
+> — cross-check Cap.652 text. (Exactly how the head-contract thresholds otherwise
+> interact across a chain: **# UNVERIFIED — confirm with Cap.652 text/QS**.)
 
 ## Exclusions
 
@@ -53,9 +55,10 @@ cannot make payment contingent on first being paid by someone else.
 
 ## The three mechanisms and their timeline
 
-All periods below are **SOURCED (law-firm summary) — cross-check against Cap.652
-text**. **CALENDAR vs WORKING days is legally load-bearing** and is encoded in
-`sopo_config.py`; the constant names carry the distinction.
+All periods below are **SOURCED (CIC FAQ / law-firm summary) — cross-check against
+Cap.652 text**. **CALENDAR vs WORKING days is legally load-bearing** and is encoded
+in `sopo_config.py`; the constant names carry the distinction, and the adjudication
+timetable runs in *working* days (CIC FAQ Q36).
 
 ### 1. Payment
 
@@ -63,6 +66,11 @@ text**. **CALENDAR vs WORKING days is legally load-bearing** and is encoded in
   response**. Response period: **30 days (s.20)** — a statutory maximum; the
   contract may specify a shorter period. *(calendar days)*
 - Payment deadline: **up to 60 days**; parties may agree earlier. *(calendar days)*
+- A **payment dispute** arises (starting the adjudication clock) on any of three
+  triggers (CIC FAQ Q27): no response served by the deadline; the respondent
+  disputes the claimed amount; or the respondent admits an amount but fails to pay
+  it in full by the payment deadline. Failure to serve a response by the deadline
+  also **forfeits the respondent's set-off** in adjudication (CIC FAQ Q25).
 
 ### 2. Adjudication
 
@@ -70,12 +78,16 @@ text**. **CALENDAR vs WORKING days is legally load-bearing** and is encoded in
   (s.24)** of the dispute arising. *(calendar days)*
 - If **no — or more than one — Adjudicator Nominating Body (ANB)** is specified,
   serve on the ANB within **8 working days (s.25(3))**.
-- **Adjudicator appointed** within **7 working days**.
-- **Determination** within **55 days after appointment (s.42(5))**.
-  *(calendar vs working days to confirm against Cap.652 — `# UNVERIFIED` on the
-  day-type only)*
+- **Adjudicator appointed** within **7 working days (s.26(2))**.
+- Adjudication exchange (CIC FAQ Q36, working days): claimant **submission within
+  1 working day** of appointment; respondent **response within 20 working days**;
+  claimant **reply within 2 working days**.
+- **Determination** within **55 working days after appointment (s.42(5) / CIC FAQ
+  Q36)**. *(working days — day-type resolved in Phase 0c)*
 - The adjudicated amount must be paid within **30 days (s.43 / s.42(7))** where
   the adjudicator has not specified a time. *(calendar days)*
+- A party may apply to **set aside** a determination within **14 days (CIC FAQ
+  Q50)** of it being served. *(calendar days)*
 - The determination is **binding on an interim basis** pending final resolution.
 
 ### 3. Enforcement
@@ -84,14 +96,29 @@ text**. **CALENDAR vs WORKING days is legally load-bearing** and is encoded in
   on value: the **HK$3,000,000** threshold separates the **Court of First
   Instance (above)** from the **District Court (below)** under the Rules
   (**Cap.652A**). SOURCED (law-firm summary) — cross-check against Cap.652A text.
+- A claimant may also lawfully **suspend or slow work** after giving **5 working
+  days' notice** (CIC FAQ Q54). *(Part 4 working-day definition — Saturdays count,
+  unlike the adjudication timetable.)*
+
+## Adjudicable disputes — extension-of-time (EOT) carve-out, phase 1
+
+SOURCED (CIC FAQ Q38) — cross-check Cap.652 text. In the current phase,
+**time-related / extension-of-time (EOT) disputes are adjudicable for PUBLIC
+contracts only**; **private-contract EOT disputes are NOT yet adjudicable**.
+Eligibility logic should later surface this as a **'warning'** when a private
+contract raises an EOT dispute (advisory, not a hard block).
 
 ## What makes a payment claim valid — s.18 content requirements
 
-> **TODO — do not encode yet.** The exact **mandatory particulars required by
-> s.18** must be read off the Cap.652 text before they are listed here or encoded
-> in `sopo_config.MANDATORY_CLAIM_PARTICULARS` (currently intentionally empty).
-> Until then, Stage 02 must not validate a claim against guessed fields.
-> **# UNVERIFIED — confirm with Cap.652 text/QS.**
+SOURCED (CIC FAQ Q17) — cross-check Cap.652 text. A valid payment claim must:
+
+1. **be in writing** (`in_writing`);
+2. **identify the construction work / related goods & services** the payment
+   relates to (`identifies_work`);
+3. **state the claimed amount and how it is calculated** (`states_amount_and_basis`).
+
+These three are encoded in `sopo_config.MANDATORY_CLAIM_PARTICULARS`; Stage 02
+treats a missing mandatory particular as a **fatal** defect.
 
 ## Reference dates and service of notices
 
@@ -107,4 +134,4 @@ text**. **CALENDAR vs WORKING days is legally load-bearing** and is encoded in
 
 When a value here is verified against the enacted Ordinance, update its tier here
 **and** the matching constant in `backend/rules_engine/sopo_config.py` so Layer 1
-and Layer 3 stay in sync. Resolve the s.18 TODO in both places together.
+and Layer 3 stay in sync.

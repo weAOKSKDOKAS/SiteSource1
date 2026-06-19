@@ -1,0 +1,23 @@
+{
+  "summary": "Every field is clearly supported by the source; no adjustments.",
+  "assessments": [
+    {
+      "field": "claimed_amount",
+      "supported": true,
+      "adjusted_confidence": 0.95,
+      "note": "Stated as HK$1,250,000.00."
+    },
+    {
+      "field": "parties.respondent",
+      "supported": true,
+      "adjusted_confidence": 0.95,
+      "note": "BigBuild named explicitly."
+    },
+    {
+      "field": "reference_date",
+      "supported": true,
+      "adjusted_confidence": 0.95,
+      "note": "28 Feb 2026 stated."
+    }
+  ]
+}

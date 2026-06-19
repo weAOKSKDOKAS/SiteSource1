@@ -1,0 +1,17 @@
+{
+  "summary": "Extraction is well supported. Note for audit: email service is asserted without an agreement on record.",
+  "assessments": [
+    {
+      "field": "service.method",
+      "supported": true,
+      "adjusted_confidence": 0.9,
+      "note": "Source says the claim was emailed."
+    },
+    {
+      "field": "claimed_amount",
+      "supported": true,
+      "adjusted_confidence": 0.95,
+      "note": "HK$1,250,000.00 stated."
+    }
+  ]
+}

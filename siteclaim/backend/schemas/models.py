@@ -119,6 +119,7 @@ class SourceMaterial(BaseModel):
 
     docs: ShipmentDocs = Field(default_factory=ShipmentDocs)
     description: str = ""  # free-text narrative supplied by the user
+    case_id: Optional[str] = None  # optional submission identifier (also locates DEMO_MODE fixtures)
     submitted_by: Optional[str] = None
     submitted_at: Optional[datetime] = None
 
@@ -172,6 +173,34 @@ class CertifiedAmount(BaseModel):
     source_span: Optional[str] = None
 
 
+class ServiceDetails(BaseModel):
+    """How the payment claim was (or will be) served on the respondent.
+
+    Service is where claims most often die on a technicality, so the Rules
+    Engine (Stage 02, ``notice_validity``) checks each element: the right party,
+    a permitted method, correct timing, and retained proof.
+    """
+
+    method: FactField[str] = Field(default_factory=FactField)  # one of sopo_config.PERMITTED_SERVICE_METHODS
+    served_on: FactField[str] = Field(default_factory=FactField)  # name/role of the party actually served
+    date_served: FactField[date] = Field(default_factory=FactField)
+    proof_retained: FactField[bool] = Field(default_factory=FactField)
+
+
+class PaymentResponseFacts(BaseModel):
+    """What the respondent did (or didn't do) about the payment claim.
+
+    Drives the set-off trap check: under SOPO, failing to serve a payment
+    response by the s.20 deadline forfeits the respondent's set-off in
+    adjudication (``sopo_config.SET_OFF_FORFEIT_ON_NO_RESPONSE``).
+    """
+
+    served: FactField[bool] = Field(default_factory=FactField)
+    date_served: FactField[date] = Field(default_factory=FactField)
+    admitted_amount: FactField[Decimal] = Field(default_factory=FactField)
+    disputes_claim: FactField[bool] = Field(default_factory=FactField)
+
+
 class ExtractedFacts(BaseModel):
     """Stage 01 output: structured facts read out of the source material.
 
@@ -191,6 +220,14 @@ class ExtractedFacts(BaseModel):
     line_items: list[LineItem] = Field(default_factory=list)
     certified_amounts: list[CertifiedAmount] = Field(default_factory=list)
     supporting_doc_refs: list[str] = Field(default_factory=list)
+    # Contract metadata used by eligibility (commencement date / threshold).
+    contract_date: FactField[date] = Field(default_factory=FactField)  # date the contract was entered into
+    # Claim service / form, used by mandatory-field and notice-validity checks.
+    claim_served_date: FactField[date] = Field(default_factory=FactField)
+    claim_in_writing: FactField[bool] = Field(default_factory=FactField)
+    service: ServiceDetails = Field(default_factory=ServiceDetails)
+    # Respondent's reaction to the claim, used by the set-off trap check.
+    payment_response: PaymentResponseFacts = Field(default_factory=PaymentResponseFacts)
     extraction_notes: Optional[str] = None
 
 
@@ -216,6 +253,8 @@ class ValidityReport(BaseModel):
     """
 
     checks: list[Check] = Field(default_factory=list)
+    # Stage 02 also computes the live deadline set; engine.run_validation attaches it.
+    deadlines: Optional["DeadlineSet"] = None
     generated_at: datetime = Field(default_factory=_utcnow)
 
     @property
@@ -296,6 +335,48 @@ class AuditReport(BaseModel):
         return not any(f.severity is Severity.FATAL for f in self.findings)
 
 
+# ---------------------------------------------------------------------------
+# Stage 02 (companion) — extraction self-verification (LLM-as-judge, Layer 2)
+# ---------------------------------------------------------------------------
+class FieldAssessment(BaseModel):
+    """The judge's verdict on one extracted field."""
+
+    field: str  # dotted path into ExtractedFacts, e.g. 'claimed_amount' or 'service.method'
+    supported: bool  # is this value actually supported by the source material?
+    adjusted_confidence: float = Field(ge=0.0, le=1.0)
+    note: str = ""  # why the judge lowered/kept the confidence
+
+
+class JudgeVerdict(BaseModel):
+    """Raw output of the Stage 02 LLM-as-judge pass (what the model returns)."""
+
+    summary: str = ""
+    assessments: list[FieldAssessment] = Field(default_factory=list)
+
+
+class ReviewFlag(BaseModel):
+    """A field flagged for human review because its confidence is below threshold."""
+
+    field: str  # dotted path
+    confidence: float
+    value_repr: Optional[str] = None  # stringified value, for display
+    reason: str = ""
+
+
+class JudgeReview(BaseModel):
+    """Processed judge result: confidence-adjusted facts + disputes + review flags.
+
+    ``verify_extraction`` applies a :class:`JudgeVerdict` to the extracted facts,
+    lowering confidence where the source does not support a value, and surfaces
+    every field that falls below ``sopo_config.CONFIDENCE_REVIEW_THRESHOLD``.
+    """
+
+    facts: ExtractedFacts
+    disputed_fields: list[FieldAssessment] = Field(default_factory=list)
+    review_flags: list[ReviewFlag] = Field(default_factory=list)
+    summary: str = ""
+
+
 __all__ = [
     # enums
     "ContractType",
@@ -313,6 +394,8 @@ __all__ = [
     "WorkPeriod",
     "LineItem",
     "CertifiedAmount",
+    "ServiceDetails",
+    "PaymentResponseFacts",
     "ExtractedFacts",
     # stage 02 out
     "Check",
@@ -324,4 +407,13 @@ __all__ = [
     # stage 04 out
     "Finding",
     "AuditReport",
+    # stage 02 judge (extraction self-verification)
+    "FieldAssessment",
+    "JudgeVerdict",
+    "ReviewFlag",
+    "JudgeReview",
 ]
+
+# Resolve the forward reference ValidityReport.deadlines -> DeadlineSet now that
+# DeadlineSet is defined above.
+ValidityReport.model_rebuild()

@@ -9,12 +9,13 @@
 ## Process
 
 The deterministic Rules Engine (pure Python, no ML) runs every statutory check
-against the facts — mandatory particulars (SOPO s.18 — TODO, awaiting
-confirmation of the exact fields), threshold applicability for the contract
-type, and reference-date sanity — grading each as fatal, warning, or info. It
-then computes every live deadline (payment response, payment due, adjudication
-windows), counting in CALENDAR or WORKING days as each section requires (via
-`business_days`). **This is where legal correctness lives.**
+against the facts — mandatory particulars (SOPO s.18: claim in writing,
+identifies the work, states amount & basis), threshold applicability for the
+contract type, and reference-date sanity — grading each as fatal, warning, or
+info. It then computes every live deadline (payment response, payment due,
+adjudication windows), counting in CALENDAR or WORKING days as each section
+requires (via `business_days`, which supports both the adjudication and Part 4
+working-day definitions). **This is where legal correctness lives.**
 
 ## Outputs
 

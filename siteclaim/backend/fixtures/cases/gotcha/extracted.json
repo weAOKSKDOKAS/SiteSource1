@@ -1,0 +1,133 @@
+{
+  "contract_sum": {
+    "value": "8000000",
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "contract_type": {
+    "value": "main_construction",
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "sector": {
+    "value": "private",
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "parties": {
+    "claimant": {
+      "value": {
+        "name": "Acme Subcontracting Ltd",
+        "role": "subcontractor",
+        "address": null,
+        "contact": null
+      },
+      "confidence": 0.95,
+      "source_span": "test-fixture"
+    },
+    "respondent": {
+      "value": {
+        "name": "BigBuild Main Contractor Ltd",
+        "role": "main contractor",
+        "address": null,
+        "contact": null
+      },
+      "confidence": 0.95,
+      "source_span": "test-fixture"
+    }
+  },
+  "reference_date": {
+    "value": "2026-02-28",
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "claimed_amount": {
+    "value": "1250000.00",
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "work_period": {
+    "value": {
+      "start": "2026-02-01",
+      "end": "2026-02-28"
+    },
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "line_items": [
+    {
+      "description": "Rebar fixing to grid C-F",
+      "quantity": null,
+      "unit": null,
+      "rate": null,
+      "amount": "1250000.00",
+      "confidence": 0.9,
+      "source_span": null
+    }
+  ],
+  "certified_amounts": [],
+  "supporting_doc_refs": [
+    "invoice_42.pdf",
+    "site_diary_feb.pdf"
+  ],
+  "contract_date": {
+    "value": "2025-09-01",
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "claim_served_date": {
+    "value": "2026-03-02",
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "claim_in_writing": {
+    "value": true,
+    "confidence": 0.95,
+    "source_span": "test-fixture"
+  },
+  "service": {
+    "method": {
+      "value": "email_if_agreed",
+      "confidence": 0.9,
+      "source_span": "test-fixture"
+    },
+    "served_on": {
+      "value": "BigBuild Main Contractor Ltd",
+      "confidence": 0.95,
+      "source_span": "test-fixture"
+    },
+    "date_served": {
+      "value": "2026-03-02",
+      "confidence": 0.95,
+      "source_span": "test-fixture"
+    },
+    "proof_retained": {
+      "value": true,
+      "confidence": 0.95,
+      "source_span": "test-fixture"
+    }
+  },
+  "payment_response": {
+    "served": {
+      "value": true,
+      "confidence": 0.95,
+      "source_span": "test-fixture"
+    },
+    "date_served": {
+      "value": "2026-03-02",
+      "confidence": 0.95,
+      "source_span": "test-fixture"
+    },
+    "admitted_amount": {
+      "value": null,
+      "confidence": 0.0,
+      "source_span": null
+    },
+    "disputes_claim": {
+      "value": null,
+      "confidence": 0.0,
+      "source_span": null
+    }
+  },
+  "extraction_notes": null
+}
