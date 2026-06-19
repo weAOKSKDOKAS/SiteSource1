@@ -80,5 +80,16 @@ relied upon. SiteClaim assists drafting; it does not give legal advice.
 
 ## Status
 
-**Phase 0: scaffolding, schemas, config, and reference stubs only. No stage
-logic yet.**
+**Layer 1 (Rules Engine) is built and tested. Pipeline stages 01–03 are
+implemented and run offline end-to-end (`backend/pipeline/run_pipeline.py`):**
+
+- **stage_01_extract** — `SourceMaterial` → `ExtractedFacts` (Layer 2).
+- **stage_02_validate** — LLM-as-judge confidence review + deterministic
+  `ValidityReport` + `DeadlineSet` (Layer 1).
+- **stage_03_draft** — facts + reports → `ClaimDraft` (structured fields +
+  `rendered_markdown`); missing/low-confidence fields become flagged
+  placeholders, a fatal check prints a "NOT FILEABLE" banner citing Layer 1.
+
+Stages 04 (audit) and 05 (human review) and the `frontend/` are not built yet.
+Statutory values in `sopo_config.py` remain SOURCED/UNVERIFIED pending QS/lawyer
+sign-off.

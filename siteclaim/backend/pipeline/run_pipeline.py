@@ -1,4 +1,4 @@
-"""Run Stage 01 -> Stage 02 on the demo fixtures and pretty-print the results.
+"""Run Stage 01 -> 02 -> 03 on the demo fixtures and pretty-print the results.
 
 Offline by default: this script forces DEMO_MODE on, so the pipeline reads canned
 fixtures and makes ZERO network calls. Run from the ``backend/`` directory:
@@ -19,10 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rules_engine.deadlines import clock  # noqa: E402
 from rules_engine.engine import run_validation  # noqa: E402
-from schemas.models import ExtractedFacts, JudgeReview, SourceMaterial, ValidityReport  # noqa: E402
+from schemas.models import ClaimDraft, ExtractedFacts, JudgeReview, SourceMaterial, ValidityReport  # noqa: E402
 
 from pipeline.stage_01_extract.extract import extract_facts  # noqa: E402
 from pipeline.stage_02_validate.verify import iter_fact_fields, verify_extraction  # noqa: E402
+from pipeline.stage_03_draft.draft import draft_claim  # noqa: E402
 
 DEMO_TODAY = date(2026, 3, 2)
 CASES = ("clean", "messy", "gotcha")
@@ -76,6 +77,19 @@ def _print_report(report: ValidityReport, today: date) -> None:
             print(f"    {d.name:<24} due {d.due_date}  ({d.business_days_remaining:+d} business days, {state})  <{d.sopo_reference}>")
 
 
+def _print_draft(draft: ClaimDraft) -> None:
+    print("  Stage 03 — drafted claim:")
+    print(
+        f"    structured: claimant={draft.claimant_name!r} respondent={draft.respondent_name!r} "
+        f"amount={draft.claimed_amount} docs={len(draft.supporting_doc_refs)}"
+    )
+    print("    rendered_markdown:")
+    print("  " + _rule("·"))
+    for line in draft.rendered_markdown.splitlines():
+        print(f"  │ {line}")
+    print("  " + _rule("·"))
+
+
 def run_case(case_id: str) -> JudgeReview:
     source = SourceMaterial.model_validate_json(
         (_FIXTURES / case_id / "source.json").read_text(encoding="utf-8")
@@ -96,6 +110,10 @@ def run_case(case_id: str) -> JudgeReview:
 
     report = run_validation(review.facts, DEMO_TODAY)  # Stage 02b — deterministic engine
     _print_report(report, DEMO_TODAY)
+    print()
+
+    draft = draft_claim(review.facts, report)  # Stage 03 — drafting
+    _print_draft(draft)
     print()
     return review
 
