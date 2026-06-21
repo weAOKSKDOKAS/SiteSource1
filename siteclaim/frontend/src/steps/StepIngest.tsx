@@ -46,31 +46,30 @@ export function StepIngest({
       />
 
       <Card className="p-5">
-        <label className="mb-2 block text-sm font-semibold text-ink">Load a demo tender</label>
+        <label className="mb-2 block text-sm font-semibold text-ink">Choose a scenario</label>
         <p className="mb-3 text-xs text-ink-faint">
           {demoMode
-            ? "Demo mode is offline — pick a prepared tender to run the whole pipeline against the seeded database."
-            : "Prepared examples — handy to see the flow end to end."}
+            ? "Demo mode is offline — each scenario runs the whole pipeline against the seeded database and reproduces identically."
+            : "Prepared scenarios — handy to see the flow end to end."}
         </p>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid gap-2 sm:grid-cols-3">
           {demoCases.map((c) => (
             <button
               key={c.id}
               type="button"
               onClick={() => onPickDemo(c.id)}
               className={cx(
-                "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                caseId === c.id ? "border-brand bg-brand-bg text-brand" : "border-line bg-card text-ink hover:bg-line-soft",
+                "flex flex-col rounded-lg border px-3 py-3 text-left transition-colors",
+                caseId === c.id ? "border-brand bg-brand-bg" : "border-line bg-card hover:bg-line-soft",
               )}
             >
-              <span className="block font-semibold">{c.name}</span>
-              <span className="block text-xs text-ink-faint">
-                hero trade: {tradeLabel(c.hero_trade)}
-              </span>
+              <span className={cx("text-sm font-semibold", caseId === c.id ? "text-brand" : "text-ink")}>{c.name}</span>
+              <span className="mt-1 text-xs leading-relaxed text-ink-soft">{c.blurb}</span>
+              <span className="mt-2 text-[11px] uppercase tracking-wide text-ink-faint">{tradeLabel(c.hero_trade)}</span>
             </button>
           ))}
           {demoCases.length === 0 && (
-            <span className="text-sm text-ink-faint">No demo cases — is the backend running on :8000?</span>
+            <span className="text-sm text-ink-faint">No scenarios — is the backend running on :8000?</span>
           )}
         </div>
       </Card>

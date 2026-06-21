@@ -156,11 +156,13 @@ export interface DemoCaseSummary {
   id: string;
   name: string;
   hero_trade: string;
+  blurb: string;
 }
 
 export interface DemoCase extends DemoCaseSummary {
   tender: TenderPackage;
   replies: BidReply[];
+  rationale_fixture: string;
 }
 
 export interface Health {

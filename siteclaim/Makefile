@@ -1,9 +1,13 @@
-# SiteClaim — developer shortcuts.
-.PHONY: demo install test snapshots build-frontend
+# SiteSource — developer shortcuts.
+.PHONY: demo seed install test build-frontend
 
-# One-command offline demo: backend (DEMO_MODE) + frontend, both local.
+# One-command offline demo: API (DEMO_MODE) + wizard, both local, zero network.
 demo:
 	./scripts/demo.sh
+
+# Build the proprietary database (deterministic, offline) -> backend/db/sitesource.db.
+seed:
+	python -m backend.db.seed
 
 # Install backend + frontend dependencies.
 install:
@@ -17,7 +21,3 @@ test:
 # Type-check + build the frontend.
 build-frontend:
 	cd frontend && npm run build
-
-# Regenerate the frontend's offline demo snapshots from the pipeline.
-snapshots:
-	cd backend && python fixtures/build_demo_snapshots.py

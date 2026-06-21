@@ -82,7 +82,9 @@ did: zero network, no model load. Treat any network call in DEMO_MODE as a bug.
 
 ## Status
 
-**Pivot in progress.** Landed so far: Phase 0 (orient/strip/reskin), Phase 1
+**Build complete (Phases 0–10).** Run the demo with `bash scripts/demo.sh` (or
+`make demo`) and see `DEMO.md` for the runbook and the three scenarios
+(clean · hero · messy). Landed: Phase 0 (orient/strip/reskin), Phase 1
 (schemas + rubrics), Phase 2 (the proprietary database `backend/db/` — schema,
 store, baked-vector embeddings, the fused seed with the planted gotcha electrical
 firm, plus `rules_engine/risk_scoring.py`, `rules_engine/ranking.py`, and
@@ -103,4 +105,5 @@ reports it), and Phase 9 (the React/TS/Vite/Tailwind five-step wizard —
 `StepIngest` · `StepShortlist` · `StepDispatch` · `StepLevel` · `StepRecommend` —
 reusing the chassis visual language and recharts; the gotcha is shown
 `recommended_against` with citations on both the shortlist and recommendation
-screens). The demo polish (Phase 10) is the last phase per the build framework.
+screens), and Phase 10 (three deterministic demo scenarios from one selector,
+`scripts/demo.sh`, projector tightening, and the `DEMO.md` runbook).

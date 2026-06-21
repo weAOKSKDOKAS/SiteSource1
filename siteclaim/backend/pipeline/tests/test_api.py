@@ -21,16 +21,18 @@ def test_stage_routes_are_registered():
 
 
 def test_demo_loaders_return_tender_and_replies():
-    cases = client.get("/demo/cases").json()
-    assert any(c["id"] == "kwun-tong" and c["hero_trade"] == "electrical" for c in cases)
-    case = client.get("/demo/kwun-tong").json()
+    ids = {c["id"] for c in client.get("/demo/cases").json()}
+    assert {"clean", "hero", "messy"} <= ids
+    case = client.get("/demo/messy").json()
     assert case["tender"]["documents"]
+    assert case["hero_trade"] == "electrical"
     assert len(case["replies"]) == 4
+    assert case["rationale_fixture"]
     assert client.get("/demo/nope").status_code == 404
 
 
 def test_full_pipeline_through_the_api_catches_the_hero():
-    case = client.get("/demo/kwun-tong").json()
+    case = client.get("/demo/messy").json()
 
     scope = client.post("/ingest", json={"tender": case["tender"]}).json()
     assert "electrical" in {p["trade"] for p in scope["packages"]}
@@ -64,3 +66,37 @@ def test_leveling_xlsx_downloads():
     assert resp.status_code == 200
     assert "spreadsheet" in resp.headers["content-type"]
     assert resp.content[:2] == b"PK"  # xlsx is a zip
+
+
+def _run_scenario(case_id: str):
+    case = client.get(f"/demo/{case_id}").json()
+    scope = client.post("/ingest", json={"tender": case["tender"]}).json()
+    levelled = client.post("/level", json={"replies": case["replies"], "scope": scope}).json()
+    rec = client.post(
+        "/recommend",
+        json={"levelled": levelled, "trade": case["hero_trade"], "demo_fixture": case["rationale_fixture"]},
+    ).json()
+    return rec
+
+
+def test_three_scenarios_reproduce_their_expected_outcome():
+    clean = _run_scenario("clean")
+    assert clean["recommended_firm_id"] == "F-JF-01"
+    assert not any(r["recommended_against"] for r in clean["ranked"])  # confident, no flag
+
+    hero = _run_scenario("hero")
+    assert hero["recommended_firm_id"] == "F-EL-02"
+    assert next(r for r in hero["ranked"] if r["firm_id"] == "F-EL-01")["recommended_against"] is True
+    assert "winding-up" in hero["rationale"].lower()
+
+    messy = _run_scenario("messy")
+    assert messy["recommended_firm_id"] == "F-EL-02"
+    assert next(r for r in messy["ranked"] if r["firm_id"] == "F-EL-01")["recommended_against"] is True
+
+
+def test_scenarios_are_deterministic_on_repeat():
+    for case_id in ("clean", "hero", "messy"):
+        first = _run_scenario(case_id)
+        second = _run_scenario(case_id)
+        assert first["recommended_firm_id"] == second["recommended_firm_id"]
+        assert [r["firm_id"] for r in first["ranked"]] == [r["firm_id"] for r in second["ranked"]]

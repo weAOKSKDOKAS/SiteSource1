@@ -32,6 +32,7 @@ export default function App() {
   const [heroTrade, setHeroTrade] = useState("electrical");
   const [tender, setTender] = useState<TenderPackage | null>(null);
   const [replies, setReplies] = useState<BidReply[]>([]);
+  const [rationaleFixture, setRationaleFixture] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
 
   // Pipeline state
@@ -91,6 +92,7 @@ export default function App() {
       setHeroTrade(source.hero_trade);
       setTender(source.tender);
       setReplies(source.replies);
+      setRationaleFixture(source.rationale_fixture);
       setFiles([]);
       setScope(null);
       invalidateAfter(1);
@@ -186,7 +188,7 @@ export default function App() {
   const goRecommend = () =>
     run(async () => {
       if (!levelled) return;
-      const result = await api.recommend(levelled, heroTrade);
+      const result = await api.recommend(levelled, heroTrade, rationaleFixture);
       setRecommendation(result);
       setAward(result.recommended_firm_id);
       advance(5);
@@ -198,6 +200,7 @@ export default function App() {
     setCaseId(null);
     setTender(null);
     setReplies([]);
+    setRationaleFixture(null);
     setFiles([]);
     setScope(null);
     setShortlist(null);

@@ -86,8 +86,30 @@ def _demo_tender() -> TenderPackage:
     )
 
 
+# Three deterministic demo scenarios — same tender + seeded DB, different bid
+# replies (and focus trade), each isolating one catch. All reproduce identically.
 _DEMO_CASES = {
-    "kwun-tong": {"name": "Kwun Tong Commercial Tower — Cat-A Office Fit-out", "hero_trade": "electrical"},
+    "clean": {
+        "name": "Clean — strong firms, confident pick",
+        "blurb": "Joinery & fitting-out: a shortlist of strong firms, a clean leveling with no corrections, and a confident recommendation.",
+        "hero_trade": "joinery_fitting_out",
+        "replies_fixture": "cases/scenarios/clean_replies.json",
+        "rationale_fixture": "cases/scenarios/clean_rationale.json",
+    },
+    "hero": {
+        "name": "Hero — the cheapest bidder, flagged",
+        "blurb": "Electrical: the cheapest, best-matching bidder looks clean on the bid sheet but carries an active winding-up petition and two safety prosecutions — recommended against despite the lowest price.",
+        "hero_trade": "electrical",
+        "replies_fixture": "cases/scenarios/hero_replies.json",
+        "rationale_fixture": "cases/scenarios/hero_rationale.json",
+    },
+    "messy": {
+        "name": "Messy — leveling changes the ranking",
+        "blurb": "Electrical: a reply hides an understated line, an unpriced provisional sum, and an exclusion; leveling corrects the total so the cheapest clean bid changes.",
+        "hero_trade": "electrical",
+        "replies_fixture": REPLIES_FIXTURE,
+        "rationale_fixture": RATIONALE_FIXTURE,
+    },
 }
 
 
@@ -95,24 +117,37 @@ class DemoCaseSummary(BaseModel):
     id: str
     name: str
     hero_trade: str
+    blurb: str
 
 
 class DemoCase(DemoCaseSummary):
     tender: TenderPackage
     replies: list[BidReply]
+    rationale_fixture: str
 
 
 @app.get("/demo/cases", response_model=list[DemoCaseSummary])
 def demo_cases() -> list[DemoCaseSummary]:
-    return [DemoCaseSummary(id=cid, **meta) for cid, meta in _DEMO_CASES.items()]
+    return [
+        DemoCaseSummary(id=cid, name=m["name"], hero_trade=m["hero_trade"], blurb=m["blurb"])
+        for cid, m in _DEMO_CASES.items()
+    ]
 
 
 @app.get("/demo/{case_id}", response_model=DemoCase)
 def demo_case(case_id: str) -> DemoCase:
-    meta = _DEMO_CASES.get(case_id)
-    if meta is None:
+    m = _DEMO_CASES.get(case_id)
+    if m is None:
         raise HTTPException(status_code=404, detail=f"Unknown demo case {case_id!r}.")
-    return DemoCase(id=case_id, **meta, tender=_demo_tender(), replies=load_demo_replies(REPLIES_FIXTURE))
+    return DemoCase(
+        id=case_id,
+        name=m["name"],
+        hero_trade=m["hero_trade"],
+        blurb=m["blurb"],
+        tender=_demo_tender(),
+        replies=load_demo_replies(m["replies_fixture"]),
+        rationale_fixture=m["rationale_fixture"],
+    )
 
 
 # ---------------------------------------------------------------------------

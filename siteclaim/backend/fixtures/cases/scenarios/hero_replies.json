@@ -1,0 +1,44 @@
+[
+  {
+    "firm_id": "F-EL-01",
+    "trade": "electrical",
+    "line_items": [
+      {"item_ref": "E-01", "description": "LV main switchboard, form 4 type 6", "unit": "no", "qty": 1.0, "rate": 950000.0, "amount": 950000.0},
+      {"item_ref": "E-02", "description": "Sub-main cabling, XLPE/SWA, 4c 95mm2", "unit": "m", "qty": 420.0, "rate": 2500.0, "amount": 1050000.0},
+      {"item_ref": "E-03", "description": "Final circuits, lighting and small power", "unit": "point", "qty": 860.0, "rate": 7000.0, "amount": 6020000.0},
+      {"item_ref": "E-04", "description": "Cable containment and busbar trunking", "unit": "m", "qty": 530.0, "rate": 1900.0, "amount": 1007000.0},
+      {"item_ref": "E-05", "description": "Testing and commissioning", "unit": "item", "qty": 1.0, "rate": 600000.0, "amount": 600000.0},
+      {"item_ref": "E-06", "description": "Provisional sum — switchgear upgrade", "unit": "item", "qty": 1.0, "rate": 250000.0, "amount": 250000.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 9877000.0
+  },
+  {
+    "firm_id": "F-EL-02",
+    "trade": "electrical",
+    "line_items": [
+      {"item_ref": "E-01", "description": "LV main switchboard, form 4 type 6", "unit": "no", "qty": 1.0, "rate": 1150000.0, "amount": 1150000.0},
+      {"item_ref": "E-02", "description": "Sub-main cabling, XLPE/SWA, 4c 95mm2", "unit": "m", "qty": 420.0, "rate": 2900.0, "amount": 1218000.0},
+      {"item_ref": "E-03", "description": "Final circuits, lighting and small power", "unit": "point", "qty": 860.0, "rate": 8600.0, "amount": 7396000.0},
+      {"item_ref": "E-04", "description": "Cable containment and busbar trunking", "unit": "m", "qty": 530.0, "rate": 2300.0, "amount": 1219000.0},
+      {"item_ref": "E-05", "description": "Testing and commissioning", "unit": "item", "qty": 1.0, "rate": 750000.0, "amount": 750000.0},
+      {"item_ref": "E-06", "description": "Provisional sum — switchgear upgrade", "unit": "item", "qty": 1.0, "rate": 300000.0, "amount": 300000.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 12033000.0
+  },
+  {
+    "firm_id": "F-EL-04",
+    "trade": "electrical",
+    "line_items": [
+      {"item_ref": "E-01", "description": "LV main switchboard, form 4 type 6", "unit": "no", "qty": 1.0, "rate": 1300000.0, "amount": 1300000.0},
+      {"item_ref": "E-02", "description": "Sub-main cabling, XLPE/SWA, 4c 95mm2", "unit": "m", "qty": 420.0, "rate": 3200.0, "amount": 1344000.0},
+      {"item_ref": "E-03", "description": "Final circuits, lighting and small power", "unit": "point", "qty": 860.0, "rate": 9500.0, "amount": 8170000.0},
+      {"item_ref": "E-04", "description": "Cable containment and busbar trunking", "unit": "m", "qty": 530.0, "rate": 2600.0, "amount": 1378000.0},
+      {"item_ref": "E-05", "description": "Testing and commissioning", "unit": "item", "qty": 1.0, "rate": 900000.0, "amount": 900000.0},
+      {"item_ref": "E-06", "description": "Provisional sum — switchgear upgrade", "unit": "item", "qty": 1.0, "rate": 350000.0, "amount": 350000.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 13442000.0
+  }
+]

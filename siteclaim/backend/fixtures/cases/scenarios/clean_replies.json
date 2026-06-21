@@ -1,0 +1,38 @@
+[
+  {
+    "firm_id": "F-JF-01",
+    "trade": "joinery_fitting_out",
+    "line_items": [
+      {"item_ref": "J-01", "description": "Demountable partitions", "unit": "m2", "qty": 920.0, "rate": 1800.0, "amount": 1656000.0},
+      {"item_ref": "J-02", "description": "Suspended ceilings", "unit": "m2", "qty": 3100.0, "rate": 1600.0, "amount": 4960000.0},
+      {"item_ref": "J-03", "description": "Doors and ironmongery", "unit": "no", "qty": 145.0, "rate": 12000.0, "amount": 1740000.0},
+      {"item_ref": "J-04", "description": "Bespoke joinery — reception and tea rooms", "unit": "item", "qty": 1.0, "rate": 1500000.0, "amount": 1500000.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 9856000.0
+  },
+  {
+    "firm_id": "F-JF-03",
+    "trade": "joinery_fitting_out",
+    "line_items": [
+      {"item_ref": "J-01", "description": "Demountable partitions", "unit": "m2", "qty": 920.0, "rate": 2000.0, "amount": 1840000.0},
+      {"item_ref": "J-02", "description": "Suspended ceilings", "unit": "m2", "qty": 3100.0, "rate": 1750.0, "amount": 5425000.0},
+      {"item_ref": "J-03", "description": "Doors and ironmongery", "unit": "no", "qty": 145.0, "rate": 13000.0, "amount": 1885000.0},
+      {"item_ref": "J-04", "description": "Bespoke joinery — reception and tea rooms", "unit": "item", "qty": 1.0, "rate": 1700000.0, "amount": 1700000.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 10850000.0
+  },
+  {
+    "firm_id": "F-JF-02",
+    "trade": "joinery_fitting_out",
+    "line_items": [
+      {"item_ref": "J-01", "description": "Demountable partitions", "unit": "m2", "qty": 920.0, "rate": 2200.0, "amount": 2024000.0},
+      {"item_ref": "J-02", "description": "Suspended ceilings", "unit": "m2", "qty": 3100.0, "rate": 1900.0, "amount": 5890000.0},
+      {"item_ref": "J-03", "description": "Doors and ironmongery", "unit": "no", "qty": 145.0, "rate": 14000.0, "amount": 2030000.0},
+      {"item_ref": "J-04", "description": "Bespoke joinery — reception and tea rooms", "unit": "item", "qty": 1.0, "rate": 1900000.0, "amount": 1900000.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 11844000.0
+  }
+]

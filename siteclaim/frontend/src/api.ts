@@ -64,7 +64,8 @@ export const api = {
   shortlist: (scope: ScopePackages) => post<ShortlistSet>("/shortlist", { scope }),
   dispatch: (req: DispatchRequest) => post<DispatchSet>("/dispatch", req),
   level: (replies: BidReply[], scope: ScopePackages | null) => post<LevelledBid[]>("/level", { replies, scope }),
-  recommend: (levelled: LevelledBid[], trade: string) => post<Recommendation>("/recommend", { levelled, trade }),
+  recommend: (levelled: LevelledBid[], trade: string, rationaleFixture: string | null) =>
+    post<Recommendation>("/recommend", { levelled, trade, demo_fixture: rationaleFixture }),
 
   levelingXlsxUrl: () => BASE + "/leveling.xlsx",
 };
