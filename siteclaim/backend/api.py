@@ -82,6 +82,35 @@ def coverage() -> dict:
         conn.close()
 
 
+class PublicFlagOut(BaseModel):
+    signal_type: str
+    label: str
+    date: str | None = None
+    source: str | None = None
+    reference: str | None = None
+
+
+class FirmOut(BaseModel):
+    firm_id: str
+    name_en: str
+    name_zh: str | None = None
+    registered_grade: str
+    value_band: str
+    trades: list[str]
+    public_flags: list[PublicFlagOut]
+
+
+@app.get("/firms", response_model=list[FirmOut])
+def firms() -> list[dict]:
+    """The proprietary data asset: real-provenance Hong Kong registry firms only
+    (never the illustrative demo firms), each with its cited public flags."""
+    conn = store.get_connection()
+    try:
+        return store.real_firms(conn)
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Demo loaders — the seeded tender and replies the wizard starts from
 # ---------------------------------------------------------------------------

@@ -102,6 +102,20 @@ def test_scenarios_are_deterministic_on_repeat():
         assert [r["firm_id"] for r in first["ranked"]] == [r["firm_id"] for r in second["ranked"]]
 
 
+def test_firms_returns_only_real_provenance_with_working_sources():
+    firms = client.get("/firms").json()
+    assert len(firms) == 134
+    assert all(not f["firm_id"].startswith("F-") for f in firms)  # never the illustrative demo firms
+    flagged = [f for f in firms if f["public_flags"]]
+    assert len(flagged) == 46
+    # every flag carries a citable government-source URL, verifiable on screen
+    refs = [fl["reference"] for f in flagged for fl in f["public_flags"]]
+    assert refs and all(r and r.startswith("http") for r in refs)
+    # the shape the Database page reads
+    sample = firms[0]
+    assert {"name_en", "name_zh", "registered_grade", "value_band", "trades", "public_flags"} <= set(sample)
+
+
 def test_coverage_counts_only_real_provenance_firms():
     cov = client.get("/coverage").json()
     # the claim counts ONLY the real registry scrape, not the 16 illustrative firms

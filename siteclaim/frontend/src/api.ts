@@ -4,6 +4,7 @@ import type {
   DemoCase,
   DemoCaseSummary,
   DispatchSet,
+  Firm,
   Health,
   LevelledBid,
   Recommendation,
@@ -52,6 +53,7 @@ export const api = {
   base: BASE,
   health: () => get<Health>("/health"),
   coverage: () => get<Coverage>("/coverage"),
+  firms: () => get<Firm[]>("/firms"),
   demoCases: () => get<DemoCaseSummary[]>("/demo/cases"),
   demoCase: (id: string) => get<DemoCase>(`/demo/${id}`),
 

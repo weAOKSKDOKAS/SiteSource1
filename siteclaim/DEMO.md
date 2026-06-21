@@ -11,7 +11,11 @@ bash scripts/demo.sh          # or:  make demo
 ```
 
 This seeds the database if needed, starts the API in DEMO_MODE on `:8000`, and
-starts the wizard on `:5173`. Open <http://localhost:5173> and pick a scenario.
+starts the app on `:5173`. Open <http://localhost:5173>. The app has two pages
+behind a top nav: **Database** (the landing page — the proprietary data asset, a
+searchable table of the real Hong Kong registry firms with their cited government
+sources) and **Sourcing** (the five-step wizard below). Switch to **Sourcing** and
+pick a scenario.
 
 > First run installs frontend deps. Backend deps: `pip install -r backend/requirements.txt`
 > (the demo only needs the standard library + FastAPI; numpy/openpyxl are used by

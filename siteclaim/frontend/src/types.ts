@@ -170,6 +170,26 @@ export interface Health {
   demo_mode: boolean;
 }
 
+// A raw public-record flag as stored, linked to its government source.
+export interface PublicFlag {
+  signal_type: string;
+  label: string;
+  date: string | null;
+  source: string | null;
+  reference: string | null;
+}
+
+// A real-provenance registry firm (the Database page's data asset).
+export interface Firm {
+  firm_id: string;
+  name_en: string;
+  name_zh: string | null;
+  registered_grade: string;
+  value_band: string;
+  trades: string[];
+  public_flags: PublicFlag[];
+}
+
 // Coverage of the real-provenance registry scrape only (the illustrative demo
 // firms are excluded from this claim).
 export interface Coverage {

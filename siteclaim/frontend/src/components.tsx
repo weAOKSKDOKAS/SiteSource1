@@ -14,10 +14,20 @@ const GATE_HINT: Record<number, string> = {
 };
 
 // --- Chrome ----------------------------------------------------------------
-export function Header({ demoMode }: { demoMode: boolean }) {
+export type Page = "database" | "sourcing";
+
+export function Header({
+  demoMode,
+  page,
+  onNavigate,
+}: {
+  demoMode: boolean;
+  page: Page;
+  onNavigate: (p: Page) => void;
+}) {
   return (
     <header className="border-b border-line bg-card">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-2.5">
           <span className="text-lg font-bold tracking-tight text-ink">
             Site<span className="text-brand">Source</span>
@@ -32,11 +42,35 @@ export function Header({ demoMode }: { demoMode: boolean }) {
             </span>
           )}
         </div>
-        <p className="w-full text-xs text-ink-faint sm:ml-auto sm:w-auto sm:max-w-sm sm:text-right">
+        <nav className="flex gap-1 sm:ml-3">
+          <NavTab active={page === "database"} onClick={() => onNavigate("database")}>
+            Database
+          </NavTab>
+          <NavTab active={page === "sourcing"} onClick={() => onNavigate("sourcing")}>
+            Sourcing
+          </NavTab>
+        </nav>
+        <p className="w-full text-xs text-ink-faint sm:ml-auto sm:w-auto sm:max-w-xs sm:text-right">
           Subcontractor sourcing &amp; bid-leveling — the proprietary data, brought to the award decision.
         </p>
       </div>
     </header>
+  );
+}
+
+function NavTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={cx(
+        "rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
+        active ? "bg-brand-bg text-brand" : "text-ink-soft hover:bg-line-soft hover:text-ink",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

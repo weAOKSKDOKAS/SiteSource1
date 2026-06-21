@@ -199,6 +199,34 @@ def coverage(conn: sqlite3.Connection) -> dict:
     }
 
 
+def real_firms(conn: sqlite3.Connection) -> list[dict]:
+    """Real-provenance registry firms only — never the illustrative demo firms —
+    each with its raw public flags (signal_type, label, date, source, reference) so
+    every row is verifiable against its cited government source on screen."""
+    rows = conn.execute(
+        "SELECT firm_id, name_en, name_zh, registered_grade, value_band, trades "
+        "FROM firms WHERE provenance = ? ORDER BY name_en",
+        (_REAL,),
+    ).fetchall()
+    firms: list[dict] = []
+    for row in rows:
+        flags = conn.execute(
+            "SELECT signal_type, label, date, source, reference FROM public_flags "
+            "WHERE firm_id = ? ORDER BY signal_type",
+            (row["firm_id"],),
+        ).fetchall()
+        firms.append({
+            "firm_id": row["firm_id"],
+            "name_en": row["name_en"],
+            "name_zh": row["name_zh"],
+            "registered_grade": row["registered_grade"] or "",
+            "value_band": row["value_band"] or "",
+            "trades": _json_list(row["trades"]),
+            "public_flags": [dict(flag) for flag in flags],
+        })
+    return firms
+
+
 # ---------------------------------------------------------------------------
 # Historical pricing
 # ---------------------------------------------------------------------------
