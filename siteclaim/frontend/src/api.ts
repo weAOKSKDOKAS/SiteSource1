@@ -1,12 +1,14 @@
 import type {
-  AuditReport,
-  ClaimDraft,
+  BidReply,
   DemoCase,
-  ExtractedFacts,
+  DemoCaseSummary,
+  DispatchSet,
   Health,
-  SourceMaterial,
-  ValidityReport,
-  VerifyResponse,
+  LevelledBid,
+  Recommendation,
+  ScopePackages,
+  ShortlistSet,
+  TenderPackage,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
@@ -37,29 +39,32 @@ function post<T>(path: string, body: unknown): Promise<T> {
   }).then((r) => handle<T>(r));
 }
 
-export interface VerifyRequest {
-  facts: ExtractedFacts;
-  case_id: string | null;
-  source_description?: string;
+export interface DispatchRequest {
+  shortlist: ShortlistSet;
+  approvals: Record<string, string[]>;
+  scope: ScopePackages | null;
+  project_name: string;
+  send: boolean;
 }
 
 export const api = {
   base: BASE,
   health: () => get<Health>("/health"),
-  legalNotice: () => get<{ warning: string; source: string }>("/legal-notice"),
-  demoCases: () => get<DemoCase[]>("/demo/cases"),
-  demoCase: (id: string) => get<SourceMaterial>(`/demo/${id}`),
-  extract: (source: SourceMaterial) => post<ExtractedFacts>("/extract", source),
-  // Live multimodal extraction: POST the raw files as multipart/form-data.
-  extractUpload: (files: File[], description: string, caseId: string | null) => {
+  demoCases: () => get<DemoCaseSummary[]>("/demo/cases"),
+  demoCase: (id: string) => get<DemoCase>(`/demo/${id}`),
+
+  ingest: (tender: TenderPackage) => post<ScopePackages>("/ingest", { tender }),
+  // Live multimodal ingest: POST the raw tender files as multipart/form-data.
+  ingestUpload: (files: File[]) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
-    fd.append("description", description);
-    if (caseId) fd.append("case_id", caseId);
-    return fetch(BASE + "/extract-upload", { method: "POST", body: fd }).then((r) => handle<ExtractedFacts>(r));
+    return fetch(BASE + "/ingest-upload", { method: "POST", body: fd }).then((r) => handle<ScopePackages>(r));
   },
-  verify: (req: VerifyRequest) => post<VerifyResponse>("/verify", req),
-  draft: (req: { facts: ExtractedFacts; validity: ValidityReport }) => post<ClaimDraft>("/draft", req),
-  audit: (req: { facts: ExtractedFacts; validity: ValidityReport; draft: ClaimDraft }) =>
-    post<AuditReport>("/audit", req),
+
+  shortlist: (scope: ScopePackages) => post<ShortlistSet>("/shortlist", { scope }),
+  dispatch: (req: DispatchRequest) => post<DispatchSet>("/dispatch", req),
+  level: (replies: BidReply[], scope: ScopePackages | null) => post<LevelledBid[]>("/level", { replies, scope }),
+  recommend: (levelled: LevelledBid[], trade: string) => post<Recommendation>("/recommend", { levelled, trade }),
+
+  levelingXlsxUrl: () => BASE + "/leveling.xlsx",
 };

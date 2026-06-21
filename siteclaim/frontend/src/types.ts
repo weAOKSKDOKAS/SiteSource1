@@ -1,182 +1,169 @@
-// TypeScript mirror of the backend Pydantic contracts (schemas/models.py).
-// Note: Decimal and date both serialise to JSON *strings*.
-
-export interface FF<T> {
-  value: T | null;
-  confidence: number;
-  source_span: string | null;
-}
-
-export interface Party {
-  name: string;
-  role?: string | null;
-  address?: string | null;
-  contact?: string | null;
-}
-
-export interface Parties {
-  claimant: FF<Party>;
-  respondent: FF<Party>;
-}
-
-export interface WorkPeriod {
-  start: string | null;
-  end: string | null;
-}
-
-export interface LineItem {
-  description: string;
-  quantity?: string | null;
-  unit?: string | null;
-  rate?: string | null;
-  amount: string | null;
-  confidence: number;
-  source_span?: string | null;
-}
-
-export interface ServiceDetails {
-  method: FF<string>;
-  served_on: FF<string>;
-  date_served: FF<string>;
-  proof_retained: FF<boolean>;
-}
-
-export interface PaymentResponseFacts {
-  served: FF<boolean>;
-  date_served: FF<string>;
-  admitted_amount: FF<string>;
-  disputes_claim: FF<boolean>;
-}
-
-export interface ExtractedFacts {
-  contract_sum: FF<string>;
-  contract_type: FF<string>;
-  sector: FF<string>;
-  parties: Parties;
-  reference_date: FF<string>;
-  claimed_amount: FF<string>;
-  work_period: FF<WorkPeriod>;
-  line_items: LineItem[];
-  certified_amounts: unknown[];
-  supporting_doc_refs: string[];
-  contract_date: FF<string>;
-  claim_served_date: FF<string>;
-  claim_in_writing: FF<boolean>;
-  service: ServiceDetails;
-  payment_response: PaymentResponseFacts;
-  extraction_notes?: string | null;
-}
+// TypeScript mirror of the backend Pydantic contracts (backend/schemas/models.py).
+// SiteSource numeric fields (qty, rate, totals, match_score) serialise as JSON numbers.
 
 export type Severity = "fatal" | "warning" | "info";
+export type DispatchStatus = "drafted" | "approved" | "sent_mock";
+// grade | award_history | safety_prosecution | winding_up | debarment | adjudication | distress_filing | closeout_performance | pricing
+export type SignalType = string;
 
-export interface Check {
-  name: string;
-  passed: boolean;
+export interface Evidence {
+  source: string;
+  signal_type: SignalType;
+  snippet: string;
+  reference: string;
+}
+
+export interface RiskFlag {
   severity: Severity;
-  sopo_reference: string;
-  explanation: string;
+  label: string;
+  rule_ref: string;
+  evidence: Evidence[];
 }
 
-export interface Deadline {
+export interface SorItem {
+  item_ref: string;
+  description: string;
+  unit: string;
+  qty: number;
+}
+
+export interface TradeWorkPackage {
+  trade: string;
+  scope_summary: string;
+  sor_items: SorItem[];
+  source_refs: string[];
+}
+
+export interface TenderDocument {
+  doc_type: string;
+  filename: string;
+}
+
+export interface TenderPackage {
+  project_name: string;
+  description: string;
+  documents: TenderDocument[];
+}
+
+export interface ScopePackages {
+  project_name: string;
+  packages: TradeWorkPackage[];
+}
+
+export interface FirmProfile {
+  firm_id: string;
   name: string;
-  due_date: string;
-  business_days_remaining: number;
-  sopo_reference: string;
+  registered_grade: string;
+  value_band: string;
+  trades: string[];
+  public_flags: RiskFlag[];
+  closeout_summary: string;
+  award_history: string[];
 }
 
-export interface DeadlineSet {
-  deadlines: Deadline[];
-  computed_from: string | null;
-  computed_at: string;
+export interface Candidate {
+  firm: FirmProfile;
+  trade: string;
+  match_score: number;
+  evidence: Evidence[];
+  risk_flags: RiskFlag[];
+  recommended_against: boolean;
 }
 
-export interface ValidityReport {
-  checks: Check[];
-  deadlines: DeadlineSet | null;
-  generated_at: string;
+export interface ShortlistSet {
+  per_trade: Record<string, Candidate[]>;
 }
 
-export interface ReviewFlag {
-  field: string;
-  confidence: number;
-  value_repr: string | null;
+export interface DispatchBundle {
+  firm_id: string;
+  firm_name: string;
+  trade: string;
+  bundle_doc_refs: string[];
+  email_subject: string;
+  email_body: string;
+  status: DispatchStatus;
+}
+
+export interface DispatchSet {
+  bundles: DispatchBundle[];
+}
+
+export interface BidLineItem {
+  item_ref: string;
+  description: string;
+  unit: string;
+  qty: number;
+  rate: number | null;
+  amount: number | null;
+}
+
+export interface BidReply {
+  firm_id: string;
+  trade: string;
+  line_items: BidLineItem[];
+  exclusions: string[];
+  claimed_total: number | null;
+}
+
+export interface ArithmeticFinding {
+  location: string;
+  issue: string;
+  corrected_value: number;
+  severity: Severity;
+}
+
+export interface LevelledBid {
+  firm_id: string;
+  firm_name: string;
+  trade: string;
+  normalized_total: number;
+  corrected_total: number;
+  arithmetic_findings: ArithmeticFinding[];
+  exclusions: string[];
+  scope_gaps: string[];
+}
+
+export interface RankedFirm {
+  firm_id: string;
+  firm_name: string;
+  corrected_total: number;
+  risk_flags: RiskFlag[];
+  recommended_against: boolean;
   reason: string;
 }
 
-export interface ClaimDraft {
-  claimant_name: string | null;
-  respondent_name: string | null;
-  contract_reference: string | null;
-  reference_date: string | null;
-  claimed_amount: string | null;
-  currency: string;
-  line_items: LineItem[];
-  basis_of_calculation: string | null;
-  statutory_statement: string | null;
-  supporting_doc_refs: string[];
-  rendered_markdown: string;
-  generated_at: string;
+export interface BidDistributionPoint {
+  firm_name: string;
+  corrected_total: number;
 }
 
-export type AuditVerdict = "fileable" | "fileable_with_fixes" | "not_fileable";
-
-export interface Finding {
-  issue: string;
-  location: string;
-  severity: Severity;
-  suggested_fix: string;
-  sopo_reference?: string | null;
+export interface HistoricalBand {
+  low: number;
+  median: number;
+  high: number;
 }
 
-export interface AuditReport {
-  findings: Finding[];
-  verdict: AuditVerdict;
-  generated_at: string;
+export interface Recommendation {
+  trade: string;
+  recommended_firm_id: string | null;
+  ranked: RankedFirm[];
+  rationale: string;
+  bid_distribution: BidDistributionPoint[];
+  historical_band: HistoricalBand | null;
 }
 
-export interface UploadedFile {
-  filename: string;
-  content_type: string;
-  size_bytes?: number | null;
-  storage_ref?: string | null;
-  sha256?: string | null;
+export interface DemoCaseSummary {
+  id: string;
+  name: string;
+  hero_trade: string;
 }
 
-export interface SourceMaterial {
-  docs: { files: UploadedFile[] };
-  description: string;
-  case_id: string | null;
-  submitted_by?: string | null;
-  submitted_at?: string | null;
-}
-
-export interface VerifyResponse {
-  facts: ExtractedFacts;
-  validity: ValidityReport;
-  review_flags: ReviewFlag[];
-  judge_summary: string;
-}
-
-export interface DemoCase {
-  case_id: string;
-  label: string;
-  description: string;
+export interface DemoCase extends DemoCaseSummary {
+  tender: TenderPackage;
+  replies: BidReply[];
 }
 
 export interface Health {
   status: string;
-  config_version: string;
   demo_mode: boolean;
-}
-
-// A pre-recorded full-pipeline result for a demo case (the frontend's offline
-// fallback). Mirrors what the wizard accumulates across the four stage calls.
-export interface Snapshot {
-  case_id: string;
-  facts: ExtractedFacts;
-  validity: ValidityReport;
-  review_flags: ReviewFlag[];
-  judge_summary: string;
-  draft: ClaimDraft;
-  audit: AuditReport;
 }

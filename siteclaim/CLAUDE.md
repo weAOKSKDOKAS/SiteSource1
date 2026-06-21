@@ -99,5 +99,8 @@ with the bid distribution and historical band, Layer-2 rationale; plus
 Phase 8 (`api.py` — one POST per stage `/ingest` `/shortlist` `/dispatch` `/level`
 `/recommend`, the `/leveling.xlsx` download, the multipart `/ingest-upload`, and the
 `/demo/cases` · `/demo/{id}` loaders; DEMO_MODE respected end-to-end, `/health`
-reports it). The frontend wizard (Phase 9) and the demo polish (Phase 10) are
-rebuilt next per the build framework.
+reports it), and Phase 9 (the React/TS/Vite/Tailwind five-step wizard —
+`StepIngest` · `StepShortlist` · `StepDispatch` · `StepLevel` · `StepRecommend` —
+reusing the chassis visual language and recharts; the gotcha is shown
+`recommended_against` with citations on both the shortlist and recommendation
+screens). The demo polish (Phase 10) is the last phase per the build framework.

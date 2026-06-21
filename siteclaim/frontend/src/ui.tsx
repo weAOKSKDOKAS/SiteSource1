@@ -1,37 +1,8 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import type { AuditVerdict, Severity } from "./types";
+import type { Severity } from "./types";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
-}
-
-// --- Confidence ------------------------------------------------------------
-type Tier = { label: string; chip: string; ring: string };
-
-export function confidenceTier(confidence: number): Tier {
-  if (confidence >= 0.8) {
-    return { label: "High confidence", chip: "bg-ok-bg text-ok", ring: "border-ok/40" };
-  }
-  if (confidence >= 0.6) {
-    return { label: "Worth a check", chip: "bg-warn-bg text-warn", ring: "border-warn/50" };
-  }
-  return { label: "Low — please confirm", chip: "bg-bad-bg text-bad", ring: "border-bad/50" };
-}
-
-export function ConfidenceChip({ confidence }: { confidence: number }) {
-  const tier = confidenceTier(confidence);
-  return (
-    <span
-      className={cx(
-        "tabular inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-        tier.chip,
-      )}
-      title={tier.label}
-    >
-      {confidence.toFixed(2)}
-      <span className="font-sans">· {tier.label}</span>
-    </span>
-  );
 }
 
 // --- Severity --------------------------------------------------------------
@@ -51,24 +22,19 @@ export function SeverityTag({ severity }: { severity: Severity }) {
   );
 }
 
-// --- Verdict ---------------------------------------------------------------
-export const VERDICT: Record<AuditVerdict, { label: string; classes: string; blurb: string }> = {
-  fileable: {
-    label: "Fileable",
-    classes: "bg-ok-bg text-ok border-ok/30",
-    blurb: "No blocking defects found. Ready for a person to approve.",
-  },
-  fileable_with_fixes: {
-    label: "Fileable with fixes",
-    classes: "bg-warn-bg text-warn border-warn/40",
-    blurb: "No fatal defects, but some particulars need confirming first.",
-  },
-  not_fileable: {
-    label: "Not fileable",
-    classes: "bg-bad-bg text-bad border-bad/40",
-    blurb: "A fatal defect would void this claim. Do not serve it as-is.",
-  },
-};
+// --- Match score (semantic relevance of closeout history to the scope) -----
+export function MatchChip({ score }: { score: number }) {
+  const value = Math.round(score * 100);
+  const tier = score >= 0.7 ? "bg-ok-bg text-ok" : score >= 0.5 ? "bg-brand-bg text-brand" : "bg-line-soft text-ink-soft";
+  return (
+    <span
+      className={cx("tabular inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", tier)}
+      title="Semantic match of the firm's closeout history to this scope"
+    >
+      {value}% match
+    </span>
+  );
+}
 
 // --- Button ----------------------------------------------------------------
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -93,12 +59,7 @@ export function Button({ variant = "primary", loading, children, className, disa
 }
 
 export function Spinner() {
-  return (
-    <span
-      className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
-      aria-hidden
-    />
-  );
+  return <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />;
 }
 
 export function Card({ children, className }: { children: ReactNode; className?: string }) {
@@ -114,12 +75,10 @@ export function ErrorBanner({ message }: { message: string }) {
 }
 
 export function InfoNotice({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-lg border border-warn/30 bg-warn-bg px-4 py-2.5 text-sm text-ink">{children}</div>
-  );
+  return <div className="rounded-lg border border-warn/30 bg-warn-bg px-4 py-2.5 text-sm text-ink">{children}</div>;
 }
 
-// A hover/focus "ⓘ" carrying an assumption basis as its tooltip. Keyboard-focusable.
+// A hover/focus "ⓘ" carrying context as its tooltip. Keyboard-focusable.
 export function InfoDot({ title }: { title: string }) {
   return (
     <span
