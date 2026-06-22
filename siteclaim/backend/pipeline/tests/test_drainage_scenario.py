@@ -51,8 +51,9 @@ def levelled(conn):
     return level_bids(load_demo_replies(_REPLIES_FIXTURE), conn=conn)
 
 
-def _by_firm(levelled):
-    return {b.firm_id: b for b in levelled}
+def _by_firm(levelled, trade="field_testing"):
+    # one bid per firm WITHIN a section (a firm now bids on all three GI sections)
+    return {b.firm_id: b for b in levelled if b.trade == trade}
 
 
 def test_ingest_splits_the_civil_tender_by_work_section(scope):
@@ -108,17 +109,27 @@ def test_runner_up_has_one_arithmetic_correction_on_g13(levelled):
 
 
 def test_normalized_totals_put_every_bid_on_the_same_scope_basis(levelled):
-    by = _by_firm(levelled)
+    by = _by_firm(levelled, "field_testing")
     assert by[GOLD].normalized_total == 1114790.0
     assert by["F-GI-01"].normalized_total == 1127890.0  # corrected + peer water + peer freeboard
     assert by[DRIL].normalized_total == 1133150.0
 
 
+def test_all_three_gi_sections_are_levelled(levelled):
+    # the tender's three work sections (G/H/J) are each levelled, not just field testing
+    trades = {b.trade for b in levelled}
+    assert trades == {"field_testing", "field_installations", "geophysical_survey"}
+    # every clean firm submitted a full package quote across all three sections
+    for firm in (GOLD, DRIL):
+        assert {b.trade for b in levelled if b.firm_id == firm} == trades
+
+
 def test_leveling_ranks_the_real_winner_first_by_normalized_total(levelled):
-    order = sorted(levelled, key=lambda b: b.normalized_total)
+    ft = [b for b in levelled if b.trade == "field_testing"]
+    order = sorted(ft, key=lambda b: b.normalized_total)
     assert [b.firm_id for b in order] == [GOLD, "F-GI-01", DRIL]
     # the apparent-cheapest bid (GI-1, lowest corrected) is NOT the leveled winner
-    cheapest_corrected = min(levelled, key=lambda b: b.corrected_total)
+    cheapest_corrected = min(ft, key=lambda b: b.corrected_total)
     assert cheapest_corrected.firm_id == "F-GI-01"
     assert order[0].firm_id != cheapest_corrected.firm_id
 

@@ -216,5 +216,293 @@
   ],
   "exclusions": [],
   "claimed_total": 1067150.0
+ },
+ {
+  "firm_id": "gold-ram-engineering-development-limited-9bbd",
+  "trade": "field_installations",
+  "line_items": [
+   {
+    "item_ref": "H14",
+    "description": "Supply and install instruments and monitoring for drainage field test",
+    "unit": "No.",
+    "qty": 6.0,
+    "rate": 45000.0,
+    "amount": 270000.0
+   },
+   {
+    "item_ref": "H15",
+    "description": "Supply and install on-site instruments within HKSAR",
+    "unit": "No.",
+    "qty": 4.0,
+    "rate": 28000.0,
+    "amount": 112000.0
+   },
+   {
+    "item_ref": "H16",
+    "description": "Monitoring, data collection and data transmission",
+    "unit": "No.-Month",
+    "qty": 24.0,
+    "rate": 3500.0,
+    "amount": 84000.0
+   },
+   {
+    "item_ref": "H17",
+    "description": "Operation and maintenance of the CCTV system",
+    "unit": "No.-Month",
+    "qty": 12.0,
+    "rate": 2800.0,
+    "amount": 33600.0
+   }
+  ],
+  "exclusions": [],
+  "claimed_total": 499600.0
+ },
+ {
+  "firm_id": "driltech-ground-engineering-limited-a721",
+  "trade": "field_installations",
+  "line_items": [
+   {
+    "item_ref": "H14",
+    "description": "Supply and install instruments and monitoring for drainage field test",
+    "unit": "No.",
+    "qty": 6.0,
+    "rate": 46000.0,
+    "amount": 276000.0
+   },
+   {
+    "item_ref": "H15",
+    "description": "Supply and install on-site instruments within HKSAR",
+    "unit": "No.",
+    "qty": 4.0,
+    "rate": 27500.0,
+    "amount": 110000.0
+   },
+   {
+    "item_ref": "H16",
+    "description": "Monitoring, data collection and data transmission",
+    "unit": "No.-Month",
+    "qty": 24.0,
+    "rate": 3450.0,
+    "amount": 82800.0
+   },
+   {
+    "item_ref": "H17",
+    "description": "Operation and maintenance of the CCTV system",
+    "unit": "No.-Month",
+    "qty": 12.0,
+    "rate": 2900.0,
+    "amount": 34800.0
+   }
+  ],
+  "exclusions": [],
+  "claimed_total": 503600.0
+ },
+ {
+  "firm_id": "F-GI-01",
+  "trade": "field_installations",
+  "line_items": [
+   {
+    "item_ref": "H14",
+    "description": "Supply and install instruments and monitoring for drainage field test",
+    "unit": "No.",
+    "qty": 6.0,
+    "rate": 44000.0,
+    "amount": 264000.0
+   },
+   {
+    "item_ref": "H15",
+    "description": "Supply and install on-site instruments within HKSAR",
+    "unit": "No.",
+    "qty": 4.0,
+    "rate": 28500.0,
+    "amount": 114000.0
+   },
+   {
+    "item_ref": "H16",
+    "description": "Monitoring, data collection and data transmission",
+    "unit": "No.-Month",
+    "qty": 24.0,
+    "rate": 3600.0,
+    "amount": 86400.0
+   },
+   {
+    "item_ref": "H17",
+    "description": "Operation and maintenance of the CCTV system",
+    "unit": "No.-Month",
+    "qty": 12.0,
+    "rate": 2750.0,
+    "amount": 33000.0
+   }
+  ],
+  "exclusions": [],
+  "claimed_total": 497400.0
+ },
+ {
+  "firm_id": "gold-ram-engineering-development-limited-9bbd",
+  "trade": "geophysical_survey",
+  "line_items": [
+   {
+    "item_ref": "J5",
+    "description": "Mobilise and demobilise geophysical survey equipment",
+    "unit": "No.",
+    "qty": 2.0,
+    "rate": 40000.0,
+    "amount": 80000.0
+   },
+   {
+    "item_ref": "J6",
+    "description": "Carry out land resistivity multi-channel survey",
+    "unit": "Point",
+    "qty": 120.0,
+    "rate": 1200.0,
+    "amount": 144000.0
+   },
+   {
+    "item_ref": "J7",
+    "description": "Carry out ground penetrating radar survey",
+    "unit": "m",
+    "qty": 800.0,
+    "rate": 95.0,
+    "amount": 76000.0
+   },
+   {
+    "item_ref": "J8",
+    "description": "Extra over J6-J7 for data interpretation",
+    "unit": "Point",
+    "qty": 120.0,
+    "rate": 320.0,
+    "amount": 38400.0
+   },
+   {
+    "item_ref": "J9",
+    "description": "Provide set of two copies of the Final Report",
+    "unit": "Set",
+    "qty": 1.0,
+    "rate": 25000.0,
+    "amount": 25000.0
+   },
+   {
+    "item_ref": "J10",
+    "description": "Provide additional copies of the Final Report",
+    "unit": "No.",
+    "qty": 3.0,
+    "rate": 1500.0,
+    "amount": 4500.0
+   }
+  ],
+  "exclusions": [],
+  "claimed_total": 367900.0
+ },
+ {
+  "firm_id": "driltech-ground-engineering-limited-a721",
+  "trade": "geophysical_survey",
+  "line_items": [
+   {
+    "item_ref": "J5",
+    "description": "Mobilise and demobilise geophysical survey equipment",
+    "unit": "No.",
+    "qty": 2.0,
+    "rate": 41000.0,
+    "amount": 82000.0
+   },
+   {
+    "item_ref": "J6",
+    "description": "Carry out land resistivity multi-channel survey",
+    "unit": "Point",
+    "qty": 120.0,
+    "rate": 1180.0,
+    "amount": 141600.0
+   },
+   {
+    "item_ref": "J7",
+    "description": "Carry out ground penetrating radar survey",
+    "unit": "m",
+    "qty": 800.0,
+    "rate": 96.0,
+    "amount": 76800.0
+   },
+   {
+    "item_ref": "J8",
+    "description": "Extra over J6-J7 for data interpretation",
+    "unit": "Point",
+    "qty": 120.0,
+    "rate": 310.0,
+    "amount": 37200.0
+   },
+   {
+    "item_ref": "J9",
+    "description": "Provide set of two copies of the Final Report",
+    "unit": "Set",
+    "qty": 1.0,
+    "rate": 24000.0,
+    "amount": 24000.0
+   },
+   {
+    "item_ref": "J10",
+    "description": "Provide additional copies of the Final Report",
+    "unit": "No.",
+    "qty": 3.0,
+    "rate": 1450.0,
+    "amount": 4350.0
+   }
+  ],
+  "exclusions": [],
+  "claimed_total": 365950.0
+ },
+ {
+  "firm_id": "F-GI-01",
+  "trade": "geophysical_survey",
+  "line_items": [
+   {
+    "item_ref": "J5",
+    "description": "Mobilise and demobilise geophysical survey equipment",
+    "unit": "No.",
+    "qty": 2.0,
+    "rate": 39500.0,
+    "amount": 79000.0
+   },
+   {
+    "item_ref": "J6",
+    "description": "Carry out land resistivity multi-channel survey",
+    "unit": "Point",
+    "qty": 120.0,
+    "rate": 1220.0,
+    "amount": 146400.0
+   },
+   {
+    "item_ref": "J7",
+    "description": "Carry out ground penetrating radar survey",
+    "unit": "m",
+    "qty": 800.0,
+    "rate": 94.0,
+    "amount": 75200.0
+   },
+   {
+    "item_ref": "J8",
+    "description": "Extra over J6-J7 for data interpretation",
+    "unit": "Point",
+    "qty": 120.0,
+    "rate": 330.0,
+    "amount": 39600.0
+   },
+   {
+    "item_ref": "J9",
+    "description": "Provide set of two copies of the Final Report",
+    "unit": "Set",
+    "qty": 1.0,
+    "rate": 26000.0,
+    "amount": 26000.0
+   },
+   {
+    "item_ref": "J10",
+    "description": "Provide additional copies of the Final Report",
+    "unit": "No.",
+    "qty": 3.0,
+    "rate": 1550.0,
+    "amount": 4650.0
+   }
+  ],
+  "exclusions": [],
+  "claimed_total": 370850.0
  }
 ]

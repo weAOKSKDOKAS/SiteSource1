@@ -30,6 +30,15 @@ input[type=number] { -moz-appearance: textfield; }
 @keyframes ssRise  { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 .ssRise { animation: ssRise .5s cubic-bezier(.2,.7,.2,1) both; }
 
+@keyframes ssScan { 0% { transform: translateX(-110%); } 100% { transform: translateX(110%); } }
+.ssScan { position: absolute; inset: 0; pointer-events: none; animation: ssScan 1.6s ease-in-out infinite; }
+
+@keyframes ssStepIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+.ssStep { animation: ssStepIn .32s ease both; }
+
+@keyframes ssDot { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.55); opacity: .5; } }
+.ssDot { animation: ssDot .85s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
-  *, .ssRise { animation-duration: .01ms !important; }
+  *, .ssRise, .ssScan, .ssStep, .ssDot { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }

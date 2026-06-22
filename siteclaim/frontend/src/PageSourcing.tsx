@@ -41,6 +41,8 @@ export function PageSourcing({
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
   const [dispatch, setDispatch] = useState<DispatchSet | null>(null);
+  const [dispatchSent, setDispatchSent] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "sending" | "collecting">("idle");
   const [levelled, setLevelled] = useState<LevelledBid[] | null>(null);
   const [levelStale, setLevelStale] = useState(false);
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
@@ -58,7 +60,7 @@ export function PageSourcing({
   function advance(to: number) { setStep(to); setMaxReached((m) => Math.max(m, to)); }
   function invalidateAfter(keep: number) {
     if (keep < 2) { setShortlist(null); setApprovals({}); }
-    if (keep < 3) setDispatch(null);
+    if (keep < 3) { setDispatch(null); setDispatchSent(false); }
     if (keep < 4) { setLevelled(null); setLevelStale(false); }
     if (keep < 5) setRecommendation(null);
     setMaxReached((m) => Math.min(m, keep));
@@ -83,8 +85,13 @@ export function PageSourcing({
     setApprovals((cur) => { const ids = cur[t] ?? []; return { ...cur, [t]: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] }; });
     setDispatch(null);
   }
-  const sendDispatch = () => run(async () => { if (!shortlist || !scope) return; setDispatch(await api.dispatch({ shortlist, approvals, scope, project_name: scope.project_name, send: true })); });
-  const goLevel = () => run(async () => { setLevelled(await api.level(replies, scope)); setLevelStale(false); advance(4); });
+  const prepareDispatch = () => run(async () => { if (!shortlist || !scope) return; setDispatch(await api.dispatch({ shortlist, approvals, scope, project_name: scope.project_name, send: false })); setDispatchSent(false); });
+  const editBundle = (firmId: string, trade: string, patch: Partial<{ email_subject: string; email_body: string }>) =>
+    setDispatch((d) => (d ? { ...d, bundles: d.bundles.map((b) => (b.firm_id === firmId && b.trade === trade ? { ...b, ...patch } : b)) } : d));
+  const confirmSend = () => setPhase("sending");
+  const onSendComplete = () => { setDispatchSent(true); setPhase("idle"); };
+  const startLevel = () => setPhase("collecting");
+  const runLevelAfterCollect = () => run(async () => { setLevelled(await api.level(replies, scope)); setLevelStale(false); advance(4); setPhase("idle"); });
   function editRate(firmId: string, ref: string, rate: number | null) {
     setReplies((cur) => cur.map((r) => r.firm_id !== firmId ? r : { ...r, line_items: r.line_items.map((l) => l.item_ref !== ref ? l : { ...l, rate, amount: rate == null ? null : l.qty * rate }) }));
     setLevelStale(true); setRecommendation(null); setMaxReached((m) => Math.min(m, 4));
@@ -93,7 +100,7 @@ export function PageSourcing({
   const goRecommend = () => run(async () => { if (!levelled) return; const r = await api.recommend(levelled, heroTrade, rationaleFixture); setRecommendation(r); setAward(r.recommended_firm_id); advance(5); });
   function reset() {
     setStep(1); setMaxReached(1); setCaseId(null); setTender(null); setScopeFixture(null); setReplies([]); setRationaleFixture(null);
-    setScope(null); setShortlist(null); setApprovals({}); setDispatch(null); setLevelled(null); setLevelStale(false); setRecommendation(null); setAward(null);
+    setScope(null); setShortlist(null); setApprovals({}); setDispatch(null); setDispatchSent(false); setPhase("idle"); setLevelled(null); setLevelStale(false); setRecommendation(null); setAward(null);
   }
 
   const covTotal = coverage?.total_firms ?? 149, covFlagged = coverage?.flagged_firms ?? 47;
@@ -104,11 +111,15 @@ export function PageSourcing({
         <Stepper step={step} maxReached={maxReached} goTo={goTo} covTotal={covTotal} covFlagged={covFlagged} />
         <div style={{ minWidth: 0 }}>
           {error && <div style={{ marginBottom: 16, borderRadius: 12, border: "1px solid rgba(229,72,77,0.3)", background: rgba("#E5484D", 0.08), padding: "12px 15px", fontSize: 13.5, color: "#E5484D" }}>Something went wrong: {error}</div>}
+          {phase === "sending" && dispatch && <ProcessingOverlay kind="sending" steps={sendingSteps(dispatch)} onDone={onSendComplete} />}
+          {phase === "collecting" && <ProcessingOverlay kind="collecting" steps={collectingSteps(replies)} onDone={runLevelAfterCollect} />}
+          {phase === "idle" && <>
           {step === 1 && <StepIngest {...{ demoMode, demoCases, caseId, scope, loading, pickDemo, runIngest, goShortlist }} />}
-          {step === 2 && shortlist && <StepShortlist {...{ shortlist, heroTrade, covTotal, covFlagged, loading, cite, onBack: () => goTo(1), onNext: () => advance(3), onLevel: goLevel }} />}
-          {step === 3 && shortlist && <StepDispatch {...{ shortlist, approvals, dispatch, loading, toggleApprove, sendDispatch, onBack: () => goTo(2), onNext: goLevel }} />}
-          {step === 4 && levelled && <StepLevel {...{ levelled, replies, levelStale, loading, editRate, recompute, onBack: () => goTo(3), onNext: goRecommend }} />}
+          {step === 2 && shortlist && <StepShortlist {...{ shortlist, heroTrade, covTotal, covFlagged, loading, cite, onBack: () => goTo(1), onNext: () => advance(3), onLevel: startLevel }} />}
+          {step === 3 && shortlist && <StepDispatch {...{ shortlist, approvals, dispatch, dispatchSent, loading, toggleApprove, prepareDispatch, editBundle, confirmSend, onBack: () => goTo(2), onNext: startLevel }} />}
+          {step === 4 && levelled && <StepLevel {...{ levelled, replies, heroTrade, levelStale, loading, editRate, recompute, onBack: () => goTo(3), onNext: goRecommend }} />}
           {step === 5 && recommendation && <StepRecommend {...{ recommendation, award, barReveal, cite, setAward, onBack: () => goTo(4), onReset: reset }} />}
+          </>}
         </div>
       </div>
     </main>
@@ -360,20 +371,80 @@ function FlagPanel({ flag, sev, cite }: { flag: { label: string; rule_ref: strin
 }
 
 // ----------------------------------------------------------------------------
-function StepDispatch({ shortlist, approvals, dispatch, loading, toggleApprove, sendDispatch, onBack, onNext }: {
-  shortlist: ShortlistSet; approvals: Record<string, string[]>; dispatch: DispatchSet | null; loading: boolean;
-  toggleApprove: (t: string, id: string) => void; sendDispatch: () => void; onBack: () => void; onNext: () => void;
+function sendingSteps(d: DispatchSet): string[] {
+  const firms = Array.from(new Set(d.bundles.map((b) => b.firm_name)));
+  return ["Composing enquiry emails", "Attaching each firm's trade document bundle", ...firms.map((f) => `Sent \u2192 ${f}`), "Mock outbox updated"];
+}
+
+function collectingSteps(rs: BidReply[]): string[] {
+  const n = Array.from(new Set(rs.map((r) => r.firm_id))).length;
+  return ["Fetching replies from the mock outbox", "Reading the returned Schedules of Rates (PDF)", `Extracting priced line items from ${n} repl${n === 1 ? "y" : "ies"}`, "Flagging arithmetic errors and scope gaps", "Normalising every bid onto one scope basis"];
+}
+
+function ProcessingOverlay({ kind, steps, onDone }: { kind: "sending" | "collecting"; steps: string[]; onDone: () => void }) {
+  const [done, setDone] = useState(0);
+  useEffect(() => {
+    const timers: number[] = [];
+    let i = 0;
+    const tick = () => {
+      i += 1;
+      setDone(i);
+      timers.push(window.setTimeout(i < steps.length ? tick : onDone, i < steps.length ? 600 : 720));
+    };
+    timers.push(window.setTimeout(tick, 460));
+    return () => timers.forEach((t) => clearTimeout(t));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const sending = kind === "sending";
+  const accent = sending ? "#2EA56A" : BLUE;
+  const title = sending ? "Dispatching enquiries" : "Reading replies & leveling";
+  const sub = sending
+    ? "Composing each firm's bundle and writing it to the mock outbox."
+    : "The agent reads the returned Schedules of Rates and prepares the like-for-like comparison.";
+  return (
+    <div className="ssRise" style={{ ...cardSx, overflow: "hidden", maxWidth: 560, margin: "7vh auto 0" }}>
+      <div style={{ position: "relative", padding: "22px 24px", borderBottom: "1px solid #eef1f6", overflow: "hidden" }}>
+        <div className="ssScan" style={{ background: `linear-gradient(90deg, transparent, ${rgba(accent, 0.18)}, transparent)` }} />
+        {kicker(sending ? "Dispatch" : "Level")}
+        <h2 style={{ margin: 0, fontFamily: DISPLAY, fontSize: 21, fontWeight: 700, color: INK }}>{title}</h2>
+        <p style={{ margin: "6px 0 0", fontSize: 13, color: SOFT, lineHeight: 1.55 }}>{sub}</p>
+      </div>
+      <ul style={{ margin: 0, padding: "10px 0 14px", listStyle: "none" }}>
+        {steps.map((label, idx) => {
+          const state = idx < done ? "done" : idx === done ? "active" : "pending";
+          return (
+            <li key={idx} className={state === "pending" ? undefined : "ssStep"} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 24px", opacity: state === "pending" ? 0.32 : 1 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, flex: "none", borderRadius: "50%", border: `1.5px solid ${state === "done" ? accent : "rgba(15,27,45,0.2)"}`, background: state === "done" ? accent : "#fff", color: "#fff", fontSize: 11 }}>
+                {state === "done" ? "\u2713" : state === "active" ? <span className="ssDot" style={{ width: 6, height: 6, borderRadius: "50%", background: accent }} /> : null}
+              </span>
+              <span style={{ fontSize: 13.5, color: state === "done" ? INK : SOFT, fontWeight: state === "active" ? 600 : 400 }}>{label}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function StepDispatch({ shortlist, approvals, dispatch, dispatchSent, loading, toggleApprove, prepareDispatch, editBundle, confirmSend, onBack, onNext }: {
+  shortlist: ShortlistSet; approvals: Record<string, string[]>; dispatch: DispatchSet | null; dispatchSent: boolean; loading: boolean;
+  toggleApprove: (t: string, id: string) => void; prepareDispatch: () => void;
+  editBundle: (firmId: string, trade: string, patch: Partial<{ email_subject: string; email_body: string }>) => void;
+  confirmSend: () => void; onBack: () => void; onNext: () => void;
 }) {
   const trades = Object.keys(shortlist.per_trade);
   const approved = Object.values(approvals).reduce((n, ids) => n + ids.length, 0);
+  const drafting = !!dispatch && !dispatchSent;
+  const labelSx: React.CSSProperties = { display: "block", fontFamily: MONO, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: FAINT, marginBottom: 4 };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
-        {kicker("Step 03 · Dispatch")}
+        {kicker("Step 03 \u00b7 Dispatch")}
         <h1 style={h1Sx}>Dispatch document bundles</h1>
-        <p style={leadSx}>Approve which firms to invite (the human gate). Each firm receives only its trade's documents and a composed enquiry email. Nothing is sent — this writes to a mock outbox.</p>
+        <p style={leadSx}>Approve which firms to invite (the human gate). Each firm receives only its trade's documents and a composed enquiry email \u2014 review and edit any email before it goes to the mock outbox.</p>
       </div>
-      {trades.map((t) => (
+
+      {!dispatch && trades.map((t) => (
         <div key={t} style={{ ...cardSx, overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "14px 19px", borderBottom: "1px solid #eef1f6" }}>
             <span style={{ width: 10, height: 10, borderRadius: "50%", background: tradeColor(t) }} />
@@ -391,15 +462,19 @@ function StepDispatch({ shortlist, approvals, dispatch, loading, toggleApprove, 
           </ul>
         </div>
       ))}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <span style={{ fontSize: 13.5, color: SOFT }}>{approved} firm{approved === 1 ? "" : "s"} approved.</span>
-        <button type="button" onClick={sendDispatch} disabled={approved === 0 || loading} style={primaryBtn(approved > 0)}>Send to approved firms (mock) →</button>
-      </div>
+
+      {!dispatch && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span style={{ fontSize: 13.5, color: SOFT }}>{approved} firm{approved === 1 ? "" : "s"} approved.</span>
+          <button type="button" onClick={prepareDispatch} disabled={approved === 0 || loading} style={primaryBtn(approved > 0)}>Prepare enquiry emails \u2192</button>
+        </div>
+      )}
+
       {dispatch && (
         <div className="ssRise" style={{ ...cardSx, overflow: "hidden" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 19px", borderBottom: "1px solid #eef1f6", background: "linear-gradient(90deg,rgba(46,165,106,0.08),transparent)" }}>
-            <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 600, color: INK }}>Mock outbox</h2>
-            <span style={{ background: rgba("#2EA56A", 0.12), color: "#2EA56A", fontSize: 11, fontWeight: 600, padding: "4px 11px", borderRadius: 999 }}>{dispatch.bundles.length} sent</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 19px", borderBottom: "1px solid #eef1f6", background: drafting ? "linear-gradient(90deg,rgba(31,111,235,0.07),transparent)" : "linear-gradient(90deg,rgba(46,165,106,0.08),transparent)" }}>
+            <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 600, color: INK }}>{drafting ? "Draft enquiries \u2014 review & edit" : "Mock outbox"}</h2>
+            <span style={{ background: drafting ? rgba(BLUE, 0.12) : rgba("#2EA56A", 0.12), color: drafting ? BLUE : "#2EA56A", fontSize: 11, fontWeight: 600, padding: "4px 11px", borderRadius: 999 }}>{dispatch.bundles.length} {drafting ? "drafted" : "sent"}</span>
           </div>
           <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
             {dispatch.bundles.map((b) => (
@@ -408,110 +483,156 @@ function StepDispatch({ shortlist, approvals, dispatch, loading, toggleApprove, 
                   <span style={{ fontSize: 14, fontWeight: 600, color: INK }}>{b.firm_name}</span>
                   <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{b.firm_id}</span>
                   <span style={{ background: rgba(BLUE, 0.1), color: BLUE, fontSize: 11, fontWeight: 500, padding: "3px 9px", borderRadius: 999 }}>{tradeLabel(b.trade)}</span>
-                  <span style={{ marginLeft: "auto", background: rgba("#2EA56A", 0.12), color: "#2EA56A", fontSize: 11, fontWeight: 600, padding: "3px 11px", borderRadius: 999 }}>Sent (mock)</span>
+                  <span style={{ marginLeft: "auto", background: drafting ? rgba("#8a98ab", 0.16) : rgba("#2EA56A", 0.12), color: drafting ? SOFT : "#2EA56A", fontSize: 11, fontWeight: 600, padding: "3px 11px", borderRadius: 999 }}>{drafting ? "Draft" : "Sent (mock)"}</span>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 7, marginTop: 11 }}>
                   <span style={{ fontSize: 12, fontWeight: 500, color: SOFT }}>Enclosed:</span>
                   {b.bundle_doc_refs.map((d) => <span key={d} style={{ fontFamily: MONO, fontSize: 11, color: SOFT, background: "#EEF2F7", borderRadius: 6, padding: "2px 8px" }}>{d}</span>)}
                 </div>
-                <div style={{ marginTop: 11, border: "1px solid #eef1f6", background: "#f6f9fc", borderRadius: 10, padding: "13px 15px" }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>{b.email_subject}</div>
-                  <p style={{ margin: "6px 0 0", whiteSpace: "pre-line", fontSize: 12, lineHeight: 1.6, color: SOFT }}>{b.email_body}</p>
-                </div>
+                {drafting ? (
+                  <div style={{ marginTop: 11, border: "1px solid #e4e9f0", background: "#fff", borderRadius: 10, padding: "12px 14px" }}>
+                    <label style={labelSx}>Subject</label>
+                    <input value={b.email_subject} onChange={(e) => editBundle(b.firm_id, b.trade, { email_subject: e.target.value })} style={{ width: "100%", border: "1px solid rgba(15,27,45,0.12)", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, color: INK, outline: "none", boxSizing: "border-box" }} />
+                    <label style={{ ...labelSx, margin: "10px 0 4px" }}>Body</label>
+                    <textarea value={b.email_body} onChange={(e) => editBundle(b.firm_id, b.trade, { email_body: e.target.value })} rows={6} style={{ width: "100%", border: "1px solid rgba(15,27,45,0.12)", borderRadius: 8, padding: "9px 11px", fontSize: 12, lineHeight: 1.6, color: SOFT, outline: "none", resize: "vertical", boxSizing: "border-box", fontFamily: "inherit" }} />
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 11, border: "1px solid #eef1f6", background: "#f6f9fc", borderRadius: 10, padding: "13px 15px" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>{b.email_subject}</div>
+                    <p style={{ margin: "6px 0 0", whiteSpace: "pre-line", fontSize: 12, lineHeight: 1.6, color: SOFT }}>{b.email_body}</p>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
+          {drafting && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, padding: "14px 19px", borderTop: "1px solid #eef1f6" }}>
+              <button type="button" onClick={confirmSend} disabled={loading} style={primaryBtn(true)}>Send to approved firms (mock) \u2192</button>
+            </div>
+          )}
         </div>
       )}
+
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, paddingTop: 4 }}>
-        <button type="button" onClick={onBack} style={ghostBtn}>← Back</button>
-        <button type="button" onClick={onNext} disabled={!dispatch || loading} style={primaryBtn(!!dispatch)}>Level the bids →</button>
+        <button type="button" onClick={onBack} style={ghostBtn}>\u2190 Back</button>
+        <button type="button" onClick={onNext} disabled={!dispatchSent || loading} style={primaryBtn(dispatchSent)}>Level the bids \u2192</button>
       </div>
     </div>
   );
 }
 
 // ----------------------------------------------------------------------------
-function StepLevel({ levelled, replies, levelStale, loading, editRate, recompute, onBack, onNext }: {
-  levelled: LevelledBid[]; replies: BidReply[]; levelStale: boolean; loading: boolean;
+function CalloutCol({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
+  const items = Array.isArray(children) ? children.flat() : children;
+  const empty = !items || (Array.isArray(items) && items.length === 0);
+  return (
+    <div style={{ ...cardSx, padding: "14px 16px" }}>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase", color, fontWeight: 600, marginBottom: 6 }}>{title}</div>
+      {empty
+        ? <div style={{ fontSize: 12, color: FAINT, padding: "6px 0" }}>None</div>
+        : <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>{items}</ul>}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+function StepLevel({ levelled, replies, heroTrade, levelStale, loading, editRate, recompute, onBack, onNext }: {
+  levelled: LevelledBid[]; replies: BidReply[]; heroTrade: string; levelStale: boolean; loading: boolean;
   editRate: (firmId: string, ref: string, rate: number | null) => void; recompute: () => void; onBack: () => void; onNext: () => void;
 }) {
-  const correctedOf = new Map(levelled.map((b) => [b.firm_id, b.corrected_total]));
-  const claimedOf = new Map(replies.map((r) => [r.firm_id, r.claimed_total ?? 0]));
+  const tradesOrder = Array.from(new Set(levelled.map((b) => b.trade))).sort((a, b) => (a === heroTrade ? -1 : b === heroTrade ? 1 : a.localeCompare(b)));
   const nameOf = new Map(levelled.map((b) => [b.firm_id, b.firm_name]));
-  const cheapest = Math.min(...levelled.map((b) => b.corrected_total));
-  const items = replies[0]?.line_items.map((l) => ({ ref: l.item_ref, desc: l.description })) ?? [];
-  const line = (fid: string, ref: string) => replies.find((r) => r.firm_id === fid)?.line_items.find((l) => l.item_ref === ref);
   const th: React.CSSProperties = { textAlign: "left", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: FAINT, padding: "10px 19px" };
   const thr: React.CSSProperties = { ...th, textAlign: "right" };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
-        {kicker("Step 04 · Level")}
+        {kicker("Step 04 \u00b7 Level")}
         <h1 style={h1Sx}>Level the bids on a like-for-like basis</h1>
-        <p style={leadSx}>The rules engine recomputes every amount as qty × rate, flags arithmetic errors, treats a missing rate or provisional sum as a scope gap, and keeps exclusions non-comparable. Edit a rate and recompute to see the ranking move.</p>
+        <p style={leadSx}>The rules engine recomputes every amount as qty \u00d7 rate, flags arithmetic errors, treats a missing rate or provisional sum as a scope gap, and keeps exclusions non-comparable. Each work section is leveled separately. Edit a rate and recompute to see the ranking move.</p>
       </div>
 
-      <div style={{ ...cardSx, overflow: "hidden" }}>
-        <h2 style={{ margin: 0, padding: "14px 19px", borderBottom: "1px solid #eef1f6", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT }}>Claimed vs corrected</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr style={{ borderBottom: "1px solid #eef1f6" }}><th style={th}>Firm</th><th style={thr}>Claimed</th><th style={thr}>Corrected</th><th style={thr}>Normalised</th><th style={th}>Notes</th></tr></thead>
-          <tbody>
-            {[...levelled].sort((a, b) => a.corrected_total - b.corrected_total).map((b) => {
-              const claimed = claimedOf.get(b.firm_id) ?? 0, delta = b.corrected_total - claimed;
-              return (
-                <tr key={b.firm_id} style={{ borderBottom: "1px solid #eef1f6", background: b.corrected_total === cheapest ? rgba("#2EA56A", 0.05) : "transparent" }}>
-                  <td style={{ padding: "13px 19px" }}><span style={{ fontSize: 14, fontWeight: 600, color: INK }}>{b.firm_name}</span> <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{b.firm_id}</span></td>
-                  <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, color: SOFT }}>{hkd(claimed)}</td>
-                  <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 600, color: INK }}>{hkd(b.corrected_total)}{Math.abs(delta) > 0.5 && <span style={{ color: "#E5484D", fontWeight: 500 }}>  ({delta > 0 ? "+" : ""}{hkd(delta)})</span>}</td>
-                  <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, color: SOFT }}>{hkd(b.normalized_total)}</td>
-                  <td style={{ padding: "13px 19px" }}>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {b.arithmetic_findings.length > 0 && <span style={{ background: rgba("#E5484D", 0.1), color: "#E5484D", fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{b.arithmetic_findings.length} corrected</span>}
-                      {b.scope_gaps.length > 0 && <span style={{ background: rgba(BLUE, 0.1), color: BLUE, fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{b.scope_gaps.length} scope gap</span>}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {tradesOrder.map((trade) => {
+        const bids = levelled.filter((b) => b.trade === trade);
+        const reps = replies.filter((r) => r.trade === trade);
+        const correctedOf = new Map(bids.map((b) => [b.firm_id, b.corrected_total]));
+        const claimedOf = new Map(reps.map((r) => [r.firm_id, r.claimed_total ?? 0]));
+        const cheapest = Math.min(...bids.map((b) => b.corrected_total));
+        const items = reps[0]?.line_items.map((l) => ({ ref: l.item_ref, desc: l.description })) ?? [];
+        const line = (fid: string, ref: string) => reps.find((r) => r.firm_id === fid)?.line_items.find((l) => l.item_ref === ref);
+        const isHero = trade === heroTrade;
+        return (
+          <div key={trade} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 11, height: 11, borderRadius: "50%", background: tradeColor(trade) }} />
+              <h2 style={{ margin: 0, fontFamily: DISPLAY, fontSize: 18, fontWeight: 700, color: INK }}>{tradeLabel(trade)}</h2>
+              {isHero && <span style={{ background: rgba(BLUE, 0.1), color: BLUE, fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", padding: "3px 9px", borderRadius: 999 }}>Hero scope</span>}
+              <span style={{ marginLeft: "auto", fontFamily: MONO, fontSize: 11.5, color: FAINT }}>{bids.length} bids</span>
+            </div>
 
-      <div className="ssx" style={{ ...cardSx, overflowX: "auto" }}>
-        <h2 style={{ margin: 0, padding: "14px 19px", borderBottom: "1px solid #eef1f6", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT }}>Rates by item — edit a rate to re-level</h2>
-        <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse" }}>
-          <thead><tr style={{ borderBottom: "1px solid #eef1f6" }}><th style={th}>Item</th>{replies.map((r) => <th key={r.firm_id} style={{ ...thr, textTransform: "none" }}>{r.firm_id}</th>)}</tr></thead>
-          <tbody>
-            {items.map(({ ref, desc }) => (
-              <tr key={ref} style={{ borderBottom: "1px solid #eef1f6" }}>
-                <td style={{ padding: "10px 17px", verticalAlign: "top" }}>
-                  <div style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 600, color: INK }}>{ref}</div>
-                  <div style={{ fontSize: 11.5, color: FAINT, marginTop: 2, maxWidth: 230 }}>{desc}</div>
-                </td>
-                {replies.map((r) => {
-                  const l = line(r.firm_id, ref); const amt = l && l.rate != null ? l.qty * l.rate : null;
-                  return (
-                    <td key={r.firm_id} style={{ padding: "10px 17px", textAlign: "right", verticalAlign: "top" }}>
-                      <input type="number" value={l?.rate ?? ""} onChange={(e) => editRate(r.firm_id, ref, e.target.value === "" ? null : Number(e.target.value))} style={{ width: 106, border: "1px solid rgba(15,27,45,0.12)", borderRadius: 8, background: "#fff", padding: "7px 9px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12, color: INK, outline: "none" }} />
-                      <div style={{ fontFamily: MONO, fontSize: 11, color: FAINT, marginTop: 3 }}>{amt != null ? hkd(amt) : "scope gap"}</div>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-            <tr style={{ borderTop: "2px solid rgba(15,27,45,0.12)", background: "#f6f9fc" }}>
-              <td style={{ padding: "12px 17px", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: SOFT }}>Corrected total</td>
-              {replies.map((r) => <td key={r.firm_id} style={{ padding: "12px 17px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 14, fontWeight: 700, color: INK }}>{hkd(correctedOf.get(r.firm_id) ?? 0)}</td>)}
-            </tr>
-          </tbody>
-        </table>
-      </div>
+            <div style={{ ...cardSx, overflow: "hidden" }}>
+              <h3 style={{ margin: 0, padding: "12px 19px", borderBottom: "1px solid #eef1f6", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT }}>Claimed vs corrected</h3>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ borderBottom: "1px solid #eef1f6" }}><th style={th}>Firm</th><th style={thr}>Claimed</th><th style={thr}>Corrected</th><th style={thr}>Normalised</th><th style={th}>Notes</th></tr></thead>
+                <tbody>
+                  {[...bids].sort((a, b) => a.corrected_total - b.corrected_total).map((b) => {
+                    const claimed = claimedOf.get(b.firm_id) ?? 0, delta = b.corrected_total - claimed;
+                    return (
+                      <tr key={b.firm_id} style={{ borderBottom: "1px solid #eef1f6", background: b.corrected_total === cheapest ? rgba("#2EA56A", 0.05) : "transparent" }}>
+                        <td style={{ padding: "13px 19px" }}><span style={{ fontSize: 14, fontWeight: 600, color: INK }}>{b.firm_name}</span> <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{b.firm_id}</span></td>
+                        <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, color: SOFT }}>{hkd(claimed)}</td>
+                        <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 600, color: INK }}>{hkd(b.corrected_total)}{Math.abs(delta) > 0.5 && <span style={{ color: "#E5484D", fontWeight: 500 }}>  ({delta > 0 ? "+" : ""}{hkd(delta)})</span>}</td>
+                        <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, color: SOFT }}>{hkd(b.normalized_total)}</td>
+                        <td style={{ padding: "13px 19px" }}>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {b.arithmetic_findings.length > 0 && <span style={{ background: rgba("#E5484D", 0.1), color: "#E5484D", fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{b.arithmetic_findings.length} corrected</span>}
+                            {b.scope_gaps.length > 0 && <span style={{ background: rgba(BLUE, 0.1), color: BLUE, fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{b.scope_gaps.length} scope gap</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="ssx" style={{ ...cardSx, overflowX: "auto" }}>
+              <h3 style={{ margin: 0, padding: "12px 19px", borderBottom: "1px solid #eef1f6", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT }}>Rates by item \u2014 edit a rate to re-level</h3>
+              <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse" }}>
+                <thead><tr style={{ borderBottom: "1px solid #eef1f6" }}><th style={th}>Item</th>{reps.map((r) => <th key={r.firm_id} style={{ ...thr, textTransform: "none" }}>{nameOf.get(r.firm_id) ?? r.firm_id}</th>)}</tr></thead>
+                <tbody>
+                  {items.map(({ ref, desc }) => (
+                    <tr key={ref} style={{ borderBottom: "1px solid #eef1f6" }}>
+                      <td style={{ padding: "10px 17px", verticalAlign: "top" }}>
+                        <div style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 600, color: INK }}>{ref}</div>
+                        <div style={{ fontSize: 11.5, color: FAINT, marginTop: 2, maxWidth: 230 }}>{desc}</div>
+                      </td>
+                      {reps.map((r) => {
+                        const l = line(r.firm_id, ref); const amt = l && l.rate != null ? l.qty * l.rate : null; const gap = l != null && l.rate == null;
+                        return (
+                          <td key={r.firm_id} style={{ padding: "10px 17px", textAlign: "right", verticalAlign: "top" }}>
+                            <input type="number" placeholder={gap ? "\u2014" : ""} value={l?.rate ?? ""} onChange={(e) => editRate(r.firm_id, ref, e.target.value === "" ? null : Number(e.target.value))} style={{ width: 106, border: `1px solid ${gap ? rgba("#D99513", 0.55) : "rgba(15,27,45,0.12)"}`, borderRadius: 8, background: gap ? rgba("#D99513", 0.06) : "#fff", padding: "7px 9px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12, color: INK, outline: "none" }} />
+                            <div style={{ fontFamily: MONO, fontSize: 11, color: gap ? "#B7791F" : FAINT, fontWeight: gap ? 600 : 400, marginTop: 3 }}>{amt != null ? hkd(amt) : "scope gap"}</div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: "2px solid rgba(15,27,45,0.12)", background: "#f6f9fc" }}>
+                    <td style={{ padding: "12px 17px", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: SOFT }}>Corrected total</td>
+                    {reps.map((r) => <td key={r.firm_id} style={{ padding: "12px 17px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 14, fontWeight: 700, color: INK }}>{hkd(correctedOf.get(r.firm_id) ?? 0)}</td>)}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
 
       {levelStale && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, border: `1px solid ${rgba("#D99513", 0.35)}`, background: rgba("#D99513", 0.08), borderRadius: 12, padding: "13px 17px" }}>
-          <span style={{ fontSize: 13.5, color: INK }}>⚠ A rate changed — the corrected totals are stale.</span>
+          <span style={{ fontSize: 13.5, color: INK }}>\u26a0 A rate changed \u2014 the corrected totals are stale.</span>
           <button type="button" onClick={recompute} style={{ background: BLUE, border: "none", color: "#fff", borderRadius: 9, padding: "8px 16px", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>Recompute</button>
         </div>
       )}
@@ -519,15 +640,15 @@ function StepLevel({ levelled, replies, levelStale, loading, editRate, recompute
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
         <CalloutCol title="Arithmetic corrections" color="#E5484D">
           {levelled.flatMap((b) => b.arithmetic_findings.map((f, i) => (
-            <li key={`${b.firm_id}-${i}`} style={{ padding: "8px 0", borderBottom: "1px solid #f3f5f9" }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>{nameOf.get(b.firm_id)}</span> <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>· {f.location}</span>
-              <div style={{ fontSize: 11.5, color: SOFT, lineHeight: 1.5, marginTop: 2 }}>{f.issue} → {hkd(f.corrected_value)}</div>
+            <li key={`${b.firm_id}-${b.trade}-${i}`} style={{ padding: "8px 0", borderBottom: "1px solid #f3f5f9" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>{nameOf.get(b.firm_id)}</span> <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>\u00b7 {f.location}</span>
+              <div style={{ fontSize: 11.5, color: SOFT, lineHeight: 1.5, marginTop: 2 }}>{f.issue} \u2192 {hkd(f.corrected_value)}</div>
             </li>
           )))}
         </CalloutCol>
         <CalloutCol title="Scope gaps" color={BLUE}>
           {levelled.flatMap((b) => b.scope_gaps.map((g, i) => (
-            <li key={`${b.firm_id}-${i}`} style={{ padding: "8px 0", borderBottom: "1px solid #f3f5f9" }}>
+            <li key={`${b.firm_id}-${b.trade}-${i}`} style={{ padding: "8px 0", borderBottom: "1px solid #f3f5f9" }}>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>{nameOf.get(b.firm_id)}</span>
               <div style={{ fontSize: 11.5, color: SOFT, lineHeight: 1.5, marginTop: 2 }}>{g}</div>
             </li>
@@ -535,7 +656,7 @@ function StepLevel({ levelled, replies, levelStale, loading, editRate, recompute
         </CalloutCol>
         <CalloutCol title="Exclusions" color="#6E56CF">
           {levelled.flatMap((b) => b.exclusions.map((x, i) => (
-            <li key={`${b.firm_id}-${i}`} style={{ padding: "8px 0", borderBottom: "1px solid #f3f5f9" }}>
+            <li key={`${b.firm_id}-${b.trade}-${i}`} style={{ padding: "8px 0", borderBottom: "1px solid #f3f5f9" }}>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>{nameOf.get(b.firm_id)}</span>
               <div style={{ fontSize: 11.5, color: SOFT, lineHeight: 1.5, marginTop: 2 }}>{x}</div>
             </li>
@@ -544,25 +665,14 @@ function StepLevel({ levelled, replies, levelStale, loading, editRate, recompute
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, paddingTop: 4 }}>
-        <button type="button" onClick={onBack} style={ghostBtn}>← Back</button>
-        <a href={api.levelingXlsxUrl()} style={{ ...ghostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 8 }}>⤓ Download Excel</a>
-        <button type="button" onClick={onNext} disabled={levelStale || loading} style={primaryBtn(!levelStale)}>Recommend an award →</button>
+        <button type="button" onClick={onBack} style={ghostBtn}>\u2190 Back</button>
+        <a href={api.levelingXlsxUrl()} style={{ ...ghostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 8 }}>\u2913 Download Excel</a>
+        <button type="button" onClick={onNext} disabled={levelStale || loading} style={primaryBtn(!levelStale)}>Recommend an award \u2192</button>
       </div>
     </div>
   );
 }
 
-function CalloutCol({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
-  const arr = (Array.isArray(children) ? children.flat() : [children]).filter(Boolean);
-  return (
-    <div style={{ ...cardSx, borderRadius: 13, overflow: "hidden", boxShadow: "none" }}>
-      <h3 style={{ margin: 0, padding: "11px 15px", borderBottom: "1px solid #eef1f6", fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color }}>{title}</h3>
-      {arr.length === 0 ? <p style={{ margin: 0, padding: "13px 15px", fontSize: 12, color: FAINT }}>None.</p> : <ul style={{ margin: 0, padding: "6px 15px", listStyle: "none" }}>{children}</ul>}
-    </div>
-  );
-}
-
-// ----------------------------------------------------------------------------
 function StepRecommend({ recommendation, award, barReveal, cite, setAward, onBack, onReset }: {
   recommendation: Recommendation; award: string | null; barReveal: boolean; cite: Cite; setAward: (id: string) => void; onBack: () => void; onReset: () => void;
 }) {
