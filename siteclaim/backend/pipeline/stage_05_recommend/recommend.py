@@ -66,6 +66,7 @@ def recommend(
                 firm_id=b.firm_id,
                 firm_name=b.firm_name,
                 corrected_total=b.corrected_total,
+                normalized_total=b.normalized_total,
                 risk_flags=score_firm(profile) if (profile := store.firm_profile(conn, b.firm_id)) else [],
             )
             for b in bids

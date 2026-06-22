@@ -219,5 +219,38 @@
     "award_history": [
       {"project": "Wan Chai hotel — bespoke joinery", "client": "Hospitality group", "year": 2022, "source": "Buildings Department submission"}
     ]
+  },
+  {
+    "firm_id": "F-GI-01",
+    "name_en": "Subcontractor GI-1 (illustrative)",
+    "name_zh": "（示例）岩土勘測分包商 GI-1",
+    "registered_grade": "GI specialist (illustrative)",
+    "registers": [],
+    "value_band": "up_to_50m",
+    "trades": ["field_testing"],
+    "public_flags": [],
+    "award_history": []
+  },
+  {
+    "firm_id": "F-GI-02",
+    "name_en": "Subcontractor GI-2 (illustrative)",
+    "name_zh": "（示例）岩土勘測分包商 GI-2",
+    "registered_grade": "GI specialist (illustrative)",
+    "registers": [],
+    "value_band": "up_to_50m",
+    "trades": ["field_testing"],
+    "public_flags": [],
+    "award_history": []
+  },
+  {
+    "firm_id": "F-GI-03",
+    "name_en": "Subcontractor GI-3 (illustrative)",
+    "name_zh": "（示例）岩土勘測分包商 GI-3",
+    "registered_grade": "GI specialist (illustrative)",
+    "registers": [],
+    "value_band": "up_to_50m",
+    "trades": ["field_testing"],
+    "public_flags": [],
+    "award_history": []
   }
 ]

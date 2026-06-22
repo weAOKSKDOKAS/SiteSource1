@@ -114,27 +114,51 @@ def firms() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Demo loaders — the seeded tender and replies the wizard starts from
 # ---------------------------------------------------------------------------
-def _demo_tender() -> TenderPackage:
-    docs = [
-        TenderDocument(doc_type=DocType.METHOD_OF_MEASUREMENT, filename="method_of_measurement.pdf"),
-        TenderDocument(doc_type=DocType.PARTICULAR_SPECIFICATION, filename="particular_specification.pdf"),
-        TenderDocument(doc_type=DocType.TENDER_ADDENDUM, filename="tender_addendum.pdf"),
-        TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename="schedule_of_rates.pdf"),
-    ]
+def _tender(project_name: str, description: str, docs: list[tuple[DocType, str]]) -> TenderPackage:
     return TenderPackage(
-        project_name="Kwun Tong Commercial Tower — Category-A Office Fit-out",
-        description="Cat-A office fit-out across 12 floors.",
-        documents=docs,
+        project_name=project_name,
+        description=description,
+        documents=[TenderDocument(doc_type=dt, filename=fn) for dt, fn in docs],
     )
 
 
-# Three deterministic demo scenarios — same tender + seeded DB, different bid
-# replies (and focus trade), each isolating one catch. All reproduce identically.
+# A building/fit-out tender (the three electrical/joinery scenarios share it) and a
+# real Hong Kong ground-investigation tender (the drainage scenario). Each scenario
+# names its own tender and its own scope fixture, so ingest splits the right package
+# structure — by trade for the building tender, by work section for the GI tender.
+_KWUN_TONG_TENDER = _tender(
+    "Kwun Tong Commercial Tower — Category-A Office Fit-out",
+    "Cat-A office fit-out across 12 floors.",
+    [
+        (DocType.METHOD_OF_MEASUREMENT, "method_of_measurement.pdf"),
+        (DocType.PARTICULAR_SPECIFICATION, "particular_specification.pdf"),
+        (DocType.TENDER_ADDENDUM, "tender_addendum.pdf"),
+        (DocType.SCHEDULE_OF_RATES, "schedule_of_rates.pdf"),
+    ],
+)
+_DRAINAGE_TENDER = _tender(
+    "GE/2026/14 — Ground Investigation, Man-made Slopes (Surface Drainage Water Study)",
+    "Ground-investigation field testing, drilling and sampling for man-made slopes; "
+    "surface drainage water study (drainage field test).",
+    [
+        (DocType.METHOD_OF_MEASUREMENT, "I-GE_2026_14_TSC-MM-01.pdf"),
+        (DocType.PARTICULAR_SPECIFICATION, "I-GE_2026_14_TSC-PS-S07-00.pdf"),
+        (DocType.TENDER_ADDENDUM, "AECOM Tender Clarification No.1.pdf"),
+        (DocType.SCHEDULE_OF_RATES, "I-GE_2026_14_TSC-SR-01.pdf"),
+    ],
+)
+
+
+# Four deterministic demo scenarios — seeded DB, each isolating one catch. All
+# reproduce identically. The three building scenarios share the Kwun Tong tender and
+# its scope split; drainage carries its own GI tender, scope split and replies.
 _DEMO_CASES = {
     "clean": {
         "name": "Clean — strong firms, confident pick",
         "blurb": "Joinery & fitting-out: a shortlist of strong firms, a clean leveling with no corrections, and a confident recommendation.",
         "hero_trade": "joinery_fitting_out",
+        "tender": _KWUN_TONG_TENDER,
+        "scope_fixture": SCOPE_FIXTURE,
         "replies_fixture": "cases/scenarios/clean_replies.json",
         "rationale_fixture": "cases/scenarios/clean_rationale.json",
     },
@@ -142,6 +166,8 @@ _DEMO_CASES = {
         "name": "Hero — the cheapest bidder, flagged",
         "blurb": "Electrical: the cheapest, best-matching bidder looks clean on the bid sheet but carries an active winding-up petition and two safety prosecutions — recommended against despite the lowest price.",
         "hero_trade": "electrical",
+        "tender": _KWUN_TONG_TENDER,
+        "scope_fixture": SCOPE_FIXTURE,
         "replies_fixture": "cases/scenarios/hero_replies.json",
         "rationale_fixture": "cases/scenarios/hero_rationale.json",
     },
@@ -149,8 +175,19 @@ _DEMO_CASES = {
         "name": "Messy — leveling changes the ranking",
         "blurb": "Electrical: a reply hides an understated line, an unpriced provisional sum, and an exclusion; leveling corrects the total so the cheapest clean bid changes.",
         "hero_trade": "electrical",
+        "tender": _KWUN_TONG_TENDER,
+        "scope_fixture": SCOPE_FIXTURE,
         "replies_fixture": REPLIES_FIXTURE,
         "rationale_fixture": RATIONALE_FIXTURE,
+    },
+    "drainage": {
+        "name": "Drainage field test — real HK tender, leveling decides",
+        "blurb": "Ground investigation (Contract GE/2026/14): a civil tender splits by work section, no public-record risk screen applies, and the apparent-cheapest bid loses once its excluded water supply and freeboard are leveled back in.",
+        "hero_trade": "field_testing",
+        "tender": _DRAINAGE_TENDER,
+        "scope_fixture": "cases/scenarios/drainage_scope.json",
+        "replies_fixture": "cases/scenarios/drainage_replies.json",
+        "rationale_fixture": "cases/scenarios/drainage_rationale.json",
     },
 }
 
@@ -164,6 +201,7 @@ class DemoCaseSummary(BaseModel):
 
 class DemoCase(DemoCaseSummary):
     tender: TenderPackage
+    scope_fixture: str
     replies: list[BidReply]
     rationale_fixture: str
 
@@ -186,7 +224,8 @@ def demo_case(case_id: str) -> DemoCase:
         name=m["name"],
         hero_trade=m["hero_trade"],
         blurb=m["blurb"],
-        tender=_demo_tender(),
+        tender=m["tender"],
+        scope_fixture=m["scope_fixture"],
         replies=load_demo_replies(m["replies_fixture"]),
         rationale_fixture=m["rationale_fixture"],
     )

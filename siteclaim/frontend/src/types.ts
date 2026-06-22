@@ -127,6 +127,7 @@ export interface RankedFirm {
   firm_id: string;
   firm_name: string;
   corrected_total: number;
+  normalized_total: number;
   risk_flags: RiskFlag[];
   recommended_against: boolean;
   reason: string;
@@ -161,6 +162,7 @@ export interface DemoCaseSummary {
 
 export interface DemoCase extends DemoCaseSummary {
   tender: TenderPackage;
+  scope_fixture: string;
   replies: BidReply[];
   rationale_fixture: string;
 }

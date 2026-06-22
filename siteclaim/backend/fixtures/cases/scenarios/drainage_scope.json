@@ -1,0 +1,38 @@
+{
+  "project_name": "GE/2026/14 — Ground Investigation, Man-made Slopes (Surface Drainage Water Study)",
+  "packages": [
+    {
+      "trade": "Field Testing",
+      "scope_summary": "Drainage field test — manufacture, mobilise and set up the test rig, carry out the test at each location, supply water, provide and remove freeboard, and drainage modification (demolition and U-channel), measured per the Method of Measurement.",
+      "sor_items": [
+        {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0},
+        {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0},
+        {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0},
+        {"item_ref": "G14", "description": "Purchase and supply water for drainage field test (private source or WSD)", "unit": "m3", "qty": 2000.0},
+        {"item_ref": "G15", "description": "Extra over G14 for plan distance over 300m and/or elevation over 30m", "unit": "No.", "qty": 3.0},
+        {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0},
+        {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0},
+        {"item_ref": "G17b", "description": "Drainage modification — construct U-channel (Std Dwg C2409J, C2413D)", "unit": "m", "qty": 60.0}
+      ],
+      "source_refs": ["I-GE_2026_14_TSC-SR-01.pdf", "I-GE_2026_14_TSC-PS-S07-00.pdf", "I-GE_2026_14_TSC-MM-01.pdf", "AECOM Tender Clarification No.1.pdf"]
+    },
+    {
+      "trade": "Drilling",
+      "scope_summary": "Rotary drilling in soil and rock and provision of borehole casing, to the scheduled depths.",
+      "sor_items": [
+        {"item_ref": "E1", "description": "Rotary drilling in soil and rock", "unit": "m", "qty": 600.0},
+        {"item_ref": "E2", "description": "Provision and installation of borehole casing", "unit": "m", "qty": 200.0}
+      ],
+      "source_refs": ["I-GE_2026_14_TSC-SR-01.pdf", "I-GE_2026_14_TSC-MM-01.pdf"]
+    },
+    {
+      "trade": "Sampling",
+      "scope_summary": "Undisturbed and disturbed sampling from drillholes, to the schedule.",
+      "sor_items": [
+        {"item_ref": "F1", "description": "Undisturbed sample (U76)", "unit": "No.", "qty": 80.0},
+        {"item_ref": "F2", "description": "Disturbed / bulk sample", "unit": "No.", "qty": 120.0}
+      ],
+      "source_refs": ["I-GE_2026_14_TSC-SR-01.pdf", "I-GE_2026_14_TSC-MM-01.pdf"]
+    }
+  ]
+}

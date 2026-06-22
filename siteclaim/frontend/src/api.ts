@@ -57,7 +57,10 @@ export const api = {
   demoCases: () => get<DemoCaseSummary[]>("/demo/cases"),
   demoCase: (id: string) => get<DemoCase>(`/demo/${id}`),
 
-  ingest: (tender: TenderPackage) => post<ScopePackages>("/ingest", { tender }),
+  // `scopeFixture` selects the per-scenario baked scope split in DEMO_MODE; omit it
+  // to use the server's default (the building/fit-out scope).
+  ingest: (tender: TenderPackage, scopeFixture?: string | null) =>
+    post<ScopePackages>("/ingest", scopeFixture ? { tender, demo_fixture: scopeFixture } : { tender }),
   // Live multimodal ingest: POST the raw tender files as multipart/form-data.
   ingestUpload: (files: File[]) => {
     const fd = new FormData();

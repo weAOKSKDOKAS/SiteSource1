@@ -247,6 +247,9 @@ class RankedFirm(BaseModel):
     firm_id: str
     firm_name: str
     corrected_total: float
+    # Like-for-like total (corrected price + peer-valued scope gaps). Defaults to 0.0
+    # for callers that don't carry it; ranking falls back to corrected_total then.
+    normalized_total: float = 0.0
     risk_flags: list[RiskFlag] = Field(default_factory=list)
     recommended_against: bool = False
     reason: str = ""

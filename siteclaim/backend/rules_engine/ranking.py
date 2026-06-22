@@ -40,10 +40,15 @@ def rank_candidates(candidates: list[Candidate]) -> list[Candidate]:
 
 
 def rank_by_total(firms: list[RankedFirm]) -> list[RankedFirm]:
-    """Order firms clean-first by ascending ``corrected_total``; fatal-flagged last.
+    """Order firms clean-first by ascending **leveled** total; fatal-flagged last.
 
-    Marks every fatal-flagged firm ``recommended_against`` with a citing reason, so
-    the cheapest-but-flagged firm sinks below a pricier clean firm.
+    Ranking is by ``normalized_total`` — the like-for-like basis that adds each bid's
+    scope gaps back at the peer price — so a bid that left scope out can no longer win
+    on the strength of the omission. When ``normalized_total`` is unset (0.0) the
+    ranking falls back to ``corrected_total``, preserving the original behaviour for
+    callers that don't carry the leveled figure. Marks every fatal-flagged firm
+    ``recommended_against`` with a citing reason, so the cheapest-but-flagged firm
+    sinks below a pricier clean firm.
     """
     marked = [
         firm.model_copy(
@@ -54,4 +59,4 @@ def rank_by_total(firms: list[RankedFirm]) -> list[RankedFirm]:
         )
         for firm in firms
     ]
-    return sorted(marked, key=lambda f: (f.recommended_against, f.corrected_total))
+    return sorted(marked, key=lambda f: (f.recommended_against, f.normalized_total or f.corrected_total))

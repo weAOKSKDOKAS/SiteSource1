@@ -34,6 +34,7 @@ export function PageSourcing({
   const [caseId, setCaseId] = useState<string | null>(null);
   const [heroTrade, setHeroTrade] = useState("electrical");
   const [tender, setTender] = useState<TenderPackage | null>(null);
+  const [scopeFixture, setScopeFixture] = useState<string | null>(null);
   const [replies, setReplies] = useState<BidReply[]>([]);
   const [rationaleFixture, setRationaleFixture] = useState<string | null>(null);
   const [scope, setScope] = useState<ScopePackages | null>(null);
@@ -66,10 +67,10 @@ export function PageSourcing({
 
   const pickDemo = (id: string) => run(async () => {
     const src = await api.demoCase(id);
-    setCaseId(id); setHeroTrade(src.hero_trade); setTender(src.tender); setReplies(src.replies); setRationaleFixture(src.rationale_fixture);
+    setCaseId(id); setHeroTrade(src.hero_trade); setTender(src.tender); setScopeFixture(src.scope_fixture); setReplies(src.replies); setRationaleFixture(src.rationale_fixture);
     setScope(null); invalidateAfter(1);
   });
-  const runIngest = () => run(async () => { if (!tender) return; setScope(await api.ingest(tender)); invalidateAfter(1); });
+  const runIngest = () => run(async () => { if (!tender) return; setScope(await api.ingest(tender, scopeFixture)); invalidateAfter(1); });
   const goShortlist = () => run(async () => {
     if (!scope) return;
     const res = await api.shortlist(scope);
@@ -91,7 +92,7 @@ export function PageSourcing({
   const recompute = () => run(async () => { setLevelled(await api.level(replies, scope)); setLevelStale(false); });
   const goRecommend = () => run(async () => { if (!levelled) return; const r = await api.recommend(levelled, heroTrade, rationaleFixture); setRecommendation(r); setAward(r.recommended_firm_id); advance(5); });
   function reset() {
-    setStep(1); setMaxReached(1); setCaseId(null); setTender(null); setReplies([]); setRationaleFixture(null);
+    setStep(1); setMaxReached(1); setCaseId(null); setTender(null); setScopeFixture(null); setReplies([]); setRationaleFixture(null);
     setScope(null); setShortlist(null); setApprovals({}); setDispatch(null); setLevelled(null); setLevelStale(false); setRecommendation(null); setAward(null);
   }
 
@@ -104,7 +105,7 @@ export function PageSourcing({
         <div style={{ minWidth: 0 }}>
           {error && <div style={{ marginBottom: 16, borderRadius: 12, border: "1px solid rgba(229,72,77,0.3)", background: rgba("#E5484D", 0.08), padding: "12px 15px", fontSize: 13.5, color: "#E5484D" }}>Something went wrong: {error}</div>}
           {step === 1 && <StepIngest {...{ demoMode, demoCases, caseId, scope, loading, pickDemo, runIngest, goShortlist }} />}
-          {step === 2 && shortlist && <StepShortlist {...{ shortlist, heroTrade, covTotal, covFlagged, loading, cite, onBack: () => goTo(1), onNext: () => advance(3) }} />}
+          {step === 2 && shortlist && <StepShortlist {...{ shortlist, heroTrade, covTotal, covFlagged, loading, cite, onBack: () => goTo(1), onNext: () => advance(3), onLevel: goLevel }} />}
           {step === 3 && shortlist && <StepDispatch {...{ shortlist, approvals, dispatch, loading, toggleApprove, sendDispatch, onBack: () => goTo(2), onNext: goLevel }} />}
           {step === 4 && levelled && <StepLevel {...{ levelled, replies, levelStale, loading, editRate, recompute, onBack: () => goTo(3), onNext: goRecommend }} />}
           {step === 5 && recommendation && <StepRecommend {...{ recommendation, award, barReveal, cite, setAward, onBack: () => goTo(4), onReset: reset }} />}
@@ -229,10 +230,41 @@ function citeButton(e: { source: string; reference: string | null; snippet: stri
   );
 }
 
-function StepShortlist({ shortlist, heroTrade, covTotal, covFlagged, loading, cite, onBack, onNext }: {
-  shortlist: ShortlistSet; heroTrade: string; covTotal: number; covFlagged: number; loading: boolean; cite: Cite; onBack: () => void; onNext: () => void;
+function StepShortlist({ shortlist, heroTrade, covTotal, covFlagged, loading, cite, onBack, onNext, onLevel }: {
+  shortlist: ShortlistSet; heroTrade: string; covTotal: number; covFlagged: number; loading: boolean; cite: Cite; onBack: () => void; onNext: () => void; onLevel: () => void;
 }) {
   const trades = Object.keys(shortlist.per_trade).sort((a, b) => (a === heroTrade ? -1 : b === heroTrade ? 1 : a.localeCompare(b)));
+  const totalCandidates = Object.values(shortlist.per_trade).reduce((n, cs) => n + cs.length, 0);
+
+  // No firm in the discovery database does this tender's work sections (e.g. the
+  // ground-investigation drainage scenario). Be honest rather than render a blank
+  // panel, and route straight to leveling — the scenario's point is ingest + level.
+  if (totalCandidates === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <div>
+          {kicker("Step 02 · Shortlist")}
+          <h1 style={h1Sx}>No matching subcontractors to screen</h1>
+        </div>
+        <div style={{ ...cardSx, padding: 22, borderColor: rgba("#D99513", 0.3) }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 13 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 10, background: rgba("#D99513", 0.12), fontSize: 18 }}>🛈</span>
+            <span style={{ fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#9a6a08" }}>No risk screen for this work section</span>
+          </div>
+          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, color: SOFT }}>
+            No subcontractors in the discovery database match this work section. This demo's
+            register data covers building contractors; ground-investigation specialists are on
+            the roadmap. This scenario demonstrates document ingest and bid leveling.
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, paddingTop: 4 }}>
+          <button type="button" onClick={onBack} style={ghostBtn}>← Back</button>
+          <button type="button" onClick={onLevel} disabled={loading} style={primaryBtn(true)}>Level the bids →</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
