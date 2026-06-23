@@ -7,6 +7,8 @@ does), CORS is permissive for local dev, and ``/health`` reports ``demo_mode``. 
 multipart upload route lets a live tender PDF be ingested when DEMO_MODE is off.
 """
 
+import re
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -375,6 +377,19 @@ def _project_code(project_name: str) -> str:
     return (project_name or "").split(" — ")[0].strip() or "GE/2026/14"
 
 
+def _stamp_name(project_name: str) -> str:
+    """A dated, filesystem-safe download name, e.g. ``GE-2026-14_bid_adjudication_2026-06-23.xlsx``."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", _project_code(project_name)).strip("-") or "tender"
+    return f"{slug}_bid_adjudication_{date.today().isoformat()}.xlsx"
+
+
+def _adjudication_meta(project_name: str) -> dict[str, str]:
+    """Real title-block parties for the known tender; empty for any other project."""
+    if "GE/2026/14" in (project_name or ""):
+        return {"employer": "VSL Intrafor Hong Kong Limited", "engineer": "AECOM"}
+    return {}
+
+
 @app.post("/dispatch", response_model=DispatchSet)
 def post_dispatch(req: DispatchRequest) -> DispatchSet:
     if req.dispatch is not None:
@@ -408,13 +423,23 @@ class LevelRequest(BaseModel):
     demo_fixture: str | None = REPLIES_FIXTURE
 
 
+# The adjudication workbook is regenerated on every /level call and served from a
+# fixed path; this carries the dated, project-stamped download name from the last
+# /level to the /leveling.xlsx download.
+_download_name = "leveling.xlsx"
+
+
 @app.post("/level", response_model=list[LevelledBid])
 def post_level(req: LevelRequest) -> list[LevelledBid]:
+    global _download_name
     replies = req.replies or load_demo_replies(req.demo_fixture)
     levelled = level_bids(replies, req.scope)
+    project_name = req.scope.project_name if req.scope else ""
     export_leveling_xlsx(  # refresh the downloadable adjudication workbook
-        levelled, replies, path=OUT_PATH, project_name=req.scope.project_name if req.scope else "",
+        levelled, replies, path=OUT_PATH, project_name=project_name,
+        **_adjudication_meta(project_name),
     )
+    _download_name = _stamp_name(project_name)
     return levelled
 
 
@@ -426,7 +451,7 @@ def get_leveling_xlsx() -> FileResponse:
     return FileResponse(
         OUT_PATH,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="leveling.xlsx",
+        filename=_download_name,
     )
 
 

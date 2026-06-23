@@ -4,11 +4,14 @@ on it).
 
 Sheets:
   * Summary                  — title block + a ranking table per work section,
-                               recommended tenderer per section.
-  * <one per section>        — the Schedule-of-Rates comparison (Item · Desc · Unit ·
-                               Qty · per-tenderer Rate/Amount · scheduled-rate
-                               benchmark · variance · remarks), with corrected /
-                               normalised subtotals and above-benchmark rates flagged.
+                               recommended tenderer per section, benchmark shown
+                               distinctly as a baseline (not a tenderer).
+  * <one per section>        — the Schedule-of-Rates comparison. The tender's own
+                               scheduled rates are the FIRST, distinct data column
+                               (the benchmark); the firms taken to bid follow, each
+                               with Rate / Amount / variance-vs-benchmark. Corrected
+                               and normalised subtotals are bold; rates above the
+                               scheduled rate are shaded.
   * Arithmetic Corrections   — every qty×rate correction (stated vs computed).
   * Scope Normalisation      — each scope gap added back at the peer rate, showing the
                                like-for-like flip.
@@ -33,6 +36,16 @@ OUT_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "out" / "leveling.
 BENCHMARK_ID = "tender-scheduled-rates"
 _CUR = '"HK$"#,##0'
 _PCT = "+0.0%;-0.0%;0.0%"
+
+# Honesty scoping (drainage demo): a section is only labelled when it carries the
+# tender's scheduled-rate benchmark. Field testing returned no subcontractor SoR, so
+# its bid columns are illustrative; in the other benchmarked sections the named real
+# bidder's column is its true submitted rates and the second column is representative.
+_REAL_BID_IDS = {
+    "kai-wai-engineering-survey-and-geophysics-limited-3f7b",
+    "sixense-limited-5d2c",
+}
+_ILLUSTRATIVE_TRADES = {"field_testing"}
 
 _TITLES = {
     "field_testing": "Field Testing",
@@ -61,12 +74,51 @@ def _sheet_name(name: str, used: set[str]) -> str:
     return candidate
 
 
+def _bid_tag(trade: str, firm_id: str, has_benchmark: bool) -> str:
+    """The honesty suffix on a bidder's column header (only in benchmarked sections)."""
+    if not has_benchmark:
+        return ""
+    if trade in _ILLUSTRATIVE_TRADES:
+        return " (illustrative)"
+    if firm_id in _REAL_BID_IDS:
+        return ""
+    return " (representative)"
+
+
+def _bid_label(firm_name: str, trade: str, firm_id: str, has_benchmark: bool) -> str:
+    """Column header = firm name + honesty suffix, without doubling a marker the DB
+    profile name already carries (e.g. ``Subcontractor GI-1 (illustrative)``)."""
+    tag = _bid_tag(trade, firm_id, has_benchmark)
+    if tag and tag.strip().lower() in firm_name.lower():
+        return firm_name
+    return f"{firm_name}{tag}"
+
+
+def _section_note(trade: str, has_benchmark: bool) -> str:
+    if not has_benchmark:
+        return ""
+    if trade in _ILLUSTRATIVE_TRADES:
+        return (
+            "No subcontractor schedule of rates was returned for this package — the bid "
+            "columns are illustrative. The benchmark column is the tender's own scheduled rates."
+        )
+    return (
+        "The named firm's column is its real submitted rates; the competitor column is "
+        "representative. The benchmark column is the tender's own scheduled rates."
+    )
+
+
 def export_leveling_xlsx(
     levelled: list[LevelledBid],
     replies: list[BidReply],
     item_order: Optional[list[str]] = None,
     path: Path | str = OUT_PATH,
     project_name: str = "",
+    *,
+    employer: str = "",
+    engineer: str = "",
+    prepared_by: str = "",
+    checked_by: str = "",
 ) -> Path:
     """Write the adjudication workbook to ``path`` and return it."""
     from openpyxl import Workbook  # lazy — leveling math must not require openpyxl
@@ -75,19 +127,37 @@ def export_leveling_xlsx(
 
     # ---- shared styles -----------------------------------------------------
     INK = "0F1B2D"
+    BENCH = "1F4E66"  # benchmark band — distinct from the tenderer band
     band = PatternFill("solid", fgColor=INK)
+    bench_band = PatternFill("solid", fgColor=BENCH)
     band_font = Font(bold=True, color="FFFFFF", size=10)
     title_font = Font(bold=True, size=15, color=INK)
     sub_font = Font(size=9.5, italic=True, color="6B7A90")
+    key_font = Font(bold=True, color=INK)
     bold = Font(bold=True)
     subtotal_fill = PatternFill("solid", fgColor="EEF2F8")
-    flag_fill = PatternFill("solid", fgColor="FCE4E4")  # rate above benchmark
-    rec_fill = PatternFill("solid", fgColor="E5F4EC")   # recommended row
+    bench_col_fill = PatternFill("solid", fgColor="EAF1F8")  # benchmark data column
+    flag_fill = PatternFill("solid", fgColor="FCE4E4")        # rate above benchmark
+    rec_fill = PatternFill("solid", fgColor="E5F4EC")         # recommended row
     thin = Side(style="thin", color="D5DCE6")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     right = Alignment(horizontal="right")
     left = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    centre = Alignment(horizontal="center")
+    centre = Alignment(horizontal="center", vertical="center")
+    centre_wrap = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    def box(ws, r1, c1, r2, c2, *, fill=None, font=None, align=None, bordered=True):
+        for rr in range(r1, r2 + 1):
+            for cc in range(c1, c2 + 1):
+                cell = ws.cell(row=rr, column=cc)
+                if fill is not None:
+                    cell.fill = fill
+                if font is not None:
+                    cell.font = font
+                if align is not None:
+                    cell.alignment = align
+                if bordered:
+                    cell.border = border
 
     # ---- data indexes ------------------------------------------------------
     trades: list[str] = []
@@ -109,7 +179,7 @@ def export_leveling_xlsx(
 
     def section_items(trade: str, tenderers, benchmark) -> list[str]:
         order: list[str] = []
-        for b in [*tenderers, *( [benchmark] if benchmark else [])]:
+        for b in [*( [benchmark] if benchmark else []), *tenderers]:
             rep = reply_of.get((b.firm_id, trade))
             for ln in (rep.line_items if rep else []):
                 if ln.item_ref not in order:
@@ -123,16 +193,11 @@ def export_leveling_xlsx(
         for col, w in widths.items():
             ws.column_dimensions[get_column_letter(col)].width = w
 
-    def band_row(ws, row: int, ncols: int) -> None:
-        for c in range(1, ncols + 1):
-            cell = ws.cell(row=row, column=c)
-            cell.fill, cell.font, cell.border = band, band_font, border
-
     wb = Workbook()
     used_names: set[str] = set()
 
     # =======================================================================
-    # SHEET: Summary
+    # SHEET: Summary  (title block + per-section ranking)
     # =======================================================================
     ws = wb.active
     ws.title = _sheet_name("Summary", used_names)
@@ -140,17 +205,27 @@ def export_leveling_xlsx(
     ws.merge_cells("A1:F1")
     ws["A1"] = "Tender Bid Adjudication — Levelled Comparison"
     ws["A1"].font = title_font
-    meta = [
-        ("Project", project_name or "Tender — levelled bid comparison"),
-        ("Employer", "________________________"),
-        ("Main Contractor", "________________________"),
-        ("Date", _dt.date.today().strftime("%d %b %Y")),
-        ("Prepared by", "________________________"),
-        ("Checked by", "________________________"),
-    ]
+
+    code = (project_name or "").split(" — ")[0].strip()
+    ctitle = project_name.split(" — ", 1)[1].strip() if " — " in (project_name or "") else ""
+    meta: list[tuple[str, str]] = []
+    if code:
+        meta.append(("Contract No.", code))
+    if ctitle:
+        meta.append(("Contract", ctitle))
+    if not code and not ctitle:
+        meta.append(("Project", "Tender — levelled bid comparison"))
+    if employer:
+        meta.append(("Employer / Main Contractor", employer))
+    if engineer:
+        meta.append(("Engineer", engineer))
+    meta.append(("Date", _dt.date.today().strftime("%d %b %Y")))
+    meta.append(("Prepared by", prepared_by or "SiteSource — automated bid adjudication"))
+    meta.append(("Checked by", checked_by or "For review and award by the Quantity Surveyor"))
+
     r = 2
     for k, v in meta:
-        ws.cell(row=r, column=1, value=k).font = bold
+        ws.cell(row=r, column=1, value=k).font = key_font
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
         ws.cell(row=r, column=2, value=v)
         r += 1
@@ -198,10 +273,12 @@ def export_leveling_xlsx(
                         cell.font = bold
             r += 1
         if benchmark:
-            vals = [f"{benchmark.firm_name}", benchmark.corrected_total, benchmark.normalized_total, "—", "—", "Tender Schedule of Rates — baseline, not a tenderer"]
+            vals = [f"{benchmark.firm_name}", benchmark.corrected_total, benchmark.normalized_total, "—", "—",
+                    "Tender Schedule of Rates — baseline for comparison, not a tenderer"]
             for c, v in enumerate(vals, start=1):
                 cell = ws.cell(row=r, column=c, value=v)
-                cell.border, cell.font = border, sub_font
+                cell.border, cell.fill = border, bench_col_fill
+                cell.font = Font(italic=True, color=BENCH, bold=(c == 1))
                 if c in (2, 3):
                     cell.number_format, cell.alignment = _CUR, right
                 elif c in (4, 5):
@@ -214,53 +291,79 @@ def export_leveling_xlsx(
     ws.cell(row=r, column=1, value="Recommended award by section").font = bold
     r += 1
     for sect, firm in rec_lines:
-        ws.cell(row=r, column=1, value=sect).font = bold
+        ws.cell(row=r, column=1, value=sect).font = key_font
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
         ws.cell(row=r, column=2, value=firm)
         r += 1
-    fit(ws, {1: 34, 2: 16, 3: 16, 4: 7, 5: 13, 6: 52})
+    fit(ws, {1: 34, 2: 16, 3: 16, 4: 7, 5: 13, 6: 56})
     ws.freeze_panes = "A2"
 
     # =======================================================================
-    # SHEET per section: the SoR comparison
+    # SHEET per section: the SoR comparison (benchmark first, then tenderers)
     # =======================================================================
     finding_items = {(b.firm_id, b.trade): {f.location.replace("line ", "") for f in b.arithmetic_findings} for b in levelled}
     gap_items = {(b.firm_id, b.trade): {g.split(" — ")[0] for g in b.scope_gaps} for b in levelled}
 
     for trade in trades:
         tenderers, benchmark = section_bids(trade)
+        has_bench = benchmark is not None
         order = section_items(trade, tenderers, benchmark)
         wss = wb.create_sheet(_sheet_name(_title(trade), used_names))
         wss.sheet_view.showGridLines = False
 
-        ncols = 4 + 2 * len(tenderers) + (2 if benchmark else 0) + 1
+        # ---- column geometry: Item·Desc·Unit·Qty | [Bench Rate·Amount] |
+        #      per tenderer [Rate·Amount·Var] | Remarks
+        col = 5
+        bench_rate_col = bench_amt_col = None
+        if has_bench:
+            bench_rate_col, bench_amt_col = col, col + 1
+            col += 2
+        rate_col, amt_col, var_col = {}, {}, {}
+        for b in tenderers:
+            rate_col[b.firm_id], amt_col[b.firm_id], var_col[b.firm_id] = col, col + 1, col + 2
+            col += 3
+        remarks_col = col
+        ncols = remarks_col
+
+        # row 1: banner ; row 2: honesty note ; rows 3-4: two-row header ; data row 5+
         wss.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
         wss.cell(row=1, column=1, value=f"{_title(trade)} — Schedule of Rates comparison (levelled)").font = title_font
+        note = _section_note(trade, has_bench)
+        wss.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+        nc = wss.cell(row=2, column=1, value=note)
+        nc.font, nc.alignment = sub_font, left
 
-        # header row (row 2)
-        head = ["Item", "Description", "Unit", "Qty"]
-        rate_col, amt_col = {}, {}
-        col = 5
+        # identity columns span the two header rows
+        for c, label in ((1, "Item"), (2, "Description"), (3, "Unit"), (4, "Qty")):
+            wss.merge_cells(start_row=3, start_column=c, end_row=4, end_column=c)
+            wss.cell(row=3, column=c, value=label)
+            box(wss, 3, c, 4, c, fill=band, font=band_font, align=centre_wrap)
+        # benchmark group
+        if has_bench:
+            wss.merge_cells(start_row=3, start_column=bench_rate_col, end_row=3, end_column=bench_amt_col)
+            wss.cell(row=3, column=bench_rate_col, value="Tender Scheduled Rates (Benchmark)")
+            box(wss, 3, bench_rate_col, 3, bench_amt_col, fill=bench_band, font=band_font, align=centre_wrap)
+            wss.cell(row=4, column=bench_rate_col, value="Rate")
+            wss.cell(row=4, column=bench_amt_col, value="Amount")
+            box(wss, 4, bench_rate_col, 4, bench_amt_col, fill=bench_band, font=band_font, align=centre_wrap)
+        # tenderer groups
         for b in tenderers:
-            rate_col[b.firm_id], amt_col[b.firm_id] = col, col + 1
-            head += [f"{b.firm_name} — Rate", f"{b.firm_name} — Amount"]
-            col += 2
-        sched_col = var_col = None
-        if benchmark:
-            sched_col, var_col = col, col + 1
-            head += ["Scheduled Rate", "Variance vs benchmark %"]
-            col += 2
-        remarks_col = col
-        head.append("Remarks / flags")
-        for c, h in enumerate(head, start=1):
-            wss.cell(row=2, column=c, value=h)
-        band_row(wss, 2, ncols)
-        for c in range(1, ncols + 1):
-            wss.cell(row=2, column=c).alignment = Alignment(horizontal="center", wrap_text=True)
+            wss.merge_cells(start_row=3, start_column=rate_col[b.firm_id], end_row=3, end_column=var_col[b.firm_id])
+            wss.cell(row=3, column=rate_col[b.firm_id], value=_bid_label(b.firm_name, trade, b.firm_id, has_bench))
+            box(wss, 3, rate_col[b.firm_id], 3, var_col[b.firm_id], fill=band, font=band_font, align=centre_wrap)
+            wss.cell(row=4, column=rate_col[b.firm_id], value="Rate")
+            wss.cell(row=4, column=amt_col[b.firm_id], value="Amount")
+            wss.cell(row=4, column=var_col[b.firm_id], value="Var vs SR")
+            box(wss, 4, rate_col[b.firm_id], 4, var_col[b.firm_id], fill=band, font=band_font, align=centre_wrap)
+        # remarks spans both header rows
+        wss.merge_cells(start_row=3, start_column=remarks_col, end_row=4, end_column=remarks_col)
+        wss.cell(row=3, column=remarks_col, value="Remarks / flags")
+        box(wss, 3, remarks_col, 4, remarks_col, fill=band, font=band_font, align=centre_wrap)
 
-        row = 3
+        row = 5
         for item in order:
-            sample = next((line_of.get((b.firm_id, trade, item)) for b in [*tenderers, *( [benchmark] if benchmark else [])] if line_of.get((b.firm_id, trade, item))), None)
+            sources = [*( [benchmark] if has_bench else []), *tenderers]
+            sample = next((line_of.get((b.firm_id, trade, item)) for b in sources if line_of.get((b.firm_id, trade, item))), None)
             if sample is None:
                 continue
             provisional = "provisional" in (sample.description or "").lower()
@@ -270,38 +373,43 @@ def export_leveling_xlsx(
             qcell = wss.cell(row=row, column=4, value=sample.qty)
             qcell.number_format = "#,##0.##"
             remarks: list[str] = []
-            bench_line = line_of.get((BENCHMARK_ID, trade, item)) if benchmark else None
+
+            bench_line = line_of.get((BENCHMARK_ID, trade, item)) if has_bench else None
             bench_rate = bench_line.rate if bench_line else None
+            if has_bench:
+                rc = wss.cell(row=row, column=bench_rate_col)
+                ac = wss.cell(row=row, column=bench_amt_col)
+                if bench_line and bench_line.rate is not None:
+                    rc.value, rc.number_format = bench_line.rate, _CUR
+                    ac.value, ac.number_format = round(bench_line.qty * bench_line.rate, 2), _CUR
+                else:
+                    rc.value, ac.value = "—", "—"
+                rc.alignment = ac.alignment = right
+                rc.fill = ac.fill = bench_col_fill
+
             for b in tenderers:
                 ln = line_of.get((b.firm_id, trade, item))
                 rc = wss.cell(row=row, column=rate_col[b.firm_id])
                 ac = wss.cell(row=row, column=amt_col[b.firm_id])
+                vc = wss.cell(row=row, column=var_col[b.firm_id])
+                rc.alignment = ac.alignment = vc.alignment = right
                 if ln is None or ln.rate is None:
-                    rc.value, ac.value = "—", "—"
-                    rc.alignment = ac.alignment = right
+                    rc.value = ac.value = vc.value = "—"
                     if item in gap_items.get((b.firm_id, trade), set()):
+                        rc.fill = ac.fill = flag_fill
                         remarks.append(f"{b.firm_name}: not priced — scope gap")
                 else:
-                    rc.value, rc.number_format, rc.alignment = ln.rate, _CUR, right
-                    ac.value, ac.number_format, ac.alignment = round(ln.qty * ln.rate, 2), _CUR, right
-                    if bench_rate not in (None, 0) and ln.rate > bench_rate:
-                        rc.fill = flag_fill
-                        remarks.append(f"{b.firm_name}: rate above benchmark")
+                    rc.value, rc.number_format = ln.rate, _CUR
+                    ac.value, ac.number_format = round(ln.qty * ln.rate, 2), _CUR
+                    if bench_rate not in (None, 0):
+                        vc.value, vc.number_format = (ln.rate - bench_rate) / bench_rate, _PCT
+                        if ln.rate > bench_rate:
+                            rc.fill = flag_fill
+                            remarks.append(f"{b.firm_name}: rate above benchmark")
+                    else:
+                        vc.value = "—"
                 if item in finding_items.get((b.firm_id, trade), set()):
                     remarks.append(f"{b.firm_name}: arithmetic corrected")
-            if benchmark:
-                sc = wss.cell(row=row, column=sched_col)
-                if bench_rate is not None:
-                    sc.value, sc.number_format, sc.alignment = bench_rate, _CUR, right
-                else:
-                    sc.value, sc.alignment = "—", right
-                vc = wss.cell(row=row, column=var_col)
-                lead = line_of.get((tenderers[0].firm_id, trade, item)) if tenderers else None
-                if lead and lead.rate is not None and bench_rate not in (None, 0):
-                    vc.value = (lead.rate - bench_rate) / bench_rate
-                    vc.number_format, vc.alignment = _PCT, right
-                else:
-                    vc.value, vc.alignment = "—", right
             if provisional:
                 remarks.append("Provisional sum — carried separately")
             rcell = wss.cell(row=row, column=remarks_col, value="; ".join(dict.fromkeys(remarks)))
@@ -313,31 +421,34 @@ def export_leveling_xlsx(
         # subtotal rows: corrected then normalised
         for label, attr in (("Corrected tender sum", "corrected_total"), ("Normalised tender sum (like-for-like)", "normalized_total")):
             wss.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
-            lc = wss.cell(row=row, column=1, value=label)
-            lc.font = bold
+            wss.cell(row=row, column=1, value=label).font = bold
+            if has_bench:
+                cell = wss.cell(row=row, column=bench_amt_col, value=getattr(benchmark, attr))
+                cell.number_format, cell.font, cell.alignment, cell.fill = _CUR, bold, right, bench_col_fill
             for b in tenderers:
                 cell = wss.cell(row=row, column=amt_col[b.firm_id], value=getattr(b, attr))
                 cell.number_format, cell.font, cell.alignment = _CUR, bold, right
-            if benchmark:
-                cell = wss.cell(row=row, column=sched_col, value=getattr(benchmark, attr))
-                cell.number_format, cell.font, cell.alignment = _CUR, bold, right
             for c in range(1, ncols + 1):
                 cell = wss.cell(row=row, column=c)
-                cell.border, cell.fill = border, subtotal_fill
+                cell.border = border
+                if not (has_bench and c in (bench_rate_col, bench_amt_col)):
+                    cell.fill = subtotal_fill
                 if not cell.font.bold:
                     cell.font = bold
             row += 1
 
-        widths = {1: 9, 2: 44, 3: 9, 4: 8}
+        widths = {1: 10, 2: 46, 3: 9, 4: 8}
+        if has_bench:
+            widths[bench_rate_col] = 13
+            widths[bench_amt_col] = 14
         for b in tenderers:
             widths[rate_col[b.firm_id]] = 13
             widths[amt_col[b.firm_id]] = 14
-        if benchmark:
-            widths[sched_col] = 14
-            widths[var_col] = 13
-        widths[remarks_col] = 40
+            widths[var_col[b.firm_id]] = 10
+        widths[remarks_col] = 42
         fit(wss, widths)
-        wss.freeze_panes = "A3"
+        wss.row_dimensions[3].height = 42
+        wss.freeze_panes = "E5"
 
     # =======================================================================
     # SHEET: Arithmetic Corrections
@@ -347,7 +458,7 @@ def export_leveling_xlsx(
     head = ["Tenderer", "Section", "Item", "Stated amount", "Computed (Qty × Rate)", "Corrected"]
     for c, h in enumerate(head, start=1):
         wsa.cell(row=1, column=c, value=h)
-    band_row(wsa, 1, len(head))
+    box(wsa, 1, 1, 1, len(head), fill=band, font=band_font, align=centre)
     row = 2
     for b in levelled:
         for f in b.arithmetic_findings:
@@ -364,7 +475,7 @@ def export_leveling_xlsx(
     if row == 2:
         wsa.merge_cells("A2:F2")
         wsa.cell(row=2, column=1, value="No arithmetic corrections — all stated amounts tie to Qty × Rate.").font = sub_font
-    fit(wsa, {1: 34, 2: 18, 3: 9, 4: 16, 5: 20, 6: 16})
+    fit(wsa, {1: 40, 2: 18, 3: 9, 4: 16, 5: 20, 6: 16})
     wsa.freeze_panes = "A2"
 
     # =======================================================================
@@ -377,7 +488,7 @@ def export_leveling_xlsx(
     head = ["Tenderer", "Section", "Item / description", "Peer amount added", "Corrected sum", "Normalised sum"]
     for c, h in enumerate(head, start=1):
         wsn.cell(row=2, column=c, value=h)
-    band_row(wsn, 2, len(head))
+    box(wsn, 2, 1, 2, len(head), fill=band, font=band_font, align=centre)
     row = 3
     any_gap = False
     for b in levelled:
@@ -403,7 +514,7 @@ def export_leveling_xlsx(
     if not any_gap:
         wsn.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
         wsn.cell(row=row, column=1, value="No scope gaps — every tenderer priced the full scope.").font = sub_font
-    fit(wsn, {1: 34, 2: 18, 3: 46, 4: 18, 5: 16, 6: 16})
+    fit(wsn, {1: 40, 2: 18, 3: 48, 4: 18, 5: 16, 6: 16})
     wsn.freeze_panes = "A3"
 
     # =======================================================================
@@ -416,7 +527,7 @@ def export_leveling_xlsx(
     head = ["Tenderer", "Section", "Stated exclusion / assumption"]
     for c, h in enumerate(head, start=1):
         wsq.cell(row=2, column=c, value=h)
-    band_row(wsq, 2, len(head))
+    box(wsq, 2, 1, 2, len(head), fill=band, font=band_font, align=centre)
     row = 3
     any_excl = False
     for b in levelled:
@@ -430,7 +541,7 @@ def export_leveling_xlsx(
     if not any_excl:
         wsq.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
         wsq.cell(row=row, column=1, value="No stated exclusions or qualifications.").font = sub_font
-    fit(wsq, {1: 34, 2: 18, 3: 70})
+    fit(wsq, {1: 40, 2: 18, 3: 76})
     wsq.freeze_panes = "A3"
 
     out = Path(path)

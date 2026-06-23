@@ -1,21 +1,5 @@
 [
   {
-    "firm_id": "F-GI-01",
-    "trade": "field_testing",
-    "line_items": [
-      {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0, "rate": 300000.0, "amount": 300000.0},
-      {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0, "rate": 50000.0, "amount": 200000.0},
-      {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0, "rate": 31000.0, "amount": 372000.0},
-      {"item_ref": "G14", "description": "Purchase and supply water for drainage field test", "unit": "m3", "qty": 2000.0, "rate": null, "amount": null},
-      {"item_ref": "G15", "description": "Extra over G14 for distance/elevation", "unit": "No.", "qty": 3.0, "rate": 1430.0, "amount": 4290.0},
-      {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0, "rate": null, "amount": null},
-      {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0, "rate": 1155.0, "amount": 46200.0},
-      {"item_ref": "G17b", "description": "Drainage modification — construct U-channel", "unit": "m", "qty": 60.0, "rate": 1635.0, "amount": 98100.0}
-    ],
-    "exclusions": ["Water supply (G14) assumed provided free of charge by the main contractor; not priced."],
-    "claimed_total": 1020590.0
-  },
-  {
     "firm_id": "gold-ram-engineering-development-limited-9bbd",
     "trade": "field_testing",
     "line_items": [
@@ -32,20 +16,36 @@
     "claimed_total": 1114790.0
   },
   {
-    "firm_id": "driltech-ground-engineering-limited-a721",
+    "firm_id": "F-GI-01",
     "trade": "field_testing",
     "line_items": [
-      {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0, "rate": 305000.0, "amount": 305000.0},
-      {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0, "rate": 51000.0, "amount": 204000.0},
-      {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0, "rate": 30500.0, "amount": 300000.0},
-      {"item_ref": "G14", "description": "Purchase and supply water for drainage field test", "unit": "m3", "qty": 2000.0, "rate": 8.0, "amount": 16000.0},
-      {"item_ref": "G15", "description": "Extra over G14 for distance/elevation", "unit": "No.", "qty": 3.0, "rate": 1450.0, "amount": 4350.0},
-      {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0, "rate": 770.0, "amount": 92400.0},
-      {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0, "rate": 1160.0, "amount": 46400.0},
-      {"item_ref": "G17b", "description": "Drainage modification — construct U-channel", "unit": "m", "qty": 60.0, "rate": 1650.0, "amount": 99000.0}
+      {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0, "rate": 300000.0, "amount": 300000.0},
+      {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0, "rate": 50000.0, "amount": 200000.0},
+      {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0, "rate": 31000.0, "amount": 372000.0},
+      {"item_ref": "G14", "description": "Purchase and supply water for drainage field test", "unit": "m3", "qty": 2000.0, "rate": null, "amount": null},
+      {"item_ref": "G15", "description": "Extra over G14 for distance/elevation", "unit": "No.", "qty": 3.0, "rate": 1430.0, "amount": 4290.0},
+      {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0, "rate": null, "amount": null},
+      {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0, "rate": 1155.0, "amount": 46200.0},
+      {"item_ref": "G17b", "description": "Drainage modification — construct U-channel", "unit": "m", "qty": 60.0, "rate": 1635.0, "amount": 98100.0}
+    ],
+    "exclusions": ["Water supply (G14) assumed provided free of charge by the main contractor; not priced."],
+    "claimed_total": 1020590.0
+  },
+  {
+    "firm_id": "tender-scheduled-rates",
+    "trade": "field_testing",
+    "line_items": [
+      {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0, "rate": 300000.0, "amount": 300000.0},
+      {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0, "rate": 50000.0, "amount": 200000.0},
+      {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0, "rate": 30000.0, "amount": 360000.0},
+      {"item_ref": "G14", "description": "Purchase and supply water for drainage field test", "unit": "m3", "qty": 2000.0, "rate": 7.2, "amount": 14400.0},
+      {"item_ref": "G15", "description": "Extra over G14 for distance/elevation", "unit": "No.", "qty": 3.0, "rate": 1430.0, "amount": 4290.0},
+      {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0, "rate": 750.0, "amount": 90000.0},
+      {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0, "rate": 1155.0, "amount": 46200.0},
+      {"item_ref": "G17b", "description": "Drainage modification — construct U-channel", "unit": "m", "qty": 60.0, "rate": 1635.0, "amount": 98100.0}
     ],
     "exclusions": [],
-    "claimed_total": 1067150.0
+    "claimed_total": 1112990.0
   },
   {
     "firm_id": "kai-wai-engineering-survey-and-geophysics-limited-3f7b",
@@ -63,6 +63,23 @@
     ],
     "exclusions": [],
     "claimed_total": 153450.0
+  },
+  {
+    "firm_id": "fugro-geotechnical-services-limited-af2a",
+    "trade": "field_installations",
+    "line_items": [
+      {"item_ref": "H14a", "description": "2-dimensional LiDAR sensor", "unit": "No.", "qty": 1.0, "rate": 60000.0, "amount": 60000.0},
+      {"item_ref": "H14b", "description": "Ultrasonic level sensor", "unit": "No.", "qty": 1.0, "rate": 10000.0, "amount": 10000.0},
+      {"item_ref": "H14c", "description": "Dual-tip conductivity probe", "unit": "No.", "qty": 1.0, "rate": 36000.0, "amount": 36000.0},
+      {"item_ref": "H14d", "description": "Optical camera", "unit": "No.", "qty": 1.0, "rate": 8500.0, "amount": 8500.0},
+      {"item_ref": "H14e", "description": "Velocimeter", "unit": "No.", "qty": 1.0, "rate": 18500.0, "amount": 18500.0},
+      {"item_ref": "H14f", "description": "Flowmeter", "unit": "No.", "qty": 1.0, "rate": 18500.0, "amount": 18500.0},
+      {"item_ref": "H15", "description": "Closed Circuit Television (CCTV) system, one camera", "unit": "No.", "qty": 1.0, "rate": 4300.0, "amount": 4300.0},
+      {"item_ref": "H16", "description": "Monitoring, data collection and data transmission", "unit": "No.-Month", "qty": 24.0, "rate": 880.0, "amount": 20000.0},
+      {"item_ref": "H17", "description": "Operation and maintenance of the CCTV", "unit": "No.-Month", "qty": 12.0, "rate": 880.0, "amount": 10560.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 186360.0
   },
   {
     "firm_id": "tender-scheduled-rates",
@@ -98,6 +115,24 @@
     ],
     "exclusions": [],
     "claimed_total": 240340.0
+  },
+  {
+    "firm_id": "geotechnics-concrete-engineering-hong-kong-limited-b412",
+    "trade": "geophysical_survey",
+    "line_items": [
+      {"item_ref": "J5a", "description": "Mobilise/demobilise land resistivity multi-channel survey equipment", "unit": "No.", "qty": 1.0, "rate": 90000.0, "amount": 90000.0},
+      {"item_ref": "J5b", "description": "Mobilise/demobilise ground penetrating radar survey equipment", "unit": "No.", "qty": 1.0, "rate": 80000.0, "amount": 80000.0},
+      {"item_ref": "J6a", "description": "Land resistivity survey, spacing >5m but ≤10m", "unit": "Point", "qty": 60.0, "rate": 600.0, "amount": 36000.0},
+      {"item_ref": "J6b", "description": "Land resistivity survey, spacing >2m but ≤5m", "unit": "Point", "qty": 40.0, "rate": 370.0, "amount": 14800.0},
+      {"item_ref": "J6c", "description": "Land resistivity survey, spacing ≤2m", "unit": "Point", "qty": 20.0, "rate": 235.0, "amount": 4700.0},
+      {"item_ref": "J7", "description": "Carry out ground penetrating radar survey", "unit": "m", "qty": 800.0, "rate": 14.0, "amount": 11200.0},
+      {"item_ref": "J8a", "description": "Extra over for data interpretation — land resistivity", "unit": "Point", "qty": 120.0, "rate": 110.0, "amount": 13200.0},
+      {"item_ref": "J8b", "description": "Extra over for data interpretation — GPR", "unit": "m", "qty": 800.0, "rate": 28.0, "amount": 22400.0},
+      {"item_ref": "J9", "description": "Provide set of two copies of the Final Report including CD-ROM", "unit": "Set", "qty": 1.0, "rate": 44000.0, "amount": 44000.0},
+      {"item_ref": "J10", "description": "Provide additional copies of the Final Report", "unit": "No.", "qty": 3.0, "rate": 3600.0, "amount": 10800.0}
+    ],
+    "exclusions": [],
+    "claimed_total": 327100.0
   },
   {
     "firm_id": "tender-scheduled-rates",

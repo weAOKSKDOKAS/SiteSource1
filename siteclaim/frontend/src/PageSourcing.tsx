@@ -778,56 +778,115 @@ function CalloutCol({ title, color, children }: { title: string; color: string; 
 }
 
 // ----------------------------------------------------------------------------
+// The tender's own Schedule of Rates rides in the levelled set as a baseline "bid"
+// under this id — always shown first and styled as a benchmark, never a tenderer.
+const BENCHMARK_FIRM_ID = "tender-scheduled-rates";
+// Honesty scoping for the drainage demo: the named real bidders whose columns carry
+// their true submitted rates. Every other tenderer in a benchmarked section is
+// representative; field testing returned no subcontractor SoR, so it is illustrative.
+const REAL_BID_FIRM_IDS = new Set([
+  "kai-wai-engineering-survey-and-geophysics-limited-3f7b",
+  "sixense-limited-5d2c",
+]);
+const ILLUSTRATIVE_TRADES = new Set(["field_testing"]);
+
 function StepLevel({ levelled, replies, heroTrade, levelStale, loading, editRate, recompute, onBack, onNext }: {
   levelled: LevelledBid[]; replies: BidReply[]; heroTrade: string; levelStale: boolean; loading: boolean;
   editRate: (firmId: string, ref: string, rate: number | null) => void; recompute: () => void; onBack: () => void; onNext: () => void;
 }) {
   const tradesOrder = Array.from(new Set(levelled.map((b) => b.trade))).sort((a, b) => (a === heroTrade ? -1 : b === heroTrade ? 1 : a.localeCompare(b)));
   const nameOf = new Map(levelled.map((b) => [b.firm_id, b.firm_name]));
-  const th: React.CSSProperties = { textAlign: "left", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: FAINT, padding: "10px 19px" };
-  const thr: React.CSSProperties = { ...th, textAlign: "right" };
+  const stickyCol: React.CSSProperties = { position: "sticky", left: 0, zIndex: 1 };
+
+  const chipFor = (firmId: string, isBench: boolean, hasBench: boolean, trade: string): { label: string; bg: string; fg: string } | null => {
+    if (isBench) return { label: "Benchmark", bg: rgba(BLUE, 0.12), fg: BLUE };
+    if (!hasBench) return null;
+    if (ILLUSTRATIVE_TRADES.has(trade)) return { label: "Illustrative", bg: rgba("#D99513", 0.16), fg: "#B7791F" };
+    if (REAL_BID_FIRM_IDS.has(firmId)) return { label: "Submitted rates", bg: rgba("#2EA56A", 0.14), fg: "#1F8A52" };
+    return { label: "Representative", bg: rgba("#6E56CF", 0.14), fg: "#6E56CF" };
+  };
+  const captionFor = (hasBench: boolean, trade: string): string | null => {
+    if (!hasBench) return null;
+    return ILLUSTRATIVE_TRADES.has(trade)
+      ? "No subcontractor schedule of rates was returned for this package, so these bid figures are illustrative. The benchmark column is the tender's own scheduled rates (real)."
+      : "The named firm's column is its real submitted rates; the competitor column is representative. The benchmark column is the tender's own scheduled rates.";
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
         {kicker("Step 04 · Level")}
         <h1 style={h1Sx}>Level the bids on a like-for-like basis</h1>
-        <p style={leadSx}>The rules engine recomputes every amount as qty × rate, flags arithmetic errors, treats a missing rate or provisional sum as a scope gap, and keeps exclusions non-comparable. Each work section is leveled separately. Edit a rate and recompute to see the ranking move.</p>
+        <p style={leadSx}>The rules engine recomputes every amount as qty × rate, flags arithmetic errors, treats a missing rate or provisional sum as a scope gap, and keeps exclusions non-comparable. Each work section is leveled separately against the tender's own scheduled rates. Edit a rate and recompute to see the ranking move.</p>
       </div>
 
       {tradesOrder.map((trade) => {
         const bids = levelled.filter((b) => b.trade === trade);
         const reps = replies.filter((r) => r.trade === trade);
-        const correctedOf = new Map(bids.map((b) => [b.firm_id, b.corrected_total]));
+        const benchRep = reps.find((r) => r.firm_id === BENCHMARK_FIRM_ID) ?? null;
+        const hasBench = benchRep != null;
+        const otherReps = reps.filter((r) => r.firm_id !== BENCHMARK_FIRM_ID);
+        const colReps = hasBench ? [benchRep as BidReply, ...otherReps] : otherReps;
+
+        const tenderBids = bids.filter((b) => b.firm_id !== BENCHMARK_FIRM_ID);
+        const benchBid = bids.find((b) => b.firm_id === BENCHMARK_FIRM_ID) ?? null;
         const claimedOf = new Map(reps.map((r) => [r.firm_id, r.claimed_total ?? 0]));
-        const cheapest = Math.min(...bids.map((b) => b.corrected_total));
-        const items = reps[0]?.line_items.map((l) => ({ ref: l.item_ref, desc: l.description })) ?? [];
+        const correctedOf = new Map(bids.map((b) => [b.firm_id, b.corrected_total]));
+        const normalizedOf = new Map(bids.map((b) => [b.firm_id, b.normalized_total]));
+        const lowestNorm = tenderBids.length ? Math.min(...tenderBids.map((b) => b.normalized_total)) : 0;
+        const lowestCorr = tenderBids.length ? Math.min(...tenderBids.map((b) => b.corrected_total)) : 0;
+        const ranked = [...tenderBids].sort((a, b) => a.normalized_total - b.normalized_total);
+
+        const itemSource = benchRep ?? [...reps].sort((a, b) => b.line_items.length - a.line_items.length)[0];
+        const items = itemSource?.line_items.map((l) => ({ ref: l.item_ref, desc: l.description, unit: l.unit, qty: l.qty })) ?? [];
         const line = (fid: string, ref: string) => reps.find((r) => r.firm_id === fid)?.line_items.find((l) => l.item_ref === ref);
         const isHero = trade === heroTrade;
+        const caption = captionFor(hasBench, trade);
+
+        const bb = "1px solid #eef1f6";
+        const ITEMW = 250, BENCHW = 152, FIRMW = 168;
+        const minW = ITEMW + (hasBench ? BENCHW : 0) + otherReps.length * FIRMW + 14;
+        const benchEdge = `1px solid ${rgba(BLUE, 0.18)}`;
+        const benchTint = rgba(BLUE, 0.05);
+        const headTh: React.CSSProperties = { padding: "9px 16px", fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: FAINT };
+
         return (
-          <div key={trade} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <section key={trade} style={{ ...cardSx, padding: 18, display: "flex", flexDirection: "column", gap: 15 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ width: 11, height: 11, borderRadius: "50%", background: tradeColor(trade) }} />
               <h2 style={{ margin: 0, fontFamily: DISPLAY, fontSize: 18, fontWeight: 700, color: INK }}>{tradeLabel(trade)}</h2>
               {isHero && <span style={{ background: rgba(BLUE, 0.1), color: BLUE, fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", padding: "3px 9px", borderRadius: 999 }}>Hero scope</span>}
-              <span style={{ marginLeft: "auto", fontFamily: MONO, fontSize: 11.5, color: FAINT }}>{bids.length} bids</span>
+              <span style={{ marginLeft: "auto", fontFamily: MONO, fontSize: 11.5, color: FAINT }}>{tenderBids.length} bid{tenderBids.length === 1 ? "" : "s"}{hasBench ? " + benchmark" : ""}</span>
             </div>
 
-            <div style={{ ...cardSx, overflow: "hidden" }}>
-              <h3 style={{ margin: 0, padding: "12px 19px", borderBottom: "1px solid #eef1f6", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT }}>Claimed vs corrected</h3>
+            {caption && <p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: FAINT, maxWidth: 780 }}>{caption}</p>}
+
+            <div style={{ border: bb, borderRadius: 12, overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr style={{ borderBottom: "1px solid #eef1f6" }}><th style={th}>Firm</th><th style={thr}>Claimed</th><th style={thr}>Corrected</th><th style={thr}>Normalised</th><th style={th}>Notes</th></tr></thead>
+                <thead>
+                  <tr style={{ borderBottom: bb, background: "#fbfcfe" }}>
+                    <th style={{ ...headTh, textAlign: "left" }}>Firm</th>
+                    <th style={{ ...headTh, textAlign: "right" }}>Claimed</th>
+                    <th style={{ ...headTh, textAlign: "right" }}>Corrected</th>
+                    <th style={{ ...headTh, textAlign: "right" }}>Normalised</th>
+                    <th style={{ ...headTh, textAlign: "left" }}>Notes</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {[...bids].sort((a, b) => a.corrected_total - b.corrected_total).map((b) => {
+                  {ranked.map((b) => {
                     const claimed = claimedOf.get(b.firm_id) ?? 0, delta = b.corrected_total - claimed;
+                    const isWinner = Math.abs(b.normalized_total - lowestNorm) < 0.5;
+                    const flip = !isWinner && Math.abs(b.corrected_total - lowestCorr) < 0.5;
                     return (
-                      <tr key={b.firm_id} style={{ borderBottom: "1px solid #eef1f6", background: b.corrected_total === cheapest ? rgba("#2EA56A", 0.05) : "transparent" }}>
-                        <td style={{ padding: "13px 19px" }}><span style={{ fontSize: 14, fontWeight: 600, color: INK }}>{b.firm_name}</span> <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{b.firm_id}</span></td>
-                        <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, color: SOFT }}>{hkd(claimed)}</td>
-                        <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 600, color: INK }}>{hkd(b.corrected_total)}{Math.abs(delta) > 0.5 && <span style={{ color: "#E5484D", fontWeight: 500 }}>  ({delta > 0 ? "+" : ""}{hkd(delta)})</span>}</td>
-                        <td style={{ padding: "13px 19px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, color: SOFT }}>{hkd(b.normalized_total)}</td>
-                        <td style={{ padding: "13px 19px" }}>
+                      <tr key={b.firm_id} style={{ borderBottom: bb, background: isWinner ? rgba("#2EA56A", 0.06) : "transparent" }}>
+                        <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 13.5, fontWeight: 600, color: INK }}>{b.firm_name}</span></td>
+                        <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12.5, color: SOFT }}>{hkd(claimed)}</td>
+                        <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12.5, fontWeight: 600, color: INK }}>{hkd(b.corrected_total)}{Math.abs(delta) > 0.5 && <span style={{ color: "#E5484D", fontWeight: 500 }}>  ({delta > 0 ? "+" : ""}{hkd(delta)})</span>}</td>
+                        <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: isWinner ? 700 : 600, color: isWinner ? "#1F8A52" : INK }}>{hkd(b.normalized_total)}</td>
+                        <td style={{ padding: "12px 16px" }}>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {isWinner && <span style={{ background: rgba("#2EA56A", 0.12), color: "#1F8A52", fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 999 }}>Lowest like-for-like</span>}
+                            {flip && <span style={{ background: rgba("#D99513", 0.14), color: "#B7791F", fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 999 }}>Lowest before normalisation</span>}
                             {b.arithmetic_findings.length > 0 && <span style={{ background: rgba("#E5484D", 0.1), color: "#E5484D", fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{b.arithmetic_findings.length} corrected</span>}
                             {b.scope_gaps.length > 0 && <span style={{ background: rgba(BLUE, 0.1), color: BLUE, fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{b.scope_gaps.length} scope gap</span>}
                           </div>
@@ -835,40 +894,93 @@ function StepLevel({ levelled, replies, heroTrade, levelStale, loading, editRate
                       </tr>
                     );
                   })}
+                  {hasBench && benchBid && (
+                    <tr style={{ background: benchTint }}>
+                      <td style={{ padding: "12px 16px" }}><span style={{ fontSize: 13.5, fontWeight: 600, color: BLUE }}>Tender scheduled rates</span><span style={{ marginLeft: 8, background: rgba(BLUE, 0.12), color: BLUE, fontFamily: MONO, fontSize: 9.5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 999 }}>Benchmark</span></td>
+                      <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12.5, color: SOFT }}>{hkd(claimedOf.get(BENCHMARK_FIRM_ID) ?? 0)}</td>
+                      <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12.5, fontWeight: 600, color: INK }}>{hkd(benchBid.corrected_total)}</td>
+                      <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 600, color: INK }}>{hkd(benchBid.normalized_total)}</td>
+                      <td style={{ padding: "12px 16px", fontSize: 11.5, color: FAINT }}>Tender Schedule of Rates — baseline, not a tenderer</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
 
-            <div className="ssx" style={{ ...cardSx, overflowX: "auto" }}>
-              <h3 style={{ margin: 0, padding: "12px 19px", borderBottom: "1px solid #eef1f6", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT }}>Rates by item — edit a rate to re-level</h3>
-              <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse" }}>
-                <thead><tr style={{ borderBottom: "1px solid #eef1f6" }}><th style={th}>Item</th>{reps.map((r) => <th key={r.firm_id} style={{ ...thr, textTransform: "none" }}>{nameOf.get(r.firm_id) ?? r.firm_id}</th>)}</tr></thead>
+            <div className="ssx" style={{ border: bb, borderRadius: 12, overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: minW, borderCollapse: "separate", borderSpacing: 0 }}>
+                <colgroup>
+                  <col style={{ width: ITEMW }} />
+                  {colReps.map((r) => <col key={r.firm_id} style={{ width: r.firm_id === BENCHMARK_FIRM_ID ? BENCHW : FIRMW }} />)}
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th style={{ ...stickyCol, zIndex: 2, background: "#fbfcfe", textAlign: "left", verticalAlign: "bottom", padding: "10px 16px", borderBottom: bb, borderRight: bb, fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: FAINT }}>Rates by item</th>
+                    {colReps.map((r) => {
+                      const isBench = r.firm_id === BENCHMARK_FIRM_ID;
+                      const chip = chipFor(r.firm_id, isBench, hasBench, trade);
+                      const label = isBench ? "Tender scheduled rates" : (nameOf.get(r.firm_id) ?? r.firm_id);
+                      return (
+                        <th key={r.firm_id} style={{ verticalAlign: "bottom", textAlign: "right", padding: "10px 14px", borderBottom: bb, background: isBench ? benchTint : "#fbfcfe", borderLeft: isBench ? benchEdge : undefined, borderRight: isBench ? benchEdge : undefined }}>
+                          <div title={label} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", minHeight: 32, fontFamily: DISPLAY, fontSize: 12.5, fontWeight: 600, lineHeight: 1.28, color: isBench ? BLUE : INK }}>{label}</div>
+                          {chip && <span style={{ display: "inline-block", marginTop: 5, background: chip.bg, color: chip.fg, fontFamily: MONO, fontSize: 9.5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 999 }}>{chip.label}</span>}
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
                 <tbody>
-                  {items.map(({ ref, desc }) => (
-                    <tr key={ref} style={{ borderBottom: "1px solid #eef1f6" }}>
-                      <td style={{ padding: "10px 17px", verticalAlign: "top" }}>
-                        <div style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 600, color: INK }}>{ref}</div>
-                        <div style={{ fontSize: 11.5, color: FAINT, marginTop: 2, maxWidth: 230 }}>{desc}</div>
-                      </td>
-                      {reps.map((r) => {
-                        const l = line(r.firm_id, ref); const amt = l && l.rate != null ? l.qty * l.rate : null; const gap = l != null && l.rate == null;
+                  {items.map(({ ref, desc, unit, qty }) => {
+                    const benchLine = hasBench ? line(BENCHMARK_FIRM_ID, ref) : undefined;
+                    const benchRate = benchLine?.rate ?? null;
+                    return (
+                      <tr key={ref}>
+                        <td style={{ ...stickyCol, background: "#fff", verticalAlign: "top", padding: "10px 16px", borderBottom: bb, borderRight: bb }}>
+                          <div style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 600, color: INK }}>{ref}</div>
+                          <div style={{ fontSize: 11.5, color: FAINT, marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
+                          <div style={{ fontFamily: MONO, fontSize: 10, color: FAINT, marginTop: 3 }}>{unit} · qty {qty.toLocaleString("en-US")}</div>
+                        </td>
+                        {colReps.map((r) => {
+                          const isBench = r.firm_id === BENCHMARK_FIRM_ID;
+                          const l = line(r.firm_id, ref);
+                          const missing = l == null;
+                          const gap = l != null && l.rate == null;
+                          const amt = l && l.rate != null ? l.qty * l.rate : null;
+                          const above = !isBench && l?.rate != null && benchRate != null && l.rate > benchRate;
+                          const cellBg = isBench ? benchTint : gap ? rgba("#D99513", 0.06) : "transparent";
+                          return (
+                            <td key={r.firm_id} style={{ textAlign: "right", verticalAlign: "top", padding: "9px 14px", borderBottom: bb, background: cellBg, borderLeft: isBench ? benchEdge : undefined, borderRight: isBench ? benchEdge : undefined }}>
+                              {isBench ? (
+                                <div style={{ fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12.5, fontWeight: 600, color: INK }}>{benchRate != null ? hkd(benchRate) : "—"}</div>
+                              ) : missing ? (
+                                <div style={{ fontFamily: MONO, fontSize: 12, color: FAINT }}>—</div>
+                              ) : (
+                                <input type="number" placeholder={gap ? "—" : ""} value={l?.rate ?? ""} onChange={(e) => editRate(r.firm_id, ref, e.target.value === "" ? null : Number(e.target.value))} style={{ width: "100%", maxWidth: 124, border: `1px solid ${gap ? rgba("#D99513", 0.55) : above ? rgba("#E5484D", 0.5) : "rgba(15,27,45,0.12)"}`, borderRadius: 8, background: gap ? rgba("#D99513", 0.06) : above ? rgba("#E5484D", 0.05) : "#fff", padding: "6px 8px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12, color: INK, outline: "none" }} />
+                              )}
+                              <div style={{ fontFamily: MONO, fontSize: 10, marginTop: 3, fontWeight: gap ? 600 : 400, color: gap ? "#B7791F" : above ? "#E5484D" : FAINT }}>{isBench ? (benchLine && benchLine.rate != null ? hkd(benchLine.qty * benchLine.rate) : "—") : gap ? "scope gap" : missing ? "" : amt != null ? hkd(amt) : ""}{above ? " · above SR" : ""}</div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                  {([["Corrected total", correctedOf, false], ["Normalised total (like-for-like)", normalizedOf, true]] as [string, Map<string, number>, boolean][]).map(([label, map, isNorm]) => (
+                    <tr key={label}>
+                      <td style={{ ...stickyCol, background: "#f6f9fc", padding: "11px 16px", borderTop: isNorm ? bb : "2px solid rgba(15,27,45,0.12)", borderRight: bb, fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: SOFT }}>{label}</td>
+                      {colReps.map((r) => {
+                        const isBench = r.firm_id === BENCHMARK_FIRM_ID;
+                        const v = map.get(r.firm_id) ?? 0;
+                        const isWinner = !isBench && isNorm && Math.abs(v - lowestNorm) < 0.5;
                         return (
-                          <td key={r.firm_id} style={{ padding: "10px 17px", textAlign: "right", verticalAlign: "top" }}>
-                            <input type="number" placeholder={gap ? "—" : ""} value={l?.rate ?? ""} onChange={(e) => editRate(r.firm_id, ref, e.target.value === "" ? null : Number(e.target.value))} style={{ width: 106, border: `1px solid ${gap ? rgba("#D99513", 0.55) : "rgba(15,27,45,0.12)"}`, borderRadius: 8, background: gap ? rgba("#D99513", 0.06) : "#fff", padding: "7px 9px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 12, color: INK, outline: "none" }} />
-                            <div style={{ fontFamily: MONO, fontSize: 11, color: gap ? "#B7791F" : FAINT, fontWeight: gap ? 600 : 400, marginTop: 3 }}>{amt != null ? hkd(amt) : "scope gap"}</div>
-                          </td>
+                          <td key={r.firm_id} style={{ textAlign: "right", padding: "11px 14px", borderTop: isNorm ? bb : "2px solid rgba(15,27,45,0.12)", background: isBench ? rgba(BLUE, 0.08) : isWinner ? rgba("#2EA56A", 0.12) : "#f6f9fc", borderLeft: isBench ? benchEdge : undefined, borderRight: isBench ? benchEdge : undefined, fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 700, color: isBench ? BLUE : isWinner ? "#1F8A52" : INK }}>{hkd(v)}</td>
                         );
                       })}
                     </tr>
                   ))}
-                  <tr style={{ borderTop: "2px solid rgba(15,27,45,0.12)", background: "#f6f9fc" }}>
-                    <td style={{ padding: "12px 17px", fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: SOFT }}>Corrected total</td>
-                    {reps.map((r) => <td key={r.firm_id} style={{ padding: "12px 17px", textAlign: "right", fontFamily: MONO, fontVariantNumeric: "tabular-nums", fontSize: 14, fontWeight: 700, color: INK }}>{hkd(correctedOf.get(r.firm_id) ?? 0)}</td>)}
-                  </tr>
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         );
       })}
 
