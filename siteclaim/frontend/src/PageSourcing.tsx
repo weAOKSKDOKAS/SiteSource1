@@ -323,7 +323,7 @@ function StepIngest({ demoMode, scope, loading, uploadedNames, runUpload, goShor
 function citeButton(e: { source: string; reference: string | null; snippet: string }, cite: Cite) {
   const reg = registerFor(e.source);
   return (
-    <button type="button" onClick={() => cite({ source: e.source, reference: e.reference, detail: e.snippet })} style={{ display: "inline-flex", alignItems: "center", gap: 8, marginTop: 7, cursor: "pointer", border: `1px solid ${rgba(reg.color, 0.3)}`, background: "#fff", borderRadius: 8, padding: "5px 10px" }}>
+    <button type="button" onClick={(ev) => { ev.stopPropagation(); cite({ source: e.source, reference: e.reference, detail: e.snippet }); }} style={{ display: "inline-flex", alignItems: "center", gap: 8, marginTop: 7, cursor: "pointer", border: `1px solid ${rgba(reg.color, 0.3)}`, background: "#fff", borderRadius: 8, padding: "5px 10px" }}>
       <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 16, height: 16, padding: "0 3px", borderRadius: 5, background: reg.color, color: "#fff", fontFamily: MONO, fontSize: 10, fontWeight: 600 }}>{reg.short}</span>
       <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, color: reg.color }}>{reg.short}</span>
       {e.reference && <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{e.reference}</span>}
@@ -347,6 +347,31 @@ function DispatchToggle({ selected, flagged, onClick }: { selected: boolean; fla
         : { ...base, background: "#fff", border: `1px solid ${rgba(BLUE, 0.45)}`, color: BLUE }}
     >
       {selected ? (flagged ? "⚠ Added · override" : "✓ Added") : "+ Add to dispatch"}
+    </button>
+  );
+}
+
+// Compact inline dispatch control for a shortlist row — no extra row height. A quiet
+// outline "+" when unselected; a filled check when selected (teal, or fatal-red as a
+// caution for a recommend-against firm). Stops propagation so it never opens the modal.
+function DispatchCheck({ selected, flagged, onClick }: { selected: boolean; flagged: boolean; onClick: (e: React.MouseEvent) => void }) {
+  const accent = flagged ? "#E5484D" : TEAL;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={selected ? "Remove from dispatch" : "Add to dispatch"}
+      title={selected ? "In dispatch — click to remove" : "Add to dispatch"}
+      style={{
+        flexShrink: 0, width: 26, height: 26, borderRadius: "50%", cursor: "pointer", padding: 0,
+        display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, lineHeight: 1,
+        border: selected ? `1px solid ${accent}` : `1.5px solid ${rgba(BLUE, 0.4)}`,
+        background: selected ? accent : "#fff",
+        color: selected ? "#fff" : BLUE,
+        transition: "background 0.12s, border-color 0.12s, color 0.12s",
+      }}
+    >
+      {selected ? "✓" : "+"}
     </button>
   );
 }
@@ -405,22 +430,43 @@ function StepShortlist({ shortlist, heroTrade, covTotal, covFlagged, loading, ci
       </div>
       {trades.map((t) => {
         const cands = shortlist.per_trade[t]; const isHero = t === heroTrade; const flaggedN = cands.filter((c) => c.recommended_against).length; const dot = tradeColor(t);
+        const selIds = approvals[t] ?? [];
         return (
-          <div key={t} style={{ background: "#fff", border: `1px solid ${isHero ? rgba("#E5484D", 0.3) : "rgba(15,27,45,0.07)"}`, borderRadius: 16, overflow: "hidden", boxShadow: isHero ? `0 0 0 4px ${rgba("#E5484D", 0.06)}, 0 12px 32px -24px rgba(15,27,45,0.4)` : "0 10px 30px -24px rgba(15,27,45,0.4)" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "14px 19px", borderBottom: "1px solid #eef1f6" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                <span style={{ width: 10, height: 10, borderRadius: "50%", background: dot }} />
-                <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 600, color: INK }}>{tradeLabel(t)}</h2>
-                {isHero && <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: "#D99513", background: rgba("#D99513", 0.12), padding: "3px 8px", borderRadius: 6 }}>⚠ watch this trade</span>}
+          <div key={t} style={{ background: "#fff", border: `1px solid ${isHero ? rgba("#E5484D", 0.3) : "rgba(15,27,45,0.07)"}`, borderRadius: 16, boxShadow: isHero ? `0 0 0 4px ${rgba("#E5484D", 0.06)}, 0 12px 32px -24px rgba(15,27,45,0.4)` : "0 10px 30px -24px rgba(15,27,45,0.4)" }}>
+            {/* section header + selection tray, pinned (below the 64px global header) while scrolling the section */}
+            <div style={{ position: "sticky", top: 64, zIndex: 2, background: "#fff", borderRadius: "16px 16px 0 0", borderBottom: "1px solid #eef1f6" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "13px 18px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: dot }} />
+                  <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 600, color: INK }}>{tradeLabel(t)}</h2>
+                  {isHero && <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: "#D99513", background: rgba("#D99513", 0.12), padding: "3px 8px", borderRadius: 6 }}>⚠ watch this trade</span>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {flaggedN > 0 && <span style={{ background: rgba("#E5484D", 0.1), color: "#E5484D", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 999 }}>{flaggedN} flagged</span>}
+                  <span style={{ background: "#EEF2F7", color: SOFT, fontSize: 11, fontWeight: 500, padding: "3px 10px", borderRadius: 999 }}>{cands.length} firms</span>
+                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {flaggedN > 0 && <span style={{ background: rgba("#E5484D", 0.1), color: "#E5484D", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 999 }}>{flaggedN} flagged</span>}
-                <span style={{ background: "#EEF2F7", color: SOFT, fontSize: 11, fontWeight: 500, padding: "3px 10px", borderRadius: 999 }}>{cands.length} firms</span>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 7, padding: "8px 18px", borderTop: "1px solid #f4f6f9", background: rgba(TEAL, 0.045) }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: selIds.length ? "#0c8e83" : FAINT, fontWeight: 600 }}>Selected for dispatch ({selIds.length})</span>
+                {selIds.length === 0
+                  ? <span style={{ fontSize: 11.5, color: FAINT }}>Tap <span style={{ fontFamily: MONO, fontWeight: 700, color: BLUE }}>+</span> to add a firm</span>
+                  : selIds.map((id) => {
+                      const c = cands.find((x) => x.firm.firm_id === id);
+                      const name = c ? c.firm.name : id;
+                      const chipAccent = c?.recommended_against ? "#E5484D" : TEAL;
+                      return (
+                        <span key={id} title={name} style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 230, background: "#fff", border: `1px solid ${rgba(chipAccent, 0.45)}`, borderRadius: 999, padding: "3px 4px 3px 11px", fontSize: 12 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: INK, fontWeight: 500 }}>{name}</span>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); toggleApprove(t, id); }} aria-label={`Remove ${name} from dispatch`} style={{ flexShrink: 0, width: 17, height: 17, borderRadius: "50%", border: "none", background: rgba(chipAccent, 0.14), color: chipAccent, cursor: "pointer", fontSize: 12, lineHeight: 1, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                        </span>
+                      );
+                    })}
               </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "16px 18px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "7px 9px" }}>
               {cands.map((c, i) => {
-                const fatal = c.risk_flags.filter((f) => f.severity === "fatal"); const warn = c.risk_flags.filter((f) => f.severity !== "fatal");
+                const fatal = c.risk_flags.filter((f) => f.severity === "fatal");
+                const warnN = c.risk_flags.filter((f) => f.severity !== "fatal").length;
                 const against = c.recommended_against;
                 const pct = Math.round(c.match_score * 100);
                 const mb = c.match_score >= 0.7 ? "#2EA56A" : c.match_score >= 0.5 ? BLUE : FAINT;
@@ -436,49 +482,39 @@ function StepShortlist({ shortlist, heroTrade, covTotal, covFlagged, loading, ci
                     onMouseEnter={() => setHoveredId(c.firm.firm_id)}
                     onMouseLeave={() => setHoveredId(null)}
                     style={{
-                      border: `1px solid ${selected ? rgba(accent, 0.5) : against ? rgba("#E5484D", 0.28) : isHov ? rgba(BLUE, 0.35) : "rgba(15,27,45,0.09)"}`,
-                      borderRadius: 14, padding: "16px 18px", cursor: "pointer",
-                      background: selected ? rgba(accent, against ? 0.06 : 0.045) : against ? rgba("#E5484D", 0.035) : "#fff",
-                      boxShadow: isHov ? `0 8px 24px -14px ${rgba(INK, 0.5)}` : "0 1px 2px rgba(15,27,45,0.03)",
-                      transition: "border-color 0.13s, box-shadow 0.13s, background 0.13s",
+                      borderLeft: `3px solid ${selected ? accent : "transparent"}`,
+                      background: isHov ? rgba(BLUE, 0.03) : against ? rgba("#E5484D", 0.028) : "transparent",
+                      borderRadius: 8, padding: "9px 12px 9px 11px", cursor: "pointer", transition: "background 0.12s",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
-                      <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, flex: "none", marginTop: 2, borderRadius: 8, fontFamily: MONO, fontSize: 11.5, fontWeight: 600, color: against ? "#E5484D" : FAINT, background: against ? rgba("#E5484D", 0.08) : "#f3f5f9" }}>{i + 1}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ flex: "none", width: 16, textAlign: "center", fontFamily: MONO, fontSize: 11.5, fontWeight: 600, color: against ? "#E5484D" : FAINT }}>{i + 1}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9 }}>
-                          <span style={{ fontFamily: DISPLAY, fontSize: 16.5, fontWeight: 700, color: INK, lineHeight: 1.25 }}>{c.firm.name}</span>
-                          {isIllustrative && <span style={{ background: rgba("#D99513", 0.12), color: "#9a6a08", fontFamily: MONO, fontSize: 9.5, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 5 }}>Illustrative</span>}
-                          {i === 0 && !against && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: rgba("#2EA56A", 0.1), color: "#1F8A52", fontSize: 10.5, fontWeight: 600, letterSpacing: "0.02em", padding: "2px 9px", borderRadius: 999 }}>✓ Top pick</span>}
-                          {against && <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: rgba("#E5484D", 0.1), color: "#E5484D", fontSize: 10.5, fontWeight: 700, padding: "2px 9px", borderRadius: 999, whiteSpace: "nowrap" }}>⛔ Recommend against</span>}
+                        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                          <span style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 700, color: INK, lineHeight: 1.25 }}>{c.firm.name}</span>
+                          {isIllustrative && <span style={{ background: rgba("#D99513", 0.12), color: "#9a6a08", fontFamily: MONO, fontSize: 9, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", padding: "1px 6px", borderRadius: 5 }}>Illustrative</span>}
+                          {i === 0 && !against && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: rgba("#2EA56A", 0.1), color: "#1F8A52", fontSize: 10, fontWeight: 600, padding: "1px 8px", borderRadius: 999 }}>✓ Top pick</span>}
+                          {against && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: rgba("#E5484D", 0.1), color: "#E5484D", fontSize: 10, fontWeight: 700, padding: "1px 8px", borderRadius: 999, whiteSpace: "nowrap" }}>⛔ Recommend against</span>}
+                          {!against && warnN > 0 && <span title="Open profile for the cited caution" style={{ display: "inline-flex", alignItems: "center", gap: 4, background: rgba("#D99513", 0.13), color: "#9a6a08", fontSize: 10, fontWeight: 600, padding: "1px 8px", borderRadius: 999, whiteSpace: "nowrap" }}>⚠ {warnN} caution</span>}
                         </div>
-                        {meta && <div style={{ fontSize: 11.5, color: FAINT, marginTop: 4 }}>{meta}</div>}
+                        {meta && <div style={{ fontSize: 11, color: FAINT, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta}</div>}
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
-                        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.09em", textTransform: "uppercase", color: FAINT, fontWeight: 600 }}>Match</span>
-                        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                          <span style={{ width: 54, height: 6, borderRadius: 3, background: "#EEF2F7", overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${pct}%`, background: mb }} /></span>
-                          <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: mb, fontVariantNumeric: "tabular-nums" }}>{pct}%</span>
-                        </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0 }}>
+                        <span style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: "0.08em", textTransform: "uppercase", color: FAINT, fontWeight: 600 }}>Match</span>
+                        <span style={{ width: 46, height: 5, borderRadius: 3, background: "#EEF2F7", overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${pct}%`, background: mb }} /></span>
+                        <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: mb, fontVariantNumeric: "tabular-nums", minWidth: 32, textAlign: "right" }}>{pct}%</span>
                       </div>
+                      <DispatchCheck selected={selected} flagged={against} onClick={(e) => { e.stopPropagation(); toggleApprove(t, c.firm.firm_id); }} />
                     </div>
-                    {c.firm.closeout_summary
-                      ? <p style={{ margin: "11px 0 0", fontSize: 12.5, lineHeight: 1.55, color: SOFT }}>{c.firm.closeout_summary}</p>
-                      : c.firm.description && <p style={{ margin: "11px 0 0", fontSize: 12, lineHeight: 1.55, color: FAINT }}>{c.firm.description}</p>}
                     {fatal.length > 0 && (
-                      <div style={{ marginTop: 13, border: `1px solid ${rgba("#E5484D", 0.3)}`, background: "linear-gradient(180deg,rgba(229,72,77,0.06),rgba(229,72,77,0.02))", borderRadius: 13, padding: 15 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 11 }}>
-                          <span style={{ fontSize: 15 }}>⛔</span>
-                          <p style={{ margin: 0, fontFamily: MONO, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#E5484D" }}>Disqualifying — do not award regardless of price</p>
+                      <div style={{ marginTop: 10, marginLeft: 28, border: `1px solid ${rgba("#E5484D", 0.3)}`, background: "linear-gradient(180deg,rgba(229,72,77,0.06),rgba(229,72,77,0.02))", borderRadius: 12, padding: 13 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                          <span style={{ fontSize: 14 }}>⛔</span>
+                          <p style={{ margin: 0, fontFamily: MONO, fontSize: 10, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: "#E5484D" }}>Disqualifying — do not award regardless of price</p>
                         </div>
                         {fatal.map((fl, fi) => <FlagPanel key={fi} flag={fl} sev="fatal" cite={cite} />)}
                       </div>
                     )}
-                    {warn.length > 0 && <div style={{ marginTop: 11 }}>{warn.map((fl, fi) => <FlagPanel key={fi} flag={fl} sev="warning" cite={cite} />)}</div>}
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, marginTop: 13, paddingTop: 12, borderTop: "1px solid #f1f3f7" }}>
-                      <span style={{ fontSize: 11, color: FAINT }}>{selected ? "Selected for dispatch" : "Click card for full profile"}</span>
-                      <DispatchToggle selected={selected} flagged={against} onClick={(e) => { e.stopPropagation(); toggleApprove(t, c.firm.firm_id); }} />
-                    </div>
                   </div>
                 );
               })}
