@@ -3220,5 +3220,128 @@
    "https://www.info.gov.hk/gia/general/202101/07/P2021010700671.htm"
   ],
   "display_sensitive": true
+ },
+ {
+  "firm_id": "geotechnics-and-concrete-engineering-h-k-limited-1df7",
+  "name_en": "Geotechnics and Concrete Engineering (H.K.) Limited",
+  "name_zh": null,
+  "registered_grade": null,
+  "registers": [],
+  "value_band": null,
+  "trades": [
+   "ground_investigation"
+  ],
+  "raw_category": "Ground Investigation Field Work",
+  "public_flags": [],
+  "award_history": [],
+  "confidence": "medium",
+  "sources_used": [
+   "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html",
+   "BD Register of Specialist Contractors (Ground Investigation Field Works) — RSC(GIFW)",
+   "Company source: Geotechnics and Concrete Engineering (H.K.) (GCE) — geotechnical engineering, materials testing, ground investigation works"
+  ]
+ },
+ {
+  "firm_id": "chung-shun-boring-engineering-company-limited-179a",
+  "name_en": "Chung Shun Boring Engineering Company Limited",
+  "name_zh": null,
+  "registered_grade": null,
+  "registers": [],
+  "value_band": null,
+  "trades": [
+   "ground_investigation"
+  ],
+  "raw_category": "Ground Investigation Field Work",
+  "public_flags": [],
+  "award_history": [],
+  "confidence": "medium",
+  "sources_used": [
+   "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html",
+   "BD Register of Specialist Contractors (Ground Investigation Field Works) — RSC(GIFW)",
+   "Company source: Chung Shun Boring Engineering (Wan Kei Group) — ground investigation field works, engaged as main contractor"
+  ]
+ },
+ {
+  "firm_id": "castco-testing-centre-limited-b6e5",
+  "name_en": "Castco Testing Centre Limited",
+  "name_zh": null,
+  "registered_grade": null,
+  "registers": [],
+  "value_band": null,
+  "trades": [
+   "ground_investigation"
+  ],
+  "raw_category": "Ground Investigation Field Work",
+  "public_flags": [],
+  "award_history": [],
+  "confidence": "medium",
+  "sources_used": [
+   "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html",
+   "BD Register of Specialist Contractors (Ground Investigation Field Works) — RSC(GIFW)",
+   "Company source: Castco Testing Centre — ground investigation department (rotary drilling, sampling, field testing, borehole televiewer)"
+  ]
+ },
+ {
+  "firm_id": "driltech-ground-engineering-limited-21bb",
+  "name_en": "DrilTech Ground Engineering Limited",
+  "name_zh": null,
+  "registered_grade": null,
+  "registers": [],
+  "value_band": null,
+  "trades": [
+   "ground_investigation"
+  ],
+  "raw_category": "Ground Investigation Field Work",
+  "public_flags": [],
+  "award_history": [],
+  "confidence": "medium",
+  "sources_used": [
+   "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html",
+   "BD Register of Specialist Contractors (Ground Investigation Field Works) — RSC(GIFW)",
+   "Company source: DrilTech Ground Engineering (Chinney Alliance Group) — ground investigation, geotechnical and drilling engineering"
+  ]
+ },
+ {
+  "firm_id": "kin-wing-engineering-limited-593b",
+  "name_en": "Kin Wing Engineering Limited",
+  "name_zh": null,
+  "registered_grade": "Group II",
+  "registers": [
+   "Approved Specialist List — Ground Investigation Field Work",
+   "Register of Specialist Contractors (Ground Investigation Field Works)"
+  ],
+  "value_band": "Group II",
+  "trades": [
+   "ground_investigation"
+  ],
+  "raw_category": "Ground Investigation Field Work",
+  "public_flags": [],
+  "award_history": [],
+  "confidence": "high",
+  "sources_used": [
+   "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html",
+   "BD Register of Specialist Contractors (Ground Investigation Field Works) — RSC(GIFW)",
+   "Company source: Kin Wing Engineering (Chinney Kin Wing) — BD RSC(GIFW); Approved Specialist List, Ground Investigation Field Work, Group II (confirmed)"
+  ]
+ },
+ {
+  "firm_id": "intrafor-hong-kong-limited-be61",
+  "name_en": "Intrafor Hong Kong Limited",
+  "name_zh": null,
+  "registered_grade": null,
+  "registers": [],
+  "value_band": null,
+  "trades": [
+   "ground_investigation"
+  ],
+  "raw_category": "Ground Investigation Field Work",
+  "public_flags": [],
+  "award_history": [],
+  "confidence": "medium",
+  "sources_used": [
+   "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html",
+   "BD Register of Specialist Contractors (Ground Investigation Field Works) — RSC(GIFW)",
+   "Company source: Intrafor Hong Kong (VSL) — ground investigation, drilling, directional coring; GE/2026/14 main contractor"
+  ]
  }
 ]

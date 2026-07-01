@@ -40,12 +40,14 @@ path** must be verified by hand with a real key over the actual GE/2026/14 files
 #        -F files=@PS-S07.pdf -F files=@PS-S26.pdf -F files=@Clarification.pdf \
 #        -F files=@MoM.pdf   -F files=@SR-01.pdf   http://localhost:8000/ingest-upload | jq '.tender.documents'
 # Expect on .tender.documents[].trades:
-#   - PS-S07  -> geotechnical / ground-investigation. NOTE: 'geotechnical' is not in the
-#               taxonomy today, so it surfaces as unmapped and routes GENERAL (the safe
-#               direction). Add a `geotechnical -> foundation_substructure` synonym in
-#               rules_engine/taxonomy if the buying team wants it routed to piling firms.
+#   - PS-S07  -> ground_investigation (v2: 'geotechnical' / 'ground investigation' now
+#               resolve to the real GI trade; no longer routed general).
 #   - PS-S26  -> tree / landscape -> external_works (maps via the existing 'landscap' synonym).
 #   - Clarification, MoM, and the combined SR-01 -> [] (general, whole file to everyone).
+# Also confirm the GI wiring end to end (live, DEMO off, against sitesource_live.db):
+#   - the SR-01 scope split produces a ground_investigation package, and
+#   - POST /shortlist {scope, include_public:true} returns the seeded real GI firms
+#     (GCE, Chung Shun, Castco, DrilTech, Kin Wing, Intrafor), clean, ordered by the screen.
 # Then POST the returned .tender to /dispatch (with scope, approvals) and confirm each
 # trade's bundle carries the correct whole originals plus its generated SoR sheet.
 ```

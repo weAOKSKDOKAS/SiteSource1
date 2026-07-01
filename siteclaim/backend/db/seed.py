@@ -33,8 +33,8 @@ from .embeddings import DETERMINISTIC_DIM, build_embeddings, deterministic_embed
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.sql"
 SEED_DATA_DIR = _HERE / "seed_data"
-DEFAULT_DB_PATH = _HERE / "sitesource.db"       # profile 'demo' (150 firms: real + illustrative)
-LIVE_DB_PATH = _HERE / "sitesource_live.db"     # profile 'live' (clean 134 real firms only)
+DEFAULT_DB_PATH = _HERE / "sitesource.db"       # profile 'demo' (real + illustrative firms)
+LIVE_DB_PATH = _HERE / "sitesource_live.db"     # profile 'live' (clean real firms only)
 SEED_VERSION = "1"
 
 # Profiles. 'demo' is the pitch database (real + the 16 illustrative firms + their
@@ -134,7 +134,7 @@ def _bake_vectors(texts: list[str]) -> tuple[list[list[float]], str, int]:
 def build_database(db_path: Path | str | None = None, *, profile: str = "demo") -> dict:
     """(Re)build the SQLite database at ``db_path``. Returns a small summary.
 
-    ``profile='demo'`` (default) builds the full 150-firm pitch database — real firms
+    ``profile='demo'`` (default) builds the full pitch database — real firms
     plus the 16 illustrative firms and their fabricated EOS records, pricing and
     contacts. ``profile='live'`` builds the clean engine database: only the real
     ``public_register`` firms, with none of the fabricated layer (no illustrative
@@ -275,7 +275,7 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="python -m db.seed",
-        description="Build the SiteSource database. 'demo' is the 150-firm pitch DB "
+        description="Build the SiteSource database. 'demo' is the full pitch DB "
         "(real + illustrative); 'live' is the clean real-firm-only engine DB.",
     )
     parser.add_argument("--profile", choices=PROFILES, default="demo", help="which database to build (default: demo)")

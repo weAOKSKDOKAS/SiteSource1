@@ -11,7 +11,7 @@ For each record it:
 
 1. **Resolves the firm** — by Business Registration number, else by exact normalized
    name, else it mints a new firm with ``provenance='partner_archive'`` (never
-   ``public_register`` — the coverage 134/46 honesty figures stay exact, and an
+   ``public_register`` — the coverage honesty figures stay exact, and an
    existing real firm's provenance is never downgraded on a match).
 2. **Writes a ``project_closeouts`` row** — always, even with no narrative. A slipped
    closeout (actual completion past planned, or a live LD/claims history) sets

@@ -21,6 +21,23 @@ def test_labels_and_synonyms_map_to_canonical():
     assert normalize("Reinforced Concrete") == "reinforced_concrete"
 
 
+def test_ground_investigation_is_canonical_and_synonyms_resolve():
+    # v2: the GI trade and its label/synonyms, shared by scope split and doc classifier.
+    assert "ground_investigation" in CANONICAL_TRADES
+    for label in (
+        "Ground investigation", "Ground Investigation Field Work", "GI field works",
+        "Site Investigation", "geotechnical", "Geotechnical Works", "drilling",
+    ):
+        assert normalize(label) == "ground_investigation", label
+
+
+def test_ground_investigation_synonyms_do_not_steal_foundation_scopes():
+    # 'drilling' maps to GI, but a bored-pile scope must still be foundation work
+    # (foundation/pile synonyms are checked before the GI synonyms).
+    assert normalize("bored pile drilling") == "foundation_substructure"
+    assert normalize("piling") == "foundation_substructure"
+
+
 def test_unmapped_trade_returns_none():
     assert normalize("Astrophysics") is None
 

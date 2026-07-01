@@ -61,7 +61,7 @@ def test_new_firm_is_partner_archive_and_not_counted_in_coverage(conn):
     firm_id, _ = _resolve_and_ingest(conn, _electrical_record())
     prov = conn.execute("SELECT provenance FROM firms WHERE firm_id = ?", (firm_id,)).fetchone()["provenance"]
     assert prov == "partner_archive"
-    assert store.coverage(conn)["total_firms"] == before  # partner firms never inflate 134/46
+    assert store.coverage(conn)["total_firms"] == before  # partner firms never inflate coverage
 
 
 def test_delayed_closeout_becomes_a_warning(conn):

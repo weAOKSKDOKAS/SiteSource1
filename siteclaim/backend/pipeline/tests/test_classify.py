@@ -89,6 +89,16 @@ def test_trade_labels_are_normalised_to_canonical_keys():
     assert tagged.documents[0].trades == ["fire_services"]  # normalised via rules_engine.taxonomy
 
 
+def test_geotechnical_spec_now_classifies_to_ground_investigation():
+    # v2: a Geotechnical Works spec (like GE/2026/14 PS-S07) resolves to the real GI
+    # trade instead of falling to general.
+    tender = _tender([("ps_s07_geotechnical.pdf", DocType.PARTICULAR_SPECIFICATION)])
+    client = FakeClient({"ps_s07_geotechnical.pdf": {"general": False, "trades": ["Geotechnical Works"], "confidence": 0.9}})
+    tagged = classify_documents(tender, client=client)
+    assert tagged.documents[0].trades == ["ground_investigation"]
+    assert tagged.documents[0].filename in {d.filename for d in route_documents(tagged, "ground_investigation")[1]}
+
+
 def test_a_document_specific_to_two_trades_routes_to_both():
     tender = _tender([("mep.pdf", DocType.PARTICULAR_SPECIFICATION)])
     client = FakeClient({"mep.pdf": {"general": False, "trades": ["electrical", "mechanical & plumbing"], "confidence": 0.9}})
