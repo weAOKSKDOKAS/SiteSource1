@@ -136,12 +136,24 @@ def _refresh_write_guard() -> None:
         raise HTTPException(status_code=409, detail="Refresh is disabled in DEMO_MODE.")
 
 
+def _require_live_target(conn) -> None:
+    """Refresh writes only ever land in a clean live-profile database — never the
+    committed demo/pitch DB. Guarding by the target's profile (not just the DEMO_MODE
+    flag) means a live run that forgets to set SITESOURCE_DB cannot mutate the demo DB."""
+    if store._meta(conn, "profile", "demo") != "live":
+        raise HTTPException(
+            status_code=409,
+            detail="Refresh applies only to a live-profile database; point SITESOURCE_DB at sitesource_live.db.",
+        )
+
+
 @app.post("/refresh/stage")
 def post_refresh_stage(req: StageRequest) -> dict:
     """Stage new public records/flags for human review (nothing lands until confirmed)."""
     _refresh_write_guard()
     conn = store.get_connection()
     try:
+        _require_live_target(conn)
         return refresh.stage_records(conn, [r.model_dump() for r in req.records])
     finally:
         conn.close()
@@ -163,6 +175,7 @@ def post_refresh_confirm(req: ConfirmRequest) -> dict:
     _refresh_write_guard()
     conn = store.get_connection()
     try:
+        _require_live_target(conn)
         return refresh.confirm_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
     finally:
         conn.close()
@@ -174,6 +187,7 @@ def post_refresh_reject(req: ConfirmRequest) -> dict:
     _refresh_write_guard()
     conn = store.get_connection()
     try:
+        _require_live_target(conn)
         return refresh.reject_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
     finally:
         conn.close()

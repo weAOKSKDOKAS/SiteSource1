@@ -70,6 +70,32 @@ def test_refresh_routes_are_registered():
     assert {"/refresh/stage", "/refresh/pending", "/refresh/confirm", "/refresh/reject"} <= paths
 
 
+def test_refresh_write_refuses_a_non_live_target(tmp_path, monkeypatch):
+    # Even with DEMO_MODE off, a refresh must never mutate a demo-profile DB.
+    from db import seed
+
+    demo_db = tmp_path / "demo.db"
+    seed.build_database(demo_db)  # profile 'demo'
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_DB", str(demo_db))
+    resp = client.post("/refresh/stage", json={"records": []})
+    assert resp.status_code == 409
+
+
+def test_refresh_write_applies_to_a_live_target(tmp_path, monkeypatch):
+    from db import seed
+
+    live_db = tmp_path / "live.db"
+    seed.build_database(live_db, profile="live")
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_DB", str(live_db))
+    resp = client.post("/refresh/stage", json={"records": [
+        {"firm_id": "new-live-firm-1", "name_en": "New Live Firm Ltd", "trades": ["electrical"],
+         "public_flags": [{"signal_type": "winding_up", "label": "Winding-up 2026"}]}
+    ]})
+    assert resp.status_code == 200 and resp.json()["staged_firms"] == 1
+
+
 def test_shortlist_include_public_opens_the_pool():
     # Phase B, reached through the API: the live-engine flag adds real public firms.
     case = client.get("/demo/messy").json()

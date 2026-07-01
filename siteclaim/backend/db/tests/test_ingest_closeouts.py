@@ -99,6 +99,35 @@ def test_entity_resolution_matches_by_br_number(conn):
     assert len(store.all_firms(conn)) == count_after_first
 
 
+def test_ingest_registers_a_new_trade_on_a_matched_firm(conn):
+    # F-EL-02 is electrical-only; a fire-services partner closeout must make it
+    # discoverable in fire_services — otherwise the baked vector is dead (filtered out).
+    assert "fire_services" not in store.firm_profile(conn, "F-EL-02").trades
+    rec = ic.PartnerCloseoutRecord(
+        firm_name="Vantage E&M Engineering Ltd", trade="fire services",
+        project_name="Sprinkler upgrade", year=2025,
+        closeout_narrative="Sprinkler wet riser and fire hydrant installation with testing and commissioning.",
+    )
+    summary = ic.ingest(conn, [rec])
+    assert summary.firms_matched == 1 and summary.embeddings_baked == 1
+    assert "fire_services" in store.firm_profile(conn, "F-EL-02").trades
+    cands = cross_reference(conn, "fire_services", "sprinkler wet riser fire hydrant testing", include_public=True)
+    mine = [c for c in cands if c.firm.firm_id == "F-EL-02"]
+    assert mine and mine[0].match_score > 0.0  # the baked closeout is now reachable and scores
+
+
+def test_distinct_identifierless_closeouts_both_land(conn):
+    r1 = ic.PartnerCloseoutRecord(firm_name="Omega Test Ltd", trade="electrical",
+                                  closeout_narrative="first job: lv final circuits and lighting")
+    r2 = ic.PartnerCloseoutRecord(firm_name="Omega Test Ltd", trade="electrical",
+                                  closeout_narrative="second, different job: power distribution and containment")
+    ic.ingest(conn, [r1, r2])
+    firm_id = _resolve(conn, "Omega Test Ltd")
+    n = conn.execute("SELECT COUNT(*) AS n FROM project_closeouts WHERE firm_id = ?", (firm_id,)).fetchone()["n"]
+    assert n == 2  # distinct narratives with no project/year are not collapsed
+    assert ic.ingest(conn, [r1]).skipped_duplicate == 1  # but re-ingesting one is still idempotent
+
+
 def test_reingesting_the_same_closeout_is_idempotent(conn):
     rec = _electrical_record()
     ic.ingest(conn, [rec])
