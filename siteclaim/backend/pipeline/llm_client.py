@@ -119,7 +119,7 @@ class LLMClient:
 
     def _default_model(self) -> str:
         if self.provider == "anthropic":
-            return ANTHROPIC_MODEL
+            return os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
         return os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
 
     # -- public API ---------------------------------------------------------

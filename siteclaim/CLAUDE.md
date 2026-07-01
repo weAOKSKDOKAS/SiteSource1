@@ -38,9 +38,18 @@ cross-reference against data a generic chatbot cannot access.
   layers coexist: real scraped Hong Kong public records (`seed_data/public/`) are
   the **discovery/coverage** pool — screened and counted (see `GET /coverage`) but
   not auto-shortlisted; the **per-tender shortlist** is drawn only from firms with
-  an assessable EOS closeout record (`store.shortlistable_firms_for_trade`).
+  an assessable EOS closeout record (`store.shortlistable_firms_for_trade`). Phase B
+  adds `cross_reference(..., include_public=True)` — the live-engine path — which
+  opens the shortlist to the full screened pool so real firms can be shortlisted;
+  the default keeps the assessed-firm behaviour the demo relies on. A `contacts`
+  table (address book, keyed by firm+trade) records where each RFQ is sent.
 - **Layer 4 — Human approval gates**: approve-before-dispatch, adjust-leveling,
   final-award.
+
+> The live-engine roadmap and the current task list live in `BUILD_PLAN.md` at the
+> repo root. Phase B (shortlist decouple) and Phase A (engine-live plumbing: routed
+> attachments, real SMTP send behind the mock-outbox default, the address book, and
+> the `/level-upload` inbound channel) have landed; see `BUILD_PLAN.md` for the rest.
 
 ## Five-stage pipeline (`backend/pipeline/`)
 

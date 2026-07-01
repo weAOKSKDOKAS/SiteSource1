@@ -128,6 +128,7 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
     public, provenance_by_id = _load_public_records()
     eos = _load_records("eos")
     pricing = _load_records("pricing")
+    contacts = _load_records("contacts")
 
     public_by_id = {r["firm_id"]: r for r in public}
     eos_by_id = {r["firm_id"]: r for r in eos}
@@ -187,6 +188,20 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
                 (row["trade"], float(row["value"]), row.get("project"), row.get("year"), row.get("source"), row.get("reference")),
             )
 
+        # Address book — only for firms that exist (the foreign key holds); a contact
+        # for an unknown firm_id is skipped rather than crashing the build.
+        known_firms = set(firm_ids)
+        contacts_written = 0
+        for row in contacts:
+            if row.get("firm_id") not in known_firms or not row.get("email") or not row.get("trade"):
+                continue
+            conn.execute(
+                "INSERT OR REPLACE INTO contacts (firm_id, trade, contact_name, email, phone, note) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (row["firm_id"], row["trade"], row.get("contact_name"), row["email"], row.get("phone"), row.get("note")),
+            )
+            contacts_written += 1
+
         # Bake embeddings once over whatever closeout text exists.
         texts = [text for (_fid, _cid, text) in chunk_rows]
         vectors, method, dim = _bake_vectors(texts)
@@ -215,6 +230,7 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
         "public_records": len(public),
         "eos_reports": len(eos),
         "pricing_samples": len(pricing),
+        "contacts": contacts_written,
         "closeout_chunks": len(chunk_rows),
         "embed_method": method,
         "embed_dim": dim,

@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS project_closeouts;
 DROP TABLE IF EXISTS award_history;
 DROP TABLE IF EXISTS trade_pricing;
 DROP TABLE IF EXISTS closeout_embeddings;
+DROP TABLE IF EXISTS contacts;
 DROP TABLE IF EXISTS meta;
 
 -- One row per firm — the fused identity (public record + private closeout archive).
@@ -84,6 +85,19 @@ CREATE TABLE closeout_embeddings (
     vector   TEXT NOT NULL      -- JSON array of floats (baked at seed time)
 );
 
+-- Subcontractor address book — where a trade's RFQ email is sent (Phase A). Keyed
+-- by (firm_id, trade): a firm bidding two trades can carry a different desk for each.
+CREATE TABLE contacts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    firm_id      TEXT NOT NULL REFERENCES firms(firm_id),
+    trade        TEXT NOT NULL,
+    contact_name TEXT,
+    email        TEXT NOT NULL,
+    phone        TEXT,
+    note         TEXT,
+    UNIQUE (firm_id, trade)
+);
+
 -- Build metadata: which embedder baked the vectors, their dimension, seed version.
 CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
@@ -95,3 +109,4 @@ CREATE INDEX idx_closeouts_firm     ON project_closeouts(firm_id);
 CREATE INDEX idx_awards_firm        ON award_history(firm_id);
 CREATE INDEX idx_pricing_trade      ON trade_pricing(trade);
 CREATE INDEX idx_embeddings_firm    ON closeout_embeddings(firm_id);
+CREATE INDEX idx_contacts_firm      ON contacts(firm_id);

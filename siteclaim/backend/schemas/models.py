@@ -60,11 +60,33 @@ class DocType(str, Enum):
 
 
 class DispatchStatus(str, Enum):
-    """Lifecycle of a :class:`DispatchBundle` (mock outbox — nothing is really sent)."""
+    """Lifecycle of a :class:`DispatchBundle`.
+
+    ``sent_mock`` is the offline/demo transport (recorded to a JSON outbox, no
+    network). ``sent`` is a real email genuinely handed to an SMTP server on the
+    live path; ``send_failed`` records a firm the mailer could not send to (e.g. no
+    address-book contact), so a partial send is never silently swallowed.
+    """
 
     DRAFTED = "drafted"
     APPROVED = "approved"
     SENT_MOCK = "sent_mock"
+    SENT = "sent"
+    SEND_FAILED = "send_failed"
+
+
+class AttachmentKind(str, Enum):
+    """What role a :class:`BundleAttachment` plays in a dispatched bundle.
+
+    ``general`` documents every trade needs (form of tender, conditions, general
+    preliminaries); ``trade_specific`` documents routed to one trade only; and the
+    ``sor_sheet`` — the per-trade Schedule-of-Rates excerpt the pipeline generates
+    for the subcontractor to price.
+    """
+
+    GENERAL = "general"
+    TRADE_SPECIFIC = "trade_specific"
+    SOR_SHEET = "sor_sheet"
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +147,7 @@ class TradeWorkPackage(BaseModel):
 class TenderDocument(BaseModel):
     doc_type: DocType
     filename: str
+    trades: list[str] = Field(default_factory=list)  # empty = general (every trade); else routed only to these
 
 
 class TenderPackage(BaseModel):
@@ -158,6 +181,17 @@ class FirmProfile(BaseModel):
     award_history: list[str] = Field(default_factory=list)
 
 
+class Contact(BaseModel):
+    """A subcontractor address-book entry (Layer 3) — where a trade's RFQ is sent."""
+
+    firm_id: str
+    trade: str
+    email: str
+    contact_name: str = ""
+    phone: str = ""
+    note: str = ""
+
+
 class Candidate(BaseModel):
     """A shortlisted firm for a trade, with its match score, evidence, and risk."""
 
@@ -178,13 +212,37 @@ class ShortlistSet(BaseModel):
 # ---------------------------------------------------------------------------
 # Stage 03 — dispatch
 # ---------------------------------------------------------------------------
+class BundleAttachment(BaseModel):
+    """A real file to attach to a firm's dispatch email (Phase A document routing).
+
+    ``source_path`` is the file on disk to attach when it exists (a whole tender
+    document routed to this trade, or the generated SoR sheet). It is ``None`` when
+    the bundle is described but no working file has been produced yet (the offline
+    demo, where the tender filenames are labels rather than real uploads). The
+    mailer attaches only the attachments whose ``source_path`` points at a real file.
+    """
+
+    filename: str
+    kind: AttachmentKind
+    trade: Optional[str] = None  # None for a general document; set for trade-specific / SoR sheet
+    source_path: Optional[str] = None
+    generated: bool = False  # True for the SoR sheet the pipeline produces (a derived excerpt)
+    label: str = ""
+
+
 class DispatchBundle(BaseModel):
-    """The document bundle + composed email sent to one firm (mock outbox)."""
+    """The document bundle + composed email sent to one firm.
+
+    ``bundle_doc_refs`` are the human-readable labels shown in the UI/outbox;
+    ``attachments`` are the routed real files (general docs + this trade's docs + the
+    generated SoR sheet) the mailer actually attaches on the live path.
+    """
 
     firm_id: str
     firm_name: str
     trade: str
-    bundle_doc_refs: list[str] = Field(default_factory=list)  # only this trade's docs
+    bundle_doc_refs: list[str] = Field(default_factory=list)  # only this trade's docs (labels)
+    attachments: list[BundleAttachment] = Field(default_factory=list)
     email_subject: str = ""
     email_body: str = ""
     status: DispatchStatus = DispatchStatus.DRAFTED
@@ -280,6 +338,7 @@ __all__ = [
     "SignalType",
     "DocType",
     "DispatchStatus",
+    "AttachmentKind",
     # generic primitive
     "Check",
     # evidence + risk
@@ -293,9 +352,11 @@ __all__ = [
     "ScopePackages",
     # layer 3 + shortlist
     "FirmProfile",
+    "Contact",
     "Candidate",
     "ShortlistSet",
     # stage 03
+    "BundleAttachment",
     "DispatchBundle",
     "DispatchSet",
     # stage 04

@@ -21,7 +21,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from schemas.models import Evidence, FirmProfile, RiskFlag, Severity, SignalType
+from schemas.models import Contact, Evidence, FirmProfile, RiskFlag, Severity, SignalType
 from db.embeddings import deterministic_embedding
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "sitesource.db"
@@ -162,6 +162,51 @@ def shortlistable_firms_for_trade(conn: sqlite3.Connection, trade: str) -> list[
     firms eligible for the per-tender shortlist."""
     assessable = eos_firm_ids(conn)
     return [firm for firm in firms_for_trade(conn, trade) if firm.firm_id in assessable]
+
+
+# ---------------------------------------------------------------------------
+# Address book (Phase A) — where a trade's RFQ email is sent
+# ---------------------------------------------------------------------------
+def _contact_from_row(row: sqlite3.Row) -> Contact:
+    return Contact(
+        firm_id=row["firm_id"],
+        trade=row["trade"],
+        email=row["email"],
+        contact_name=row["contact_name"] or "",
+        phone=row["phone"] or "",
+        note=row["note"] or "",
+    )
+
+
+def _has_contacts_table(conn: sqlite3.Connection) -> bool:
+    """True if the DB was seeded with the address-book table (older DBs may predate it)."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'"
+    ).fetchone()
+    return row is not None
+
+
+def contact_for(conn: sqlite3.Connection, firm_id: str, trade: str) -> Optional[Contact]:
+    """The address-book entry for ``firm_id`` on ``trade``, or None if unknown."""
+    if not _has_contacts_table(conn):
+        return None
+    row = conn.execute(
+        "SELECT firm_id, trade, contact_name, email, phone, note FROM contacts "
+        "WHERE firm_id = ? AND trade = ?",
+        (firm_id, trade),
+    ).fetchone()
+    return _contact_from_row(row) if row is not None else None
+
+
+def all_contacts(conn: sqlite3.Connection) -> list[Contact]:
+    """Every address-book entry (empty list if the table predates Phase A)."""
+    if not _has_contacts_table(conn):
+        return []
+    rows = conn.execute(
+        "SELECT firm_id, trade, contact_name, email, phone, note FROM contacts "
+        "ORDER BY firm_id, trade"
+    ).fetchall()
+    return [_contact_from_row(row) for row in rows]
 
 
 _REAL = "public_register"

@@ -1,0 +1,138 @@
+[
+  {
+    "firm_id": "F-EL-01",
+    "trade": "electrical",
+    "contact_name": "Estimating Team",
+    "email": "estimating@subcontractor-e.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-EL-02",
+    "trade": "electrical",
+    "contact_name": "Estimating Team",
+    "email": "estimating@vantage-e-m-engineering-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-EL-03",
+    "trade": "electrical",
+    "contact_name": "Estimating Team",
+    "email": "estimating@harbour-electrical-works-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-EL-04",
+    "trade": "electrical",
+    "contact_name": "Estimating Team",
+    "email": "estimating@kowloon-power-systems-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-MP-01",
+    "trade": "mechanical_plumbing",
+    "contact_name": "Estimating Team",
+    "email": "estimating@summit-mep-contracting-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-MP-02",
+    "trade": "mechanical_plumbing",
+    "contact_name": "Estimating Team",
+    "email": "estimating@evergreen-plumbing-drainage-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-MP-03",
+    "trade": "mechanical_plumbing",
+    "contact_name": "Estimating Team",
+    "email": "estimating@pacific-mechanical-services-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-FS-01",
+    "trade": "fire_services",
+    "contact_name": "Estimating Team",
+    "email": "estimating@guardian-fire-engineering-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-FS-02",
+    "trade": "fire_services",
+    "contact_name": "Estimating Team",
+    "email": "estimating@redhill-fire-services-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-FS-03",
+    "trade": "fire_services",
+    "contact_name": "Estimating Team",
+    "email": "estimating@sentinel-protection-systems-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-RC-01",
+    "trade": "reinforced_concrete",
+    "contact_name": "Estimating Team",
+    "email": "estimating@granite-concrete-construction-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-RC-02",
+    "trade": "reinforced_concrete",
+    "contact_name": "Estimating Team",
+    "email": "estimating@united-formwork-concrete-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-RC-03",
+    "trade": "reinforced_concrete",
+    "contact_name": "Estimating Team",
+    "email": "estimating@dragon-foundation-concrete-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-RC-03",
+    "trade": "foundation_substructure",
+    "contact_name": "Estimating Team",
+    "email": "estimating@dragon-foundation-concrete-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-JF-01",
+    "trade": "joinery_fitting_out",
+    "contact_name": "Estimating Team",
+    "email": "estimating@artisan-interior-contracts-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-JF-02",
+    "trade": "joinery_fitting_out",
+    "contact_name": "Estimating Team",
+    "email": "estimating@crafted-spaces-fitting-out-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  },
+  {
+    "firm_id": "F-JF-03",
+    "trade": "joinery_fitting_out",
+    "contact_name": "Estimating Team",
+    "email": "estimating@heritage-joinery-works-ltd.example",
+    "phone": "",
+    "note": "Illustrative contact (fabricated, matches the illustrative demo firm)."
+  }
+]

@@ -33,17 +33,22 @@ def shortlist(
     demo_fixture: Optional[str] = None,  # noqa: ARG001 — deterministic over the offline DB
     *,
     conn: Optional[sqlite3.Connection] = None,
+    include_public: bool = False,
 ) -> ShortlistSet:
     """Return ranked candidates per trade for ``scope``.
 
     Pass ``conn`` to read a specific database (tests use a temp seed); otherwise the
-    packaged ``sitesource.db`` is opened and closed here.
+    packaged ``sitesource.db`` is opened and closed here. ``include_public=True``
+    opens the shortlist to the full screened public-record pool (the live-engine
+    path); the default keeps the assessed-firm behaviour the demo scenarios rely on.
     """
     own_conn = conn is None
     conn = conn or store.get_connection()
     try:
         per_trade = {
-            pkg.trade: cross_reference(conn, pkg.trade, pkg.scope_summary)
+            pkg.trade: cross_reference(
+                conn, pkg.trade, pkg.scope_summary, include_public=include_public
+            )
             for pkg in scope.packages
         }
     finally:
