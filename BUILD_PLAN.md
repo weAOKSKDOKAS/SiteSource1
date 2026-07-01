@@ -326,13 +326,34 @@ Done so far:
   - Live tender uploads persisted to a per-tender `Workspace` so dispatch can attach
     the real originals; inbound reply upload at `POST /level-upload`.
   - Model override (`ANTHROPIC_MODEL`) and a documented `.env.example`.
+- Phase C real-data work. Public, refreshable, and clean:
+  - Seed profile split: `python -m db.seed --profile {demo,live}`. `demo` (default,
+    unchanged) is the 150-firm pitch DB; `live` is the clean 134 real-firm DB (no
+    illustrative firms, EOS, pricing, or contacts), built to `sitesource_live.db`.
+    `store.get_connection` honours `SITESOURCE_DB` so the live engine opens the clean
+    DB with no code change. Coverage stays 134/46 in both.
+  - Refreshable public data (`db/refresh.py`, `POST /refresh/{stage,pending,confirm,reject}`):
+    an operator/n8n POSTs new public records; they stage to `staged_firms`/`staged_flags`
+    and only land after a human confirm. Idempotent (fingerprint dedupe), provenance
+    forced to `public_register`, and gated off in DEMO_MODE. No live scraper is built.
+  - Debarment links cleaned: the 2 debarment flags that pointed at the generic DEVB
+    search index are de-linked (reference blanked, source annotated); no fabricated
+    deep link, the 11-debarment / 46-flagged figures unchanged.
+- Phase D code-ready (`db/ingest_closeouts.py`): a partner-archive closeout ingest
+  script (CSV/JSON) that resolves each record to a firm (BR, else name, else a new
+  `partner_archive` firm), writes `project_closeouts` (+ award history, delayed→warning),
+  and bakes a closeout embedding in the DB's own embed space — so `cross_reference`
+  uses it as enrichment automatically. Partner firms never inflate the 134/46 figures.
 
 Immediate next, in order:
 
-1. Phase C seed split: `seed --profile live` (clean 134) vs `seed --profile demo` (150),
-   so the fabricated firms leave the live database without touching the demo.
+1. Phase D BD track: land a partner-contractor archive (VSL) and run the ingest script
+   against a real closeout export — the moat becomes real (this is business development,
+   the code is ready).
 2. Phase A hardening once a pilot is lined up: n8n IMAP/Gmail inbound trigger into
    `/level-upload`, real subcontractor contacts in the address book, and a live SMTP
    run against a real tender.
+3. Phase C automation: an n8n cron per public source (DEVB, Labour Department, Companies
+   Registry) feeding `POST /refresh/stage`, with the human confirm at `/refresh/pending`.
 
 Anything that adds a defensibility claim gets an eval before it gets built.

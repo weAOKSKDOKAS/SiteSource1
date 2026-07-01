@@ -47,9 +47,18 @@ cross-reference against data a generic chatbot cannot access.
   final-award.
 
 > The live-engine roadmap and the current task list live in `BUILD_PLAN.md` at the
-> repo root. Phase B (shortlist decouple) and Phase A (engine-live plumbing: routed
-> attachments, real SMTP send behind the mock-outbox default, the address book, and
-> the `/level-upload` inbound channel) have landed; see `BUILD_PLAN.md` for the rest.
+> repo root. Landed: Phase B (shortlist decouple), Phase A (engine-live plumbing:
+> routed attachments, real SMTP send behind the mock-outbox default, the address book,
+> the `/level-upload` inbound channel), Phase C (a `demo`/`live` seed profile split —
+> `python -m db.seed --profile {demo,live}`, selected at runtime via `SITESOURCE_DB`;
+> a human-gated public-data refresh at `/refresh/*`; and debarment-link cleanup), and
+> the Phase D code-ready closeout ingest (`db/ingest_closeouts.py`). See `BUILD_PLAN.md`.
+>
+> Two databases now: `sitesource.db` is the demo profile (150 firms; the committed
+> pitch DB the tests read). `sitesource_live.db` is the clean live profile (134 real
+> firms only). Coverage is 134/46 in both — illustrative firms are present-but-excluded
+> in demo and simply absent in live. Partner-archive firms carry provenance
+> `partner_archive` and never enter the 134/46 figures.
 
 ## Five-stage pipeline (`backend/pipeline/`)
 

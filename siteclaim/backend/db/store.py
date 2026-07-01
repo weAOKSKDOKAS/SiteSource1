@@ -17,6 +17,7 @@ adjudicates them.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -31,8 +32,18 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parent / "sitesource.db"
 # Connection
 # ---------------------------------------------------------------------------
 def get_connection(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
-    """Open the SiteSource DB read-only-ish (a plain connection with Row access)."""
-    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    """Open the SiteSource DB read-only-ish (a plain connection with Row access).
+
+    Path precedence: an explicit ``db_path`` wins; otherwise the ``SITESOURCE_DB``
+    environment variable (how the live engine points at the clean ``sitesource_live.db``);
+    otherwise the packaged demo ``sitesource.db``. Tests always pass an explicit path,
+    so they are immune to the env override.
+    """
+    if db_path is not None:
+        path = Path(db_path)
+    else:
+        env_path = os.getenv("SITESOURCE_DB", "").strip()
+        path = Path(env_path) if env_path else DEFAULT_DB_PATH
     if not path.is_file():
         raise FileNotFoundError(
             f"SiteSource DB not found at {path}. Build it with `python -m db.seed`."

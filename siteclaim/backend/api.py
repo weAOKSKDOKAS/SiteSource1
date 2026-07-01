@@ -32,7 +32,7 @@ from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  
 from pipeline.stage_04_level.level import level_bids, load_demo_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace  # noqa: E402
-from db import store  # noqa: E402
+from db import refresh, store  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
     Contact,
@@ -94,6 +94,87 @@ def contacts() -> list[Contact]:
     conn = store.get_connection()
     try:
         return store.all_contacts(conn)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Refresh — semi-automated public-data ingest with a human-confirm gate (Phase C)
+# ---------------------------------------------------------------------------
+class PublicFlagIn(BaseModel):
+    signal_type: str
+    label: str
+    date: str | None = None
+    source: str | None = None
+    reference: str | None = None
+
+
+class PublicRecordIn(BaseModel):
+    model_config = {"extra": "ignore"}  # tolerate scrape-only keys (confidence, sources_used, …)
+    firm_id: str
+    name_en: str | None = None
+    name_zh: str | None = None
+    registered_grade: str | None = None
+    value_band: str | None = None
+    registers: list[str] = Field(default_factory=list)
+    trades: list[str] = Field(default_factory=list)
+    public_flags: list[PublicFlagIn] = Field(default_factory=list)
+    award_history: list[dict] = Field(default_factory=list)
+
+
+class StageRequest(BaseModel):
+    records: list[PublicRecordIn] = Field(default_factory=list)
+
+
+class ConfirmRequest(BaseModel):
+    batch_id: str | None = None
+    firm_ids: list[str] | None = None
+
+
+def _refresh_write_guard() -> None:
+    if demo_mode():
+        raise HTTPException(status_code=409, detail="Refresh is disabled in DEMO_MODE.")
+
+
+@app.post("/refresh/stage")
+def post_refresh_stage(req: StageRequest) -> dict:
+    """Stage new public records/flags for human review (nothing lands until confirmed)."""
+    _refresh_write_guard()
+    conn = store.get_connection()
+    try:
+        return refresh.stage_records(conn, [r.model_dump() for r in req.records])
+    finally:
+        conn.close()
+
+
+@app.get("/refresh/pending")
+def get_refresh_pending() -> list[dict]:
+    """What is waiting for a human to confirm or reject."""
+    conn = store.get_connection()
+    try:
+        return refresh.list_pending(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/refresh/confirm")
+def post_refresh_confirm(req: ConfirmRequest) -> dict:
+    """Apply staged records/flags into the live database (the human gate)."""
+    _refresh_write_guard()
+    conn = store.get_connection()
+    try:
+        return refresh.confirm_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
+    finally:
+        conn.close()
+
+
+@app.post("/refresh/reject")
+def post_refresh_reject(req: ConfirmRequest) -> dict:
+    """Reject staged records/flags (kept as an audit trail, never applied)."""
+    _refresh_write_guard()
+    conn = store.get_connection()
+    try:
+        return refresh.reject_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
     finally:
         conn.close()
 

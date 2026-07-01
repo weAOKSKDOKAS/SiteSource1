@@ -53,6 +53,23 @@ def test_dispatch_send_in_demo_is_mock_and_carries_attachments():
     assert "sor_sheet" in kinds and "general" in kinds  # routed, even if not written to disk
 
 
+def test_refresh_write_routes_are_disabled_in_demo():
+    # The refresh write path must never mutate the committed demo DB during a demo run.
+    stage = client.post("/refresh/stage", json={"records": [
+        {"firm_id": "some-firm", "public_flags": [{"signal_type": "winding_up", "label": "x"}]}
+    ]})
+    confirm = client.post("/refresh/confirm", json={})
+    assert stage.status_code == 409 and confirm.status_code == 409
+    # the read-only pending view is available and tolerant (empty on the demo DB)
+    pending = client.get("/refresh/pending")
+    assert pending.status_code == 200 and isinstance(pending.json(), list)
+
+
+def test_refresh_routes_are_registered():
+    paths = {route.path for route in app.routes}
+    assert {"/refresh/stage", "/refresh/pending", "/refresh/confirm", "/refresh/reject"} <= paths
+
+
 def test_shortlist_include_public_opens_the_pool():
     # Phase B, reached through the API: the live-engine flag adds real public firms.
     case = client.get("/demo/messy").json()

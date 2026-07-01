@@ -33,8 +33,17 @@ from .embeddings import DETERMINISTIC_DIM, build_embeddings, deterministic_embed
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.sql"
 SEED_DATA_DIR = _HERE / "seed_data"
-DEFAULT_DB_PATH = _HERE / "sitesource.db"
+DEFAULT_DB_PATH = _HERE / "sitesource.db"       # profile 'demo' (150 firms: real + illustrative)
+LIVE_DB_PATH = _HERE / "sitesource_live.db"     # profile 'live' (clean 134 real firms only)
 SEED_VERSION = "1"
+
+# Profiles. 'demo' is the pitch database (real + the 16 illustrative firms + their
+# fabricated EOS records, pricing, and contacts). 'live' is the clean engine database:
+# only the real public-register firms, none of the fabricated layer. The mode flag on
+# cross_reference (include_public) is what lets the live engine shortlist real firms
+# against this clean database; see BUILD_PLAN.md sections 3 and 6.
+PROFILES = ("demo", "live")
+_REAL = "public_register"
 
 # Reuse the Layer-1 taxonomy normaliser to screen real-scrape trade names (e.g.
 # "fire services", "mechanical and plumbing") into canonical keys at build time.
@@ -122,17 +131,39 @@ def _bake_vectors(texts: list[str]) -> tuple[list[list[float]], str, int]:
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
-def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
-    """(Re)build the SQLite database at ``db_path``. Returns a small summary."""
-    db_path = Path(db_path)
+def build_database(db_path: Path | str | None = None, *, profile: str = "demo") -> dict:
+    """(Re)build the SQLite database at ``db_path``. Returns a small summary.
+
+    ``profile='demo'`` (default) builds the full 150-firm pitch database — real firms
+    plus the 16 illustrative firms and their fabricated EOS records, pricing and
+    contacts. ``profile='live'`` builds the clean engine database: only the real
+    ``public_register`` firms, with none of the fabricated layer (no illustrative
+    firms, no EOS closeouts/embeddings, no illustrative pricing, no illustrative
+    contacts). The default is unchanged so the committed demo DB and every hermetic
+    test stay untouched.
+
+    When ``db_path`` is None the path is derived from the profile (demo →
+    ``sitesource.db``, live → ``sitesource_live.db``); an explicit ``db_path`` always
+    wins.
+    """
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile {profile!r} (use one of {PROFILES})")
+    db_path = Path(db_path) if db_path is not None else (DEFAULT_DB_PATH if profile == "demo" else LIVE_DB_PATH)
+
     public, provenance_by_id = _load_public_records()
-    eos = _load_records("eos")
-    pricing = _load_records("pricing")
-    contacts = _load_records("contacts")
+    # The live engine carries only real public data; the fabricated layer (illustrative
+    # firms' EOS records, pricing, contacts) is demo-only and skipped entirely for live.
+    eos = _load_records("eos") if profile == "demo" else []
+    pricing = _load_records("pricing") if profile == "demo" else []
+    contacts = _load_records("contacts") if profile == "demo" else []
 
     public_by_id = {r["firm_id"]: r for r in public}
     eos_by_id = {r["firm_id"]: r for r in eos}
     firm_ids = sorted(set(public_by_id) | set(eos_by_id))
+    if profile == "live":
+        # Keep only real-provenance firms — drop the 16 illustrative stubs. Provenance
+        # (not an id-prefix guess) is the source-of-truth discriminator.
+        firm_ids = [fid for fid in firm_ids if provenance_by_id.get(fid) == _REAL]
 
     if db_path.exists():
         db_path.unlink()
@@ -215,6 +246,7 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
             "embed_method": method,
             "embed_dim": str(dim),
             "seed_version": SEED_VERSION,
+            "profile": profile,
             "built_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
             "firm_count": str(len(firm_ids)),
         }.items():
@@ -226,6 +258,7 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
 
     return {
         "db_path": str(db_path),
+        "profile": profile,
         "firms": len(firm_ids),
         "public_records": len(public),
         "eos_reports": len(eos),
@@ -237,8 +270,19 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
     }
 
 
-def main() -> None:
-    summary = build_database()
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m db.seed",
+        description="Build the SiteSource database. 'demo' is the 150-firm pitch DB "
+        "(real + illustrative); 'live' is the clean real-firm-only engine DB.",
+    )
+    parser.add_argument("--profile", choices=PROFILES, default="demo", help="which database to build (default: demo)")
+    parser.add_argument("--out", default=None, help="output path (default: derived from the profile)")
+    args = parser.parse_args(argv)
+
+    summary = build_database(args.out, profile=args.profile)
     print("Built SiteSource DB:")
     for key, value in summary.items():
         print(f"  {key:>16}: {value}")

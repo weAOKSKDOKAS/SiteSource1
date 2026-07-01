@@ -15,6 +15,8 @@ DROP TABLE IF EXISTS award_history;
 DROP TABLE IF EXISTS trade_pricing;
 DROP TABLE IF EXISTS closeout_embeddings;
 DROP TABLE IF EXISTS contacts;
+DROP TABLE IF EXISTS staged_firms;
+DROP TABLE IF EXISTS staged_flags;
 DROP TABLE IF EXISTS meta;
 
 -- One row per firm — the fused identity (public record + private closeout archive).
@@ -24,10 +26,11 @@ CREATE TABLE firms (
     name_zh          TEXT,
     registered_grade TEXT,
     value_band       TEXT,
+    br_number        TEXT,   -- Business Registration number, when known (entity resolution for partner ingest)
     registers        TEXT,   -- JSON array of registration schemes (lossless for the scrape)
     trades           TEXT,   -- JSON array of canonical taxonomy keys
     closeout_summary TEXT,
-    provenance       TEXT NOT NULL DEFAULT 'illustrative'  -- 'public_register' (real scrape) | 'illustrative' (demo stub)
+    provenance       TEXT NOT NULL DEFAULT 'illustrative'  -- 'public_register' (real scrape) | 'illustrative' (demo stub) | 'partner_archive' (closeout ingest)
 );
 
 -- Public-record signals (winding-up, safety prosecutions, debarment, adjudication,
@@ -98,6 +101,38 @@ CREATE TABLE contacts (
     UNIQUE (firm_id, trade)
 );
 
+-- Refresh staging (Phase C) — new public records/flags land here first and only
+-- reach the live firms/public_flags tables after a human confirms them. A refresh
+-- never mutates curated data directly; it stages, a human reviews, then it applies.
+CREATE TABLE staged_firms (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id    TEXT NOT NULL,
+    firm_id     TEXT NOT NULL,
+    payload     TEXT NOT NULL,   -- JSON of the normalized firm record
+    provenance  TEXT NOT NULL DEFAULT 'public_register',
+    is_new_firm INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'pending',  -- pending | applied | rejected
+    staged_at   TEXT NOT NULL,
+    applied_at  TEXT,
+    rejected_at TEXT
+);
+
+CREATE TABLE staged_flags (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id    TEXT NOT NULL,
+    firm_id     TEXT NOT NULL,
+    signal_type TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    date        TEXT,
+    source      TEXT,
+    reference   TEXT,
+    fingerprint TEXT NOT NULL,   -- stable hash of the flag, for logical dedupe
+    status      TEXT NOT NULL DEFAULT 'pending',  -- pending | applied | rejected
+    staged_at   TEXT NOT NULL,
+    applied_at  TEXT,
+    rejected_at TEXT
+);
+
 -- Build metadata: which embedder baked the vectors, their dimension, seed version.
 CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
@@ -110,3 +145,6 @@ CREATE INDEX idx_awards_firm        ON award_history(firm_id);
 CREATE INDEX idx_pricing_trade      ON trade_pricing(trade);
 CREATE INDEX idx_embeddings_firm    ON closeout_embeddings(firm_id);
 CREATE INDEX idx_contacts_firm      ON contacts(firm_id);
+CREATE INDEX idx_staged_firms_status ON staged_firms(status);
+CREATE INDEX idx_staged_flags_status ON staged_flags(status);
+CREATE INDEX idx_staged_flags_fp     ON staged_flags(fingerprint);
