@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 from pipeline.documents import to_images  # noqa: E402
 from pipeline.llm_client import demo_mode  # noqa: E402
+from pipeline.stage_01_ingest.classify import classify_documents  # noqa: E402
 from pipeline.stage_01_ingest.ingest import ingest_tender  # noqa: E402
 from pipeline.stage_02_shortlist.shortlist import shortlist  # noqa: E402
 from pipeline.stage_03_dispatch.dispatch import build_dispatch  # noqa: E402
@@ -282,37 +283,52 @@ class IngestRequest(BaseModel):
     demo_fixture: str | None = SCOPE_FIXTURE
 
 
+class IngestUploadResponse(BaseModel):
+    """The scope split plus the trade-tagged tender, so the client can hand the tagged
+    tender to ``/dispatch`` for per-trade document routing."""
+
+    scope: ScopePackages
+    tender: TenderPackage
+
+
 @app.post("/ingest", response_model=ScopePackages)
 def post_ingest(req: IngestRequest) -> ScopePackages:
     return ingest_tender(req.tender, demo_fixture=req.demo_fixture)
 
 
-@app.post("/ingest-upload", response_model=ScopePackages)
+@app.post("/ingest-upload", response_model=IngestUploadResponse)
 async def post_ingest_upload(
     files: list[UploadFile] = File(...),
     project_name: str = Form("Uploaded tender"),
-) -> ScopePackages:
-    """Ingest live tender documents (PDF/image). In DEMO_MODE the upload is accepted
-    but the baked scope fixture is returned (no model, no network). Live, each
-    original is persisted to the tender workspace so dispatch can attach the real
-    files, then rasterised for the vision model."""
+) -> IngestUploadResponse:
+    """Ingest live tender documents (PDF/image) and return the scope split plus the
+    trade-tagged tender. In DEMO_MODE the upload is accepted but the baked scope fixture
+    is returned and the tender is left untagged (no model, no network). Live, each
+    original is persisted to the tender workspace so dispatch can attach the real files;
+    the pages are rasterised for the vision model; and each document is classified by
+    trade (Layer 2) so its ``trades`` route the right whole originals at dispatch."""
     tender = TenderPackage(
         project_name=project_name,
         documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=f.filename or "upload") for f in files],
     )
     if demo_mode():
-        return ingest_tender(tender, demo_fixture=SCOPE_FIXTURE)
+        return IngestUploadResponse(scope=ingest_tender(tender, demo_fixture=SCOPE_FIXTURE), tender=tender)
 
     workspace = Workspace()
-    images: list[str] = []
+    per_doc_images: list[list[str]] = []
+    merged: list[str] = []
     for upload in files:
         data = await upload.read()
         workspace.save_upload(project_name, upload.filename or "upload", data)
         try:
-            images += to_images(data, upload.content_type)
+            doc_images = to_images(data, upload.content_type)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ingest_tender(tender, images=images)
+        per_doc_images.append(doc_images[:2])  # first one or two pages carry the doc identity
+        merged += doc_images
+    scope = ingest_tender(tender, images=merged)
+    tagged = classify_documents(tender, per_doc_images)
+    return IngestUploadResponse(scope=scope, tender=tagged)
 
 
 # ---------------------------------------------------------------------------

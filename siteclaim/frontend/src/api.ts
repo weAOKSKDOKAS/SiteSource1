@@ -5,6 +5,7 @@ import type {
   DemoCaseSummary,
   DispatchSet,
   Health,
+  IngestUpload,
   LevelledBid,
   Recommendation,
   ScopePackages,
@@ -57,10 +58,11 @@ export const api = {
 
   ingest: (tender: TenderPackage) => post<ScopePackages>("/ingest", { tender }),
   // Live multimodal ingest: POST the raw tender files as multipart/form-data.
+  // Returns the scope split plus the trade-tagged tender (pass the tender to /dispatch).
   ingestUpload: (files: File[]) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
-    return fetch(BASE + "/ingest-upload", { method: "POST", body: fd }).then((r) => handle<ScopePackages>(r));
+    return fetch(BASE + "/ingest-upload", { method: "POST", body: fd }).then((r) => handle<IngestUpload>(r));
   },
 
   shortlist: (scope: ScopePackages) => post<ShortlistSet>("/shortlist", { scope }),

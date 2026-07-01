@@ -32,11 +32,16 @@ def test_level_upload_in_demo_returns_the_baked_levelling():
     assert levelled and all("corrected_total" in bid for bid in levelled)
 
 
-def test_ingest_upload_in_demo_accepts_files_and_returns_scope():
+def test_ingest_upload_in_demo_returns_scope_and_untagged_tender():
     files = {"files": ("tender.pdf", b"%PDF-1.4 fake", "application/pdf")}
     resp = client.post("/ingest-upload", files=files, data={"project_name": "Live Tender A"})
     assert resp.status_code == 200
-    assert resp.json()["packages"]
+    body = resp.json()
+    assert body["scope"]["packages"]     # the scope split
+    assert body["tender"]["documents"]   # the tagged tender (for /dispatch routing)
+    # DEMO_MODE leaves the tender untagged — classification runs only on the live path,
+    # so the demo scenarios and the hero catch are untouched.
+    assert all(doc["trades"] == [] for doc in body["tender"]["documents"])
 
 
 def test_dispatch_send_in_demo_is_mock_and_carries_attachments():
