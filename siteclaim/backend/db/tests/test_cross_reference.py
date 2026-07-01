@@ -2,7 +2,7 @@
 firm because the database carries a fatal winding-up petition against it."""
 
 from db import store
-from db.cross_reference import cross_reference
+from db.cross_reference import SECTION_CAP, cross_reference
 from db.tests.conftest import ELECTRICAL_SCOPE_QUERY
 from schemas.models import Severity
 
@@ -43,23 +43,36 @@ def test_gotcha_carries_fatal_winding_up_with_evidence(conn):
     assert winding.evidence and winding.evidence[0].reference == "CR:HCCW-215/2026"
 
 
-def test_no_eos_electrical_firm_is_silently_dropped(conn):
-    # New contract: every electrical firm WITH an assessable EOS record is shown
-    # (the flagged firm is demoted, never hidden); none is silently dropped.
+def test_electrical_shortlist_is_capped_and_keeps_the_demoted_gotcha(conn):
+    # The shortlist now surfaces the genuine register pool too, so it is capped to a
+    # readable size — but the recommend-against gotcha is always kept, demoted last,
+    # never capped away, and the clean demo firms remain present.
     candidates = cross_reference(conn, "electrical", ELECTRICAL_SCOPE_QUERY)
-    assert set(_ids(candidates)) == {f.firm_id for f in store.shortlistable_firms_for_trade(conn, "electrical")}
-    assert "F-EL-01" in set(_ids(candidates))  # the flagged firm is present, just demoted
+    ids = set(_ids(candidates))
+    assert {"F-EL-01", "F-EL-02", "F-EL-03", "F-EL-04"} <= ids
+    assert candidates[-1].firm.firm_id == "F-EL-01"  # the flagged firm is present, just demoted last
+    clean = [c for c in candidates if not c.recommended_against]
+    assert len(clean) <= SECTION_CAP
+    # far more electrical firms are now shortlistable than are shown — the cap is real
+    assert len(store.shortlistable_firms_for_trade(conn, "electrical")) > len(candidates)
 
 
-def test_public_only_firms_are_in_db_but_never_shortlisted(conn):
-    # The wider public-record pool exists in the firms table (discovery/coverage) …
-    assessable = store.eos_firm_ids(conn)
-    public_only = {f.firm_id for f in store.all_firms(conn)} - assessable
-    assert public_only  # the real scrape is present in the DB
-    # … but no public-only firm (no EOS) appears in any per-tender shortlist.
-    for trade in ("electrical", "mechanical_plumbing", "fire_services"):
-        ids = {c.firm.firm_id for c in cross_reference(conn, trade, "scope summary")}
-        assert not (ids & public_only)
-    # and the electrical shortlist is exactly the four assessed demo firms, in order.
+def test_trade_matched_register_firms_now_surface_capped_and_ranked(conn):
+    # The opened gate: a trade-matched firm on the real CIC register is shortlistable
+    # even with no held closeout and no award — the genuine pool surfaces (previously
+    # it was hidden behind the closeout/award gate).
+    register = store.register_firm_ids(conn)
     order = [c.firm.firm_id for c in cross_reference(conn, "electrical", ELECTRICAL_SCOPE_QUERY)]
-    assert order == ["F-EL-02", "F-EL-04", "F-EL-03", "F-EL-01"]
+    assert any(fid in register for fid in order)  # real register firms now appear
+    # yet the hero still reads correctly: clean runner-up on top, gotcha demoted last,
+    # and the curated/assessed demo firms sit above the register-only pool.
+    assert order[0] == "F-EL-02"
+    assert order[-1] == "F-EL-01"
+    register_in_card = [fid for fid in order if fid in register]
+    demo_in_card = [fid for fid in order if fid.startswith("F-EL-")]
+    assert max(order.index(fid) for fid in demo_in_card if fid != "F-EL-01") < min(
+        order.index(fid) for fid in register_in_card
+    )
+    # a firm that does not do the trade is never surfaced under it
+    non_electrical = next(f.firm_id for f in store.all_firms(conn) if "electrical" not in f.trades)
+    assert non_electrical not in set(order)

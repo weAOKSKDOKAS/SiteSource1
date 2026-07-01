@@ -1,0 +1,659 @@
+[
+  {
+    "firm_id": "fugro-geotechnical-services-limited-af2a",
+    "name_en": "Fugro Geotechnical Services Limited",
+    "name_zh": null,
+    "registered_grade": "Ground Investigation Field Work (Group II)",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": "Group II, contracts/sub-contracts of unlimited value",
+    "trades": [
+      "field_testing",
+      "field_installations",
+      "geophysical_survey"
+    ],
+    "raw_category": "Ground Investigation Field Work",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Landslip Prevention and Mitigation Programme, Ground Investigation Term Contract (2025-2028), Contract 7",
+        "client": "Civil Engineering and Development Department",
+        "year": 2026,
+        "source": "https://www.cedd.gov.hk/eng/tender-notices/contracts/contracts-awarded/index-id-2394.html"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=GROU&class=&group=II&search=true",
+      "https://www.cedd.gov.hk/eng/tender-notices/contracts/contracts-awarded/index-id-2394.html",
+      "https://www.devb.gov.hk/filemanager/en/content_187/Letter_to_contractors-Revised_Group_Tender_Limits_Probationary_Limits_and_Financial_Criteria_Jan_2021.pdf"
+    ],
+    "display_sensitive": false,
+    "profile": {
+      "overview": "First international geotechnical specialist in Hong Kong, operating since 1973; part of the global Geo-data company Fugro N.V.",
+      "group_parent": "Fugro N.V. (global Geo-data company)",
+      "offices": [
+        "Fo Tan, Hong Kong"
+      ],
+      "services": [
+        "Land and marine site investigation",
+        "Geotechnical drilling",
+        "Cone penetration testing (CPT)",
+        "Laboratory testing",
+        "Instrumentation & real-time groundwater monitoring",
+        "Geophysical site characterisation",
+        "Slope engineering",
+        "BIM geotechnical modelling"
+      ],
+      "notable_projects": [
+        {
+          "title": "Hong Kong International Airport Three-Runway System (3RS) — land and marine site investigation (since 2011)"
+        },
+        {
+          "title": "Central Waters artificial islands — marine geotechnical and geophysical characterisation"
+        },
+        {
+          "title": "CEDD / GEO Landslip Prevention and Mitigation Programme"
+        }
+      ],
+      "accreditations": [
+        "HOKLAS 015 (Fugro Technical Services)",
+        "DEVB Group II — Ground Investigation Field Work"
+      ],
+      "staff_note": ""
+    }
+  },
+  {
+    "firm_id": "lam-geotechnics-limited-1e4b",
+    "name_en": "Lam Geotechnics Limited",
+    "name_zh": null,
+    "registered_grade": "Ground Investigation Field Work (Group II)",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": "Group II, contracts/sub-contracts of unlimited value",
+    "trades": [
+      "field_installations",
+      "field_testing",
+      "ground_investigation"
+    ],
+    "raw_category": "Ground Investigation Field Work",
+    "public_flags": [],
+    "award_history": [],
+    "confidence": "medium",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=GROU&class=&group=II&search=true",
+      "https://www.devb.gov.hk/filemanager/en/content_187/Letter_to_contractors-Revised_Group_Tender_Limits_Probationary_Limits_and_Financial_Criteria_Jan_2021.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "intrafor-hong-kong-limited-c9a4",
+    "name_en": "Intrafor Hong Kong Limited",
+    "name_zh": null,
+    "registered_grade": "Ground Investigation Field Work (Group II)",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": "Group II, contracts/sub-contracts of unlimited value",
+    "trades": [
+      "field_installations",
+      "field_testing",
+      "ground_investigation"
+    ],
+    "raw_category": "Ground Investigation Field Work",
+    "public_flags": [],
+    "award_history": [],
+    "confidence": "medium",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=GROU&class=&group=II&search=true",
+      "https://www.devb.gov.hk/filemanager/en/content_187/Letter_to_contractors-Revised_Group_Tender_Limits_Probationary_Limits_and_Financial_Criteria_Jan_2021.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "chung-shun-boring-engineering-company-limited-2ee9",
+    "name_en": "Chung Shun Boring Engineering Company Limited",
+    "name_zh": null,
+    "registered_grade": "Ground Investigation Field Work (Group II)",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": "Group II, contracts/sub-contracts of unlimited value",
+    "trades": [
+      "field_installations",
+      "field_testing",
+      "ground_investigation"
+    ],
+    "raw_category": "Ground Investigation Field Work",
+    "public_flags": [],
+    "award_history": [],
+    "confidence": "medium",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=GROU&class=&group=II&search=true",
+      "https://www.devb.gov.hk/filemanager/en/content_187/Letter_to_contractors-Revised_Group_Tender_Limits_Probationary_Limits_and_Financial_Criteria_Jan_2021.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "driltech-ground-engineering-limited-a721",
+    "name_en": "DrilTech Ground Engineering Limited",
+    "name_zh": null,
+    "registered_grade": "Ground Investigation Field Work (Group II)",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": "Group II, contracts/sub-contracts of unlimited value",
+    "trades": [
+      "field_installations",
+      "field_testing",
+      "ground_investigation"
+    ],
+    "raw_category": "Ground Investigation Field Work",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Landslip Prevention and Mitigation Programme, Ground Investigation Term Contract (2024-2027), Contract 2",
+        "client": "Civil Engineering and Development Department",
+        "year": 2025,
+        "source": "https://www.cedd.gov.hk/filemanager/eng/content_37/lpm_activesite_eng.pdf"
+      }
+    ],
+    "confidence": "medium",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=GROU&class=&group=II&search=true",
+      "https://www.cedd.gov.hk/filemanager/eng/content_37/lpm_activesite_eng.pdf",
+      "https://www.devb.gov.hk/filemanager/en/content_187/Letter_to_contractors-Revised_Group_Tender_Limits_Probationary_Limits_and_Financial_Criteria_Jan_2021.pdf"
+    ],
+    "display_sensitive": false,
+    "profile": {
+      "overview": "Founded 1996; member of the Chinney Kin Wing group. Drilling, site investigation and ground engineering for the Hong Kong public sector.",
+      "group_parent": "Chinney Kin Wing group",
+      "offices": [
+        "Cheung Sha Wan, Hong Kong"
+      ],
+      "services": [
+        "Drilling",
+        "Site investigation",
+        "Ground engineering"
+      ],
+      "notable_projects": [
+        {
+          "title": "CEDD NEC4 ground-investigation services framework (~HK$400m; highly commended, 2025 NEC Martin Barnes Awards)"
+        },
+        {
+          "title": "CEDD GI works, Northern New Territories (North) 2024–26 — drillholes, trial pits, groundwater monitoring, geophysical surveys, in-situ and laboratory tests"
+        }
+      ],
+      "accreditations": [
+        "Housing Authority list — bored/percussive piling and ground investigation",
+        "DEVB Group II"
+      ],
+      "staff_note": ""
+    }
+  },
+  {
+    "firm_id": "gold-ram-engineering-development-limited-9bbd",
+    "name_en": "Gold Ram Engineering & Development Limited",
+    "name_zh": null,
+    "registered_grade": "Ground Investigation Field Work (Group II)",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": "Group II, contracts/sub-contracts of unlimited value",
+    "trades": [
+      "field_installations",
+      "field_testing",
+      "ground_investigation"
+    ],
+    "raw_category": "Ground Investigation Field Work",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Landslip Prevention and Mitigation Programme, Ground Investigation Term Contract (2025-2028), Contract 8",
+        "client": "Civil Engineering and Development Department",
+        "year": 2026,
+        "source": "https://www.cedd.gov.hk/eng/tender-notices/contracts/contracts-awarded/index-id-2400.html"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=GROU&class=&group=II&search=true",
+      "https://www.cedd.gov.hk/eng/tender-notices/contracts/contracts-awarded/index-id-2400.html",
+      "https://www.devb.gov.hk/filemanager/en/content_187/Letter_to_contractors-Revised_Group_Tender_Limits_Probationary_Limits_and_Financial_Criteria_Jan_2021.pdf"
+    ],
+    "display_sensitive": false,
+    "profile": {
+      "overview": "In Hong Kong since 1984 (renamed 1989); subsidiary of CIGIS (Ministry of Construction, PRC). BD-registered ground-investigation specialist contractor.",
+      "group_parent": "CIGIS (Ministry of Construction, PRC)",
+      "offices": [
+        "Hong Kong Plaza, Connaught Road West"
+      ],
+      "services": [
+        "Ground investigation",
+        "Laboratory testing"
+      ],
+      "notable_projects": [
+        {
+          "title": "CEDD Landslip Prevention and Mitigation Programme GI Term Contract (2025–2028), Contract 4 — GI and laboratory testing for ~60 government slopes/retaining walls and 3 natural hillside study areas; about 30 months from August 2025"
+        }
+      ],
+      "accreditations": [
+        "BD-registered GI specialist contractor",
+        "Housing Authority GI list",
+        "DEVB Group II"
+      ],
+      "staff_note": "90+ staff"
+    }
+  },
+  {
+    "firm_id": "fugro-technical-services-limited-96d8",
+    "name_en": "Fugro Technical Services Limited",
+    "name_zh": "輝固技術服務有限公司",
+    "registered_grade": "Soil and Rock Testing; Registration No. HOKLAS 015",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works",
+      "Hong Kong Accreditation Service HOKLAS"
+    ],
+    "value_band": null,
+    "trades": [
+      "field_testing",
+      "sampling"
+    ],
+    "raw_category": "Soil and Rock Testing; Construction Materials; Calibration Services",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Materials Testing Services Term Contract (2024/2027) for Maintenance and Building Materials (Package B2)",
+        "client": "Hong Kong Housing Authority",
+        "year": 2024,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.itc.gov.hk/en/quality/hkas/doc/scopes/015.pdf",
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=SOIL&class=&group=&search=true",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "ft-laboratories-limited-6f3c",
+    "name_en": "FT Laboratories Limited",
+    "name_zh": "科達測檢試驗所有限公司",
+    "registered_grade": "Registration No. HOKLAS 071",
+    "registers": [
+      "Hong Kong Accreditation Service HOKLAS",
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": null,
+    "trades": [
+      "field_testing",
+      "sampling"
+    ],
+    "raw_category": "Construction Materials; Calibration Services; Non-Destructive Pile Testing for Foundation and Building Contracts; Specialized Operations for Highway Structures (Class IV)",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Materials Testing Services Term Contract (2025/2027) for Non-Destructive Pile Testing for Foundation, Building and Design & Build Contracts (Package 1)",
+        "client": "Hong Kong Housing Authority",
+        "year": 2025,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Aug_2025.pdf"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.itc.gov.hk/en/quality/hkas/doc/scopes/071.pdf",
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=&class=&group=&search=true",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Aug_2025.pdf",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Sep.pdf",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Awards_September_2023.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "geotechnics-concrete-engineering-hong-kong-limited-b412",
+    "name_en": "Geotechnics & Concrete Engineering (Hong Kong) Limited",
+    "name_zh": "香港土力混凝土工程有限公司",
+    "registered_grade": "Ground Investigation Field Work (Group II); Soil and Rock Testing; Registration No. HOKLAS 024",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works",
+      "Hong Kong Accreditation Service HOKLAS"
+    ],
+    "value_band": "Group II, contracts/sub-contracts of unlimited value",
+    "trades": [
+      "field_installations",
+      "field_testing",
+      "ground_investigation"
+    ],
+    "raw_category": "Ground Investigation Field Work; Soil and Rock Testing; Construction Materials; Calibration Services",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Materials Testing Services Term Contract (2024/2027) for Construction Materials (Package A2)",
+        "client": "Hong Kong Housing Authority",
+        "year": 2024,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.itc.gov.hk/en/quality/hkas/doc/scopes/024.pdf",
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=&class=&group=&search=true",
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=SOIL&class=&group=&search=true",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf",
+      "https://www.devb.gov.hk/filemanager/en/content_187/Letter_to_contractors-Revised_Group_Tender_Limits_Probationary_Limits_and_Financial_Criteria_Jan_2021.pdf"
+    ],
+    "display_sensitive": false,
+    "profile": {
+      "overview": "HOKLAS-024 laboratory and ground-investigation contractor; main laboratory on Ko Shan Road, Hung Hom. Clients include CEDD, ASD, DSD, WSD and the Hong Kong Housing Authority.",
+      "group_parent": "",
+      "offices": [
+        "Main laboratory — Ko Shan Road, Hung Hom"
+      ],
+      "services": [
+        "Ground investigation",
+        "Laboratory soil and rock testing",
+        "Construction materials testing",
+        "Environmental testing",
+        "Calibration"
+      ],
+      "notable_projects": [
+        {
+          "title": "Express Rail Link Contract 810B — West Kowloon Terminus"
+        },
+        {
+          "title": "CEDD ground investigation (including GI for the Landslip Prevention and Mitigation Programme)"
+        }
+      ],
+      "accreditations": [
+        "HOKLAS 024",
+        "ISO 9001:2015",
+        "ISO 14001:2015",
+        "ISO 45001:2018"
+      ],
+      "staff_note": ""
+    }
+  },
+  {
+    "firm_id": "soils-materials-engineering-company-limited-fab7",
+    "name_en": "Soils & Materials Engineering Company Limited",
+    "name_zh": "綜合試驗有限公司",
+    "registered_grade": "Soil and Rock Testing; Registration No. HOKLAS 028",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works",
+      "Hong Kong Accreditation Service HOKLAS"
+    ],
+    "value_band": null,
+    "trades": [
+      "field_testing",
+      "sampling"
+    ],
+    "raw_category": "Soil and Rock Testing; Construction Materials; Calibration Services",
+    "public_flags": [
+      {
+        "signal_type": "safety_prosecution",
+        "label": "Convicted for employment of a relevant person without relevant certificate",
+        "date": "2024-10-17",
+        "source": "Labour Department",
+        "reference": "https://www.labour.gov.hk/datagovhk/resource/lsd/lsd-convictionrecords_en.xlsx"
+      }
+    ],
+    "award_history": [
+      {
+        "project": "Materials Testing Services Term Contract (2024/2027) for Construction Materials (Package A3)",
+        "client": "Hong Kong Housing Authority",
+        "year": 2024,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.itc.gov.hk/en/quality/hkas/doc/scopes/028.pdf",
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=SOIL&class=&group=&search=true",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf",
+      "https://www.labour.gov.hk/datagovhk/resource/lsd/lsd-convictionrecords_en.xlsx"
+    ],
+    "display_sensitive": true
+  },
+  {
+    "firm_id": "ets-testconsult-limited-ca6f",
+    "name_en": "ETS-Testconsult Limited",
+    "name_zh": "東業德勤測試顧問有限公司",
+    "registered_grade": "Soil and Rock Testing; Registration No. HOKLAS 022",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works",
+      "Hong Kong Accreditation Service HOKLAS"
+    ],
+    "value_band": null,
+    "trades": [
+      "field_testing",
+      "sampling"
+    ],
+    "raw_category": "Soil and Rock Testing; Construction Materials; Calibration Services; Non-Destructive Pile Testing for Foundation and Building Contracts",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Materials Testing Services Term Contract (2024/2026) for Non-Destructive Pile Testing for Foundation and Building Contracts (Package 1)",
+        "client": "Hong Kong Housing Authority",
+        "year": 2024,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Sep.pdf"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.itc.gov.hk/en/quality/hkas/doc/scopes/022.pdf",
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=SOIL&class=&group=&search=true",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Sep.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "stanger-asia-limited-6a8f",
+    "name_en": "Stanger Asia Limited",
+    "name_zh": "史達嘉亞洲有限公司",
+    "registered_grade": "Registration No. HOKLAS 021",
+    "registers": [
+      "Hong Kong Accreditation Service HOKLAS"
+    ],
+    "value_band": null,
+    "trades": [
+      "field_testing",
+      "sampling"
+    ],
+    "raw_category": "Construction Materials; Calibration Services; Non-Destructive Pile Testing for Foundation and Building Contracts",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Materials Testing Services Term Contract (2023/2025) for Non-Destructive Pile Testing for Foundation and Building Contracts (Package 1)",
+        "client": "Hong Kong Housing Authority",
+        "year": 2023,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Awards_September_2023.pdf"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.itc.gov.hk/en/quality/hkas/doc/scopes/021.pdf",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Awards_September_2023.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "the-lab-asia-limited-7d69",
+    "name_en": "The Lab (Asia) Limited",
+    "name_zh": null,
+    "registered_grade": "Registration No. HOKLAS 204",
+    "registers": [
+      "Hong Kong Accreditation Service HOKLAS",
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": null,
+    "trades": [
+      "field_testing",
+      "sampling"
+    ],
+    "raw_category": "Construction Materials; Calibration Services; Specialized Operations for Highway Structures (Class IV)",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Materials Testing Services Term Contract (2024/2027) for Construction Materials (Package A4)",
+        "client": "Hong Kong Housing Authority",
+        "year": 2024,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "https://www.itc.gov.hk/en/quality/hkas/doc/scopes/204.pdf",
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=&class=&group=&search=true",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Nov_2024.pdf",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Awards_October_2022.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "chynchen-associates-limited-0765",
+    "name_en": "Chynchen Associates Limited",
+    "name_zh": null,
+    "registered_grade": "Land, Engineering and Hydrographic Survey Services",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": null,
+    "trades": [
+      "external_works",
+      "geophysical_survey"
+    ],
+    "raw_category": "Land, Engineering and Hydrographic Survey Services",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Term Agreement for Engineering Surveying Services 2025-2027 for Region A",
+        "client": "Hong Kong Housing Authority",
+        "year": 2025,
+        "source": "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Aug_2025.pdf"
+      }
+    ],
+    "confidence": "medium",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=&class=&group=&search=true",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Award_Aug_2025.pdf",
+      "https://www.housingauthority.gov.hk/en/common/pdf/business-partnerships/tenders/BP_Tender_Awards_September_2023.pdf"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "advance-surveying-consultancy-limited-b0a3",
+    "name_en": "Advance Surveying Consultancy Limited",
+    "name_zh": null,
+    "registered_grade": "Land, Engineering and Hydrographic Survey Services",
+    "registers": [
+      "DEVB List of Approved Suppliers of Materials and Specialist Contractors for Public Works"
+    ],
+    "value_band": null,
+    "trades": [
+      "external_works",
+      "geophysical_survey"
+    ],
+    "raw_category": "Land, Engineering and Hydrographic Survey Services",
+    "public_flags": [],
+    "award_history": [],
+    "confidence": "medium",
+    "sources_used": [
+      "https://www.devb.gov.hk/en/construction_sector_matters/contractors/supplier/index.html?category=&class=&group=&search=true"
+    ],
+    "display_sensitive": false
+  },
+  {
+    "firm_id": "sixense-limited-5d2c",
+    "name_en": "Sixense Limited",
+    "name_zh": null,
+    "registered_grade": "Geophysical survey & instrumentation specialist",
+    "registers": [
+      "ISO 9001:2015 (Cert. FS 57613)"
+    ],
+    "value_band": null,
+    "trades": [
+      "geophysical_survey",
+      "field_installations"
+    ],
+    "raw_category": "Geophysical Survey; Instrumentation & Monitoring",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Quotation for Geophysical Survey, Contract GE/2026/14 (via VSL Intrafor Hong Kong Ltd)",
+        "client": "VSL Intrafor Hong Kong Limited",
+        "year": 2026,
+        "source": "Sixense quotation ref. SIX/T26034/331-26 dated 17 Jun 2026"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "Sixense quotation ref. SIX/T26034/331-26 dated 17 Jun 2026 (Geophysical Survey, Rev.0)"
+    ],
+    "display_sensitive": false,
+    "profile": {
+      "overview": "About 25 years in Hong Kong in geotechnical and structural instrumentation and monitoring; part of Soletanche Freyssinet / VINCI (formerly Sol Data).",
+      "group_parent": "Soletanche Freyssinet / VINCI",
+      "offices": [
+        "Kwun Tong, Hong Kong"
+      ],
+      "services": [
+        "Instrumentation and automated monitoring (Cyclops automated total station, automatic vibration monitoring, GNSS deformation)",
+        "Geophysics: cross-hole and surface seismic and electric tomography",
+        "Ground penetrating radar (GPR)",
+        "Hydrogeophysics"
+      ],
+      "notable_projects": [
+        {
+          "title": "Major contributor to Hong Kong rail and tunnelling monitoring"
+        },
+        {
+          "title": "Introduced GNSS monitoring on the HK Airport Three-Runway System (3RS), setting a new reclamation-monitoring standard"
+        }
+      ],
+      "accreditations": [
+        "HOKLAS 130 (formerly Sol Data)"
+      ],
+      "staff_note": ""
+    }
+  },
+  {
+    "firm_id": "kai-wai-engineering-survey-and-geophysics-limited-3f7b",
+    "name_en": "Kai Wai Engineering Survey and Geophysics Limited",
+    "name_zh": "佳為工程勘察測繪有限公司",
+    "registered_grade": "Engineering survey & geophysics specialist",
+    "registers": [],
+    "value_band": null,
+    "trades": [
+      "geophysical_survey",
+      "field_installations"
+    ],
+    "raw_category": "Engineering Survey & Geophysics; Field Installations",
+    "public_flags": [],
+    "award_history": [
+      {
+        "project": "Quotation for Field Installations (RFQ), Contract GE/2026/14",
+        "client": "Main contractor (RFQ)",
+        "year": 2026,
+        "source": "Field Installation (RFQ) Schedule-of-Rates offer, signed and chopped"
+      }
+    ],
+    "confidence": "high",
+    "sources_used": [
+      "Field Installation (RFQ) Schedule-of-Rates offer for Contract GE/2026/14 (signed/chopped)"
+    ],
+    "display_sensitive": false,
+    "profile": {
+      "overview": "Hong Kong engineering-survey and geophysics firm (佳為工程勘察測繪有限公司). Limited verifiable public corporate information beyond the register and its GE/2026/14 field-installations offer. Recommend standard pre-qualification checks before award.",
+      "group_parent": "",
+      "offices": [],
+      "services": [],
+      "notable_projects": [],
+      "accreditations": [],
+      "staff_note": ""
+    }
+  }
+]

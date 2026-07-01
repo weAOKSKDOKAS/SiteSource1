@@ -1,107 +1,44 @@
 @import "tailwindcss";
 
-/* ---------------------------------------------------------------------------
-   SiteClaim design tokens — "site office meets statute".
-   Chrome is quiet (ink + cool paper + hairlines, IBM Plex superfamily); the
-   semantic traffic-light colours are load-bearing (confidence + verdict) so
-   they carry meaning rather than decorate. One brand accent: drafting blue.
---------------------------------------------------------------------------- */
-@theme {
-  --color-ink: #15212e;
-  --color-ink-soft: #4a5a6b;
-  --color-ink-faint: #8595a3;
-  --color-paper: #eceff3;
-  --color-card: #ffffff;
-  --color-line: #d4dbe2;
-  --color-line-soft: #e6ebf0;
+/* SiteSource v2 — global styles (ported from the Claude Design handoff).
+   The app is rendered with inline styles that mirror the design pixel-for-pixel;
+   this file carries only the global resets, fonts, keyframes and scrollbar. */
 
-  --color-brand: #1f4e8c;
-  --color-brand-bright: #2f6fd0;
-  --color-brand-bg: #e7eef8;
-
-  --color-ok: #1a7f55;
-  --color-ok-bg: #e3f3ea;
-  --color-warn: #9a5b08;
-  --color-warn-bg: #fbeed5;
-  --color-bad: #b42318;
-  --color-bad-bg: #fbe5e2;
-
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
-  --font-serif: "IBM Plex Serif", ui-serif, Georgia, serif;
-}
-
-html {
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 body {
   margin: 0;
-  background-color: var(--color-paper);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
+  background: #EEF2F7;
+  color: #0F1B2D;
+  font-family: 'Spline Sans', system-ui, sans-serif;
+  font-size: 14px;
 }
+input, select, button, textarea { font-family: inherit; font-size: inherit; }
+::placeholder { color: #8a98ab; }
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; }
+::selection { background: rgba(31,111,235,0.18); }
 
-/* Numeric/label data reads as "instrument data" in mono. */
-.tabular {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
+/* thin scrollbars on opt-in containers */
+.ssx::-webkit-scrollbar { width: 10px; height: 10px; }
+.ssx::-webkit-scrollbar-thumb { background: #c4cfdc; border-radius: 6px; border: 2px solid #fff; }
+.ssx::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes ssPulse { 0%,100% { opacity: .85; } 50% { opacity: .35; } }
+@keyframes ssLive  { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.82); } }
+@keyframes ssRise  { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.ssRise { animation: ssRise .5s cubic-bezier(.2,.7,.2,1) both; }
+
+@keyframes ssScan { 0% { transform: translateX(-110%); } 100% { transform: translateX(110%); } }
+.ssScan { position: absolute; inset: 0; pointer-events: none; animation: ssScan 1.6s ease-in-out infinite; }
+
+@keyframes ssStepIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+.ssStep { animation: ssStepIn .32s ease both; }
+
+@keyframes ssDot { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.55); opacity: .5; } }
+.ssDot { animation: ssDot .85s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
+  *, .ssRise, .ssScan, .ssStep, .ssDot { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
-
-/* ---------------------------------------------------------------------------
-   The rendered claim — a legal instrument, set in serif inside the document
-   pane. This serif appears ONLY here (content-driven), never in app chrome.
---------------------------------------------------------------------------- */
-.doc {
-  font-family: var(--font-serif);
-  color: var(--color-ink);
-  line-height: 1.65;
-  font-size: 0.95rem;
-}
-.doc h1 {
-  font-size: 1.6rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin: 0 0 0.25rem;
-}
-.doc h2 {
-  font-size: 1.05rem;
-  font-weight: 600;
-  margin: 1.5rem 0 0.5rem;
-  padding-bottom: 0.3rem;
-  border-bottom: 1px solid var(--color-line);
-}
-.doc p { margin: 0.5rem 0; }
-.doc strong { font-weight: 600; }
-.doc hr { border: none; border-top: 1px solid var(--color-line); margin: 1.25rem 0; }
-.doc ol, .doc ul { margin: 0.5rem 0; padding-left: 1.4rem; }
-.doc li { margin: 0.15rem 0; }
-.doc blockquote {
-  margin: 0.75rem 0;
-  padding: 0.5rem 0.9rem;
-  border-left: 3px solid var(--color-brand);
-  background: var(--color-brand-bg);
-  border-radius: 0 6px 6px 0;
-  font-style: normal;
-}
-.doc table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0.75rem 0;
-  font-family: var(--font-sans);
-  font-size: 0.85rem;
-}
-.doc th, .doc td {
-  border: 1px solid var(--color-line);
-  padding: 0.4rem 0.6rem;
-  text-align: left;
-}
-.doc th { background: #f3f6f9; font-weight: 600; }

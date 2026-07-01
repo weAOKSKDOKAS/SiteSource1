@@ -4,16 +4,43 @@
     "name_en": "Subcontractor E (illustrative)",
     "name_zh": "（示例）電業分包商 E",
     "registered_grade": "REC (EMSD)",
-    "registers": ["Registered Electrical Contractor (EMSD)"],
+    "registers": [
+      "Registered Electrical Contractor (EMSD)"
+    ],
     "value_band": "up_to_50m",
-    "trades": ["electrical"],
+    "trades": [
+      "electrical"
+    ],
     "public_flags": [
-      {"signal_type": "winding_up", "label": "Winding-up petition HCCW 215/2026 presented", "date": "2026-02-11", "source": "Companies Registry", "reference": "CR:HCCW-215/2026"},
-      {"signal_type": "safety_prosecution", "label": "Conviction — Factories and Industrial Undertakings Ordinance s.6A (fall from height)", "date": "2024-09-03", "source": "Labour Department", "reference": "LD:KCS-4471/2024"},
-      {"signal_type": "safety_prosecution", "label": "Conviction — Construction Sites (Safety) Regulations reg.38 (live working)", "date": "2025-05-19", "source": "Labour Department", "reference": "LD:KTW-1180/2025"}
+      {
+        "signal_type": "winding_up",
+        "label": "Winding-up petition HCCW 215/2026 presented",
+        "date": "2026-02-11",
+        "source": "Companies Registry",
+        "reference": "CR:HCCW-215/2026"
+      },
+      {
+        "signal_type": "safety_prosecution",
+        "label": "Conviction — Factories and Industrial Undertakings Ordinance s.6A (fall from height)",
+        "date": "2024-09-03",
+        "source": "Labour Department",
+        "reference": "LD:KCS-4471/2024"
+      },
+      {
+        "signal_type": "safety_prosecution",
+        "label": "Conviction — Construction Sites (Safety) Regulations reg.38 (live working)",
+        "date": "2025-05-19",
+        "source": "Labour Department",
+        "reference": "LD:KTW-1180/2025"
+      }
     ],
     "award_history": [
-      {"project": "Kwai Chung logistics centre — electrical fit-out", "client": "Private developer", "year": 2023, "source": "Buildings Department submission"}
+      {
+        "project": "Kwai Chung logistics centre — electrical fit-out",
+        "client": "Private developer",
+        "year": 2023,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -21,13 +48,28 @@
     "name_en": "Vantage E&M Engineering Ltd",
     "name_zh": "領峰機電工程有限公司",
     "registered_grade": "REC (EMSD)",
-    "registers": ["Registered Electrical Contractor (EMSD)", "Approved Specialist — E&M"],
+    "registers": [
+      "Registered Electrical Contractor (EMSD)",
+      "Approved Specialist — E&M"
+    ],
     "value_band": "50m_to_200m",
-    "trades": ["electrical"],
+    "trades": [
+      "electrical"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Tseung Kwan O office tower — LV distribution and lighting", "client": "Grade-A landlord", "year": 2024, "source": "GLD gazette"},
-      {"project": "Kowloon East data hall — power distribution", "client": "Telecom operator", "year": 2022, "source": "GLD gazette"}
+      {
+        "project": "Tseung Kwan O office tower — LV distribution and lighting",
+        "client": "Grade-A landlord",
+        "year": 2024,
+        "source": "GLD gazette"
+      },
+      {
+        "project": "Kowloon East data hall — power distribution",
+        "client": "Telecom operator",
+        "year": 2022,
+        "source": "GLD gazette"
+      }
     ]
   },
   {
@@ -35,12 +77,21 @@
     "name_en": "Harbour Electrical Works Ltd",
     "name_zh": "海港電業工程有限公司",
     "registered_grade": "REC (EMSD)",
-    "registers": ["Registered Electrical Contractor (EMSD)"],
+    "registers": [
+      "Registered Electrical Contractor (EMSD)"
+    ],
     "value_band": "up_to_50m",
-    "trades": ["electrical"],
+    "trades": [
+      "electrical"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Sha Tin retail podium — lighting and small power", "client": "Mall operator", "year": 2023, "source": "Buildings Department submission"}
+      {
+        "project": "Sha Tin retail podium — lighting and small power",
+        "client": "Mall operator",
+        "year": 2023,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -48,14 +99,29 @@
     "name_en": "Kowloon Power Systems Ltd",
     "name_zh": "九龍電力系統有限公司",
     "registered_grade": "REC (EMSD)",
-    "registers": ["Registered Electrical Contractor (EMSD)"],
+    "registers": [
+      "Registered Electrical Contractor (EMSD)"
+    ],
     "value_band": "up_to_50m",
-    "trades": ["electrical"],
+    "trades": [
+      "electrical"
+    ],
     "public_flags": [
-      {"signal_type": "safety_prosecution", "label": "Conviction — Construction Sites (Safety) Regulations (housekeeping)", "date": "2023-07-14", "source": "Labour Department", "reference": "LD:TST-2207/2023"}
+      {
+        "signal_type": "safety_prosecution",
+        "label": "Conviction — Construction Sites (Safety) Regulations (housekeeping)",
+        "date": "2023-07-14",
+        "source": "Labour Department",
+        "reference": "LD:TST-2207/2023"
+      }
     ],
     "award_history": [
-      {"project": "Hung Hom institutional building — containment and final circuits", "client": "Subvented body", "year": 2022, "source": "Buildings Department submission"}
+      {
+        "project": "Hung Hom institutional building — containment and final circuits",
+        "client": "Subvented body",
+        "year": 2022,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -63,12 +129,21 @@
     "name_en": "Summit MEP Contracting Ltd",
     "name_zh": "峰盛機電工程有限公司",
     "registered_grade": "Group B",
-    "registers": ["Approved Contractor for Public Works — Building (Group B)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group B)"
+    ],
     "value_band": "50m_to_200m",
-    "trades": ["mechanical_plumbing"],
+    "trades": [
+      "mechanical_plumbing"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Kai Tak community hospital — HVAC and pipework", "client": "Public body", "year": 2024, "source": "GLD gazette"}
+      {
+        "project": "Kai Tak community hospital — HVAC and pipework",
+        "client": "Public body",
+        "year": 2024,
+        "source": "GLD gazette"
+      }
     ]
   },
   {
@@ -76,12 +151,22 @@
     "name_en": "Evergreen Plumbing & Drainage Ltd",
     "name_zh": "長青水務渠務有限公司",
     "registered_grade": "Group A",
-    "registers": ["Approved Contractor for Public Works — Building (Group A)", "Licensed Plumber (WSD)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group A)",
+      "Licensed Plumber (WSD)"
+    ],
     "value_band": "up_to_50m",
-    "trades": ["mechanical_plumbing"],
+    "trades": [
+      "mechanical_plumbing"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Yuen Long residential — plumbing and drainage", "client": "Private developer", "year": 2023, "source": "Buildings Department submission"}
+      {
+        "project": "Yuen Long residential — plumbing and drainage",
+        "client": "Private developer",
+        "year": 2023,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -89,14 +174,29 @@
     "name_en": "Pacific Mechanical Services Ltd",
     "name_zh": "太平洋機械服務有限公司",
     "registered_grade": "Group B",
-    "registers": ["Approved Contractor for Public Works — Building (Group B)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group B)"
+    ],
     "value_band": "50m_to_200m",
-    "trades": ["mechanical_plumbing"],
+    "trades": [
+      "mechanical_plumbing"
+    ],
     "public_flags": [
-      {"signal_type": "adjudication", "label": "Unpaid adjudication determination under SOPO (HK$3.2m outstanding)", "date": "2025-11-20", "source": "Adjudicator's determination", "reference": "ADJ:HKIAC-2025-0442"}
+      {
+        "signal_type": "adjudication",
+        "label": "Unpaid adjudication determination under SOPO (HK$3.2m outstanding)",
+        "date": "2025-11-20",
+        "source": "Adjudicator's determination",
+        "reference": "ADJ:HKIAC-2025-0442"
+      }
     ],
     "award_history": [
-      {"project": "Tuen Mun workshop — ductwork", "client": "Private developer", "year": 2022, "source": "Buildings Department submission"}
+      {
+        "project": "Tuen Mun workshop — ductwork",
+        "client": "Private developer",
+        "year": 2022,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -104,12 +204,21 @@
     "name_en": "Guardian Fire Engineering Ltd",
     "name_zh": "衛信消防工程有限公司",
     "registered_grade": "RFC (FSD Class 1-3)",
-    "registers": ["Registered Fire Service Installation Contractor (FSD)"],
+    "registers": [
+      "Registered Fire Service Installation Contractor (FSD)"
+    ],
     "value_band": "50m_to_200m",
-    "trades": ["fire_services"],
+    "trades": [
+      "fire_services"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Central commercial tower — sprinklers and detection", "client": "Grade-A landlord", "year": 2024, "source": "GLD gazette"}
+      {
+        "project": "Central commercial tower — sprinklers and detection",
+        "client": "Grade-A landlord",
+        "year": 2024,
+        "source": "GLD gazette"
+      }
     ]
   },
   {
@@ -117,12 +226,21 @@
     "name_en": "Redhill Fire Services Ltd",
     "name_zh": "紅山消防有限公司",
     "registered_grade": "RFC (FSD Class 1-3)",
-    "registers": ["Registered Fire Service Installation Contractor (FSD)"],
+    "registers": [
+      "Registered Fire Service Installation Contractor (FSD)"
+    ],
     "value_band": "up_to_50m",
-    "trades": ["fire_services"],
+    "trades": [
+      "fire_services"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Kwun Tong office — hydrants and alarm", "client": "Private developer", "year": 2023, "source": "Buildings Department submission"}
+      {
+        "project": "Kwun Tong office — hydrants and alarm",
+        "client": "Private developer",
+        "year": 2023,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -130,14 +248,29 @@
     "name_en": "Sentinel Protection Systems Ltd",
     "name_zh": "哨兵消防系統有限公司",
     "registered_grade": "RFC (FSD Class 1-3)",
-    "registers": ["Registered Fire Service Installation Contractor (FSD)"],
+    "registers": [
+      "Registered Fire Service Installation Contractor (FSD)"
+    ],
     "value_band": "50m_to_200m",
-    "trades": ["fire_services"],
+    "trades": [
+      "fire_services"
+    ],
     "public_flags": [
-      {"signal_type": "debarment", "label": "Removed from the approved specialist list for public works", "date": "2025-03-01", "source": "Development Bureau", "reference": "DEVB:DEBAR-2025-017"}
+      {
+        "signal_type": "debarment",
+        "label": "Removed from the approved specialist list for public works",
+        "date": "2025-03-01",
+        "source": "Development Bureau",
+        "reference": "DEVB:DEBAR-2025-017"
+      }
     ],
     "award_history": [
-      {"project": "Sham Shui Po public building — fire services", "client": "Public body", "year": 2021, "source": "GLD gazette"}
+      {
+        "project": "Sham Shui Po public building — fire services",
+        "client": "Public body",
+        "year": 2021,
+        "source": "GLD gazette"
+      }
     ]
   },
   {
@@ -145,14 +278,29 @@
     "name_en": "Granite Concrete Construction Ltd",
     "name_zh": "磐石混凝土建築有限公司",
     "registered_grade": "Group C",
-    "registers": ["Approved Contractor for Public Works — Building (Group C)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group C)"
+    ],
     "value_band": "above_200m",
-    "trades": ["reinforced_concrete"],
+    "trades": [
+      "reinforced_concrete"
+    ],
     "public_flags": [
-      {"signal_type": "distress_filing", "label": "Statutory demand served (HK$5.1m); no winding-up petition filed", "date": "2026-01-08", "source": "Companies Registry", "reference": "CR:SD-2026-0091"}
+      {
+        "signal_type": "distress_filing",
+        "label": "Statutory demand served (HK$5.1m); no winding-up petition filed",
+        "date": "2026-01-08",
+        "source": "Companies Registry",
+        "reference": "CR:SD-2026-0091"
+      }
     ],
     "award_history": [
-      {"project": "West Kowloon superstructure — RC frame", "client": "Public body", "year": 2023, "source": "GLD gazette"}
+      {
+        "project": "West Kowloon superstructure — RC frame",
+        "client": "Public body",
+        "year": 2023,
+        "source": "GLD gazette"
+      }
     ]
   },
   {
@@ -160,12 +308,21 @@
     "name_en": "United Formwork & Concrete Ltd",
     "name_zh": "聯合模板混凝土有限公司",
     "registered_grade": "Group B",
-    "registers": ["Approved Contractor for Public Works — Building (Group B)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group B)"
+    ],
     "value_band": "50m_to_200m",
-    "trades": ["reinforced_concrete"],
+    "trades": [
+      "reinforced_concrete"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Tsuen Wan residential — formwork and concreting", "client": "Private developer", "year": 2022, "source": "Buildings Department submission"}
+      {
+        "project": "Tsuen Wan residential — formwork and concreting",
+        "client": "Private developer",
+        "year": 2022,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -173,12 +330,22 @@
     "name_en": "Dragon Foundation & Concrete Ltd",
     "name_zh": "龍基礎混凝土有限公司",
     "registered_grade": "Group C",
-    "registers": ["Approved Contractor for Public Works — Site Formation (Group C)"],
+    "registers": [
+      "Approved Contractor for Public Works — Site Formation (Group C)"
+    ],
     "value_band": "above_200m",
-    "trades": ["reinforced_concrete", "foundation_substructure"],
+    "trades": [
+      "reinforced_concrete",
+      "foundation_substructure"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Hung Shui Kiu platform — piling and pile caps", "client": "Public body", "year": 2024, "source": "GLD gazette"}
+      {
+        "project": "Hung Shui Kiu platform — piling and pile caps",
+        "client": "Public body",
+        "year": 2024,
+        "source": "GLD gazette"
+      }
     ]
   },
   {
@@ -186,12 +353,21 @@
     "name_en": "Artisan Interior Contracts Ltd",
     "name_zh": "匠藝室內工程有限公司",
     "registered_grade": "Group A",
-    "registers": ["Approved Contractor for Public Works — Building (Group A)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group A)"
+    ],
     "value_band": "up_to_50m",
-    "trades": ["joinery_fitting_out"],
+    "trades": [
+      "joinery_fitting_out"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Causeway Bay flagship — fit-out and joinery", "client": "Retail brand", "year": 2024, "source": "Buildings Department submission"}
+      {
+        "project": "Causeway Bay flagship — fit-out and joinery",
+        "client": "Retail brand",
+        "year": 2024,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -199,12 +375,21 @@
     "name_en": "Crafted Spaces Fitting-Out Ltd",
     "name_zh": "創意空間裝修有限公司",
     "registered_grade": "Group A",
-    "registers": ["Approved Contractor for Public Works — Building (Group A)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group A)"
+    ],
     "value_band": "above_200m",
-    "trades": ["joinery_fitting_out"],
+    "trades": [
+      "joinery_fitting_out"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Admiralty headquarters — partitions and ceilings", "client": "Corporate occupier", "year": 2023, "source": "Buildings Department submission"}
+      {
+        "project": "Admiralty headquarters — partitions and ceilings",
+        "client": "Corporate occupier",
+        "year": 2023,
+        "source": "Buildings Department submission"
+      }
     ]
   },
   {
@@ -212,12 +397,60 @@
     "name_en": "Heritage Joinery Works Ltd",
     "name_zh": "承傳木工有限公司",
     "registered_grade": "Group B",
-    "registers": ["Approved Contractor for Public Works — Building (Group B)"],
+    "registers": [
+      "Approved Contractor for Public Works — Building (Group B)"
+    ],
     "value_band": "50m_to_200m",
-    "trades": ["joinery_fitting_out"],
+    "trades": [
+      "joinery_fitting_out"
+    ],
     "public_flags": [],
     "award_history": [
-      {"project": "Wan Chai hotel — bespoke joinery", "client": "Hospitality group", "year": 2022, "source": "Buildings Department submission"}
+      {
+        "project": "Wan Chai hotel — bespoke joinery",
+        "client": "Hospitality group",
+        "year": 2022,
+        "source": "Buildings Department submission"
+      }
     ]
+  },
+  {
+    "firm_id": "F-GI-01",
+    "name_en": "Subcontractor GI-1 (illustrative)",
+    "name_zh": "（示例）岩土勘測分包商 GI-1",
+    "registered_grade": "GI specialist (illustrative)",
+    "registers": [],
+    "value_band": "up_to_50m",
+    "trades": [
+      "field_testing"
+    ],
+    "public_flags": [
+      {
+        "signal_type": "safety_prosecution",
+        "label": "Conviction — Construction Sites (Safety) Regulations, work near slope crest",
+        "date": "2025-03-18",
+        "source": "Labour Department",
+        "reference": "LD:GIS-2207/2025"
+      },
+      {
+        "signal_type": "safety_prosecution",
+        "label": "Conviction — Factories and Industrial Undertakings (excavation) Regulation",
+        "date": "2024-11-05",
+        "source": "Labour Department",
+        "reference": "LD:GIS-1840/2024"
+      }
+    ],
+    "award_history": []
+  },
+  {
+    "firm_id": "tender-scheduled-rates",
+    "name_en": "Tender scheduled rates (benchmark)",
+    "name_zh": null,
+    "registered_grade": "Schedule of Rates — Contract GE/2026/14",
+    "registers": [],
+    "value_band": null,
+    "trades": [],
+    "public_flags": [],
+    "award_history": []
   }
 ]

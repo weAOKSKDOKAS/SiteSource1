@@ -36,9 +36,13 @@ cross-reference against data a generic chatbot cannot access.
 - **Layer 3 — The proprietary database** (`backend/db/`): the fused subcontractor
   profiles (SQLite + baked embeddings). The grounding corpus and the moat. Two
   layers coexist: real scraped Hong Kong public records (`seed_data/public/`) are
-  the **discovery/coverage** pool — screened and counted (see `GET /coverage`) but
-  not auto-shortlisted; the **per-tender shortlist** is drawn only from firms with
-  an assessable EOS closeout record (`store.shortlistable_firms_for_trade`).
+  the **discovery/coverage** pool — screened and counted (see `GET /coverage`); the
+  **per-tender shortlist** (`store.shortlistable_firms_for_trade`) surfaces every
+  firm that genuinely does the trade — assessable (held EOS closeout), award-bearing,
+  or trade-matched on the real CIC register — then `db/cross_reference.py` scores each
+  by how directly its registered specialty matches the section (assessed/curated firms
+  ranked near the top), demotes any fatal-flagged firm below all clean firms, and caps
+  each section to a readable shortlist.
 - **Layer 4 — Human approval gates**: approve-before-dispatch, adjust-leveling,
   final-award.
 

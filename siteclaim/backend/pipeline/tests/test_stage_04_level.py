@@ -85,8 +85,9 @@ def test_excel_is_produced(replies, levelled):
     out = export_leveling_xlsx(levelled, replies, item_order=["E-01", "E-02", "E-03", "E-04", "E-05", "E-06"], path=OUT_PATH)
     assert out.is_file()
     wb = load_workbook(out)
-    ws = wb.active
-    assert ws.title == "Leveling"
-    # the totals row carries the corrected totals
-    flat = [c.value for row in ws.iter_rows() for c in row]
+    # the adjudication workbook: a Summary, a per-section sheet, and the analysis sheets
+    assert {"Summary", "Electrical", "Arithmetic Corrections", "Scope Normalisation",
+            "Qualifications & Exclusions"} <= set(wb.sheetnames)
+    # the corrected totals tie to the on-screen leveling, across the workbook
+    flat = [c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row]
     assert 12272000.0 in flat and 12033000.0 in flat

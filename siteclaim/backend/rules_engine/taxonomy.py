@@ -1,11 +1,16 @@
-"""Deterministic trade-taxonomy validation (Layer 1).
+"""Deterministic work-package taxonomy validation (Layer 1).
 
-The canonical trade keys are read **from** ``references/rubrics/trade_taxonomy.md``
-at import, so the rubric is the single source of truth: add a trade there and the
-validator follows with no code change. The LLM may phrase a trade richly; this
-module normalises every ``TradeWorkPackage.trade`` to a canonical key. A trade that
-maps to nothing is **surfaced as unmapped, never silently dropped** (the rubric's
-rule), so a human can reconcile it.
+The canonical keys are read **from** ``references/rubrics/trade_taxonomy.md`` at
+import, so the rubric is the single source of truth across tender domains: a
+building/fit-out tender splits by trade (electrical, M&P, fire services); a civil or
+ground-investigation tender splits by work section (drilling, sampling, field
+testing, field installations, drainage works). This module normalises each
+``TradeWorkPackage.trade`` to a canonical key where a known label or synonym matches.
+
+The taxonomy is **advisory, not a whitelist**: a tender may legitimately use a work
+package outside the list. An unmatched package is **not** an error and **not**
+dropped — it is kept under a slugified form of the tender's own label (a valid
+work-package key for any tender type) and surfaced for human review.
 """
 
 from __future__ import annotations
@@ -19,16 +24,21 @@ _RUBRIC_PATH = Path(__file__).resolve().parents[1] / "references" / "rubrics" / 
 
 # Fallback if the rubric file is ever unreadable (keeps the package importable).
 _FALLBACK_KEYS = {
+    # building / fit-out
     "foundation_substructure", "structural", "reinforced_concrete", "electrical",
     "mechanical_plumbing", "fire_services", "joinery_fitting_out", "builders_work",
     "external_works",
+    # civil / ground investigation
+    "ground_investigation", "drilling", "sampling", "field_testing",
+    "field_installations", "instrumentation", "drainage_works", "slope_works",
+    "site_formation", "roadworks",
 }
 
 _ROW_RE = re.compile(r"^\|\s*`([a-z_]+)`\s*\|\s*([^|]+?)\s*\|")
 
 
 def _load_canonical() -> tuple[frozenset[str], dict[str, str]]:
-    """Return (canonical keys, label->key map) parsed from the rubric table."""
+    """Return (canonical keys, label->key map) parsed from the rubric tables."""
     keys: set[str] = set()
     labels: dict[str, str] = {}
     try:
@@ -48,12 +58,16 @@ def _load_canonical() -> tuple[frozenset[str], dict[str, str]]:
 CANONICAL_TRADES, _LABELS = _load_canonical()
 
 # Near-synonyms the model is likely to emit -> canonical key. Matched as substrings
-# against a normalised (lowercased, separators stripped) form of the trade name.
+# against a normalised (lowercased, separators stripped) form of the work-package
+# name. NOTE: "drainage" no longer maps to mechanical_plumbing — a civil drainage
+# scope must not be mis-tagged as building M&P (building drainage arrives as part of
+# the "mechanical & plumbing" trade label, which still maps via "mechanical").
 _SYNONYMS: dict[str, str] = {
+    # building / fit-out
     "electric": "electrical", "e&m": "electrical", "em": "electrical", "lv": "electrical",
     "mechanicalplumbing": "mechanical_plumbing", "mechanical": "mechanical_plumbing",
     "m&e": "mechanical_plumbing", "mep": "mechanical_plumbing", "hvac": "mechanical_plumbing",
-    "plumb": "mechanical_plumbing", "drainage": "mechanical_plumbing", "pipework": "mechanical_plumbing",
+    "plumb": "mechanical_plumbing", "pipework": "mechanical_plumbing",
     "fire": "fire_services", "sprinkler": "fire_services",
     "joinery": "joinery_fitting_out", "fitout": "joinery_fitting_out", "fittingout": "joinery_fitting_out",
     "interior": "joinery_fitting_out", "partition": "joinery_fitting_out",
@@ -63,7 +77,16 @@ _SYNONYMS: dict[str, str] = {
     "foundation": "foundation_substructure", "substructure": "foundation_substructure",
     "piling": "foundation_substructure", "pile": "foundation_substructure",
     "builderswork": "builders_work", "bwic": "builders_work",
-    "external": "external_works", "landscap": "external_works", "roadworks": "external_works",
+    "external": "external_works", "landscap": "external_works",
+    # civil / ground investigation
+    "groundinvestigation": "ground_investigation",
+    "borehole": "drilling", "drill": "drilling",
+    "sampl": "sampling",
+    "fieldtest": "field_testing", "permeability": "field_testing",
+    "piezometer": "field_installations", "standpipe": "field_installations",
+    "slope": "slope_works",
+    "siteformation": "site_formation",
+    "roadwork": "roadworks",
 }
 
 
@@ -71,8 +94,13 @@ def _squash(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
+def _slugify(label: str) -> str:
+    """A valid work-package key from any label: lowercase, non-alphanumeric -> '_'."""
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
 def normalize(trade: str) -> str | None:
-    """Map a free-form trade name to a canonical key, or None if unmapped."""
+    """Map a free-form work-package name to a canonical key, or None if unknown."""
     raw = trade.strip().lower()
     squashed = _squash(raw)
     if squashed in {_squash(k) for k in CANONICAL_TRADES}:
@@ -92,18 +120,21 @@ def normalize(trade: str) -> str | None:
 
 
 def validate_scope(scope: ScopePackages) -> tuple[ScopePackages, list[str]]:
-    """Normalise every package's trade to a canonical key.
+    """Normalise every package's work-package key.
 
-    Returns the normalised :class:`ScopePackages` and the list of original trade
-    names that could not be mapped (kept in the output unchanged, never dropped).
+    A known label is mapped to its canonical key. A package with **no** canonical
+    match is kept under a slugified form of its own label (a valid key — the pipeline
+    runs cleanly on any tender type); its original label is returned in the second
+    value **for transparency, not as an error**.
     """
     packages: list[TradeWorkPackage] = []
     unmapped: list[str] = []
     for pkg in scope.packages:
         canonical = normalize(pkg.trade)
-        if canonical is None:
-            unmapped.append(pkg.trade)
-            packages.append(pkg)
-        else:
+        if canonical is not None:
             packages.append(pkg.model_copy(update={"trade": canonical}))
+        else:
+            key = _slugify(pkg.trade) or "work_section"
+            unmapped.append(pkg.trade)
+            packages.append(pkg.model_copy(update={"trade": key}))
     return ScopePackages(project_name=scope.project_name, packages=packages), unmapped

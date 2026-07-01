@@ -65,6 +65,7 @@ class DispatchStatus(str, Enum):
     DRAFTED = "drafted"
     APPROVED = "approved"
     SENT_MOCK = "sent_mock"
+    DRAFTED_GMAIL = "drafted_gmail"  # the bundles were POSTed to n8n, which created Gmail drafts
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +157,15 @@ class FirmProfile(BaseModel):
     public_flags: list[RiskFlag] = Field(default_factory=list)
     closeout_summary: str = ""
     award_history: list[str] = Field(default_factory=list)
+    # Register-fused fields (the real CIC register). enquiry_email is what Dispatch
+    # reads to draft the enquiry; description is the short factual blurb.
+    enquiry_email: str = ""
+    description: str = ""
+    # The raw registered specialties ({code, group, specialty}) and registration date
+    # from the CIC register, kept so the shortlist scorer can tell an exact specialty
+    # match from an incidental (GI-expanded) one. Empty for non-register firms.
+    registered_trades: list[dict] = Field(default_factory=list)
+    reg_date: str = ""
 
 
 class Candidate(BaseModel):
@@ -247,6 +257,9 @@ class RankedFirm(BaseModel):
     firm_id: str
     firm_name: str
     corrected_total: float
+    # Like-for-like total (corrected price + peer-valued scope gaps). Defaults to 0.0
+    # for callers that don't carry it; ranking falls back to corrected_total then.
+    normalized_total: float = 0.0
     risk_flags: list[RiskFlag] = Field(default_factory=list)
     recommended_against: bool = False
     reason: str = ""

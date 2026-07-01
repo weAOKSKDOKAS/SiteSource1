@@ -102,13 +102,62 @@ def test_scenarios_are_deterministic_on_repeat():
         assert [r["firm_id"] for r in first["ranked"]] == [r["firm_id"] for r in second["ranked"]]
 
 
+def test_firms_is_a_paginated_register_with_real_emails():
+    page = client.get("/firms").json()
+    assert set(page) == {"items", "total", "limit", "offset"}
+    assert page["total"] == 1410 and page["limit"] == 25 and page["offset"] == 0
+    assert len(page["items"]) == 25  # server-side page, not the whole register
+    # never the illustrative demo firms or the benchmark row
+    assert all(not it["firm_id"].startswith("F-") for it in page["items"])
+    assert all(it["firm_id"] != "tender-scheduled-rates" for it in page["items"])
+    # the register shape the Database table reads
+    sample = page["items"][0]
+    assert {"name_en", "description", "enquiry_email", "registered_trades", "reg_date",
+            "expiry_date", "trades", "public_flags"} <= set(sample)
+    # the real register firms carry their real enquiry e-mail (Dispatch reads this);
+    # a handful are redacted in the source ("[email protected]"), so allow a few
+    reg = client.get("/firms?limit=100&q=limited").json()
+    with_email = [it for it in reg["items"] if it["enquiry_email"]]
+    assert len(with_email) >= 90
+    assert sum("@" in it["enquiry_email"] and "[email" not in it["enquiry_email"] for it in with_email) >= 80
+
+
+def test_firms_pagination_sorts_offsets_and_caps():
+    p1 = client.get("/firms?limit=10&offset=0").json()
+    p2 = client.get("/firms?limit=10&offset=10").json()
+    assert p1["limit"] == 10 and len(p1["items"]) == 10
+    names = [it["name_en"].lower() for it in p1["items"]]
+    assert names == sorted(names)  # alphabetical by default
+    assert p1["items"][0]["firm_id"] != p2["items"][0]["firm_id"]  # different page
+    assert client.get("/firms?limit=999").json()["limit"] == 25   # disallowed -> default
+    assert client.get("/firms?limit=100").json()["limit"] == 100  # hard cap honoured
+
+
+def test_firms_search_and_demo_firms_resolve():
+    res = client.get("/firms?q=DrilTech").json()
+    dt = next(it for it in res["items"] if "DrilTech" in it["name_en"])
+    assert dt["enquiry_email"] and dt["br_no"]  # merged from the register row
+    assert any("Gold Ram" in it["name_en"] for it in client.get("/firms?q=Gold Ram").json()["items"])
+    # a flagged firm still carries an http-citable reference
+    soils = client.get("/firms?q=Soils %26 Materials").json()["items"]
+    flags = [fl for it in soils for fl in it["public_flags"]]
+    assert flags and all(fl["reference"].startswith("http") for fl in flags)
+
+
 def test_coverage_counts_only_real_provenance_firms():
     cov = client.get("/coverage").json()
-    # the claim counts ONLY the real registry scrape, not the 16 illustrative firms
+    # the claim counts the real CIC register (~1,366) plus the enforcement/offer
+    # overlay — never the illustrative firms or the benchmark row
     assert cov["provenance"] == "public_register"
-    assert cov["total_firms"] == 134
-    assert cov["flagged_firms"] == 46
+    assert cov["total_firms"] == 1410
+    assert cov["flagged_firms"] == 47
+    # the headline composition: CIC register + enforcement/offer overlay
+    assert cov["register_count"] == 1365
+    assert cov["overlay_count"] == 45
+    assert cov["flagged_count"] == 47
+    assert cov["register_count"] + cov["overlay_count"] == cov["total_firms"]
     # only the real flag types appear — the demo-only adjudication / distress filing
     # (whose references are illustrative placeholders) are excluded from the claim
     assert set(cov["flags_by_type"]) == {"debarment", "safety_prosecution", "winding_up"}
     assert "electrical" in cov["trades"]
+    assert cov["registers"] >= 1 and cov["flag_sources"]

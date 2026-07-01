@@ -1,0 +1,53 @@
+{
+  "project_name": "GE/2026/14 — Ground Investigation, Man-made Slopes (Surface Drainage Water Study)",
+  "packages": [
+    {
+      "trade": "Field Testing",
+      "scope_summary": "Drainage field test (SR Section G): manufacture, mobilise and set up the test rig, carry out the test at each location, supply water, provide and remove freeboard, and drainage modification (demolition and channel construction), measured per the Method of Measurement.",
+      "sor_items": [
+        {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0},
+        {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0},
+        {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0},
+        {"item_ref": "G14", "description": "Purchase and supply water for drainage field test (private source or WSD)", "unit": "m3", "qty": 2000.0},
+        {"item_ref": "G15", "description": "Extra over G14 for plan distance over 300m and/or elevation over 30m", "unit": "No.", "qty": 3.0},
+        {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0},
+        {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0},
+        {"item_ref": "G17b", "description": "Drainage modification — construct U-channel (Std Dwg C2409J, C2413D)", "unit": "m", "qty": 60.0}
+      ],
+      "source_refs": ["I-GE_2026_14_TSC-SR-01.pdf", "I-GE_2026_14_TSC-PS-S07-00.pdf", "I-GE_2026_14_TSC-MM-01.pdf", "AECOM Tender Clarification No.1.pdf"]
+    },
+    {
+      "trade": "Field Installations",
+      "scope_summary": "Field installations and instrumentation for the drainage field test (SR Section H14–H17, clause PS 7.286A–7.299A): supply and install each test instrument, the CCTV system, and the monitoring / data-transmission and CCTV operation over the test period.",
+      "sor_items": [
+        {"item_ref": "H14a", "description": "Supply & install 2-dimensional LiDAR sensor (PS 7.291A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "H14b", "description": "Supply & install ultrasonic level sensor (PS 7.292A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "H14c", "description": "Supply & install dual-tip conductivity probe (PS 7.293A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "H14d", "description": "Supply & install optical camera (PS 7.294A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "H14e", "description": "Supply & install velocimeter (PS 7.295A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "H14f", "description": "Supply & install flowmeter (PS 7.297A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "H15", "description": "Supply & install Closed Circuit Television (CCTV) system, one camera (PS 7.299A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "H16", "description": "Monitoring, data collection and data transmission from the instruments", "unit": "No.-Month", "qty": 24.0},
+        {"item_ref": "H17", "description": "Operation and maintenance of the CCTV (PB 150)", "unit": "No.-Month", "qty": 12.0}
+      ],
+      "source_refs": ["I-GE_2026_14_TSC-SR-01.pdf", "I-GE_2026_14_TSC-PS-S07-00.pdf", "I-GE_2026_14_TSC-MM-01.pdf"]
+    },
+    {
+      "trade": "Geophysical Survey",
+      "scope_summary": "Geophysical survey (SR Section J5–J10, clause PS 7.301A–7.302A): mobilise and demobilise the land-resistivity and ground-penetrating-radar equipment, carry out the surveys, interpret the data, and deliver the final report.",
+      "sor_items": [
+        {"item_ref": "J5a", "description": "Mobilise/demobilise land resistivity multi-channel survey equipment (PS 7.301A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "J5b", "description": "Mobilise/demobilise ground penetrating radar survey equipment (PS 7.302A)", "unit": "No.", "qty": 1.0},
+        {"item_ref": "J6a", "description": "Land resistivity survey, measurement spacing >5m but ≤10m (PS 7.301A)", "unit": "Point", "qty": 60.0},
+        {"item_ref": "J6b", "description": "Land resistivity survey, measurement spacing >2m but ≤5m (PS 7.301A)", "unit": "Point", "qty": 40.0},
+        {"item_ref": "J6c", "description": "Land resistivity survey, measurement spacing ≤2m (PS 7.301A)", "unit": "Point", "qty": 20.0},
+        {"item_ref": "J7", "description": "Carry out ground penetrating radar survey (PS 7.302A)", "unit": "m", "qty": 800.0},
+        {"item_ref": "J8a", "description": "Extra over for data interpretation — land resistivity survey (PS 7.301A)", "unit": "Point", "qty": 120.0},
+        {"item_ref": "J8b", "description": "Extra over for data interpretation — ground penetrating radar survey (PS 7.302A)", "unit": "m", "qty": 800.0},
+        {"item_ref": "J9", "description": "Provide set of two copies of the Final Report including CD-ROM", "unit": "Set", "qty": 1.0},
+        {"item_ref": "J10", "description": "Provide additional copies of the Final Report", "unit": "No.", "qty": 3.0}
+      ],
+      "source_refs": ["I-GE_2026_14_TSC-SR-01.pdf", "I-GE_2026_14_TSC-MM-01.pdf"]
+    }
+  ]
+}

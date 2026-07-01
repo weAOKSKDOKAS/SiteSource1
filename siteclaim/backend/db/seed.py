@@ -33,14 +33,16 @@ from .embeddings import DETERMINISTIC_DIM, build_embeddings, deterministic_embed
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.sql"
 SEED_DATA_DIR = _HERE / "seed_data"
+CSV_REGISTER_PATH = SEED_DATA_DIR / "source" / "RSRC_01_combined.csv"
 DEFAULT_DB_PATH = _HERE / "sitesource.db"
-SEED_VERSION = "1"
+SEED_VERSION = "2"
 
 # Reuse the Layer-1 taxonomy normaliser to screen real-scrape trade names (e.g.
 # "fire services", "mechanical and plumbing") into canonical keys at build time.
 if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
-from rules_engine.taxonomy import normalize as _normalize_trade  # noqa: E402
+from rules_engine.taxonomy import normalize as _normalize_trade  # noqa: E402,F401
+from db import register_loader  # noqa: E402
 
 
 def _canonical_trades(raw_trades: list[str]) -> list[str]:
@@ -128,10 +130,17 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
     public, provenance_by_id = _load_public_records()
     eos = _load_records("eos")
     pricing = _load_records("pricing")
-
-    public_by_id = {r["firm_id"]: r for r in public}
     eos_by_id = {r["firm_id"]: r for r in eos}
-    firm_ids = sorted(set(public_by_id) | set(eos_by_id))
+
+    # The real CIC register is the public_register base; curated records (offers,
+    # awards, enforcement flags) are fused onto their matching register row, and the
+    # illustrative/demo stub stays its own (excluded-from-coverage) layer.
+    curated_real = [r for r in public if provenance_by_id.get(r["firm_id"]) == "public_register"]
+    illustrative = [r for r in public if provenance_by_id.get(r["firm_id"]) != "public_register"]
+    register = register_loader.load_csv_register(CSV_REGISTER_PATH)
+    public_firms = register_loader.merge_register(register, curated_real, eos_by_id)
+    illus_firms = [register_loader.illustrative_firm(r, eos_by_id.get(r["firm_id"], {})) for r in illustrative]
+    all_firms = public_firms + illus_firms
 
     if db_path.exists():
         db_path.unlink()
@@ -140,44 +149,55 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
         chunk_rows: list[tuple[str, int, str]] = []  # (firm_id, chunk_id, text)
-        for fid in firm_ids:
-            pub = public_by_id.get(fid, {})
-            rep = eos_by_id.get(fid, {})
-
+        for firm in all_firms:
+            fid = firm["firm_id"]
+            profile = firm.get("profile")
             conn.execute(
-                "INSERT INTO firms (firm_id, name_en, name_zh, registered_grade, value_band, "
-                "registers, trades, closeout_summary, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO firms (firm_id, name_en, name_zh, registered_grade, value_band, registers, "
+                "trades, registered_trades, closeout_summary, description, enquiry_email, br_no, address, "
+                "phone, fax, reg_date, expiry_date, profile, provenance) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     fid,
-                    pub.get("name_en") or fid,
-                    pub.get("name_zh"),
-                    pub.get("registered_grade"),
-                    pub.get("value_band"),
-                    json.dumps(pub.get("registers", [])),
-                    json.dumps(_canonical_trades(pub.get("trades", []))),
-                    rep.get("closeout_summary", ""),
-                    provenance_by_id.get(fid, "illustrative"),
+                    firm["name_en"],
+                    firm.get("name_zh"),
+                    firm.get("registered_grade"),
+                    firm.get("value_band"),
+                    json.dumps(firm.get("registers", [])),
+                    json.dumps(firm.get("trades", [])),
+                    json.dumps(firm.get("registered_trades", [])),
+                    firm.get("closeout_summary", ""),
+                    firm.get("description", ""),
+                    firm.get("enquiry_email", ""),
+                    firm.get("br_no", ""),
+                    firm.get("address", ""),
+                    firm.get("phone", ""),
+                    firm.get("fax", ""),
+                    firm.get("reg_date", ""),
+                    firm.get("expiry_date", ""),
+                    json.dumps(profile) if profile else None,
+                    firm["provenance"],
                 ),
             )
-            for flag in pub.get("public_flags", []):
+            for flag in firm.get("public_flags", []):
                 conn.execute(
                     "INSERT INTO public_flags (firm_id, signal_type, label, date, source, reference) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (fid, flag["signal_type"], flag["label"], flag.get("date"), flag.get("source"), flag.get("reference")),
                 )
-            for proj in rep.get("projects", []):
+            for proj in firm.get("projects", []):
                 conn.execute(
                     "INSERT INTO project_closeouts (firm_id, project, client, year, delayed, note, source, reference) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (fid, proj.get("project"), proj.get("client"), proj.get("year"),
                      int(proj.get("delayed", 0)), proj.get("note"), proj.get("source"), proj.get("reference")),
                 )
-            for award in pub.get("award_history", []):
+            for award in firm.get("award_history", []):
                 conn.execute(
                     "INSERT INTO award_history (firm_id, project, client, year, source) VALUES (?, ?, ?, ?, ?)",
                     (fid, award.get("project"), award.get("client"), award.get("year"), award.get("source")),
                 )
-            for idx, text in enumerate(rep.get("report_text", [])):
+            for idx, text in enumerate(firm.get("report_text", [])):
                 if text and text.strip():
                     chunk_rows.append((fid, idx, text.strip()))
 
@@ -201,7 +221,7 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
             "embed_dim": str(dim),
             "seed_version": SEED_VERSION,
             "built_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-            "firm_count": str(len(firm_ids)),
+            "firm_count": str(len(all_firms)),
         }.items():
             conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (key, value))
 
@@ -211,8 +231,9 @@ def build_database(db_path: Path | str = DEFAULT_DB_PATH) -> dict:
 
     return {
         "db_path": str(db_path),
-        "firms": len(firm_ids),
-        "public_records": len(public),
+        "firms": len(all_firms),
+        "register_rows": len(register),
+        "public_register": len(public_firms),
         "eos_reports": len(eos),
         "pricing_samples": len(pricing),
         "closeout_chunks": len(chunk_rows),
@@ -226,8 +247,8 @@ def main() -> None:
     print("Built SiteSource DB:")
     for key, value in summary.items():
         print(f"  {key:>16}: {value}")
-    if summary["public_records"] == 0:
-        print("  note: no public records found — built from the EOS archive alone.")
+    if summary["register_rows"] == 0:
+        print("  note: register CSV not found — built from the curated records alone.")
 
 
 if __name__ == "__main__":

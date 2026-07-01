@@ -31,6 +31,11 @@ from schemas.models import (
     Recommendation,
 )
 
+# The tender's own Schedule of Rates is carried in the levelled set as a baseline
+# "bid" under this id. It is a benchmark, never a competing tenderer, so it is
+# excluded from the ranking, the recommendation, and the bid distribution.
+_BENCHMARK_ID = "tender-scheduled-rates"
+
 
 class _Rationale(BaseModel):
     """The single string Layer 2 is allowed to produce — it never sets the ranking."""
@@ -57,7 +62,7 @@ def recommend(
     client: Optional[LLMClient] = None,
 ) -> Recommendation:
     """Produce the risk-adjusted recommendation for ``trade``."""
-    bids = [b for b in levelled if b.trade == trade]
+    bids = [b for b in levelled if b.trade == trade and b.firm_id != _BENCHMARK_ID]
     own_conn = conn is None
     conn = conn or store.get_connection()
     try:
@@ -66,6 +71,7 @@ def recommend(
                 firm_id=b.firm_id,
                 firm_name=b.firm_name,
                 corrected_total=b.corrected_total,
+                normalized_total=b.normalized_total,
                 risk_flags=score_firm(profile) if (profile := store.firm_profile(conn, b.firm_id)) else [],
             )
             for b in bids

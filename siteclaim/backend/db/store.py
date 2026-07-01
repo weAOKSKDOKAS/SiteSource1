@@ -55,6 +55,16 @@ def _json_list(raw: Optional[str]) -> list:
         return []
 
 
+def _json_obj(raw: Optional[str]) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
 def _raw_flag(signal_type: SignalType, label: str, source: str, reference: str, snippet: str) -> RiskFlag:
     """A raw, unadjudicated signal. Severity INFO is a placeholder — the rules
     engine assigns the real severity from the rubric (see module docstring)."""
@@ -119,8 +129,13 @@ def _award_strings(conn: sqlite3.Connection, firm_id: str) -> list[str]:
     return out
 
 
+def _row_keys(row: sqlite3.Row) -> set[str]:
+    return set(row.keys())
+
+
 def _firm_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> FirmProfile:
     firm_id = row["firm_id"]
+    keys = _row_keys(row)
     return FirmProfile(
         firm_id=firm_id,
         name=row["name_en"],
@@ -130,6 +145,10 @@ def _firm_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> FirmProfile:
         public_flags=_public_flag_rows(conn, firm_id) + _closeout_flag_rows(conn, firm_id),
         closeout_summary=row["closeout_summary"] or "",
         award_history=_award_strings(conn, firm_id),
+        enquiry_email=(row["enquiry_email"] or "") if "enquiry_email" in keys else "",
+        description=(row["description"] or "") if "description" in keys else "",
+        registered_trades=_json_list(row["registered_trades"]) if "registered_trades" in keys else [],
+        reg_date=(row["reg_date"] or "") if "reg_date" in keys else "",
     )
 
 
@@ -157,11 +176,32 @@ def eos_firm_ids(conn: sqlite3.Connection) -> set[str]:
     return {row["firm_id"] for row in rows}
 
 
+def register_firm_ids(conn: sqlite3.Connection) -> set[str]:
+    """Firm ids drawn from the real CIC register (provenance ``public_register``) —
+    the genuine subcontractor pool, as opposed to the illustrative/benchmark rows."""
+    rows = conn.execute("SELECT firm_id FROM firms WHERE provenance = ?", (_REAL,)).fetchall()
+    return {row["firm_id"] for row in rows}
+
+
 def shortlistable_firms_for_trade(conn: sqlite3.Connection, trade: str) -> list[FirmProfile]:
-    """Firms in ``trade`` that have an assessable EOS closeout record — the only
-    firms eligible for the per-tender shortlist."""
+    """Firms in ``trade`` the platform surfaces for a per-tender shortlist. Three
+    kinds qualify, so the genuine register pool is not hidden behind the private
+    closeout archive:
+
+    * firms with an **assessable EOS closeout** report we hold,
+    * firms with a **public award** record, and
+    * any **trade-matched firm on the real CIC register**.
+
+    Only the illustrative/benchmark rows that are neither assessed nor on the register
+    are withheld. The match scoring and the per-section cap that keep this readable are
+    applied downstream in :func:`db.cross_reference.cross_reference`."""
     assessable = eos_firm_ids(conn)
-    return [firm for firm in firms_for_trade(conn, trade) if firm.firm_id in assessable]
+    register = register_firm_ids(conn)
+    return [
+        firm
+        for firm in firms_for_trade(conn, trade)
+        if firm.firm_id in assessable or firm.award_history or firm.firm_id in register
+    ]
 
 
 _REAL = "public_register"
@@ -173,6 +213,13 @@ def coverage(conn: sqlite3.Connection) -> dict:
     demo firms (fabricated, placeholder references) are deliberately excluded, so the
     'sourced from official registers … linked to its government source' claim holds."""
     total = conn.execute("SELECT COUNT(*) AS n FROM firms WHERE provenance = ?", (_REAL,)).fetchone()["n"]
+    # The CIC-register firms carry a Business Registration No.; the overlay rows
+    # (enforcement/offer records not on the register) do not — so the headline can
+    # state its composition rather than read as a bare total.
+    register_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM firms WHERE provenance = ? AND br_no IS NOT NULL AND br_no != ''",
+        (_REAL,),
+    ).fetchone()["n"]
     flagged = conn.execute(
         "SELECT COUNT(DISTINCT pf.firm_id) AS n FROM public_flags pf "
         "JOIN firms f ON f.firm_id = pf.firm_id WHERE f.provenance = ?",
@@ -190,13 +237,143 @@ def coverage(conn: sqlite3.Connection) -> dict:
     trades: set[str] = set()
     for row in conn.execute("SELECT trades FROM firms WHERE provenance = ?", (_REAL,)):
         trades |= set(_json_list(row["trades"]))
+    flag_sources = [
+        row["source"]
+        for row in conn.execute(
+            "SELECT DISTINCT pf.source AS source FROM public_flags pf "
+            "JOIN firms f ON f.firm_id = pf.firm_id WHERE f.provenance = ? AND pf.source IS NOT NULL "
+            "AND pf.source != '' ORDER BY pf.source",
+            (_REAL,),
+        )
+    ]
     return {
         "total_firms": int(total),
         "flagged_firms": int(flagged),
+        "register_count": int(register_count),
+        "overlay_count": int(total) - int(register_count),
+        "flagged_count": int(flagged),
         "flags_by_type": flags_by_type,
         "trades": sorted(trades),
+        "flag_sources": flag_sources,
+        "registers": len(flag_sources),
         "provenance": _REAL,
     }
+
+
+def _firm_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    flags = conn.execute(
+        "SELECT signal_type, label, date, source, reference FROM public_flags "
+        "WHERE firm_id = ? ORDER BY signal_type",
+        (row["firm_id"],),
+    ).fetchall()
+    return {
+        "firm_id": row["firm_id"],
+        "name_en": row["name_en"],
+        "name_zh": row["name_zh"],
+        "registered_grade": row["registered_grade"] or "",
+        "value_band": row["value_band"] or "",
+        "trades": _json_list(row["trades"]),
+        "registered_trades": _json_list(row["registered_trades"]),
+        "description": row["description"] or "",
+        "enquiry_email": row["enquiry_email"] or "",
+        "br_no": row["br_no"] or "",
+        "reg_date": row["reg_date"] or "",
+        "expiry_date": row["expiry_date"] or "",
+        "public_flags": [dict(flag) for flag in flags],
+    }
+
+
+_FIRM_SORTS = {
+    "name": "name_en COLLATE NOCASE ASC",
+    "name_desc": "name_en COLLATE NOCASE DESC",
+}
+
+
+def paged_firms(
+    conn: sqlite3.Connection, *, limit: int = 25, offset: int = 0, q: str = "", sort: str = "name"
+) -> dict:
+    """A page of real-provenance registry firms, alphabetical by default. Server-side
+    only — never load the whole register into the client. ``q`` is a case-insensitive
+    name search. Returns ``{items, total, limit, offset}``; each item carries its
+    description, enquiry_email and registration dates."""
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    order = _FIRM_SORTS.get(sort, _FIRM_SORTS["name"])
+    where = "provenance = ?"
+    params: list[object] = [_REAL]
+    needle = (q or "").strip()
+    if needle:
+        where += " AND name_en LIKE ? COLLATE NOCASE"
+        params.append(f"%{needle}%")
+    total = conn.execute(f"SELECT COUNT(*) AS n FROM firms WHERE {where}", params).fetchone()["n"]
+    rows = conn.execute(
+        f"SELECT * FROM firms WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    ).fetchall()
+    return {
+        "items": [_firm_dict(conn, row) for row in rows],
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def firm_full_by_id(conn: sqlite3.Connection, firm_id: str) -> dict | None:
+    """Full firm profile for the detail modal — all columns plus award history with
+    source URLs and public flags with citation references."""
+    row = conn.execute("SELECT * FROM firms WHERE firm_id = ?", (firm_id,)).fetchone()
+    if row is None:
+        return None
+    keys = _row_keys(row)
+    flags = conn.execute(
+        "SELECT signal_type, label, date, source, reference FROM public_flags "
+        "WHERE firm_id = ? ORDER BY signal_type",
+        (firm_id,),
+    ).fetchall()
+    awards = conn.execute(
+        "SELECT project, client, year, source FROM award_history "
+        "WHERE firm_id = ? ORDER BY year DESC",
+        (firm_id,),
+    ).fetchall()
+    return {
+        "firm_id": row["firm_id"],
+        "name_en": row["name_en"],
+        "name_zh": row["name_zh"],
+        "registered_grade": row["registered_grade"] or "",
+        "value_band": row["value_band"] or "",
+        "registers": _json_list(row["registers"]),
+        "trades": _json_list(row["trades"]),
+        "registered_trades": _json_list(row["registered_trades"]),
+        "description": row["description"] or "",
+        "enquiry_email": row["enquiry_email"] or "",
+        "br_no": row["br_no"] or "",
+        "reg_date": row["reg_date"] or "",
+        "expiry_date": row["expiry_date"] or "",
+        "public_flags": [
+            {"signal_type": fl["signal_type"], "label": fl["label"],
+             "date": fl["date"], "source": fl["source"], "reference": fl["reference"]}
+            for fl in flags
+        ],
+        "award_history": [
+            {"project": aw["project"] or "", "client": aw["client"],
+             "year": aw["year"], "source": aw["source"]}
+            for aw in awards
+        ],
+        "provenance": row["provenance"],
+        # The curated, verifiable profile (overview, services, notable projects, ...)
+        # for the firms that genuinely do these trades; empty for register-only firms.
+        "profile": _json_obj(row["profile"]) if "profile" in keys else {},
+    }
+
+
+def real_firms(conn: sqlite3.Connection) -> list[dict]:
+    """All real-provenance registry firms (used by tests / internal callers). The API
+    serves :func:`paged_firms` instead — never load the full register in the client."""
+    rows = conn.execute(
+        "SELECT * FROM firms WHERE provenance = ? ORDER BY name_en COLLATE NOCASE",
+        (_REAL,),
+    ).fetchall()
+    return [_firm_dict(conn, row) for row in rows]
 
 
 # ---------------------------------------------------------------------------

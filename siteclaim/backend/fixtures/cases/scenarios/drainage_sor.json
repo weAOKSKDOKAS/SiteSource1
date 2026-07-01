@@ -1,0 +1,154 @@
+{
+  "field_testing": {
+    "benchmark": {
+      "claimed_total": 1112990.0,
+      "exclusions": [],
+      "line_items": [
+        {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0, "rate": 300000.0, "amount": 300000.0},
+        {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0, "rate": 50000.0, "amount": 200000.0},
+        {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0, "rate": 30000.0, "amount": 360000.0},
+        {"item_ref": "G14", "description": "Purchase and supply water for drainage field test", "unit": "m3", "qty": 2000.0, "rate": 7.2, "amount": 14400.0},
+        {"item_ref": "G15", "description": "Extra over G14 for distance/elevation", "unit": "No.", "qty": 3.0, "rate": 1430.0, "amount": 4290.0},
+        {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0, "rate": 750.0, "amount": 90000.0},
+        {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0, "rate": 1155.0, "amount": 46200.0},
+        {"item_ref": "G17b", "description": "Drainage modification — construct U-channel", "unit": "m", "qty": 60.0, "rate": 1635.0, "amount": 98100.0}
+      ]
+    },
+    "pinned": {},
+    "templates": [
+      {
+        "claimed_total": 1114790.0,
+        "exclusions": [],
+        "line_items": [
+          {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0, "rate": 300000.0, "amount": 300000.0},
+          {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0, "rate": 50000.0, "amount": 200000.0},
+          {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0, "rate": 30000.0, "amount": 360000.0},
+          {"item_ref": "G14", "description": "Purchase and supply water for drainage field test", "unit": "m3", "qty": 2000.0, "rate": 7.5, "amount": 15000.0},
+          {"item_ref": "G15", "description": "Extra over G14 for distance/elevation", "unit": "No.", "qty": 3.0, "rate": 1430.0, "amount": 4290.0},
+          {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0, "rate": 760.0, "amount": 91200.0},
+          {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0, "rate": 1155.0, "amount": 46200.0},
+          {"item_ref": "G17b", "description": "Drainage modification — construct U-channel", "unit": "m", "qty": 60.0, "rate": 1635.0, "amount": 98100.0}
+        ]
+      },
+      {
+        "claimed_total": 1107690.0,
+        "exclusions": [],
+        "line_items": [
+          {"item_ref": "G11", "description": "Manufacture the set up of drainage field test", "unit": "Item", "qty": 1.0, "rate": 295000.0, "amount": 295000.0},
+          {"item_ref": "G12", "description": "Mobilise full set of drainage field test set up on land", "unit": "No.", "qty": 4.0, "rate": 49000.0, "amount": 196000.0},
+          {"item_ref": "G13", "description": "Set up at each test location and carry out drainage field test", "unit": "No.", "qty": 12.0, "rate": 31000.0, "amount": 360000.0},
+          {"item_ref": "G14", "description": "Purchase and supply water for drainage field test", "unit": "m3", "qty": 2000.0, "rate": 7.6, "amount": 15200.0},
+          {"item_ref": "G15", "description": "Extra over G14 for distance/elevation", "unit": "No.", "qty": 3.0, "rate": 1430.0, "amount": 4290.0},
+          {"item_ref": "G16", "description": "Provide and remove freeboard", "unit": "m", "qty": 120.0, "rate": 770.0, "amount": 92400.0},
+          {"item_ref": "G17a", "description": "Drainage modification — demolish artificial hard material", "unit": "m3", "qty": 40.0, "rate": 1160.0, "amount": 46400.0},
+          {"item_ref": "G17b", "description": "Drainage modification — construct U-channel", "unit": "m", "qty": 60.0, "rate": 1640.0, "amount": 98400.0}
+        ]
+      }
+    ]
+  },
+  "field_installations": {
+    "benchmark": {
+      "claimed_total": 314000.0,
+      "exclusions": [],
+      "line_items": [
+        {"item_ref": "H14a", "description": "2-dimensional LiDAR sensor", "unit": "No.", "qty": 1.0, "rate": 60000.0, "amount": 60000.0},
+        {"item_ref": "H14b", "description": "Ultrasonic level sensor", "unit": "No.", "qty": 1.0, "rate": 12000.0, "amount": 12000.0},
+        {"item_ref": "H14c", "description": "Dual-tip conductivity probe", "unit": "No.", "qty": 1.0, "rate": 13000.0, "amount": 13000.0},
+        {"item_ref": "H14d", "description": "Optical camera", "unit": "No.", "qty": 1.0, "rate": 32000.0, "amount": 32000.0},
+        {"item_ref": "H14e", "description": "Velocimeter", "unit": "No.", "qty": 1.0, "rate": 28000.0, "amount": 28000.0},
+        {"item_ref": "H14f", "description": "Flowmeter", "unit": "No.", "qty": 1.0, "rate": 70000.0, "amount": 70000.0},
+        {"item_ref": "H15", "description": "Closed Circuit Television (CCTV) system, one camera", "unit": "No.", "qty": 1.0, "rate": 15000.0, "amount": 15000.0},
+        {"item_ref": "H16", "description": "Monitoring, data collection and data transmission", "unit": "No.-Month", "qty": 24.0, "rate": 2000.0, "amount": 48000.0},
+        {"item_ref": "H17", "description": "Operation and maintenance of the CCTV", "unit": "No.-Month", "qty": 12.0, "rate": 3000.0, "amount": 36000.0}
+      ]
+    },
+    "pinned": {
+      "kai-wai-engineering-survey-and-geophysics-limited-3f7b": {
+        "claimed_total": 153450.0,
+        "exclusions": [],
+        "line_items": [
+          {"item_ref": "H14a", "description": "2-dimensional LiDAR sensor", "unit": "No.", "qty": 1.0, "rate": 49500.0, "amount": 49500.0},
+          {"item_ref": "H14b", "description": "Ultrasonic level sensor", "unit": "No.", "qty": 1.0, "rate": 8250.0, "amount": 8250.0},
+          {"item_ref": "H14c", "description": "Dual-tip conductivity probe", "unit": "No.", "qty": 1.0, "rate": 30000.0, "amount": 30000.0},
+          {"item_ref": "H14d", "description": "Optical camera", "unit": "No.", "qty": 1.0, "rate": 7000.0, "amount": 7000.0},
+          {"item_ref": "H14e", "description": "Velocimeter", "unit": "No.", "qty": 1.0, "rate": 15000.0, "amount": 15000.0},
+          {"item_ref": "H14f", "description": "Flowmeter", "unit": "No.", "qty": 1.0, "rate": 15000.0, "amount": 15000.0},
+          {"item_ref": "H15", "description": "Closed Circuit Television (CCTV) system, one camera", "unit": "No.", "qty": 1.0, "rate": 3500.0, "amount": 3500.0},
+          {"item_ref": "H16", "description": "Monitoring, data collection and data transmission", "unit": "No.-Month", "qty": 24.0, "rate": 700.0, "amount": 16800.0},
+          {"item_ref": "H17", "description": "Operation and maintenance of the CCTV", "unit": "No.-Month", "qty": 12.0, "rate": 700.0, "amount": 8400.0}
+        ]
+      }
+    },
+    "templates": [
+      {
+        "claimed_total": 186360.0,
+        "exclusions": [],
+        "line_items": [
+          {"item_ref": "H14a", "description": "2-dimensional LiDAR sensor", "unit": "No.", "qty": 1.0, "rate": 60000.0, "amount": 60000.0},
+          {"item_ref": "H14b", "description": "Ultrasonic level sensor", "unit": "No.", "qty": 1.0, "rate": 10000.0, "amount": 10000.0},
+          {"item_ref": "H14c", "description": "Dual-tip conductivity probe", "unit": "No.", "qty": 1.0, "rate": 36000.0, "amount": 36000.0},
+          {"item_ref": "H14d", "description": "Optical camera", "unit": "No.", "qty": 1.0, "rate": 8500.0, "amount": 8500.0},
+          {"item_ref": "H14e", "description": "Velocimeter", "unit": "No.", "qty": 1.0, "rate": 18500.0, "amount": 18500.0},
+          {"item_ref": "H14f", "description": "Flowmeter", "unit": "No.", "qty": 1.0, "rate": 18500.0, "amount": 18500.0},
+          {"item_ref": "H15", "description": "Closed Circuit Television (CCTV) system, one camera", "unit": "No.", "qty": 1.0, "rate": 4300.0, "amount": 4300.0},
+          {"item_ref": "H16", "description": "Monitoring, data collection and data transmission", "unit": "No.-Month", "qty": 24.0, "rate": 880.0, "amount": 20000.0},
+          {"item_ref": "H17", "description": "Operation and maintenance of the CCTV", "unit": "No.-Month", "qty": 12.0, "rate": 880.0, "amount": 10560.0}
+        ]
+      }
+    ]
+  },
+  "geophysical_survey": {
+    "benchmark": {
+      "claimed_total": 715230.0,
+      "exclusions": [],
+      "line_items": [
+        {"item_ref": "J5a", "description": "Mobilise/demobilise land resistivity multi-channel survey equipment", "unit": "No.", "qty": 1.0, "rate": 27120.0, "amount": 27120.0},
+        {"item_ref": "J5b", "description": "Mobilise/demobilise ground penetrating radar survey equipment", "unit": "No.", "qty": 1.0, "rate": 28210.0, "amount": 28210.0},
+        {"item_ref": "J6a", "description": "Land resistivity survey, spacing >5m but ≤10m", "unit": "Point", "qty": 60.0, "rate": 3800.0, "amount": 228000.0},
+        {"item_ref": "J6b", "description": "Land resistivity survey, spacing >2m but ≤5m", "unit": "Point", "qty": 40.0, "rate": 1900.0, "amount": 76000.0},
+        {"item_ref": "J6c", "description": "Land resistivity survey, spacing ≤2m", "unit": "Point", "qty": 20.0, "rate": 640.0, "amount": 12800.0},
+        {"item_ref": "J7", "description": "Carry out ground penetrating radar survey", "unit": "m", "qty": 800.0, "rate": 140.0, "amount": 112000.0},
+        {"item_ref": "J8a", "description": "Extra over for data interpretation — land resistivity", "unit": "Point", "qty": 120.0, "rate": 320.0, "amount": 38400.0},
+        {"item_ref": "J8b", "description": "Extra over for data interpretation — GPR", "unit": "m", "qty": 800.0, "rate": 140.0, "amount": 112000.0},
+        {"item_ref": "J9", "description": "Provide set of two copies of the Final Report including CD-ROM", "unit": "Set", "qty": 1.0, "rate": 35100.0, "amount": 35100.0},
+        {"item_ref": "J10", "description": "Provide additional copies of the Final Report", "unit": "No.", "qty": 3.0, "rate": 15200.0, "amount": 45600.0}
+      ]
+    },
+    "pinned": {
+      "sixense-limited-5d2c": {
+        "claimed_total": 240340.0,
+        "exclusions": [],
+        "line_items": [
+          {"item_ref": "J5a", "description": "Mobilise/demobilise land resistivity multi-channel survey equipment", "unit": "No.", "qty": 1.0, "rate": 66740.0, "amount": 66740.0},
+          {"item_ref": "J5b", "description": "Mobilise/demobilise ground penetrating radar survey equipment", "unit": "No.", "qty": 1.0, "rate": 59240.0, "amount": 59240.0},
+          {"item_ref": "J6a", "description": "Land resistivity survey, spacing >5m but ≤10m", "unit": "Point", "qty": 60.0, "rate": 440.0, "amount": 26400.0},
+          {"item_ref": "J6b", "description": "Land resistivity survey, spacing >2m but ≤5m", "unit": "Point", "qty": 40.0, "rate": 270.0, "amount": 10800.0},
+          {"item_ref": "J6c", "description": "Land resistivity survey, spacing ≤2m", "unit": "Point", "qty": 20.0, "rate": 170.0, "amount": 3400.0},
+          {"item_ref": "J7", "description": "Carry out ground penetrating radar survey", "unit": "m", "qty": 800.0, "rate": 10.0, "amount": 8000.0},
+          {"item_ref": "J8a", "description": "Extra over for data interpretation — land resistivity", "unit": "Point", "qty": 120.0, "rate": 80.0, "amount": 9600.0},
+          {"item_ref": "J8b", "description": "Extra over for data interpretation — GPR", "unit": "m", "qty": 800.0, "rate": 20.0, "amount": 16000.0},
+          {"item_ref": "J9", "description": "Provide set of two copies of the Final Report including CD-ROM", "unit": "Set", "qty": 1.0, "rate": 32240.0, "amount": 32240.0},
+          {"item_ref": "J10", "description": "Provide additional copies of the Final Report", "unit": "No.", "qty": 3.0, "rate": 2640.0, "amount": 7920.0}
+        ]
+      }
+    },
+    "templates": [
+      {
+        "claimed_total": 327100.0,
+        "exclusions": [],
+        "line_items": [
+          {"item_ref": "J5a", "description": "Mobilise/demobilise land resistivity multi-channel survey equipment", "unit": "No.", "qty": 1.0, "rate": 90000.0, "amount": 90000.0},
+          {"item_ref": "J5b", "description": "Mobilise/demobilise ground penetrating radar survey equipment", "unit": "No.", "qty": 1.0, "rate": 80000.0, "amount": 80000.0},
+          {"item_ref": "J6a", "description": "Land resistivity survey, spacing >5m but ≤10m", "unit": "Point", "qty": 60.0, "rate": 600.0, "amount": 36000.0},
+          {"item_ref": "J6b", "description": "Land resistivity survey, spacing >2m but ≤5m", "unit": "Point", "qty": 40.0, "rate": 370.0, "amount": 14800.0},
+          {"item_ref": "J6c", "description": "Land resistivity survey, spacing ≤2m", "unit": "Point", "qty": 20.0, "rate": 235.0, "amount": 4700.0},
+          {"item_ref": "J7", "description": "Carry out ground penetrating radar survey", "unit": "m", "qty": 800.0, "rate": 14.0, "amount": 11200.0},
+          {"item_ref": "J8a", "description": "Extra over for data interpretation — land resistivity", "unit": "Point", "qty": 120.0, "rate": 110.0, "amount": 13200.0},
+          {"item_ref": "J8b", "description": "Extra over for data interpretation — GPR", "unit": "m", "qty": 800.0, "rate": 28.0, "amount": 22400.0},
+          {"item_ref": "J9", "description": "Provide set of two copies of the Final Report including CD-ROM", "unit": "Set", "qty": 1.0, "rate": 44000.0, "amount": 44000.0},
+          {"item_ref": "J10", "description": "Provide additional copies of the Final Report", "unit": "No.", "qty": 3.0, "rate": 3600.0, "amount": 10800.0}
+        ]
+      }
+    ]
+  }
+}

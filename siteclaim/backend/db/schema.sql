@@ -18,16 +18,28 @@ DROP TABLE IF EXISTS meta;
 
 -- One row per firm — the fused identity (public record + private closeout archive).
 CREATE TABLE firms (
-    firm_id          TEXT PRIMARY KEY,
-    name_en          TEXT NOT NULL,
-    name_zh          TEXT,
-    registered_grade TEXT,
-    value_band       TEXT,
-    registers        TEXT,   -- JSON array of registration schemes (lossless for the scrape)
-    trades           TEXT,   -- JSON array of canonical taxonomy keys
-    closeout_summary TEXT,
-    provenance       TEXT NOT NULL DEFAULT 'illustrative'  -- 'public_register' (real scrape) | 'illustrative' (demo stub)
+    firm_id           TEXT PRIMARY KEY,
+    name_en           TEXT NOT NULL,
+    name_zh           TEXT,
+    registered_grade  TEXT,
+    value_band        TEXT,
+    registers         TEXT,   -- JSON array of registration schemes (lossless for the scrape)
+    trades            TEXT,   -- JSON array of canonical taxonomy keys (discovery/shortlist)
+    registered_trades TEXT,   -- JSON array of {code, group, specialty} from the CIC register
+    closeout_summary  TEXT,
+    description       TEXT,   -- short factual blurb generated from register data
+    enquiry_email     TEXT,   -- the real Office E-mail (Dispatch reads this to draft enquiries)
+    br_no             TEXT,   -- Business Registration No.
+    address           TEXT,
+    phone             TEXT,
+    fax               TEXT,
+    reg_date          TEXT,   -- Date of Registration
+    expiry_date       TEXT,   -- Expiry Date of Current Registration
+    profile           TEXT,   -- JSON curated profile (overview, services, notable_projects, ...) for known firms
+    provenance        TEXT NOT NULL DEFAULT 'illustrative'  -- 'public_register' (real) | 'illustrative' (demo)
 );
+CREATE INDEX idx_firms_provenance ON firms(provenance);
+CREATE INDEX idx_firms_name       ON firms(name_en);
 
 -- Public-record signals (winding-up, safety prosecutions, debarment, adjudication,
 -- distress filings, …). No severity here — severity is adjudicated by the rules engine.
