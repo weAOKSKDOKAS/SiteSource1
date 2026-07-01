@@ -17,11 +17,12 @@ adjudicates them.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from schemas.models import Evidence, FirmProfile, RiskFlag, Severity, SignalType
+from schemas.models import Contact, Evidence, FirmProfile, RiskFlag, Severity, SignalType
 from db.embeddings import deterministic_embedding
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "sitesource.db"
@@ -31,8 +32,18 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parent / "sitesource.db"
 # Connection
 # ---------------------------------------------------------------------------
 def get_connection(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
-    """Open the SiteSource DB read-only-ish (a plain connection with Row access)."""
-    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    """Open the SiteSource DB read-only-ish (a plain connection with Row access).
+
+    Path precedence: an explicit ``db_path`` wins; otherwise the ``SITESOURCE_DB``
+    environment variable (how the live engine points at the clean ``sitesource_live.db``);
+    otherwise the packaged demo ``sitesource.db``. Tests always pass an explicit path,
+    so they are immune to the env override.
+    """
+    if db_path is not None:
+        path = Path(db_path)
+    else:
+        env_path = os.getenv("SITESOURCE_DB", "").strip()
+        path = Path(env_path) if env_path else DEFAULT_DB_PATH
     if not path.is_file():
         raise FileNotFoundError(
             f"SiteSource DB not found at {path}. Build it with `python -m db.seed`."
@@ -162,6 +173,51 @@ def shortlistable_firms_for_trade(conn: sqlite3.Connection, trade: str) -> list[
     firms eligible for the per-tender shortlist."""
     assessable = eos_firm_ids(conn)
     return [firm for firm in firms_for_trade(conn, trade) if firm.firm_id in assessable]
+
+
+# ---------------------------------------------------------------------------
+# Address book (Phase A) — where a trade's RFQ email is sent
+# ---------------------------------------------------------------------------
+def _contact_from_row(row: sqlite3.Row) -> Contact:
+    return Contact(
+        firm_id=row["firm_id"],
+        trade=row["trade"],
+        email=row["email"],
+        contact_name=row["contact_name"] or "",
+        phone=row["phone"] or "",
+        note=row["note"] or "",
+    )
+
+
+def _has_contacts_table(conn: sqlite3.Connection) -> bool:
+    """True if the DB was seeded with the address-book table (older DBs may predate it)."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'"
+    ).fetchone()
+    return row is not None
+
+
+def contact_for(conn: sqlite3.Connection, firm_id: str, trade: str) -> Optional[Contact]:
+    """The address-book entry for ``firm_id`` on ``trade``, or None if unknown."""
+    if not _has_contacts_table(conn):
+        return None
+    row = conn.execute(
+        "SELECT firm_id, trade, contact_name, email, phone, note FROM contacts "
+        "WHERE firm_id = ? AND trade = ?",
+        (firm_id, trade),
+    ).fetchone()
+    return _contact_from_row(row) if row is not None else None
+
+
+def all_contacts(conn: sqlite3.Connection) -> list[Contact]:
+    """Every address-book entry (empty list if the table predates Phase A)."""
+    if not _has_contacts_table(conn):
+        return []
+    rows = conn.execute(
+        "SELECT firm_id, trade, contact_name, email, phone, note FROM contacts "
+        "ORDER BY firm_id, trade"
+    ).fetchall()
+    return [_contact_from_row(row) for row in rows]
 
 
 _REAL = "public_register"

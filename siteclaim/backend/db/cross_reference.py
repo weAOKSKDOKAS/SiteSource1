@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import sqlite3
 
-from schemas.models import Candidate, Evidence, FirmProfile, SignalType
+from schemas.models import Candidate, Evidence, FirmProfile, Severity, SignalType
 from db import store
 from rules_engine.ranking import rank_candidates
 from rules_engine.risk_scoring import score_firm
+
+
+def _warning_count(flags: list) -> int:
+    """How many WARNING-severity flags a firm carries (used to order the public pool)."""
+    return sum(1 for f in flags if f.severity is Severity.WARNING)
 
 
 def _grounding_evidence(firm: FirmProfile) -> list[Evidence]:
@@ -45,20 +50,41 @@ def _grounding_evidence(firm: FirmProfile) -> list[Evidence]:
 
 
 def cross_reference(
-    conn: sqlite3.Connection, trade: str, scope_query: str, k: int | None = None
+    conn: sqlite3.Connection,
+    trade: str,
+    scope_query: str,
+    k: int | None = None,
+    *,
+    include_public: bool = False,
 ) -> list[Candidate]:
     """Return ranked candidates for ``trade`` against ``scope_query``.
 
-    Only firms with an **assessable EOS closeout record** are shortlisted — the
-    wider public-record pool is the discovery/coverage layer, screened and counted
-    but not auto-shortlisted (a firm with no closeout history would otherwise enter
-    at match 0 and bury the genuinely assessed firms). Among the assessable firms,
-    none is silently dropped: ``match_score`` is the semantic relevance of its
-    closeout history to the scope, ``risk_flags`` are the deterministic adjudication
-    of its signals, and the list is ordered clean-first by ranking. ``k`` optionally
-    caps the result.
+    Two shortlist populations, one code path:
+
+    * ``include_public=False`` (default) — only firms with an **assessable EOS
+      closeout record** are shortlisted. The wider public-record pool is the
+      discovery/coverage layer, screened and counted but not auto-shortlisted. This
+      is the assessed-firm behaviour the baked demo scenarios rely on, so it stays
+      the default.
+    * ``include_public=True`` — the shortlist is opened to the **full screened pool**
+      for the trade (:func:`db.store.firms_for_trade`). Every registered firm is a
+      candidate, ordered by the public risk screen: fatal-flagged firms demoted last
+      by ranking, and among clean firms the spotless ones ahead of those carrying a
+      warning. The closeout semantic match stays a soft enrichment feature and is 0
+      for a firm with no closeout history. This is the live-engine path — real firms
+      carry no closeout record until a partner-contractor archive lands, so the
+      screen and registration are what order them for now.
+
+    In both modes no firm is silently dropped: ``match_score`` is the semantic
+    relevance of any closeout history to the scope, ``risk_flags`` are the
+    deterministic adjudication of the firm's signals, and the list is ordered
+    clean-first by ranking. ``k`` optionally caps the result.
     """
-    firms = store.shortlistable_firms_for_trade(conn, trade)
+    firms = (
+        store.firms_for_trade(conn, trade)
+        if include_public
+        else store.shortlistable_firms_for_trade(conn, trade)
+    )
     scores = dict(store.semantic_closeout_matches(conn, scope_query, trade, k=len(firms) or 1))
 
     candidates = [
@@ -71,6 +97,13 @@ def cross_reference(
         )
         for firm in firms
     ]
+
+    # In the public pool most firms share match_score 0 (no closeout yet), so order the
+    # input by screen quality first — spotless clean firms ahead of clean-but-warned —
+    # then by name for stability. rank_candidates then applies the hard clean-first /
+    # fatal-last rule as a stable sort, so this ordering survives among match ties and
+    # is harmlessly superseded by a real closeout match when one exists.
+    candidates.sort(key=lambda c: (_warning_count(c.risk_flags), -c.match_score, c.firm.name))
 
     ranked = rank_candidates(candidates)
     return ranked[:k] if k is not None else ranked

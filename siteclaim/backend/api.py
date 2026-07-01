@@ -3,8 +3,12 @@
 One POST per stage, plus the Excel download and the demo loaders. The chassis
 pattern is preserved: ``.env`` is auto-loaded before anything reads env, DEMO_MODE
 is respected end-to-end (the routes call the same stage functions the offline runner
-does), CORS is permissive for local dev, and ``/health`` reports ``demo_mode``. The
-multipart upload route lets a live tender PDF be ingested when DEMO_MODE is off.
+does), CORS is permissive for local dev, and ``/health`` reports ``demo_mode``.
+
+Phase A live-engine routes sit alongside the demo ones: ``/ingest-upload`` reads a
+real tender and persists the originals; ``/dispatch`` can route real attachments and
+send real email (gated — see ``mailer``); ``/level-upload`` catches a subcontractor's
+returned Schedule of Rates; ``/contacts`` exposes the address book.
 """
 
 from pathlib import Path
@@ -13,7 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")  # before anything reads env
 
-from fastapi import FastAPI, File, HTTPException, UploadFile  # noqa: E402
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
@@ -23,13 +27,15 @@ from pipeline.llm_client import demo_mode  # noqa: E402
 from pipeline.stage_01_ingest.ingest import ingest_tender  # noqa: E402
 from pipeline.stage_02_shortlist.shortlist import shortlist  # noqa: E402
 from pipeline.stage_03_dispatch.dispatch import build_dispatch  # noqa: E402
+from pipeline.stage_03_dispatch.mailer import send_bundles  # noqa: E402
 from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  # noqa: E402
-from pipeline.stage_04_level.level import level_bids, load_demo_replies  # noqa: E402
+from pipeline.stage_04_level.level import level_bids, load_demo_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
-from db import store  # noqa: E402
-from db.outbox import send_mock  # noqa: E402
+from pipeline.workspace import Workspace  # noqa: E402
+from db import refresh, store  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
+    Contact,
     DispatchSet,
     DocType,
     LevelledBid,
@@ -48,7 +54,7 @@ RATIONALE_FIXTURE = "cases/clean/recommendation_rationale.json"
 
 app = FastAPI(
     title="SiteSource API",
-    version="0.2.0",
+    version="0.3.0",
     description="AI subcontractor-sourcing and bid-leveling platform.",
 )
 
@@ -78,6 +84,97 @@ def coverage() -> dict:
     conn = store.get_connection()
     try:
         return store.coverage(conn)
+    finally:
+        conn.close()
+
+
+@app.get("/contacts", response_model=list[Contact])
+def contacts() -> list[Contact]:
+    """The subcontractor address book (Phase A) — where each trade's RFQ is sent."""
+    conn = store.get_connection()
+    try:
+        return store.all_contacts(conn)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Refresh — semi-automated public-data ingest with a human-confirm gate (Phase C)
+# ---------------------------------------------------------------------------
+class PublicFlagIn(BaseModel):
+    signal_type: str
+    label: str
+    date: str | None = None
+    source: str | None = None
+    reference: str | None = None
+
+
+class PublicRecordIn(BaseModel):
+    model_config = {"extra": "ignore"}  # tolerate scrape-only keys (confidence, sources_used, …)
+    firm_id: str
+    name_en: str | None = None
+    name_zh: str | None = None
+    registered_grade: str | None = None
+    value_band: str | None = None
+    registers: list[str] = Field(default_factory=list)
+    trades: list[str] = Field(default_factory=list)
+    public_flags: list[PublicFlagIn] = Field(default_factory=list)
+    award_history: list[dict] = Field(default_factory=list)
+
+
+class StageRequest(BaseModel):
+    records: list[PublicRecordIn] = Field(default_factory=list)
+
+
+class ConfirmRequest(BaseModel):
+    batch_id: str | None = None
+    firm_ids: list[str] | None = None
+
+
+def _refresh_write_guard() -> None:
+    if demo_mode():
+        raise HTTPException(status_code=409, detail="Refresh is disabled in DEMO_MODE.")
+
+
+@app.post("/refresh/stage")
+def post_refresh_stage(req: StageRequest) -> dict:
+    """Stage new public records/flags for human review (nothing lands until confirmed)."""
+    _refresh_write_guard()
+    conn = store.get_connection()
+    try:
+        return refresh.stage_records(conn, [r.model_dump() for r in req.records])
+    finally:
+        conn.close()
+
+
+@app.get("/refresh/pending")
+def get_refresh_pending() -> list[dict]:
+    """What is waiting for a human to confirm or reject."""
+    conn = store.get_connection()
+    try:
+        return refresh.list_pending(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/refresh/confirm")
+def post_refresh_confirm(req: ConfirmRequest) -> dict:
+    """Apply staged records/flags into the live database (the human gate)."""
+    _refresh_write_guard()
+    conn = store.get_connection()
+    try:
+        return refresh.confirm_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
+    finally:
+        conn.close()
+
+
+@app.post("/refresh/reject")
+def post_refresh_reject(req: ConfirmRequest) -> dict:
+    """Reject staged records/flags (kept as an audit trail, never applied)."""
+    _refresh_write_guard()
+    conn = store.get_connection()
+    try:
+        return refresh.reject_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
     finally:
         conn.close()
 
@@ -177,19 +274,28 @@ def post_ingest(req: IngestRequest) -> ScopePackages:
 
 
 @app.post("/ingest-upload", response_model=ScopePackages)
-async def post_ingest_upload(files: list[UploadFile] = File(...)) -> ScopePackages:
+async def post_ingest_upload(
+    files: list[UploadFile] = File(...),
+    project_name: str = Form("Uploaded tender"),
+) -> ScopePackages:
     """Ingest live tender documents (PDF/image). In DEMO_MODE the upload is accepted
-    but the baked scope fixture is returned (no model, no network)."""
+    but the baked scope fixture is returned (no model, no network). Live, each
+    original is persisted to the tender workspace so dispatch can attach the real
+    files, then rasterised for the vision model."""
     tender = TenderPackage(
-        project_name="Uploaded tender",
+        project_name=project_name,
         documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=f.filename or "upload") for f in files],
     )
     if demo_mode():
         return ingest_tender(tender, demo_fixture=SCOPE_FIXTURE)
+
+    workspace = Workspace()
     images: list[str] = []
     for upload in files:
+        data = await upload.read()
+        workspace.save_upload(project_name, upload.filename or "upload", data)
         try:
-            images += to_images(await upload.read(), upload.content_type)
+            images += to_images(data, upload.content_type)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ingest_tender(tender, images=images)
@@ -200,11 +306,12 @@ async def post_ingest_upload(files: list[UploadFile] = File(...)) -> ScopePackag
 # ---------------------------------------------------------------------------
 class ShortlistRequest(BaseModel):
     scope: ScopePackages
+    include_public: bool = False  # live engine sets True; demo/default stays assessed-firm
 
 
 @app.post("/shortlist", response_model=ShortlistSet)
 def post_shortlist(req: ShortlistRequest) -> ShortlistSet:
-    return shortlist(req.scope)
+    return shortlist(req.scope, include_public=req.include_public)
 
 
 # ---------------------------------------------------------------------------
@@ -214,18 +321,24 @@ class DispatchRequest(BaseModel):
     shortlist: ShortlistSet
     approvals: dict[str, list[str]] = Field(default_factory=dict)
     scope: ScopePackages | None = None
+    tender: TenderPackage | None = None  # live: routes real attachments by document
     project_name: str = ""
     send: bool = False
+    dry_run: bool = False  # force the mock outbox even when SMTP is configured
     demo_fixture: str | None = DISPATCH_FIXTURE
 
 
 @app.post("/dispatch", response_model=DispatchSet)
 def post_dispatch(req: DispatchRequest) -> DispatchSet:
+    # Live runs get a workspace so the SoR sheets are generated and real originals
+    # (persisted at ingest-upload) are attached; the demo describes bundles only.
+    workspace = None if demo_mode() else Workspace()
     dispatch = build_dispatch(
         req.shortlist, req.approvals, demo_fixture=req.demo_fixture,
         scope=req.scope, project_name=req.project_name,
+        tender=req.tender, tender_id=req.project_name, workspace=workspace,
     )
-    return send_mock(dispatch) if req.send else dispatch
+    return send_bundles(dispatch, dry_run=req.dry_run) if req.send else dispatch
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +355,32 @@ def post_level(req: LevelRequest) -> list[LevelledBid]:
     replies = req.replies or load_demo_replies(req.demo_fixture)
     levelled = level_bids(replies, req.scope)
     export_leveling_xlsx(levelled, replies, path=OUT_PATH)  # refresh the downloadable Excel
+    return levelled
+
+
+@app.post("/level-upload", response_model=list[LevelledBid])
+async def post_level_upload(
+    files: list[UploadFile] = File(...),
+    firm_id: str = Form(...),
+    trade: str = Form(...),
+) -> list[LevelledBid]:
+    """Inbound channel (Phase A): the operator drops a subcontractor's returned
+    Schedule of Rates here. In DEMO_MODE the baked levelled comparison is returned;
+    live, Layer 2 parses the document into a BidReply and Layer 1 levels it."""
+    if demo_mode():
+        levelled = level_bids([], demo_fixture=REPLIES_FIXTURE)
+        export_leveling_xlsx(levelled, load_demo_replies(REPLIES_FIXTURE), path=OUT_PATH)
+        return levelled
+
+    images: list[str] = []
+    for upload in files:
+        try:
+            images += to_images(await upload.read(), upload.content_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    reply = parse_bid_reply(firm_id=firm_id, trade=trade, images=images)
+    levelled = level_bids([reply])
+    export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
     return levelled
 
 

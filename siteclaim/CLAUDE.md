@@ -38,9 +38,27 @@ cross-reference against data a generic chatbot cannot access.
   layers coexist: real scraped Hong Kong public records (`seed_data/public/`) are
   the **discovery/coverage** pool — screened and counted (see `GET /coverage`) but
   not auto-shortlisted; the **per-tender shortlist** is drawn only from firms with
-  an assessable EOS closeout record (`store.shortlistable_firms_for_trade`).
+  an assessable EOS closeout record (`store.shortlistable_firms_for_trade`). Phase B
+  adds `cross_reference(..., include_public=True)` — the live-engine path — which
+  opens the shortlist to the full screened pool so real firms can be shortlisted;
+  the default keeps the assessed-firm behaviour the demo relies on. A `contacts`
+  table (address book, keyed by firm+trade) records where each RFQ is sent.
 - **Layer 4 — Human approval gates**: approve-before-dispatch, adjust-leveling,
   final-award.
+
+> The live-engine roadmap and the current task list live in `BUILD_PLAN.md` at the
+> repo root. Landed: Phase B (shortlist decouple), Phase A (engine-live plumbing:
+> routed attachments, real SMTP send behind the mock-outbox default, the address book,
+> the `/level-upload` inbound channel), Phase C (a `demo`/`live` seed profile split —
+> `python -m db.seed --profile {demo,live}`, selected at runtime via `SITESOURCE_DB`;
+> a human-gated public-data refresh at `/refresh/*`; and debarment-link cleanup), and
+> the Phase D code-ready closeout ingest (`db/ingest_closeouts.py`). See `BUILD_PLAN.md`.
+>
+> Two databases now: `sitesource.db` is the demo profile (150 firms; the committed
+> pitch DB the tests read). `sitesource_live.db` is the clean live profile (134 real
+> firms only). Coverage is 134/46 in both — illustrative firms are present-but-excluded
+> in demo and simply absent in live. Partner-archive firms carry provenance
+> `partner_archive` and never enter the 134/46 figures.
 
 ## Five-stage pipeline (`backend/pipeline/`)
 

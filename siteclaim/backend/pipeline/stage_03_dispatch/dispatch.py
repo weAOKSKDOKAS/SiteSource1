@@ -23,12 +23,16 @@ from __future__ import annotations
 from typing import Optional
 
 from pipeline.llm_client import LLMClient, demo_mode
+from pipeline.stage_03_dispatch.attachments import build_attachments
+from pipeline.workspace import Workspace
 from schemas.models import (
+    BundleAttachment,
     DispatchBundle,
     DispatchSet,
     DispatchStatus,
     ScopePackages,
     ShortlistSet,
+    TenderPackage,
 )
 
 _EMAIL_SYSTEM = (
@@ -113,12 +117,20 @@ def build_dispatch(
     *,
     scope: Optional[ScopePackages] = None,
     project_name: str = "",
+    tender: Optional[TenderPackage] = None,
+    tender_id: str = "",
+    workspace: Optional[Workspace] = None,
     client: Optional[LLMClient] = None,
 ) -> DispatchSet:
     """Assemble approved bundles. Only approved, shortlisted firms appear; each
     bundle carries only its trade's documents and a composed email; status is set
-    to ``approved`` (past the Layer 4 gate)."""
+    to ``approved`` (past the Layer 4 gate).
+
+    ``bundle_doc_refs`` stays the human-readable label list. When ``tender``/
+    ``workspace`` are given, ``attachments`` are the routed real files (general docs +
+    this trade's docs + the generated SoR sheet) for the live send path (§5)."""
     client = client or LLMClient()
+    tender_id = tender_id or project_name
 
     # Deterministic scaffold: which firms (approved AND shortlisted), which trade docs.
     scaffold: list[tuple[str, str, str, list[str]]] = []
@@ -132,12 +144,21 @@ def build_dispatch(
 
     emails = _compose_emails(scaffold, project_name, demo_fixture, client)
 
+    # Attachments are per-trade: assemble once per trade (the SoR sheet is generated
+    # once), then shared by every firm approved for that trade.
+    attachments_by_trade: dict[str, list[BundleAttachment]] = {}
+    for trade in {t for (t, _f, _n, _d) in scaffold}:
+        attachments_by_trade[trade] = build_attachments(
+            trade, scope, tender, project_name=project_name, tender_id=tender_id, workspace=workspace
+        )
+
     bundles = [
         DispatchBundle(
             firm_id=fid,
             firm_name=name,
             trade=trade,
             bundle_doc_refs=docs,
+            attachments=attachments_by_trade.get(trade, []),
             email_subject=emails[(trade, fid)][0],
             email_body=emails[(trade, fid)][1],
             status=DispatchStatus.APPROVED,
