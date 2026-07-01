@@ -33,6 +33,7 @@ from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  
 from pipeline.stage_04_level.level import level_bids, load_demo_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace  # noqa: E402
+from pipeline import reply_loop  # noqa: E402
 from db import refresh, store  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
@@ -52,6 +53,8 @@ SCOPE_FIXTURE = "cases/clean/scope_packages.json"
 DISPATCH_FIXTURE = "cases/clean/dispatch.json"
 REPLIES_FIXTURE = "cases/messy/bid_replies.json"
 RATIONALE_FIXTURE = "cases/clean/recommendation_rationale.json"
+INBOUND_REPLY_FIXTURE = "cases/inbound/reply.json"          # DEMO parse of an inbound reply
+INBOUND_FALLBACK_FIXTURE = "cases/inbound/fallback_match.json"  # DEMO AI fallback verdict
 
 app = FastAPI(
     title="SiteSource API",
@@ -412,6 +415,68 @@ async def post_level_upload(
     levelled = level_bids([reply])
     export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
     return levelled
+
+
+class InboundReplyResponse(BaseModel):
+    """The outcome of an inbound reply: matched onto a tender's growing comparison, or
+    unmatched (needs manual assignment). ``comparison`` is the re-leveled set of every
+    reply received for the tender so far."""
+
+    status: str  # "matched" | "unmatched"
+    detail: str = ""
+    tender_id: str = ""
+    firm_id: str = ""
+    trade: str = ""
+    reply_count: int = 0
+    comparison: list[LevelledBid] = Field(default_factory=list)
+
+
+@app.post("/inbound-reply", response_model=InboundReplyResponse)
+async def post_inbound_reply(
+    files: list[UploadFile] = File(...),
+    ref: str = Form(""),
+) -> InboundReplyResponse:
+    """Close the reply loop (Phase A): n8n posts a subcontractor's reply attachment plus
+    the correlation ref it read from the subject. The ref resolves the reply to its
+    tender/firm/trade deterministically (AI matching is only a fallback for a ref-less
+    reply); the reply is parsed, accumulated onto that tender, re-leveled, and the
+    comparison xlsx regenerated with the existing leveling/export code. This fills the
+    comparison only — a human still awards."""
+    workspace = Workspace()
+
+    # Rasterise the attachment on the live path (for parse + fallback); DEMO uses fixtures.
+    images: list[str] = []
+    if not demo_mode():
+        for upload in files:
+            try:
+                images += to_images(await upload.read(), upload.content_type)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
+    if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
+        resolved = reply_loop.fallback_match(
+            images, workspace, demo_fixture=INBOUND_FALLBACK_FIXTURE if demo_mode() else None
+        )
+    if resolved is None:
+        return InboundReplyResponse(status="unmatched", detail="unmatched — needs manual assignment")
+
+    tender_id, firm_id, trade = resolved["tender_id"], resolved["firm_id"], resolved["trade"]
+    parsed = parse_bid_reply(
+        firm_id=firm_id, trade=trade, images=images,
+        demo_fixture=INBOUND_REPLY_FIXTURE if demo_mode() else None,
+    )
+    # The ref is authoritative for identity; the parse supplies the priced content.
+    reply = parsed.model_copy(update={"firm_id": firm_id, "trade": trade})
+
+    replies = reply_loop.accumulate_reply(workspace, tender_id, reply)
+    levelled = level_bids(replies)
+    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id))
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH)  # refresh the /leveling.xlsx download
+    return InboundReplyResponse(
+        status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
+        reply_count=len(replies), comparison=levelled,
+    )
 
 
 @app.get("/leveling.xlsx")

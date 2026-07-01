@@ -101,6 +101,43 @@ def test_refresh_write_applies_to_a_live_target(tmp_path, monkeypatch):
     assert resp.status_code == 200 and resp.json()["staged_firms"] == 1
 
 
+def test_inbound_reply_route_is_registered():
+    assert "/inbound-reply" in {route.path for route in app.routes}
+
+
+def test_inbound_reply_ref_path_accumulates_and_relevels(monkeypatch, tmp_path):
+    from pipeline import reply_loop
+    from pipeline.workspace import Workspace
+
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    ws = Workspace()  # picks up the env
+    ref2 = reply_loop.make_ref("Kwun Tong", "F-EL-02", "electrical")
+    reply_loop.record_dispatch(ws, ref2, "Kwun Tong", "F-EL-02", "electrical")
+
+    first = client.post("/inbound-reply", files={"files": ("reply.pdf", b"%PDF-1.4", "application/pdf")}, data={"ref": ref2})
+    assert first.status_code == 200
+    body = first.json()
+    assert body["status"] == "matched" and body["reply_count"] == 1
+    assert [b["firm_id"] for b in body["comparison"]] == ["F-EL-02"]
+
+    # a second firm's reply on the same tender grows the comparison (accumulate + relevel)
+    ref3 = reply_loop.make_ref("Kwun Tong", "F-EL-03", "electrical")
+    reply_loop.record_dispatch(ws, ref3, "Kwun Tong", "F-EL-03", "electrical")
+    second = client.post("/inbound-reply", files={"files": ("reply.pdf", b"%PDF-1.4", "application/pdf")}, data={"ref": ref3})
+    body2 = second.json()
+    assert body2["reply_count"] == 2
+    assert {b["firm_id"] for b in body2["comparison"]} == {"F-EL-02", "F-EL-03"}
+
+
+def test_inbound_reply_without_a_ref_is_unmatched(monkeypatch, tmp_path):
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))  # empty registry -> nothing to match
+    resp = client.post("/inbound-reply", files={"files": ("reply.pdf", b"%PDF-1.4", "application/pdf")}, data={"ref": ""})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "unmatched" and "manual assignment" in body["detail"]
+    assert body["comparison"] == []
+
+
 def test_shortlist_include_public_opens_the_pool():
     # Phase B, reached through the API: the live-engine flag adds real public firms.
     case = client.get("/demo/messy").json()
