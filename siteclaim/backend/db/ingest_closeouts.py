@@ -11,7 +11,7 @@ For each record it:
 
 1. **Resolves the firm** — by Business Registration number, else by exact normalized
    name, else it mints a new firm with ``provenance='partner_archive'`` (never
-   ``public_register`` — the coverage 134/46 honesty figures stay exact, and an
+   ``public_register`` — the coverage honesty figures stay exact, and an
    existing real firm's provenance is never downgraded on a match).
 2. **Writes a ``project_closeouts`` row** — always, even with no narrative. A slipped
    closeout (actual completion past planned, or a live LD/claims history) sets
@@ -223,14 +223,37 @@ def resolve_firm(conn: sqlite3.Connection, record: PartnerCloseoutRecord) -> tup
     return _mint_firm_id(record.firm_name, record.br_number), True
 
 
+def _canonical_trade(trade: str) -> str:
+    return _normalize_trade(trade) or trade
+
+
 def _create_firm(conn: sqlite3.Connection, firm_id: str, record: PartnerCloseoutRecord) -> None:
-    trades = [_normalize_trade(record.trade) or record.trade] if record.trade else []
+    trades = [_canonical_trade(record.trade)] if record.trade else []
     conn.execute(
         "INSERT INTO firms (firm_id, name_en, br_number, trades, closeout_summary, provenance) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (firm_id, record.firm_name, record.br_number, json.dumps(trades),
          (record.closeout_narrative or "")[:400], _PARTNER),
     )
+
+
+def _ensure_firm_trade(conn: sqlite3.Connection, firm_id: str, trade: str) -> bool:
+    """Add ``trade`` (canonicalised) to a firm's trades if missing, and return True if
+    it was added. Without this, a closeout ingested for an existing firm in a trade it
+    is not yet registered for bakes a vector that ``firms_for_trade`` filters out — the
+    match would silently stay 0. A partner closeout is evidence the firm does the trade."""
+    canon = _canonical_trade(trade) if trade else ""
+    if not canon:
+        return False
+    row = conn.execute("SELECT trades FROM firms WHERE firm_id = ?", (firm_id,)).fetchone()
+    if row is None:
+        return False
+    trades = store._json_list(row["trades"])
+    if canon in trades:
+        return False
+    trades.append(canon)
+    conn.execute("UPDATE firms SET trades = ? WHERE firm_id = ?", (json.dumps(trades), firm_id))
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -263,11 +286,21 @@ def _compose_note(record: PartnerCloseoutRecord, delayed: bool) -> str:
     return " ".join(parts)
 
 
-def _closeout_exists(conn: sqlite3.Connection, firm_id: str, project: Optional[str], year: Optional[int]) -> bool:
+def _closeout_exists(
+    conn: sqlite3.Connection, firm_id: str, project: Optional[str], year: Optional[int], note: str
+) -> bool:
+    if project or year is not None:
+        # Identified by its project/year — one closeout per (firm, project, year).
+        return conn.execute(
+            "SELECT 1 FROM project_closeouts WHERE firm_id = ? AND IFNULL(project,'') = IFNULL(?,'') "
+            "AND IFNULL(year,-1) = IFNULL(?,-1) LIMIT 1",
+            (firm_id, project, year),
+        ).fetchone() is not None
+    # No project/year identifiers — fall back to note content so two genuinely distinct
+    # identifier-less jobs are not collapsed into one (re-ingesting the same record still
+    # composes the identical note and dedupes).
     return conn.execute(
-        "SELECT 1 FROM project_closeouts WHERE firm_id = ? AND IFNULL(project,'') = IFNULL(?,'') "
-        "AND IFNULL(year,-1) = IFNULL(?,-1) LIMIT 1",
-        (firm_id, project, year),
+        "SELECT 1 FROM project_closeouts WHERE firm_id = ? AND note = ? LIMIT 1", (firm_id, note)
     ).fetchone() is not None
 
 
@@ -317,9 +350,13 @@ def ingest(conn_or_path, records: list[PartnerCloseoutRecord]) -> IngestSummary:
                 summary.firms_created += 1
             else:
                 summary.firms_matched += 1
+            # A matched firm may not yet be registered for this trade; register it so the
+            # baked closeout is actually discoverable by firms_for_trade / the shortlist.
+            _ensure_firm_trade(conn, firm_id, record.trade)
 
             delayed = _is_delayed(record)
-            if _closeout_exists(conn, firm_id, record.project_name, record.year):
+            note = _compose_note(record, delayed)
+            if _closeout_exists(conn, firm_id, record.project_name, record.year, note):
                 summary.skipped_duplicate += 1
                 conn.commit()
                 continue
@@ -328,8 +365,7 @@ def ingest(conn_or_path, records: list[PartnerCloseoutRecord]) -> IngestSummary:
                 "INSERT INTO project_closeouts (firm_id, project, client, year, delayed, note, source, reference) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (firm_id, record.project_name, record.client, record.year, int(delayed),
-                 _compose_note(record, delayed), "Partner archive",
-                 f"PARTNER:{firm_id}:{record.year or 'na'}"),
+                 note, "Partner archive", f"PARTNER:{firm_id}:{record.year or 'na'}"),
             )
             summary.closeouts_written += 1
 

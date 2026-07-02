@@ -104,11 +104,13 @@ def test_scenarios_are_deterministic_on_repeat():
 
 def test_coverage_counts_only_real_provenance_firms():
     cov = client.get("/coverage").json()
-    # the claim counts ONLY the real registry scrape, not the 16 illustrative firms
+    # the claim counts ONLY the real registry scrape, not the 16 illustrative firms.
+    # 140 real = 134 building-trade + 6 ground-investigation firms (v2); flagged stays 46.
     assert cov["provenance"] == "public_register"
-    assert cov["total_firms"] == 134
+    assert cov["total_firms"] == 140
     assert cov["flagged_firms"] == 46
     # only the real flag types appear — the demo-only adjudication / distress filing
     # (whose references are illustrative placeholders) are excluded from the claim
     assert set(cov["flags_by_type"]) == {"debarment", "safety_prosecution", "winding_up"}
     assert "electrical" in cov["trades"]
+    assert "ground_investigation" in cov["trades"]  # v2: GI firms are in the coverage pool

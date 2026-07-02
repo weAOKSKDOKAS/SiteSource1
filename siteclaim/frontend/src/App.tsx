@@ -106,7 +106,9 @@ export default function App() {
     run(async () => {
       let result: ScopePackages;
       if (!demoMode && files.length > 0) {
-        result = await api.ingestUpload(files);
+        const uploaded = await api.ingestUpload(files);
+        setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
+        result = uploaded.scope;
       } else if (tender) {
         result = await api.ingest(tender);
       } else {

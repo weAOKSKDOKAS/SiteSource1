@@ -64,6 +64,11 @@ _SYNONYMS: dict[str, str] = {
     "piling": "foundation_substructure", "pile": "foundation_substructure",
     "builderswork": "builders_work", "bwic": "builders_work",
     "external": "external_works", "landscap": "external_works", "roadworks": "external_works",
+    # Ground investigation (v2) — listed AFTER foundation/piling so a bored-pile scope
+    # still resolves to foundation_substructure; a pure GI/drilling scope lands here.
+    "groundinvestigation": "ground_investigation", "siteinvestigation": "ground_investigation",
+    "gifieldwork": "ground_investigation", "geotechnical": "ground_investigation",
+    "drilling": "ground_investigation",
 }
 
 

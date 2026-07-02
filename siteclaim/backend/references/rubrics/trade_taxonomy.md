@@ -1,4 +1,4 @@
-# Trade Taxonomy — canonical HK construction trades (v1)
+# Trade Taxonomy — canonical HK construction trades (v2)
 
 The canonical list of trades a tender is split into. **Layer 1 checks the scope
 split against this list** (deterministic): a returned trade must map to one of
@@ -8,6 +8,7 @@ phrasing, but every `TradeWorkPackage.trade` is normalised to a canonical key he
 | Canonical key | Label | Typical scope |
 | --- | --- | --- |
 | `foundation_substructure` | Foundation & substructure | Piling, pile caps, ground beams, basement |
+| `ground_investigation` | Ground investigation | Boreholes, rotary drilling, sampling, in-situ & field testing (GI field works) |
 | `structural` | Structural steel | Steelwork, connections, metal decking |
 | `reinforced_concrete` | Reinforced concrete | Formwork, rebar fixing, concreting |
 | `electrical` | Electrical | LV distribution, containment, power & lighting |
@@ -23,3 +24,7 @@ phrasing, but every `TradeWorkPackage.trade` is normalised to a canonical key he
 - A trade with no match is **not** silently dropped — it is surfaced as an
   unmapped trade for human review.
 - The taxonomy is versioned; bump the version when a key is added or renamed.
+- v2 adds `ground_investigation` (GI field works — boreholes, drilling, site
+  investigation). It is only justified because real GI specialist firms carry it (the
+  normalizer is shared with the shortlist), so `geotechnical` / `site investigation` /
+  `drilling` now resolve to it instead of falling unmapped.

@@ -1,8 +1,8 @@
 """Phase C — the semi-automated refresh with a human-confirm gate.
 
 Every test builds its OWN temp DB (not the shared session DB), because a refresh
-mutates the live firms/public_flags tables and would otherwise corrupt the 134/46
-coverage assertions in sibling modules.
+mutates the live firms/public_flags tables and would otherwise corrupt the coverage
+assertions in sibling modules.
 """
 
 import pytest
@@ -97,7 +97,7 @@ def test_reject_keeps_data_out(conn):
 
 
 def test_confirm_forces_public_register_provenance(conn):
-    # A refresh payload cannot inject 'illustrative' provenance to game the 134/46 claim.
+    # A refresh payload cannot inject 'illustrative' provenance to game the coverage claim.
     rec = {"firm_id": "sneaky-firm-0001", "name_en": "Sneaky Ltd", "trades": ["electrical"],
            "provenance": "illustrative", "public_flags": []}
     summary = refresh.stage_records(conn, [rec])

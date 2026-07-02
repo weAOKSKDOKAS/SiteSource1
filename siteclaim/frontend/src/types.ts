@@ -50,6 +50,12 @@ export interface ScopePackages {
   packages: TradeWorkPackage[];
 }
 
+// Live upload returns the scope split plus the trade-tagged tender (for /dispatch routing).
+export interface IngestUpload {
+  scope: ScopePackages;
+  tender: TenderPackage;
+}
+
 export interface FirmProfile {
   firm_id: string;
   name: string;

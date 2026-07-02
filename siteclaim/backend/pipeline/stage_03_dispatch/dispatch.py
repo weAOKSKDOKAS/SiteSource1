@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pipeline.llm_client import LLMClient, demo_mode
+from pipeline.reply_loop import make_ref, record_dispatch, subject_with_ref
 from pipeline.stage_03_dispatch.attachments import build_attachments
 from pipeline.workspace import Workspace
 from schemas.models import (
@@ -152,17 +153,22 @@ def build_dispatch(
             trade, scope, tender, project_name=project_name, tender_id=tender_id, workspace=workspace
         )
 
-    bundles = [
-        DispatchBundle(
+    # A stable correlation ref goes in every subject so an inbound reply resolves
+    # deterministically; the mapping is recorded to the registry on the live path.
+    bundles: list[DispatchBundle] = []
+    for (trade, fid, name, docs) in scaffold:
+        ref = make_ref(tender_id, fid, trade)
+        if workspace is not None:
+            record_dispatch(workspace, ref, tender_id, fid, trade)
+        subject, body = emails[(trade, fid)]
+        bundles.append(DispatchBundle(
             firm_id=fid,
             firm_name=name,
             trade=trade,
             bundle_doc_refs=docs,
             attachments=attachments_by_trade.get(trade, []),
-            email_subject=emails[(trade, fid)][0],
-            email_body=emails[(trade, fid)][1],
+            email_subject=subject_with_ref(subject, ref),
+            email_body=body,
             status=DispatchStatus.APPROVED,
-        )
-        for (trade, fid, name, docs) in scaffold
-    ]
+        ))
     return DispatchSet(bundles=bundles)

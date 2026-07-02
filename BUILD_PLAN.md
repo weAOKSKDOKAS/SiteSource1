@@ -42,8 +42,8 @@ Numbers below are read from the actual build (the `NOVA-main` tree and the commi
 
 | Thing | Value | Real or illustrative |
 | --- | --- | --- |
-| Firms in `sitesource.db` | 150 | 134 real + 16 illustrative |
-| Real public-record firms | 134 | Real scrape, real HK gov sources, real URLs |
+| Firms in `sitesource.db` | 156 | 140 real + 16 illustrative |
+| Real public-record firms | 140 | 134 building-trade + 6 ground-investigation (v2); real HK gov sources |
 | Flagged real firms | 46 | 11 debarment, 36 safety-prosecution, 1 winding-up |
 | Illustrative demo firms | 16 | `F-EL-01`…`F-JF-03`, fabricated |
 | EOS closeout records | 16 | All attached to the 16 illustrative firms, fabricated |

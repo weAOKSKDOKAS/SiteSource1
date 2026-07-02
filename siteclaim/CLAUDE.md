@@ -54,11 +54,12 @@ cross-reference against data a generic chatbot cannot access.
 > a human-gated public-data refresh at `/refresh/*`; and debarment-link cleanup), and
 > the Phase D code-ready closeout ingest (`db/ingest_closeouts.py`). See `BUILD_PLAN.md`.
 >
-> Two databases now: `sitesource.db` is the demo profile (150 firms; the committed
-> pitch DB the tests read). `sitesource_live.db` is the clean live profile (134 real
-> firms only). Coverage is 134/46 in both — illustrative firms are present-but-excluded
+> Two databases now: `sitesource.db` is the demo profile (156 firms; the committed
+> pitch DB the tests read). `sitesource_live.db` is the clean live profile (140 real
+> firms only). Coverage is 140/46 in both — 140 real = 134 building-trade + 6
+> ground-investigation firms (taxonomy v2); illustrative firms are present-but-excluded
 > in demo and simply absent in live. Partner-archive firms carry provenance
-> `partner_archive` and never enter the 134/46 figures.
+> `partner_archive` and never enter the 140/46 figures.
 
 ## Five-stage pipeline (`backend/pipeline/`)
 

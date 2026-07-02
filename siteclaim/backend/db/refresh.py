@@ -16,7 +16,7 @@ Design guarantees:
   re-staging or re-confirming the same n8n batch adds nothing.
 * **Honest provenance.** A refresh represents real ingest, so a confirmed firm is
   always ``provenance='public_register'``; the payload cannot inject ``illustrative``.
-  So the coverage 134/46 honesty figures only ever move on confirmed real data.
+  So the coverage honesty figures only ever move on confirmed real data.
 * **No orphans, no clobber.** A confirm INSERTs new firms and new flags only; it never
   rewrites an existing firm's curated identity, and a flag whose firm does not exist
   (and is not being created in the same confirm) is left pending, never orphan-inserted

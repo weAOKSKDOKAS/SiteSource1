@@ -1,0 +1,12 @@
+{
+  "firm_id": "INBOUND",
+  "trade": "electrical",
+  "line_items": [
+    {"item_ref": "E-01", "description": "LV main switchboard, form 4 type 6", "unit": "no", "qty": 1.0, "rate": 900000.0, "amount": 900000.0},
+    {"item_ref": "E-02", "description": "Sub-main cabling, XLPE/SWA, 4c 95mm2", "unit": "m", "qty": 420.0, "rate": 2450.0, "amount": 1029000.0},
+    {"item_ref": "E-03", "description": "Final circuits, lighting and small power", "unit": "point", "qty": 860.0, "rate": 6900.0, "amount": 5934000.0},
+    {"item_ref": "E-04", "description": "Cable containment and busbar trunking", "unit": "m", "qty": 530.0, "rate": 1900.0, "amount": 1007000.0}
+  ],
+  "exclusions": [],
+  "claimed_total": 8870000.0
+}

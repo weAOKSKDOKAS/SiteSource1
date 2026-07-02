@@ -32,11 +32,16 @@ def test_level_upload_in_demo_returns_the_baked_levelling():
     assert levelled and all("corrected_total" in bid for bid in levelled)
 
 
-def test_ingest_upload_in_demo_accepts_files_and_returns_scope():
+def test_ingest_upload_in_demo_returns_scope_and_untagged_tender():
     files = {"files": ("tender.pdf", b"%PDF-1.4 fake", "application/pdf")}
     resp = client.post("/ingest-upload", files=files, data={"project_name": "Live Tender A"})
     assert resp.status_code == 200
-    assert resp.json()["packages"]
+    body = resp.json()
+    assert body["scope"]["packages"]     # the scope split
+    assert body["tender"]["documents"]   # the tagged tender (for /dispatch routing)
+    # DEMO_MODE leaves the tender untagged — classification runs only on the live path,
+    # so the demo scenarios and the hero catch are untouched.
+    assert all(doc["trades"] == [] for doc in body["tender"]["documents"])
 
 
 def test_dispatch_send_in_demo_is_mock_and_carries_attachments():
@@ -68,6 +73,69 @@ def test_refresh_write_routes_are_disabled_in_demo():
 def test_refresh_routes_are_registered():
     paths = {route.path for route in app.routes}
     assert {"/refresh/stage", "/refresh/pending", "/refresh/confirm", "/refresh/reject"} <= paths
+
+
+def test_refresh_write_refuses_a_non_live_target(tmp_path, monkeypatch):
+    # Even with DEMO_MODE off, a refresh must never mutate a demo-profile DB.
+    from db import seed
+
+    demo_db = tmp_path / "demo.db"
+    seed.build_database(demo_db)  # profile 'demo'
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_DB", str(demo_db))
+    resp = client.post("/refresh/stage", json={"records": []})
+    assert resp.status_code == 409
+
+
+def test_refresh_write_applies_to_a_live_target(tmp_path, monkeypatch):
+    from db import seed
+
+    live_db = tmp_path / "live.db"
+    seed.build_database(live_db, profile="live")
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_DB", str(live_db))
+    resp = client.post("/refresh/stage", json={"records": [
+        {"firm_id": "new-live-firm-1", "name_en": "New Live Firm Ltd", "trades": ["electrical"],
+         "public_flags": [{"signal_type": "winding_up", "label": "Winding-up 2026"}]}
+    ]})
+    assert resp.status_code == 200 and resp.json()["staged_firms"] == 1
+
+
+def test_inbound_reply_route_is_registered():
+    assert "/inbound-reply" in {route.path for route in app.routes}
+
+
+def test_inbound_reply_ref_path_accumulates_and_relevels(monkeypatch, tmp_path):
+    from pipeline import reply_loop
+    from pipeline.workspace import Workspace
+
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    ws = Workspace()  # picks up the env
+    ref2 = reply_loop.make_ref("Kwun Tong", "F-EL-02", "electrical")
+    reply_loop.record_dispatch(ws, ref2, "Kwun Tong", "F-EL-02", "electrical")
+
+    first = client.post("/inbound-reply", files={"files": ("reply.pdf", b"%PDF-1.4", "application/pdf")}, data={"ref": ref2})
+    assert first.status_code == 200
+    body = first.json()
+    assert body["status"] == "matched" and body["reply_count"] == 1
+    assert [b["firm_id"] for b in body["comparison"]] == ["F-EL-02"]
+
+    # a second firm's reply on the same tender grows the comparison (accumulate + relevel)
+    ref3 = reply_loop.make_ref("Kwun Tong", "F-EL-03", "electrical")
+    reply_loop.record_dispatch(ws, ref3, "Kwun Tong", "F-EL-03", "electrical")
+    second = client.post("/inbound-reply", files={"files": ("reply.pdf", b"%PDF-1.4", "application/pdf")}, data={"ref": ref3})
+    body2 = second.json()
+    assert body2["reply_count"] == 2
+    assert {b["firm_id"] for b in body2["comparison"]} == {"F-EL-02", "F-EL-03"}
+
+
+def test_inbound_reply_without_a_ref_is_unmatched(monkeypatch, tmp_path):
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))  # empty registry -> nothing to match
+    resp = client.post("/inbound-reply", files={"files": ("reply.pdf", b"%PDF-1.4", "application/pdf")}, data={"ref": ""})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "unmatched" and "manual assignment" in body["detail"]
+    assert body["comparison"] == []
 
 
 def test_shortlist_include_public_opens_the_pool():

@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 from pipeline.documents import to_images  # noqa: E402
 from pipeline.llm_client import demo_mode  # noqa: E402
+from pipeline.stage_01_ingest.classify import classify_documents  # noqa: E402
 from pipeline.stage_01_ingest.ingest import ingest_tender  # noqa: E402
 from pipeline.stage_02_shortlist.shortlist import shortlist  # noqa: E402
 from pipeline.stage_03_dispatch.dispatch import build_dispatch  # noqa: E402
@@ -32,6 +33,7 @@ from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  
 from pipeline.stage_04_level.level import level_bids, load_demo_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace  # noqa: E402
+from pipeline import reply_loop  # noqa: E402
 from db import refresh, store  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
@@ -51,6 +53,8 @@ SCOPE_FIXTURE = "cases/clean/scope_packages.json"
 DISPATCH_FIXTURE = "cases/clean/dispatch.json"
 REPLIES_FIXTURE = "cases/messy/bid_replies.json"
 RATIONALE_FIXTURE = "cases/clean/recommendation_rationale.json"
+INBOUND_REPLY_FIXTURE = "cases/inbound/reply.json"          # DEMO parse of an inbound reply
+INBOUND_FALLBACK_FIXTURE = "cases/inbound/fallback_match.json"  # DEMO AI fallback verdict
 
 app = FastAPI(
     title="SiteSource API",
@@ -136,12 +140,24 @@ def _refresh_write_guard() -> None:
         raise HTTPException(status_code=409, detail="Refresh is disabled in DEMO_MODE.")
 
 
+def _require_live_target(conn) -> None:
+    """Refresh writes only ever land in a clean live-profile database — never the
+    committed demo/pitch DB. Guarding by the target's profile (not just the DEMO_MODE
+    flag) means a live run that forgets to set SITESOURCE_DB cannot mutate the demo DB."""
+    if store._meta(conn, "profile", "demo") != "live":
+        raise HTTPException(
+            status_code=409,
+            detail="Refresh applies only to a live-profile database; point SITESOURCE_DB at sitesource_live.db.",
+        )
+
+
 @app.post("/refresh/stage")
 def post_refresh_stage(req: StageRequest) -> dict:
     """Stage new public records/flags for human review (nothing lands until confirmed)."""
     _refresh_write_guard()
     conn = store.get_connection()
     try:
+        _require_live_target(conn)
         return refresh.stage_records(conn, [r.model_dump() for r in req.records])
     finally:
         conn.close()
@@ -163,6 +179,7 @@ def post_refresh_confirm(req: ConfirmRequest) -> dict:
     _refresh_write_guard()
     conn = store.get_connection()
     try:
+        _require_live_target(conn)
         return refresh.confirm_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
     finally:
         conn.close()
@@ -174,6 +191,7 @@ def post_refresh_reject(req: ConfirmRequest) -> dict:
     _refresh_write_guard()
     conn = store.get_connection()
     try:
+        _require_live_target(conn)
         return refresh.reject_pending(conn, batch_id=req.batch_id, firm_ids=req.firm_ids)
     finally:
         conn.close()
@@ -268,37 +286,52 @@ class IngestRequest(BaseModel):
     demo_fixture: str | None = SCOPE_FIXTURE
 
 
+class IngestUploadResponse(BaseModel):
+    """The scope split plus the trade-tagged tender, so the client can hand the tagged
+    tender to ``/dispatch`` for per-trade document routing."""
+
+    scope: ScopePackages
+    tender: TenderPackage
+
+
 @app.post("/ingest", response_model=ScopePackages)
 def post_ingest(req: IngestRequest) -> ScopePackages:
     return ingest_tender(req.tender, demo_fixture=req.demo_fixture)
 
 
-@app.post("/ingest-upload", response_model=ScopePackages)
+@app.post("/ingest-upload", response_model=IngestUploadResponse)
 async def post_ingest_upload(
     files: list[UploadFile] = File(...),
     project_name: str = Form("Uploaded tender"),
-) -> ScopePackages:
-    """Ingest live tender documents (PDF/image). In DEMO_MODE the upload is accepted
-    but the baked scope fixture is returned (no model, no network). Live, each
-    original is persisted to the tender workspace so dispatch can attach the real
-    files, then rasterised for the vision model."""
+) -> IngestUploadResponse:
+    """Ingest live tender documents (PDF/image) and return the scope split plus the
+    trade-tagged tender. In DEMO_MODE the upload is accepted but the baked scope fixture
+    is returned and the tender is left untagged (no model, no network). Live, each
+    original is persisted to the tender workspace so dispatch can attach the real files;
+    the pages are rasterised for the vision model; and each document is classified by
+    trade (Layer 2) so its ``trades`` route the right whole originals at dispatch."""
     tender = TenderPackage(
         project_name=project_name,
         documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=f.filename or "upload") for f in files],
     )
     if demo_mode():
-        return ingest_tender(tender, demo_fixture=SCOPE_FIXTURE)
+        return IngestUploadResponse(scope=ingest_tender(tender, demo_fixture=SCOPE_FIXTURE), tender=tender)
 
     workspace = Workspace()
-    images: list[str] = []
+    per_doc_images: list[list[str]] = []
+    merged: list[str] = []
     for upload in files:
         data = await upload.read()
         workspace.save_upload(project_name, upload.filename or "upload", data)
         try:
-            images += to_images(data, upload.content_type)
+            doc_images = to_images(data, upload.content_type)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ingest_tender(tender, images=images)
+        per_doc_images.append(doc_images[:2])  # first one or two pages carry the doc identity
+        merged += doc_images
+    scope = ingest_tender(tender, images=merged)
+    tagged = classify_documents(tender, per_doc_images)
+    return IngestUploadResponse(scope=scope, tender=tagged)
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +415,68 @@ async def post_level_upload(
     levelled = level_bids([reply])
     export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
     return levelled
+
+
+class InboundReplyResponse(BaseModel):
+    """The outcome of an inbound reply: matched onto a tender's growing comparison, or
+    unmatched (needs manual assignment). ``comparison`` is the re-leveled set of every
+    reply received for the tender so far."""
+
+    status: str  # "matched" | "unmatched"
+    detail: str = ""
+    tender_id: str = ""
+    firm_id: str = ""
+    trade: str = ""
+    reply_count: int = 0
+    comparison: list[LevelledBid] = Field(default_factory=list)
+
+
+@app.post("/inbound-reply", response_model=InboundReplyResponse)
+async def post_inbound_reply(
+    files: list[UploadFile] = File(...),
+    ref: str = Form(""),
+) -> InboundReplyResponse:
+    """Close the reply loop (Phase A): n8n posts a subcontractor's reply attachment plus
+    the correlation ref it read from the subject. The ref resolves the reply to its
+    tender/firm/trade deterministically (AI matching is only a fallback for a ref-less
+    reply); the reply is parsed, accumulated onto that tender, re-leveled, and the
+    comparison xlsx regenerated with the existing leveling/export code. This fills the
+    comparison only — a human still awards."""
+    workspace = Workspace()
+
+    # Rasterise the attachment on the live path (for parse + fallback); DEMO uses fixtures.
+    images: list[str] = []
+    if not demo_mode():
+        for upload in files:
+            try:
+                images += to_images(await upload.read(), upload.content_type)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
+    if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
+        resolved = reply_loop.fallback_match(
+            images, workspace, demo_fixture=INBOUND_FALLBACK_FIXTURE if demo_mode() else None
+        )
+    if resolved is None:
+        return InboundReplyResponse(status="unmatched", detail="unmatched — needs manual assignment")
+
+    tender_id, firm_id, trade = resolved["tender_id"], resolved["firm_id"], resolved["trade"]
+    parsed = parse_bid_reply(
+        firm_id=firm_id, trade=trade, images=images,
+        demo_fixture=INBOUND_REPLY_FIXTURE if demo_mode() else None,
+    )
+    # The ref is authoritative for identity; the parse supplies the priced content.
+    reply = parsed.model_copy(update={"firm_id": firm_id, "trade": trade})
+
+    replies = reply_loop.accumulate_reply(workspace, tender_id, reply)
+    levelled = level_bids(replies)
+    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id))
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH)  # refresh the /leveling.xlsx download
+    return InboundReplyResponse(
+        status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
+        reply_count=len(replies), comparison=levelled,
+    )
 
 
 @app.get("/leveling.xlsx")
