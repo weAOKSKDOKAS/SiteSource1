@@ -198,6 +198,7 @@ def fallback_match(
             target_model=RefMatch,
             demo_fixture=demo_fixture,
             images=images,
+            purpose="reply-match",
         )
     except (RuntimeError, FileNotFoundError, ValidationError, ValueError):
         return None

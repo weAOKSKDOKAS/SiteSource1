@@ -125,7 +125,7 @@ class _FakeClient:
         self.calls: list[SimpleNamespace] = []
         self._responder = responder
 
-    def complete_json(self, *, system, user, target_model, demo_fixture=None, images=None):
+    def complete_json(self, *, system, user, target_model, demo_fixture=None, images=None, **_):
         self.calls.append(SimpleNamespace(system=system, user=user, images=images, demo_fixture=demo_fixture))
         return self._responder(user, images, len(self.calls) - 1)
 

@@ -112,7 +112,7 @@ def parse_bid_reply(
     replies = run_calls(
         lambda call: client.complete_json(
             system=_PARSE_SYSTEM, user=call[0], target_model=BidReply,
-            demo_fixture=demo_fixture, images=call[1],
+            demo_fixture=demo_fixture, images=call[1], purpose="reply-parse",
         ),
         calls,
     )

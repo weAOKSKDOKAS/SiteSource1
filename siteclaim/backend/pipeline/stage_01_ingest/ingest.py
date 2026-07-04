@@ -225,7 +225,7 @@ def _extract(
     results = run_calls(
         lambda call: client.complete_json(
             system=system, user=call[0], target_model=ScopePackages,
-            demo_fixture=demo_fixture, images=call[1],
+            demo_fixture=demo_fixture, images=call[1], purpose="ingest-chunk",
         ),
         calls,
     )

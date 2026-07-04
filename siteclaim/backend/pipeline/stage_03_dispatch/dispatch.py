@@ -101,6 +101,7 @@ def _compose_batch(
             user=_compose_prompt(batch, project_name),
             target_model=DispatchSet,
             demo_fixture=demo_fixture,
+            purpose="compose",
         )
     except (RuntimeError, FileNotFoundError, ValidationError, ValueError):
         return {}

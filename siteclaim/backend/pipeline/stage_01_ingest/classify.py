@@ -184,6 +184,7 @@ def classify_documents(
                 target_model=DocClassification,
                 demo_fixture=demo_fixture,
                 images=images,
+                purpose="classify",
             )
             trades = _resolve_trades(result)
             resolved_type = _resolve_doc_type(result.doc_type)

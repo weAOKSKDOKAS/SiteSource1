@@ -27,6 +27,7 @@ vision-capable OpenAI-compatible endpoints; only that one builder would change t
 wire a different OpenAI-style vision provider.
 """
 
+import json
 import os
 import re
 import threading
@@ -162,16 +163,18 @@ class LLMClient:
         demo_fixture: Optional[str] = None,
         images: Optional[list[str]] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        purpose: str = "",
     ) -> T:
         """Return ``target_model`` parsed from the model's JSON output.
 
         DEMO_MODE loads ``demo_fixture`` and never touches the network (no SDK
         import). Otherwise it calls the configured provider — attaching ``images``
         if given — strips fences, and parses, with one corrective JSON retry.
+        ``purpose`` labels the call in the per-call log (ingest-chunk / classify / …).
         """
         if demo_mode():
             return self._load_fixture(demo_fixture, target_model)
-        raw = self._complete_text(system=system, user=user, images=images, max_tokens=max_tokens)
+        raw = self._complete_text(system=system, user=user, images=images, max_tokens=max_tokens, purpose=purpose)
         try:
             return target_model.model_validate_json(strip_code_fences(raw))
         except (ValidationError, ValueError):
@@ -181,7 +184,10 @@ class LLMClient:
                 "Return ONLY a single valid JSON object that matches the schema — "
                 "no prose, no explanation, no code fences."
             )
-            raw2 = self._complete_text(system=system, user=corrective, images=images, max_tokens=max_tokens)
+            raw2 = self._complete_text(
+                system=system, user=corrective, images=images, max_tokens=max_tokens,
+                purpose=f"{purpose or 'llm'}-retry",
+            )
             return target_model.model_validate_json(strip_code_fences(raw2))
 
     # -- DEMO_MODE ----------------------------------------------------------
@@ -194,12 +200,34 @@ class LLMClient:
         return target_model.model_validate_json(path.read_text(encoding="utf-8"))
 
     # -- live path (lazy imports; never reached in DEMO_MODE) ---------------
-    def _complete_text(self, *, system: str, user: str, images: Optional[list[str]], max_tokens: int) -> str:
+    def _complete_text(
+        self, *, system: str, user: str, images: Optional[list[str]], max_tokens: int, purpose: str = ""
+    ) -> str:
         provider = self._route(images)  # content routing: images -> anthropic, text -> cheap
         model = self._model_for(provider)
         if provider == "anthropic":
-            return self._anthropic_complete(system, user, images, max_tokens, model)
-        return self._deepseek_complete(system, user, images, max_tokens, model)
+            return self._anthropic_complete(system, user, images, max_tokens, model, purpose)
+        return self._deepseek_complete(system, user, images, max_tokens, model, purpose)
+
+    def _log_call(self, provider: str, model: str, purpose: str, ms: float, tokens: dict) -> None:
+        """One line per live call to stdout (visibility for the fine-tuning phase), and a
+        JSONL record when ``SITESOURCE_LLM_LOG`` names a file. Never raises — logging must
+        not break a call. DEMO_MODE never reaches here (it returns a fixture first)."""
+        tin, tout = tokens.get("in"), tokens.get("out")
+        line = f"[llm] provider={provider} model={model} purpose={purpose or 'llm'} ms={ms:.0f}"
+        if tin is not None or tout is not None:
+            line += f" in={tin} out={tout}"
+        print(line, flush=True)
+        path = os.getenv("SITESOURCE_LLM_LOG", "").strip()
+        if path:
+            try:
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "provider": provider, "model": model, "purpose": purpose or "llm",
+                        "ms": round(ms), "in": tin, "out": tout,
+                    }) + "\n")
+            except OSError:
+                pass  # a log write must never fail the pipeline
 
     def _retry(self, call, transient: tuple):
         """Run ``call`` with exponential backoff on transient/5xx errors."""
@@ -219,7 +247,7 @@ class LLMClient:
         assert last_exc is not None
         raise last_exc
 
-    def _deepseek_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str) -> str:
+    def _deepseek_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str, purpose: str = "") -> str:
         import openai  # lazy: importing this module must not require the SDK
 
         with self._clients_lock:  # concurrent chunk calls may hit this first-time together
@@ -233,14 +261,21 @@ class LLMClient:
             openai.InternalServerError,
         )
         messages = build_openai_messages(system, user, images)  # text-only in practice
+        tokens: dict = {}
 
         def call() -> str:
             resp = client.chat.completions.create(model=model, messages=messages, max_tokens=max_tokens)
+            usage = getattr(resp, "usage", None)
+            tokens["in"] = getattr(usage, "prompt_tokens", None)
+            tokens["out"] = getattr(usage, "completion_tokens", None)
             return resp.choices[0].message.content or ""
 
-        return self._retry(call, transient)
+        start = time.perf_counter()
+        text = self._retry(call, transient)
+        self._log_call("deepseek", model, purpose, (time.perf_counter() - start) * 1000, tokens)
+        return text
 
-    def _anthropic_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str) -> str:
+    def _anthropic_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str, purpose: str = "") -> str:
         import anthropic  # lazy
 
         with self._clients_lock:  # concurrent chunk calls may hit this first-time together
@@ -254,6 +289,7 @@ class LLMClient:
             anthropic.InternalServerError,
         )
         content = build_anthropic_content(user, images)
+        tokens: dict = {}
 
         def call() -> str:
             resp = client.messages.create(
@@ -262,6 +298,12 @@ class LLMClient:
                 system=system,
                 messages=[{"role": "user", "content": content}],
             )
+            usage = getattr(resp, "usage", None)
+            tokens["in"] = getattr(usage, "input_tokens", None)
+            tokens["out"] = getattr(usage, "output_tokens", None)
             return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
 
-        return self._retry(call, transient)
+        start = time.perf_counter()
+        text = self._retry(call, transient)
+        self._log_call("anthropic", model, purpose, (time.perf_counter() - start) * 1000, tokens)
+        return text
