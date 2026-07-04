@@ -333,7 +333,7 @@ def post_ingest_upload(
 
     workspace = Workspace()
     originals: list[tuple[str, bytes]] = []  # saved late — under the final name (below)
-    per_doc_images: list[list[str]] = []
+    per_doc_images: list[list[str]] = []    # first pages for classification — scanned docs only
     doc_texts: list[str] = []               # extracted text layer, per document (index-aligned)
     doc_page_images: list[list[str]] = []   # scanned-page renders, per document
     for upload in files:
@@ -341,21 +341,23 @@ def post_ingest_upload(
         originals.append((upload.filename or "upload", data))
         try:
             # Text-first: extract each page's text layer, rendering a page to an image only
-            # when it is scanned. Classification stays a small 1-2 page vision call.
+            # when it is scanned.
             text, page_images = extract_document(data, upload.content_type)
-            class_images = to_images(data, upload.content_type, max_pages=2)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         doc_texts.append(text)
         doc_page_images.append(page_images)
-        per_doc_images.append(class_images)
+        # Classification is text-first too: a doc with a text layer is classified from its
+        # text (no render); only a scanned doc needs pages, and we reuse the ones already
+        # rendered above rather than rasterising again.
+        per_doc_images.append([] if text.strip() else page_images[:2])
 
     # Classify each document FIRST (kind + trade routing) so item extraction can be gated
     # to the Schedule(s) of Rates: a Method of Measurement lists item-like rows that are
     # NOT priceable, and extracting over every document's text yielded phantom sor_items
     # live. Only schedule_of_rates text/images feed the priced-item split; every other
     # document informs the trade split as bounded context but never produces a line item.
-    tagged = classify_documents(tender, per_doc_images)
+    tagged = classify_documents(tender, per_doc_images, per_doc_text=doc_texts)
     sor_text_parts: list[str] = []
     context_parts: list[str] = []
     scope_images: list[str] = []

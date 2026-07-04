@@ -185,3 +185,40 @@ def test_classify_prompt_requests_doc_type_and_general_for_cross_trade_docs():
     assert "doc_type" in prompt and "schedule_of_rates" in prompt and "method_of_measurement" in prompt
     assert "INDEPENDENT" in prompt                       # doc_type orthogonal to general
     assert "never leaning to the tender's dominant trade" in prompt  # cross-trade -> general
+
+
+# -- text-first classification: text when available, vision only for scanned docs ------
+class RecordingClient:
+    """Records images and user prompt per call; returns a fixed general classification."""
+
+    def __init__(self):
+        self.calls = []
+
+    def complete_json(self, *, user, target_model, images=None, **_):
+        self.calls.append({"user": user, "images": images})
+        return target_model(general=True, doc_type="general", confidence=0.9)
+
+
+def test_a_document_with_text_classifies_from_text_and_renders_no_image():
+    tender = _tender([("ps_electrical.pdf", DocType.PARTICULAR_SPECIFICATION)])
+    client = RecordingClient()
+    classify_documents(
+        tender, per_doc_images=[["would-be-render"]],  # available, but must NOT be used
+        per_doc_text=["PARTICULAR SPECIFICATION — ELECTRICAL INSTALLATION, Section 16"],
+        client=client,
+    )
+    (call,) = client.calls
+    assert call["images"] is None                         # text-first: no vision render
+    assert "PARTICULAR SPECIFICATION" in call["user"]     # the text reached the prompt
+
+
+def test_a_scanned_document_with_no_text_falls_back_to_vision():
+    tender = _tender([("scan.pdf", DocType.SCHEDULE_OF_RATES)])
+    client = RecordingClient()
+    classify_documents(
+        tender, per_doc_images=[["scanned-page-png"]],
+        per_doc_text=[""],  # no usable text layer
+        client=client,
+    )
+    (call,) = client.calls
+    assert call["images"] == ["scanned-page-png"]         # vision fallback for a scanned doc

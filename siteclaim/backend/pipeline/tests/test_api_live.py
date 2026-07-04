@@ -302,7 +302,7 @@ def _stub_live_ingest(monkeypatch, extracted_name: str):
         "api.ingest_tender",
         lambda tender, images=None, doc_text="", context_text="": ScopePackages(project_name=extracted_name, packages=[]),
     )
-    monkeypatch.setattr("api.classify_documents", lambda tender, imgs: tender)
+    monkeypatch.setattr("api.classify_documents", lambda tender, imgs, per_doc_text=None: tender)
 
 
 def test_ingest_upload_adopts_the_extracted_contract_name(monkeypatch, tmp_path):
@@ -368,7 +368,7 @@ def test_ingest_upload_extracts_items_only_from_schedule_of_rates_text(monkeypat
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
 
     # Classifier: sr01 is the Schedule of Rates, mm01 is the Method of Measurement.
-    def fake_classify(tender, per_doc_images):
+    def fake_classify(tender, per_doc_images, per_doc_text=None):
         kinds = {"sr01.pdf": DocType.SCHEDULE_OF_RATES, "mm01.pdf": DocType.METHOD_OF_MEASUREMENT}
         return TenderPackage(project_name=tender.project_name, documents=[
             d.model_copy(update={"doc_type": kinds[d.filename], "trades": []}) for d in tender.documents
@@ -407,7 +407,7 @@ def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
     monkeypatch.setattr("api.extract_document", lambda data, ct: ("Method of measurement rules, 57 of them", []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
-    monkeypatch.setattr("api.classify_documents", lambda tender, imgs: TenderPackage(
+    monkeypatch.setattr("api.classify_documents", lambda tender, imgs, per_doc_text=None: TenderPackage(
         project_name=tender.project_name,
         documents=[d.model_copy(update={"doc_type": DocType.METHOD_OF_MEASUREMENT, "trades": []}) for d in tender.documents],
     ))

@@ -111,12 +111,20 @@ def _resolve_doc_type(label: str) -> Optional[DocType]:
     return _DOC_TYPE_ALIASES.get(key)
 
 
-def _doc_prompt(doc: TenderDocument) -> str:
-    return (
+_DOC_TEXT_SNIPPET_CHARS = 2000  # the header / first page identifies the kind; a snippet suffices
+
+
+def _doc_prompt(doc: TenderDocument, text: str = "") -> str:
+    base = (
         f"Document type (as uploaded): {doc.doc_type.value}\n"
         f"Filename: {doc.filename}\n"
-        "Classify this single document as general or trade-specific."
     )
+    if text.strip():
+        base += (
+            "\n=== First extracted text of this document (use it to identify the kind and "
+            "trade) ===\n" + text.strip()[:_DOC_TEXT_SNIPPET_CHARS] + "\n\n"
+        )
+    return base + "Classify this single document as general or trade-specific."
 
 
 def _resolve_trades(result: DocClassification) -> list[str]:
@@ -146,25 +154,33 @@ def classify_documents(
     tender: TenderPackage,
     per_doc_images: Optional[list[list[str]]] = None,
     *,
+    per_doc_text: Optional[list[str]] = None,
     demo_fixture: Optional[str] = None,
     client: Optional[LLMClient] = None,
 ) -> TenderPackage:
-    """Return ``tender`` with each document's ``trades`` populated by Layer 2.
+    """Return ``tender`` with each document's ``trades`` and ``doc_type`` populated by L2.
 
-    ``per_doc_images[i]`` are the first one or two rendered pages of ``tender.documents[i]``
-    (the live vision path); pass ``None`` for a text-only classification. A per-document
+    **Text-first**: when ``per_doc_text[i]`` has a usable text layer the document is
+    classified from a text snippet (no image is attached, so the call routes to the cheap
+    text provider); only a scanned document with no text falls back to vision, using
+    ``per_doc_images[i]`` (its first one or two rendered pages). A per-document
     classification error falls back to **general** (empty trades) — never a withheld
     document. The input tender is not mutated; a tagged copy is returned.
     """
     client = client or LLMClient()
     tagged: list[TenderDocument] = []
     for index, doc in enumerate(tender.documents):
-        images = per_doc_images[index] if per_doc_images and index < len(per_doc_images) else None
+        text = per_doc_text[index] if per_doc_text and index < len(per_doc_text) else ""
+        # Text-first: a usable text layer classifies from text (cheap provider, no render);
+        # only a scanned document with no text is sent to vision.
+        images = None if text.strip() else (
+            per_doc_images[index] if per_doc_images and index < len(per_doc_images) else None
+        )
         doc_type = doc.doc_type  # kept if classification fails or the label is unrecognised
         try:
             result = client.complete_json(
                 system=_system_prompt(),
-                user=_doc_prompt(doc),
+                user=_doc_prompt(doc, text),
                 target_model=DocClassification,
                 demo_fixture=demo_fixture,
                 images=images,
