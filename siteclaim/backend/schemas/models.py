@@ -266,6 +266,18 @@ class DispatchSet(BaseModel):
 
     bundles: list[DispatchBundle] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap_bare_bundle_list(cls, data):
+        """Robustness shim: a model sometimes returns a bare top-level array of bundle
+        objects instead of the ``{"bundles": [...]}`` envelope. Wrap it — the content is
+        right, only the envelope is wrong. Narrow by design: the compose prompt is the
+        real fix; this only catches that exact drift and is a no-op when the model
+        already returns the object."""
+        if isinstance(data, list):
+            return {"bundles": data}
+        return data
+
 
 # ---------------------------------------------------------------------------
 # Stage 04 — bid replies and leveling

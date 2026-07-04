@@ -8,7 +8,7 @@ from db.outbox import read_outbox, send_mock
 from pipeline.stage_01_ingest.ingest import ingest_tender
 from pipeline.stage_02_shortlist.shortlist import shortlist
 from pipeline.stage_03_dispatch.dispatch import build_dispatch
-from schemas.models import DispatchStatus, ScopePackages, TenderPackage
+from schemas.models import DispatchSet, DispatchStatus, ScopePackages, TenderPackage
 
 _SCOPE_FIXTURE = "cases/clean/scope_packages.json"
 _DISPATCH_FIXTURE = "cases/clean/dispatch.json"
@@ -90,3 +90,24 @@ def test_send_mock_records_to_outbox_and_flips_status(shortlisted, scope, tmp_pa
     records = read_outbox(outbox)
     assert {r["firm_id"] for r in records} == {"F-EL-02", "F-FS-01"}
     assert all(r["sent_at"] for r in records)  # timestamped
+
+
+def test_dispatch_set_wraps_a_bare_bundle_list():
+    # Live drift: the model returns a bare top-level array of bundles instead of the
+    # {"bundles": [...]} envelope. The content is right, only the envelope is wrong.
+    bare = (
+        '[{"firm_id": "castco-testing-centre-limited-b6e5", "firm_name": "Castco Testing Centre Limited", '
+        '"trade": "ground_investigation", "email_subject": "RFQ — Ground Investigation", '
+        '"email_body": "Dear Castco, ... Kind regards, Buying Team"}]'
+    )
+    ds = DispatchSet.model_validate_json(bare)
+    assert len(ds.bundles) == 1
+    assert ds.bundles[0].firm_id == "castco-testing-centre-limited-b6e5"
+    assert ds.bundles[0].trade == "ground_investigation" and ds.bundles[0].email_subject.startswith("RFQ")
+
+
+def test_dispatch_set_object_payload_still_parses():
+    # The shim is a no-op when the model already returns the correct envelope.
+    obj = '{"bundles": [{"firm_id": "f1", "firm_name": "F1 Ltd", "trade": "electrical", "email_subject": "S", "email_body": "B"}]}'
+    ds = DispatchSet.model_validate_json(obj)
+    assert len(ds.bundles) == 1 and ds.bundles[0].firm_id == "f1"

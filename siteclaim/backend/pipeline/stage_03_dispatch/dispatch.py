@@ -42,9 +42,11 @@ _EMAIL_SYSTEM = (
     "email_body inviting them to price ONLY their trade's package on the named "
     "project, referencing the enclosed trade scope and Schedule of Rates and asking "
     "for a priced return by the tender date. Be specific to the trade and project. "
-    "Do not quote prices or make commitments. Return JSON matching the DispatchSet "
-    "schema, one bundle per firm with firm_id, firm_name, trade, email_subject and "
-    "email_body."
+    "Do not quote prices or make commitments.\n\n"
+    "Return ONE JSON object with a `bundles` array — never a bare top-level array. "
+    'The exact shape is: {"bundles": [{"firm_id": <string>, "firm_name": <string>, '
+    '"trade": <string>, "email_subject": <string>, "email_body": <string>}]} — one '
+    "entry per firm. The top level is an object with a `bundles` key, not a list."
 )
 
 
