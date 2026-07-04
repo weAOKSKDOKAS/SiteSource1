@@ -17,6 +17,19 @@ def test_live_routes_are_registered():
     assert {"/level-upload", "/contacts"} <= paths
 
 
+def test_heavy_upload_routes_are_sync_so_they_run_in_the_threadpool():
+    # These handlers do blocking work (pymupdf render, sequential LLM calls). They must be
+    # plain sync def — FastAPI then runs them in its threadpool, so one long ingest never
+    # starves the event loop (/health kept answering in the live run). async def would put
+    # the blocking work back on the loop; guard against a regression to it.
+    import inspect
+
+    import api
+
+    for handler in (api.post_ingest_upload, api.post_level_upload, api.post_inbound_reply):
+        assert not inspect.iscoroutinefunction(handler), f"{handler.__name__} must be sync def"
+
+
 def test_contacts_endpoint_lists_the_address_book():
     contacts = client.get("/contacts").json()
     assert isinstance(contacts, list) and contacts

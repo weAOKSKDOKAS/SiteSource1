@@ -304,7 +304,7 @@ DEFAULT_UPLOAD_PROJECT_NAME = "Uploaded tender"  # the /ingest-upload form defau
 
 
 @app.post("/ingest-upload", response_model=IngestUploadResponse)
-async def post_ingest_upload(
+def post_ingest_upload(
     files: list[UploadFile] = File(...),
     project_name: str = Form(DEFAULT_UPLOAD_PROJECT_NAME),
 ) -> IngestUploadResponse:
@@ -319,7 +319,11 @@ async def post_ingest_upload(
     ``project_name`` always wins, but when the operator left the default the real
     contract name the split extracts (``scope.project_name``) is adopted — and the
     originals are saved only then, so the workspace slug, the ref registry (keyed off
-    this name at dispatch), and the returned scope/tender all agree on one name."""
+    this name at dispatch), and the returned scope/tender all agree on one name.
+
+    Sync handler: FastAPI runs it in a threadpool, so the blocking pymupdf render and the
+    sequential LLM calls below never stall the event loop (``/health`` keeps answering
+    during a long ingest)."""
     tender = TenderPackage(
         project_name=project_name,
         documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=f.filename or "upload") for f in files],
@@ -333,7 +337,7 @@ async def post_ingest_upload(
     text_parts: list[str] = []
     scope_images: list[str] = []
     for upload in files:
-        data = await upload.read()
+        data = upload.file.read()
         originals.append((upload.filename or "upload", data))
         try:
             # Text-first for the scope split: extract each page's text layer, rendering a
@@ -424,16 +428,19 @@ def post_level(req: LevelRequest) -> list[LevelledBid]:
     return levelled
 
 
-async def _read_reply_uploads(files: list[UploadFile]) -> tuple[list[BidReply], list[str]]:
+def _read_reply_uploads(files: list[UploadFile]) -> tuple[list[BidReply], list[str]]:
     """Split reply uploads into deterministically-parsed SoR sheets and rasterised pages.
 
     An xlsx reply is our own dispatched SoR sheet returned with the Rate column filled —
     we authored the format, so it parses with openpyxl and NO model call
-    (``parse_sor_xlsx``). PDFs and images keep the existing vision/text parse path."""
+    (``parse_sor_xlsx``). PDFs and images keep the existing vision/text parse path.
+
+    Sync (called from sync route handlers): reads the spooled upload directly so the
+    blocking render/parse below runs in FastAPI's threadpool, not on the event loop."""
     sheets: list[BidReply] = []
     images: list[str] = []
     for upload in files:
-        data = await upload.read()
+        data = upload.file.read()
         try:
             if is_xlsx_upload(upload.filename, upload.content_type):
                 sheets.append(parse_sor_xlsx(data))
@@ -459,7 +466,7 @@ def _parse_reply(
 
 
 @app.post("/level-upload", response_model=list[LevelledBid])
-async def post_level_upload(
+def post_level_upload(
     files: list[UploadFile] = File(...),
     firm_id: str = Form(...),
     trade: str = Form(...),
@@ -467,13 +474,15 @@ async def post_level_upload(
     """Inbound channel (Phase A): the operator drops a subcontractor's returned
     Schedule of Rates here. In DEMO_MODE the baked levelled comparison is returned;
     live, an xlsx (our returned SoR sheet) is parsed deterministically and a PDF/image
-    is parsed by Layer 2; Layer 1 levels the result."""
+    is parsed by Layer 2; Layer 1 levels the result.
+
+    Sync handler (threadpool): the blocking parse/level below never stalls the loop."""
     if demo_mode():
         levelled = level_bids([], demo_fixture=REPLIES_FIXTURE)
         export_leveling_xlsx(levelled, load_demo_replies(REPLIES_FIXTURE), path=OUT_PATH)
         return levelled
 
-    sheets, images = await _read_reply_uploads(files)
+    sheets, images = _read_reply_uploads(files)
     reply = _parse_reply(sheets, images, firm_id=firm_id, trade=trade)
     levelled = level_bids([reply])
     export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
@@ -495,7 +504,7 @@ class InboundReplyResponse(BaseModel):
 
 
 @app.post("/inbound-reply", response_model=InboundReplyResponse)
-async def post_inbound_reply(
+def post_inbound_reply(
     files: list[UploadFile] = File(...),
     ref: str = Form(""),
 ) -> InboundReplyResponse:
@@ -504,7 +513,9 @@ async def post_inbound_reply(
     tender/firm/trade deterministically (AI matching is only a fallback for a ref-less
     reply); the reply is parsed, accumulated onto that tender, re-leveled, and the
     comparison xlsx regenerated with the existing leveling/export code. This fills the
-    comparison only — a human still awards."""
+    comparison only — a human still awards.
+
+    Sync handler (threadpool): the blocking parse/level below never stalls the loop."""
     workspace = Workspace()
 
     # Read the attachment on the live path: an xlsx (our returned SoR sheet) parses
@@ -512,7 +523,7 @@ async def post_inbound_reply(
     sheets: list[BidReply] = []
     images: list[str] = []
     if not demo_mode():
-        sheets, images = await _read_reply_uploads(files)
+        sheets, images = _read_reply_uploads(files)
 
     resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
     if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
