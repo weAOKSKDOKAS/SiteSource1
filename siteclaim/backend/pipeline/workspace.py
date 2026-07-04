@@ -16,6 +16,7 @@ the same directory and the paths are reproducible.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -23,12 +24,35 @@ from pathlib import Path
 _DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "out" / "workspace"
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
+# A Hong Kong contract number: a letter prefix then 2–3 slash-separated numeric groups,
+# e.g. "GE/2026/14", "HY/2020/09". Preferred as the slug — short, human, and stable.
+_CONTRACT_RE = re.compile(r"[A-Za-z]{1,5}(?:\s*/\s*\d{1,4}){2,3}")
+_SLUG_MAX = 40  # keep slugs short so nested artifact paths stay well under Windows' 259-char limit
 
 
 def tender_slug(project_name: str) -> str:
-    """A filesystem-safe, deterministic id for a tender from its project name."""
-    slug = _SLUG_STRIP.sub("-", (project_name or "").strip().lower()).strip("-")
-    return slug or "tender"
+    """A filesystem-safe, deterministic, **short** id for a tender from its project name.
+
+    A full contract title runs to 150+ chars, which overran Windows' path limit for the
+    nested per-firm SoR sheet (Excel refused to open it) and bloated the ``[SiteSource
+    Ref: …]`` email subject. So: prefer an embedded contract number (``GE/2026/14`` →
+    ``ge-2026-14``); otherwise slugify and, if still long, truncate to ~40 chars plus a
+    short stable hash of the full name so distinct long titles never collide. Pure
+    function of the name — no timestamp, no randomness — so a ref always round-trips.
+    """
+    name = (project_name or "").strip()
+    match = _CONTRACT_RE.search(name)
+    if match:
+        contract = _SLUG_STRIP.sub("-", match.group(0).lower()).strip("-")
+        if contract:
+            return contract
+    slug = _SLUG_STRIP.sub("-", name.lower()).strip("-")
+    if not slug:
+        return "tender"
+    if len(slug) <= _SLUG_MAX:
+        return slug
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]  # stable across processes
+    return f"{slug[:_SLUG_MAX].rstrip('-')}-{digest}"
 
 
 def _safe_name(filename: str) -> str:
