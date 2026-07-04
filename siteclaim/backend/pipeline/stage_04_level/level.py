@@ -55,11 +55,13 @@ def _chunk_pages(images: list[str], pages_per_chunk: int) -> list[list[str]]:
     return [images[i:i + pages_per_chunk] for i in range(0, len(images), pages_per_chunk)]
 
 
-def _merge_replies(replies: list[BidReply], firm_id: str, trade: str) -> BidReply:
-    """Merge per-chunk replies into one BidReply: concatenate ``line_items`` deduped by
+def merge_replies(replies: list[BidReply], firm_id: str, trade: str) -> BidReply:
+    """Merge partial replies into one BidReply: concatenate ``line_items`` deduped by
     ``item_ref`` (the first wins), union the exclusions, and take the first stated
     ``claimed_total``. ``firm_id`` / ``trade`` are the identity resolved from the ref —
-    authoritative here, never taken from the model's transcription."""
+    authoritative here, never taken from a parse. Used for the per-chunk results of
+    :func:`parse_bid_reply` and by the API to combine deterministically-parsed SoR
+    sheets (xlsx) with any model-parsed pages."""
     line_items = []
     seen: set[str] = set()
     exclusions: list[str] = []
@@ -111,7 +113,7 @@ def parse_bid_reply(
         )
         for (user, call_images) in calls
     ]
-    return _merge_replies(replies, firm_id, trade)
+    return merge_replies(replies, firm_id, trade)
 
 
 def level_bids(

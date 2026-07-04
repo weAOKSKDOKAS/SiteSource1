@@ -30,7 +30,8 @@ from pipeline.stage_02_shortlist.shortlist import shortlist  # noqa: E402
 from pipeline.stage_03_dispatch.dispatch import build_dispatch  # noqa: E402
 from pipeline.stage_03_dispatch.mailer import send_bundles  # noqa: E402
 from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  # noqa: E402
-from pipeline.stage_04_level.level import level_bids, load_demo_replies, parse_bid_reply  # noqa: E402
+from pipeline.stage_04_level.level import level_bids, load_demo_replies, merge_replies, parse_bid_reply  # noqa: E402
+from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
@@ -398,6 +399,40 @@ def post_level(req: LevelRequest) -> list[LevelledBid]:
     return levelled
 
 
+async def _read_reply_uploads(files: list[UploadFile]) -> tuple[list[BidReply], list[str]]:
+    """Split reply uploads into deterministically-parsed SoR sheets and rasterised pages.
+
+    An xlsx reply is our own dispatched SoR sheet returned with the Rate column filled —
+    we authored the format, so it parses with openpyxl and NO model call
+    (``parse_sor_xlsx``). PDFs and images keep the existing vision/text parse path."""
+    sheets: list[BidReply] = []
+    images: list[str] = []
+    for upload in files:
+        data = await upload.read()
+        try:
+            if is_xlsx_upload(upload.filename, upload.content_type):
+                sheets.append(parse_sor_xlsx(data))
+            else:
+                images += to_images(data, upload.content_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return sheets, images
+
+
+def _parse_reply(
+    sheets: list[BidReply], images: list[str], *, firm_id: str, trade: str,
+    demo_fixture: str | None = None,
+) -> BidReply:
+    """One BidReply from the uploads. Sheets are already parsed (deterministic); the
+    model is consulted only when there are pages for it to read (or for the DEMO
+    fixture). Identity is forced by ``merge_replies`` — the ref/form stays
+    authoritative on every path."""
+    if sheets and not images:
+        return merge_replies(sheets, firm_id, trade)  # pure xlsx reply -> no LLM at all
+    parsed = parse_bid_reply(firm_id=firm_id, trade=trade, images=images, demo_fixture=demo_fixture)
+    return merge_replies(sheets + [parsed], firm_id, trade) if sheets else parsed
+
+
 @app.post("/level-upload", response_model=list[LevelledBid])
 async def post_level_upload(
     files: list[UploadFile] = File(...),
@@ -406,19 +441,15 @@ async def post_level_upload(
 ) -> list[LevelledBid]:
     """Inbound channel (Phase A): the operator drops a subcontractor's returned
     Schedule of Rates here. In DEMO_MODE the baked levelled comparison is returned;
-    live, Layer 2 parses the document into a BidReply and Layer 1 levels it."""
+    live, an xlsx (our returned SoR sheet) is parsed deterministically and a PDF/image
+    is parsed by Layer 2; Layer 1 levels the result."""
     if demo_mode():
         levelled = level_bids([], demo_fixture=REPLIES_FIXTURE)
         export_leveling_xlsx(levelled, load_demo_replies(REPLIES_FIXTURE), path=OUT_PATH)
         return levelled
 
-    images: list[str] = []
-    for upload in files:
-        try:
-            images += to_images(await upload.read(), upload.content_type)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    reply = parse_bid_reply(firm_id=firm_id, trade=trade, images=images)
+    sheets, images = await _read_reply_uploads(files)
+    reply = _parse_reply(sheets, images, firm_id=firm_id, trade=trade)
     levelled = level_bids([reply])
     export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
     return levelled
@@ -451,14 +482,12 @@ async def post_inbound_reply(
     comparison only — a human still awards."""
     workspace = Workspace()
 
-    # Rasterise the attachment on the live path (for parse + fallback); DEMO uses fixtures.
+    # Read the attachment on the live path: an xlsx (our returned SoR sheet) parses
+    # deterministically, a PDF/image is rasterised for parse + fallback; DEMO uses fixtures.
+    sheets: list[BidReply] = []
     images: list[str] = []
     if not demo_mode():
-        for upload in files:
-            try:
-                images += to_images(await upload.read(), upload.content_type)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        sheets, images = await _read_reply_uploads(files)
 
     resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
     if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
@@ -469,8 +498,8 @@ async def post_inbound_reply(
         return InboundReplyResponse(status="unmatched", detail="unmatched — needs manual assignment")
 
     tender_id, firm_id, trade = resolved["tender_id"], resolved["firm_id"], resolved["trade"]
-    parsed = parse_bid_reply(
-        firm_id=firm_id, trade=trade, images=images,
+    parsed = _parse_reply(
+        sheets, images, firm_id=firm_id, trade=trade,
         demo_fixture=INBOUND_REPLY_FIXTURE if demo_mode() else None,
     )
     # The ref is authoritative for identity; the parse supplies the priced content.

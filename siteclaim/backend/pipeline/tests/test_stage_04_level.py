@@ -13,9 +13,9 @@ from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx
 from pipeline.stage_04_level.level import (
     IMAGE_PAGES_PER_CHUNK,
     _chunk_pages,
-    _merge_replies,
     level_bids,
     load_demo_replies,
+    merge_replies,
     parse_bid_reply,
 )
 from rules_engine.leveling import computable_amount, level_reply, peer_item_reference
@@ -208,7 +208,7 @@ def test_merge_replies_dedupes_by_item_ref_unions_exclusions_and_keeps_identity(
     r1 = BidReply(firm_id="x", trade="t", line_items=[_item("A-1"), _item("A-2")], exclusions=["e1"], claimed_total=None)
     r2 = BidReply(firm_id="y", trade="u", line_items=[_item("A-2"), _item("A-3")], exclusions=["e1", "e2"], claimed_total=500.0)
 
-    merged = _merge_replies([r1, r2], firm_id="firm-authoritative", trade="field_installation")
+    merged = merge_replies([r1, r2], firm_id="firm-authoritative", trade="field_installation")
 
     assert [li.item_ref for li in merged.line_items] == ["A-1", "A-2", "A-3"]  # A-2 deduped, first wins
     assert merged.exclusions == ["e1", "e2"]                                    # unioned, order preserved

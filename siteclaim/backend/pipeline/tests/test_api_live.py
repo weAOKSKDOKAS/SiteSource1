@@ -145,3 +145,111 @@ def test_shortlist_include_public_opens_the_pool():
     default = client.post("/shortlist", json={"scope": scope}).json()
     public = client.post("/shortlist", json={"scope": scope, "include_public": True}).json()
     assert len(public["per_trade"]["electrical"]) > len(default["per_trade"]["electrical"])
+
+
+# -- deterministic xlsx reply parsing through the routes ------------------------------
+#
+# The realistic reply is our own dispatched SoR sheet returned with the Rate column
+# filled — parsing it needs no model at all. These tests flip DEMO off (the parse
+# branch only runs live) and stub the LLM parse with an assertion bomb, proving the
+# xlsx path never consults the model: openpyxl is local, so everything stays offline.
+
+_XLSX_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _model_must_not_be_called(*args, **kwargs):
+    raise AssertionError("the model must not be called on the xlsx reply path")
+
+
+def _filled_sheet_bytes(tmp_path) -> bytes:
+    """The dispatched SoR sheet for two electrical items, rates filled in by the firm."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from pipeline.stage_03_dispatch.attachments import generate_sor_sheet
+    from schemas.models import SorItem, TradeWorkPackage
+
+    pkg = TradeWorkPackage(
+        trade="electrical", scope_summary="LV works",
+        sor_items=[
+            SorItem(item_ref="E-01", description="LV main switchboard", unit="no", qty=1.0),
+            SorItem(item_ref="E-02", description="Sub-main cabling", unit="m", qty=100.0),
+        ],
+        source_refs=["Schedule of Rates"],
+    )
+    path = generate_sor_sheet(pkg, "Kwun Tong", tmp_path / "sor.xlsx")
+    wb = load_workbook(path)
+    ws = wb.active
+    header = next(r for r in range(1, ws.max_row + 1) if ws.cell(row=r, column=1).value == "Item")
+    rates = {"E-01": 950000, "E-02": 2500}
+    for r in range(header + 1, ws.max_row + 1):
+        ref = ws.cell(row=r, column=1).value
+        if ref in rates:
+            ws.cell(row=r, column=5, value=rates[ref])  # "Rate (HKD)"
+    buffer = BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def test_level_upload_parses_an_xlsx_reply_with_no_model_call(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setattr("api.parse_bid_reply", _model_must_not_be_called)
+
+    resp = client.post(
+        "/level-upload",
+        files={"files": ("SoR_electrical.xlsx", _filled_sheet_bytes(tmp_path), _XLSX_CT)},
+        data={"firm_id": "F-EL-02", "trade": "electrical"},
+    )
+
+    assert resp.status_code == 200
+    (bid,) = resp.json()
+    assert bid["firm_id"] == "F-EL-02" and bid["trade"] == "electrical"
+    assert bid["corrected_total"] == 1200000.0  # 1 x 950,000 + 100 x 2,500 — Layer 1 arithmetic
+    assert {ir["item_ref"]: ir["rate"] for ir in bid["item_rates"]} == {"E-01": 950000.0, "E-02": 2500.0}
+
+
+def test_inbound_reply_xlsx_resolves_by_ref_and_parses_deterministically(monkeypatch, tmp_path):
+    from pipeline import reply_loop
+    from pipeline.workspace import Workspace
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    monkeypatch.setattr("api.parse_bid_reply", _model_must_not_be_called)
+    ws = Workspace()
+    ref = reply_loop.make_ref("Kwun Tong", "F-EL-02", "electrical")
+    reply_loop.record_dispatch(ws, ref, "Kwun Tong", "F-EL-02", "electrical")
+
+    resp = client.post(
+        "/inbound-reply",
+        files={"files": ("SoR_electrical.xlsx", _filled_sheet_bytes(tmp_path), _XLSX_CT)},
+        data={"ref": ref},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "matched" and body["firm_id"] == "F-EL-02"  # ref stays authoritative
+    assert body["reply_count"] == 1
+    assert body["comparison"][0]["corrected_total"] == 1200000.0
+
+
+def test_level_upload_rejects_a_non_sor_xlsx_with_a_clear_400(monkeypatch):
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setattr("api.parse_bid_reply", _model_must_not_be_called)
+    wb = Workbook()
+    wb.active.append(["Colour", "Size", "Price"])  # wrong headers — not our SoR layout
+    buffer = BytesIO()
+    wb.save(buffer)
+
+    resp = client.post(
+        "/level-upload",
+        files={"files": ("prices.xlsx", buffer.getvalue(), _XLSX_CT)},
+        data={"firm_id": "F-EL-02", "trade": "electrical"},
+    )
+
+    assert resp.status_code == 400
+    assert "Not a Schedule of Rates sheet" in resp.json()["detail"]
