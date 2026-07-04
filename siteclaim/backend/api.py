@@ -372,11 +372,12 @@ async def post_ingest_upload(
 class ShortlistRequest(BaseModel):
     scope: ScopePackages
     include_public: bool = False  # live engine sets True; demo/default stays assessed-firm
+    k: int | None = None  # cap per trade's ranked list; None (demo/default) returns all
 
 
 @app.post("/shortlist", response_model=ShortlistSet)
 def post_shortlist(req: ShortlistRequest) -> ShortlistSet:
-    return shortlist(req.scope, include_public=req.include_public)
+    return shortlist(req.scope, include_public=req.include_public, k=req.k)
 
 
 # ---------------------------------------------------------------------------

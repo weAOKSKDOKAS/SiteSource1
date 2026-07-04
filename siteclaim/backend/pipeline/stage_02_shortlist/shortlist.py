@@ -34,6 +34,7 @@ def shortlist(
     *,
     conn: Optional[sqlite3.Connection] = None,
     include_public: bool = False,
+    k: Optional[int] = None,
 ) -> ShortlistSet:
     """Return ranked candidates per trade for ``scope``.
 
@@ -41,13 +42,15 @@ def shortlist(
     packaged ``sitesource.db`` is opened and closed here. ``include_public=True``
     opens the shortlist to the full screened public-record pool (the live-engine
     path); the default keeps the assessed-firm behaviour the demo scenarios rely on.
+    ``k`` caps each trade's ranked list (a broad public trade can hold 20+ firms —
+    nobody dispatches to all of them); ``None`` returns every candidate, as before.
     """
     own_conn = conn is None
     conn = conn or store.get_connection()
     try:
         per_trade = {
             pkg.trade: cross_reference(
-                conn, pkg.trade, pkg.scope_summary, include_public=include_public
+                conn, pkg.trade, pkg.scope_summary, k=k, include_public=include_public
             )
             for pkg in scope.packages
         }

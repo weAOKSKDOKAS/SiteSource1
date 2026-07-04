@@ -61,3 +61,22 @@ def test_gotcha_outranks_a_clean_firm_on_match_yet_is_below_it(shortlisted):
     gotcha = next(c for c in electrical if c.firm.firm_id == "F-EL-01")
     above_gotcha = electrical[: electrical.index(gotcha)]
     assert any(c.match_score < gotcha.match_score for c in above_gotcha)
+
+
+def test_k_caps_each_trade_without_reordering(conn):
+    # k bounds a broad public trade (live, 20+ firms) to a dispatchable shortlist:
+    # the capped list must be exactly the head of the uncapped ranking, never a reshuffle.
+    scope = ingest_tender(TenderPackage(project_name="demo", description=""), demo_fixture=_FIXTURE)
+    full = shortlist(scope, conn=conn, include_public=True)
+    capped = shortlist(scope, conn=conn, include_public=True, k=2)
+    for trade, cands in full.per_trade.items():
+        assert [c.firm.firm_id for c in capped.per_trade[trade]] == [c.firm.firm_id for c in cands][:2]
+
+
+def test_k_none_is_identical_to_the_default(conn):
+    scope = ingest_tender(TenderPackage(project_name="demo", description=""), demo_fixture=_FIXTURE)
+    default = shortlist(scope, conn=conn)
+    explicit = shortlist(scope, conn=conn, k=None)
+    assert {t: [c.firm.firm_id for c in cs] for t, cs in default.per_trade.items()} == {
+        t: [c.firm.firm_id for c in cs] for t, cs in explicit.per_trade.items()
+    }

@@ -65,7 +65,14 @@ export const api = {
     return fetch(BASE + "/ingest-upload", { method: "POST", body: fd }).then((r) => handle<IngestUpload>(r));
   },
 
-  shortlist: (scope: ScopePackages) => post<ShortlistSet>("/shortlist", { scope }),
+  // Live mode opens the shortlist to the screened public pool and caps each trade's
+  // ranked list; demo mode sends neither, keeping the assessed-firm demo behaviour.
+  shortlist: (scope: ScopePackages, opts?: { includePublic?: boolean; k?: number }) =>
+    post<ShortlistSet>("/shortlist", {
+      scope,
+      ...(opts?.includePublic ? { include_public: true } : {}),
+      ...(opts?.k != null ? { k: opts.k } : {}),
+    }),
   dispatch: (req: DispatchRequest) => post<DispatchSet>("/dispatch", req),
   level: (replies: BidReply[], scope: ScopePackages | null) => post<LevelledBid[]>("/level", { replies, scope }),
   recommend: (levelled: LevelledBid[], trade: string, rationaleFixture: string | null) =>

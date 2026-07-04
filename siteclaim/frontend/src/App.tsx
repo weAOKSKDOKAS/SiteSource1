@@ -121,7 +121,10 @@ export default function App() {
   const goShortlist = () =>
     run(async () => {
       if (!scope) return;
-      const result = await api.shortlist(scope);
+      // Live engine: open the screened public pool and cap each trade at 8 candidates
+      // (the flags / recommended_against markers render exactly as in demo). Demo mode
+      // sends neither, preserving the assessed-firm shortlist the scenarios rely on.
+      const result = await api.shortlist(scope, demoMode ? undefined : { includePublic: true, k: 8 });
       setShortlist(result);
       // Default the approval gate to the top clean firm per trade.
       const defaults: Record<string, string[]> = {};

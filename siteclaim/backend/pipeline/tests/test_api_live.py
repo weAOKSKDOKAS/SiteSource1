@@ -147,6 +147,18 @@ def test_shortlist_include_public_opens_the_pool():
     assert len(public["per_trade"]["electrical"]) > len(default["per_trade"]["electrical"])
 
 
+def test_shortlist_k_caps_the_ranked_list_through_the_api():
+    # The live frontend sends include_public + k so a broad trade (22 external_works
+    # firms on the real GI tender) does not become 22 dispatch bundles.
+    case = client.get("/demo/messy").json()
+    scope = client.post("/ingest", json={"tender": case["tender"]}).json()
+    full = client.post("/shortlist", json={"scope": scope, "include_public": True}).json()
+    capped = client.post("/shortlist", json={"scope": scope, "include_public": True, "k": 3}).json()
+    for trade, cands in full["per_trade"].items():
+        expected = [c["firm"]["firm_id"] for c in cands][:3]
+        assert [c["firm"]["firm_id"] for c in capped["per_trade"][trade]] == expected  # head, not reshuffle
+
+
 # -- deterministic xlsx reply parsing through the routes ------------------------------
 #
 # The realistic reply is our own dispatched SoR sheet returned with the Rate column
