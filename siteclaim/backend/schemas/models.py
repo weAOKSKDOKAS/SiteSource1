@@ -22,7 +22,7 @@ with a source and a citable reference; every candidate carries a ``match_score``
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +143,19 @@ class TradeWorkPackage(BaseModel):
     sor_items: list[SorItem] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)  # which tender doc each came from
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_package_name_drift(cls, data):
+        """Robustness shim: some models (observed on Sonnet 5) name the field
+        ``package_name`` instead of ``trade``. If a package carries ``package_name``
+        but no ``trade``, move it — so a minor drift degrades to a normalisable trade
+        (Layer 1's ``validate_scope`` still maps it) instead of a 500 and a
+        corrective-retry. Narrow by design: the ingest prompt is the real fix; this
+        only catches that exact drift and does nothing when ``trade`` is present."""
+        if isinstance(data, dict) and data.get("package_name") and not data.get("trade"):
+            data = {**data, "trade": data["package_name"]}
+        return data
+
 
 class TenderDocument(BaseModel):
     doc_type: DocType
@@ -161,7 +174,7 @@ class TenderPackage(BaseModel):
 class ScopePackages(BaseModel):
     """Stage 01 output: the tender split into one package per trade."""
 
-    project_name: str
+    project_name: str = ""  # injected from the tender in ingest; a model may omit it
     packages: list[TradeWorkPackage] = Field(default_factory=list)
 
 

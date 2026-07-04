@@ -1,0 +1,13 @@
+{
+  "packages": [
+    {
+      "package_name": "Geotechnical Works",
+      "scope_summary": "Ground investigation: boreholes, rotary drilling, sampling and in-situ field testing",
+      "sor_items": [
+        {"item_ref": "GI-01", "description": "Rotary drilling in soil/rock", "unit": "m", "qty": 300.0},
+        {"item_ref": "GI-02", "description": "Undisturbed sampling", "unit": "no", "qty": 45.0}
+      ],
+      "source_refs": ["PS-S07 Geotechnical Works"]
+    }
+  ]
+}
