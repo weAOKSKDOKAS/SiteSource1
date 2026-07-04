@@ -6,12 +6,14 @@ Responsibilities:
   ``backend/fixtures/`` and short-circuits BEFORE any provider code runs. No SDK is
   imported and no socket is opened — the offline demo is safe even with
   ``openai`` / ``anthropic`` / ``pymupdf`` all uninstalled.
-* **Provider abstraction** (env ``EXTRACTION_PROVIDER``, default ``anthropic``):
-    - ``anthropic`` — the **default** Claude path; reads image/PDF blocks natively.
-    - ``deepseek`` — the OpenAI-compatible API at ``https://api.deepseek.com`` via the
-      ``openai`` SDK; model from ``DEEPSEEK_MODEL``. **Text-only** — DeepSeek V4's chat
-      API rejects ``image_url`` input, so document uploads must use ``anthropic``.
-  Both SDKs are imported **lazily**, only on the live path.
+* **Provider routing by content** (``_route``): a call carrying any image goes to
+  **Anthropic** (Sonnet) vision — DeepSeek V4's chat API rejects ``image_url`` input; a
+  **text-only** call goes to the cheap text provider, **DeepSeek** when
+  ``DEEPSEEK_API_KEY`` is set (OpenAI-compatible API at ``https://api.deepseek.com``,
+  model from ``DEEPSEEK_MODEL``), otherwise **Anthropic** in text mode so it still works
+  today with no new key. ``EXTRACTION_PROVIDER`` sets the constructed default; content
+  routing overrides it so images never reach DeepSeek and text takes the cheapest path.
+  Both SDKs are imported **lazily**, only on the live path, one client cached per provider.
 * **Multimodal**: ``complete_json(images=[...base64 PNG...])`` attaches the document
   images to the message (OpenAI ``image_url`` blocks / Anthropic ``image`` blocks).
 * **Strict-JSON parsing** into a Pydantic model (strip ``` fences → parse, one
@@ -113,12 +115,38 @@ class LLMClient:
     """Provider-swappable LLM client with DEMO_MODE + strict-JSON parsing."""
 
     def __init__(self, provider: Optional[str] = None, model: Optional[str] = None) -> None:
-        self.provider = (provider or extraction_provider()).lower()
+        self.provider = (provider or extraction_provider()).lower()  # constructed default
+        self._model_arg = model  # explicit model override, if any
         self.model = model or self._default_model()
-        self._client = None  # lazily constructed on first live call
+        self._clients: dict = {}  # one lazily-built SDK client per provider (routing may switch)
 
     def _default_model(self) -> str:
         if self.provider == "anthropic":
+            return os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
+        return os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
+
+    # -- provider routing by content ----------------------------------------
+    def _route(self, images: Optional[list[str]]) -> str:
+        """Pick the provider for a call by its content.
+
+        A call carrying any image → Anthropic (Sonnet) vision — DeepSeek's chat API
+        rejects image input. A text-only call → the cheap text provider: DeepSeek when
+        ``DEEPSEEK_API_KEY`` is set, otherwise Anthropic in text mode (works today with
+        no new key). Content routing overrides the constructed provider so images never
+        reach DeepSeek and text takes the cheapest available path.
+        """
+        if images:
+            return "anthropic"
+        if os.getenv("DEEPSEEK_API_KEY", "").strip():
+            return "deepseek"
+        return "anthropic"
+
+    def _model_for(self, provider: str) -> str:
+        """The model to use for a routed provider (honours an explicit constructor
+        override for the matching provider, else the env default)."""
+        if provider == self.provider and self._model_arg:
+            return self._model_arg
+        if provider == "anthropic":
             return os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
         return os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
 
@@ -165,11 +193,11 @@ class LLMClient:
 
     # -- live path (lazy imports; never reached in DEMO_MODE) ---------------
     def _complete_text(self, *, system: str, user: str, images: Optional[list[str]], max_tokens: int) -> str:
-        if self.provider == "anthropic":
-            return self._anthropic_complete(system, user, images, max_tokens)
-        if self.provider == "deepseek":
-            return self._deepseek_complete(system, user, images, max_tokens)
-        raise ValueError(f"unknown EXTRACTION_PROVIDER {self.provider!r} (use 'deepseek' or 'anthropic')")
+        provider = self._route(images)  # content routing: images -> anthropic, text -> cheap
+        model = self._model_for(provider)
+        if provider == "anthropic":
+            return self._anthropic_complete(system, user, images, max_tokens, model)
+        return self._deepseek_complete(system, user, images, max_tokens, model)
 
     def _retry(self, call, transient: tuple):
         """Run ``call`` with exponential backoff on transient/5xx errors."""
@@ -189,32 +217,32 @@ class LLMClient:
         assert last_exc is not None
         raise last_exc
 
-    def _deepseek_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int) -> str:
+    def _deepseek_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str) -> str:
         import openai  # lazy: importing this module must not require the SDK
 
-        if self._client is None:
-            self._client = openai.OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=os.getenv("DEEPSEEK_API_KEY"))
+        if "deepseek" not in self._clients:
+            self._clients["deepseek"] = openai.OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=os.getenv("DEEPSEEK_API_KEY"))
+        client = self._clients["deepseek"]
         transient = (
             openai.RateLimitError,
             openai.APIConnectionError,
             openai.APITimeoutError,
             openai.InternalServerError,
         )
-        messages = build_openai_messages(system, user, images)
+        messages = build_openai_messages(system, user, images)  # text-only in practice
 
         def call() -> str:
-            resp = self._client.chat.completions.create(
-                model=self.model, messages=messages, max_tokens=max_tokens
-            )
+            resp = client.chat.completions.create(model=model, messages=messages, max_tokens=max_tokens)
             return resp.choices[0].message.content or ""
 
         return self._retry(call, transient)
 
-    def _anthropic_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int) -> str:
+    def _anthropic_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str) -> str:
         import anthropic  # lazy
 
-        if self._client is None:
-            self._client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+        if "anthropic" not in self._clients:
+            self._clients["anthropic"] = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+        client = self._clients["anthropic"]
         transient = (
             anthropic.RateLimitError,
             anthropic.APIConnectionError,
@@ -224,8 +252,8 @@ class LLMClient:
         content = build_anthropic_content(user, images)
 
         def call() -> str:
-            resp = self._client.messages.create(
-                model=self.model,
+            resp = client.messages.create(
+                model=model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": content}],

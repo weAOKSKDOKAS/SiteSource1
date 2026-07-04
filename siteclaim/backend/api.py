@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from pipeline.documents import to_images  # noqa: E402
+from pipeline.documents import extract_document, to_images  # noqa: E402
 from pipeline.llm_client import demo_mode  # noqa: E402
 from pipeline.stage_01_ingest.classify import classify_documents  # noqa: E402
 from pipeline.stage_01_ingest.ingest import ingest_tender  # noqa: E402
@@ -319,17 +319,24 @@ async def post_ingest_upload(
 
     workspace = Workspace()
     per_doc_images: list[list[str]] = []
-    merged: list[str] = []
+    text_parts: list[str] = []
+    scope_images: list[str] = []
     for upload in files:
         data = await upload.read()
         workspace.save_upload(project_name, upload.filename or "upload", data)
         try:
-            doc_images = to_images(data, upload.content_type)
+            # Text-first for the scope split: extract each page's text layer, rendering a
+            # page to an image only when it is scanned. Classification stays a small 1-2
+            # page vision call (its own concern), so it renders the first pages.
+            text, page_images = extract_document(data, upload.content_type)
+            class_images = to_images(data, upload.content_type, max_pages=2)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        per_doc_images.append(doc_images[:2])  # first one or two pages carry the doc identity
-        merged += doc_images
-    scope = ingest_tender(tender, images=merged)
+        if text.strip():
+            text_parts.append(f"=== {upload.filename or 'document'} ===\n{text}")
+        scope_images += page_images
+        per_doc_images.append(class_images)
+    scope = ingest_tender(tender, images=scope_images, doc_text="\n\n".join(text_parts))
     tagged = classify_documents(tender, per_doc_images)
     return IngestUploadResponse(scope=scope, tender=tagged)
 

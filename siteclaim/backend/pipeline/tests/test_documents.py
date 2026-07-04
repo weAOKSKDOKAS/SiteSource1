@@ -10,7 +10,7 @@ import pytest
 
 fitz = pytest.importorskip("fitz")  # PyMuPDF
 
-from pipeline.documents import to_images  # noqa: E402
+from pipeline.documents import extract_document, to_images  # noqa: E402
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -20,6 +20,18 @@ def _make_pdf(pages: int = 1) -> bytes:
     for _ in range(pages):
         page = doc.new_page()
         page.insert_text((72, 72), "Total Due: HK$1,250,000")
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def _make_scanned_pdf() -> bytes:
+    """A page with only an image and no text layer (a scanned page)."""
+    doc = fitz.open()
+    page = doc.new_page()
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200))
+    pix.clear_with(255)  # blank white image, no text
+    page.insert_image(page.rect, pixmap=pix)
     data = doc.tobytes()
     doc.close()
     return data
@@ -64,3 +76,42 @@ def test_unsupported_type_raises():
 def test_empty_file_raises():
     with pytest.raises(ValueError):
         to_images(b"", "application/pdf")
+
+
+# -- text-first extraction (extract_document) ------------------------------
+def test_extract_document_uses_the_text_layer_and_renders_no_image():
+    text, images = extract_document(_make_pdf(2), "application/pdf")
+    assert "Total Due" in text and "1,250,000" in text  # literal rows, not a picture
+    assert images == []                                  # a text layer -> no page rendered
+
+
+def test_extract_document_falls_back_to_image_for_a_scanned_page():
+    text, images = extract_document(_make_scanned_pdf(), "application/pdf")
+    assert text == ""                                    # no usable text layer
+    assert len(images) == 1
+    assert base64.b64decode(images[0])[:8] == _PNG_MAGIC  # the scanned page went to vision
+
+
+def test_extract_document_mixes_text_and_image_pages():
+    # one text page + one scanned page in the same document
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "M1 rotary drilling PS 1.13.1A no 50")
+    scan = doc.new_page()
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200))
+    pix.clear_with(255)
+    scan.insert_image(scan.rect, pixmap=pix)
+    data = doc.tobytes()
+    doc.close()
+
+    text, images = extract_document(data, "application/pdf")
+    assert "rotary drilling" in text and len(images) == 1  # text page as text, scan as image
+
+
+def test_extract_document_image_upload_is_vision_only():
+    text, images = extract_document(_make_png(), "image/png")
+    assert text == "" and len(images) == 1
+
+
+def test_extract_document_empty_raises():
+    with pytest.raises(ValueError):
+        extract_document(b"", "application/pdf")

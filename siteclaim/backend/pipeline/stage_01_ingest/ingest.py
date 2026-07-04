@@ -50,7 +50,12 @@ def _system_prompt() -> str:
         "`scope_summary`, NOT in any other field. Never emit a `package_name` field. Emit "
         "exactly one package per canonical trade that appears in the tender — consolidate "
         "several sub-sections of the same trade into that trade's single package rather than "
-        "one package per sub-section — and no package for a trade that is not present."
+        "one package per sub-section — and no package for a trade that is not present.\n\n"
+        "Populate `sor_items` with EVERY priced row of the Schedule of Rates for that trade "
+        "— one object per row — copying its item reference, description, unit, and quantity "
+        "verbatim (include `qty` when the row states one). Do NOT collapse a section into a "
+        "single summary item: `scope_summary` is the prose overview, `sor_items` is the "
+        "row-by-row list. Never invent an item, a rate, or a quantity."
     )
 
 
@@ -70,17 +75,24 @@ def ingest_tender(
     *,
     client: Optional[LLMClient] = None,
     images: Optional[list[str]] = None,
+    doc_text: str = "",
 ) -> ScopePackages:
     """Split ``tender`` into one :class:`TradeWorkPackage` per trade.
 
-    In DEMO_MODE the split is read from ``demo_fixture``; otherwise Layer 2 produces
-    it (reading ``images`` — rendered tender pages — when given, for the live upload
-    path). Either way Layer 1 normalises trades against the taxonomy before returning.
+    In DEMO_MODE the split is read from ``demo_fixture``. Otherwise Layer 2 produces it
+    text-first: ``doc_text`` is the extracted text layer of the tender documents (so the
+    model reads literal Schedule-of-Rates rows) and ``images`` are only the pages that
+    had no text layer (scanned). A text-only call routes to the cheap provider; any image
+    routes to Anthropic vision (see ``llm_client``). Either way Layer 1 normalises trades
+    against the taxonomy before returning.
     """
     client = client or LLMClient()
+    user = _user_prompt(tender)
+    if doc_text.strip():
+        user += "\n\n=== Extracted tender document text ===\n" + doc_text
     scope = client.complete_json(
         system=_system_prompt(),
-        user=_user_prompt(tender),
+        user=user,
         target_model=ScopePackages,
         demo_fixture=demo_fixture,
         images=images,

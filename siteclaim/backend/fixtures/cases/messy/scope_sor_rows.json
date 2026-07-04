@@ -1,0 +1,15 @@
+{
+  "project_name": "GE/2026/14 Ground Investigation",
+  "packages": [
+    {
+      "trade": "ground_investigation",
+      "scope_summary": "Ground investigation field works: boreholes, drilling, sampling and in-situ testing",
+      "sor_items": [
+        {"item_ref": "M1", "description": "Percentage adjustment on Items in Landfill or Contaminated Site", "unit": "%", "qty": 50.0},
+        {"item_ref": "PS 1.13.1A", "description": "Rotary drilling in soil and rock", "unit": "m", "qty": 300.0},
+        {"item_ref": "PS 1.13.2", "description": "Undisturbed sampling", "unit": "no", "qty": 45.0}
+      ],
+      "source_refs": ["SR-01"]
+    }
+  ]
+}
