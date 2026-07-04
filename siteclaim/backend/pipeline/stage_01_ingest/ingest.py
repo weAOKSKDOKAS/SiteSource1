@@ -20,20 +20,38 @@ from __future__ import annotations
 from typing import Optional
 
 from pipeline.llm_client import LLMClient
-from rules_engine.taxonomy import validate_scope
+from rules_engine.taxonomy import CANONICAL_TRADES, validate_scope
 from schemas.models import ScopePackages, TenderPackage
 
-_SYSTEM = (
-    "You are a quantity-surveying assistant for a Hong Kong main contractor. "
-    "Read the tender documents (Method of Measurement, Particular Specification, "
-    "Tender Addendum, Schedule of Rates) and SPLIT the works into one package per "
-    "trade. For each trade return a concise scope_summary, the relevant Schedule-of-"
-    "Rates items (item_ref, description, unit, qty), and source_refs naming which "
-    "document each item came from. Use Hong Kong construction trade names. "
-    "You ONLY split and extract scope — you never price the work, never invent a "
-    "quantity or rate, and never judge or rank a subcontractor. Return JSON matching "
-    "the ScopePackages schema."
-)
+
+def _system_prompt() -> str:
+    """Build the split instruction, embedding the canonical trades from the taxonomy.
+
+    States the output shape by exact field name (not by schema title) and lists the
+    valid trades read live from ``rules_engine.taxonomy`` — so a newer model does not
+    guess field names (the observed Sonnet-5 drift was ``package_name`` instead of
+    ``trade``) and the trade list never drifts from the taxonomy.
+    """
+    trades = ", ".join(sorted(CANONICAL_TRADES))
+    return (
+        "You are a quantity-surveying assistant for a Hong Kong main contractor. Read the "
+        "tender documents (Method of Measurement, Particular Specification, Tender Addendum, "
+        "Schedule of Rates) and SPLIT the works into trade packages. You ONLY split and "
+        "extract scope — never price the work, never invent a quantity or rate, never judge "
+        "or rank a subcontractor.\n\n"
+        "Return ONE JSON object with EXACTLY these field names and no others:\n"
+        '{"project_name": <string>, "packages": [\n'
+        '  {"trade": <canonical trade>, "scope_summary": <string>, '
+        '"sor_items": [{"item_ref": <string>, "description": <string>, "unit": <string>, '
+        '"qty": <number>}], "source_refs": [<string naming the tender document>]}\n'
+        "]}\n\n"
+        f"`trade` MUST be exactly one of these canonical trades: {trades}. Put the "
+        "descriptive sub-section name (e.g. \"Geotechnical Works\", \"Section 7\") in "
+        "`scope_summary`, NOT in any other field. Never emit a `package_name` field. Emit "
+        "exactly one package per canonical trade that appears in the tender — consolidate "
+        "several sub-sections of the same trade into that trade's single package rather than "
+        "one package per sub-section — and no package for a trade that is not present."
+    )
 
 
 def _user_prompt(tender: TenderPackage) -> str:
@@ -61,12 +79,16 @@ def ingest_tender(
     """
     client = client or LLMClient()
     scope = client.complete_json(
-        system=_SYSTEM,
+        system=_system_prompt(),
         user=_user_prompt(tender),
         target_model=ScopePackages,
         demo_fixture=demo_fixture,
         images=images,
     )
+    # project_name is known from the tender — inject it rather than depend on the model
+    # echoing it (a newer model may omit it; ScopePackages defaults it to "").
+    if not scope.project_name:
+        scope = scope.model_copy(update={"project_name": tender.project_name})
     normalised, unmapped = validate_scope(scope)
     if unmapped:
         # Surfaced, not dropped — a human reconciles these against the taxonomy.

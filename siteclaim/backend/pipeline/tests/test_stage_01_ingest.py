@@ -52,3 +52,34 @@ def test_scope_items_and_sources_survive_the_split():
     electrical = next(pkg for pkg in scope.packages if pkg.trade == "electrical")
     assert electrical.sor_items and electrical.sor_items[0].qty > 0
     assert electrical.source_refs  # each package cites which tender document it came from
+
+
+def test_scope_packages_accepts_package_name_and_missing_project_name():
+    # The Sonnet-5 drift: a package uses `package_name` instead of `trade`, and the
+    # top-level `project_name` is omitted. Both are now accepted (no ValidationError).
+    payload = (
+        '{"packages": [{"package_name": "Electrical", "scope_summary": "LV distribution", '
+        '"sor_items": [], "source_refs": []}]}'
+    )
+    scope = ScopePackages.model_validate_json(payload)
+    assert scope.project_name == ""                 # defaulted, not required
+    assert scope.packages[0].trade == "Electrical"  # package_name mapped to trade (pre-normalisation)
+
+
+def test_ingest_tolerates_the_drift_and_fills_project_name():
+    # End to end: a model payload with `package_name` and no `project_name` no longer
+    # 500s — project_name is injected from the tender and the trade is normalised.
+    scope = ingest_tender(_tender(), demo_fixture="cases/messy/scope_drift.json")
+    assert isinstance(scope, ScopePackages)
+    assert scope.project_name.startswith("Kwun Tong")           # injected from the tender
+    assert scope.packages[0].trade == "ground_investigation"    # package_name -> trade -> canonical
+
+
+def test_system_prompt_names_fields_and_lists_canonical_trades():
+    # The prompt states the exact field names and embeds the taxonomy trade list, so a
+    # newer model does not guess (`package_name`) and the list stays in sync.
+    from pipeline.stage_01_ingest.ingest import _system_prompt
+
+    prompt = _system_prompt()
+    assert '"trade"' in prompt and '"scope_summary"' in prompt and "package_name" in prompt
+    assert "ground_investigation" in prompt and "electrical" in prompt  # from rules_engine.taxonomy
