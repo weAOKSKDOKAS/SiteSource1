@@ -334,24 +334,43 @@ def post_ingest_upload(
     workspace = Workspace()
     originals: list[tuple[str, bytes]] = []  # saved late — under the final name (below)
     per_doc_images: list[list[str]] = []
-    text_parts: list[str] = []
-    scope_images: list[str] = []
+    doc_texts: list[str] = []               # extracted text layer, per document (index-aligned)
+    doc_page_images: list[list[str]] = []   # scanned-page renders, per document
     for upload in files:
         data = upload.file.read()
         originals.append((upload.filename or "upload", data))
         try:
-            # Text-first for the scope split: extract each page's text layer, rendering a
-            # page to an image only when it is scanned. Classification stays a small 1-2
-            # page vision call (its own concern), so it renders the first pages.
+            # Text-first: extract each page's text layer, rendering a page to an image only
+            # when it is scanned. Classification stays a small 1-2 page vision call.
             text, page_images = extract_document(data, upload.content_type)
             class_images = to_images(data, upload.content_type, max_pages=2)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if text.strip():
-            text_parts.append(f"=== {upload.filename or 'document'} ===\n{text}")
-        scope_images += page_images
+        doc_texts.append(text)
+        doc_page_images.append(page_images)
         per_doc_images.append(class_images)
-    scope = ingest_tender(tender, images=scope_images, doc_text="\n\n".join(text_parts))
+
+    # Classify each document FIRST (kind + trade routing) so item extraction can be gated
+    # to the Schedule(s) of Rates: a Method of Measurement lists item-like rows that are
+    # NOT priceable, and extracting over every document's text yielded phantom sor_items
+    # live. Only schedule_of_rates text/images feed the priced-item split; every other
+    # document informs the trade split as bounded context but never produces a line item.
+    tagged = classify_documents(tender, per_doc_images)
+    sor_text_parts: list[str] = []
+    context_parts: list[str] = []
+    scope_images: list[str] = []
+    for doc, text, page_images in zip(tagged.documents, doc_texts, doc_page_images):
+        label = doc.filename or "document"
+        if doc.doc_type == DocType.SCHEDULE_OF_RATES:
+            if text.strip():
+                sor_text_parts.append(f"=== {label} ===\n{text}")
+            scope_images += page_images  # scanned SoR pages carry priced rows -> vision
+        elif text.strip():
+            context_parts.append(f"=== {label} ===\n{text}")
+    scope = ingest_tender(
+        tender, images=scope_images,
+        doc_text="\n\n".join(sor_text_parts), context_text="\n\n".join(context_parts),
+    )
 
     # Adopt the extracted contract name when the form was left at its default (the split
     # reads the real name off the documents, e.g. "Contract No. GE/2026/14 — ..."); an
@@ -366,7 +385,7 @@ def post_ingest_upload(
         workspace.save_upload(final_name, filename, data)
 
     scope = scope.model_copy(update={"project_name": final_name})
-    tagged = classify_documents(tender, per_doc_images).model_copy(update={"project_name": final_name})
+    tagged = tagged.model_copy(update={"project_name": final_name})
     return IngestUploadResponse(scope=scope, tender=tagged)
 
 

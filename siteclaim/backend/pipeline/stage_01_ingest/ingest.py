@@ -184,13 +184,19 @@ def _merge_scopes(results: list[ScopePackages], tender: TenderPackage) -> ScopeP
     return ScopePackages(project_name=project_name or tender.project_name, packages=packages)
 
 
+_CONTEXT_MAX_CHARS = 6000  # bounded background from non-SoR documents for the trade split
+
+
 def _extract(
-    client: LLMClient, tender: TenderPackage, doc_text: str, images: Optional[list[str]], demo_fixture: Optional[str]
+    client: LLMClient, tender: TenderPackage, doc_text: str, images: Optional[list[str]],
+    demo_fixture: Optional[str], context_text: str = "",
 ) -> ScopePackages:
     """Run the item-extraction prompt over the document and merge into one ScopePackages.
 
     Large text is chunked (one small call per chunk); any scanned pages go in a single
     vision call; a small or empty document (incl. the DEMO fixture) is a single call.
+    ``context_text`` (non-SoR documents — specs, clarifications, MoM) is passed once, as
+    clearly-labelled background for the trade split, and is never a source of priced items.
     """
     system = _system_prompt()
     base_user = _user_prompt(tender)
@@ -202,6 +208,17 @@ def _extract(
         calls.append((base_user + "\n\n=== Attached scanned tender pages ===", images))
     if not calls:  # no text and no images (DEMO fixture / small tender) -> one call
         calls.append((base_user, None))
+
+    context = context_text.strip()[:_CONTEXT_MAX_CHARS]
+    if context:  # background rides the first call only — informs the split, never priced
+        block = (
+            "\n\n=== Context documents (specifications, clarifications, method of "
+            "measurement) — for scope and trade understanding ONLY; do NOT extract any "
+            "priced item from this section ===\n" + context
+        )
+        user0, imgs0 = calls[0]
+        calls[0] = (user0 + block, imgs0)
+
     results = [
         client.complete_json(
             system=system, user=user, target_model=ScopePackages, demo_fixture=demo_fixture, images=call_images
@@ -218,18 +235,22 @@ def ingest_tender(
     client: Optional[LLMClient] = None,
     images: Optional[list[str]] = None,
     doc_text: str = "",
+    context_text: str = "",
 ) -> ScopePackages:
     """Split ``tender`` into one :class:`TradeWorkPackage` per trade.
 
     In DEMO_MODE the split is read from ``demo_fixture``. Otherwise Layer 2 produces it
-    text-first: ``doc_text`` (the extracted text layer) is chunked on section/page
+    text-first: ``doc_text`` (the Schedule-of-Rates text layer) is chunked on section/page
     boundaries and each chunk extracted separately, then merged — so a 58-page Schedule
     of Rates yields the full item list without truncation. Scanned pages (``images``) go
-    in a single vision call. ``project_name`` is taken from the tender; Layer 1 then
-    normalises trades against the taxonomy before returning.
+    in a single vision call. ``context_text`` is non-SoR document text (specs,
+    clarifications, MoM) that informs the trade split but yields no priced items — the
+    caller gates on the classified ``doc_type`` so a Method of Measurement never produces
+    phantom items. ``project_name`` is taken from the tender; Layer 1 then normalises
+    trades against the taxonomy before returning.
     """
     client = client or LLMClient()
-    scope = _extract(client, tender, doc_text, images, demo_fixture)
+    scope = _extract(client, tender, doc_text, images, demo_fixture, context_text=context_text)
     normalised, unmapped = validate_scope(scope)
     if unmapped:
         # Surfaced, not dropped — a human reconciles these against the taxonomy.

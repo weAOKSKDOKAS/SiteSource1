@@ -148,3 +148,40 @@ def test_classification_result_defaults_are_safe():
     tender = _tender([("x.pdf", DocType.PARTICULAR_SPECIFICATION)])
     tagged = classify_documents(tender, client=FakeClient({"x.pdf": {}}))
     assert tagged.documents[0].trades == []
+
+
+# -- doc_type: the extraction-gating axis, orthogonal to routing -----------
+def test_classify_sets_doc_type_independently_of_general_routing():
+    tender = _tender([
+        ("sr01_combined.pdf", DocType.SCHEDULE_OF_RATES),
+        ("mm01.pdf", DocType.SCHEDULE_OF_RATES),          # uploaded default; classifier corrects it
+        ("clarification.pdf", DocType.SCHEDULE_OF_RATES),
+    ])
+    client = FakeClient({
+        # A combined SoR is general for ROUTING yet schedule_of_rates for KIND (extract).
+        "sr01_combined.pdf": {"general": True, "doc_type": "schedule_of_rates", "confidence": 0.9},
+        "mm01.pdf": {"general": True, "doc_type": "method_of_measurement", "confidence": 0.9},
+        "clarification.pdf": {"general": True, "doc_type": "clarification", "confidence": 0.9},
+    })
+    by_name = {d.filename: d for d in classify_documents(tender, client=client).documents}
+
+    assert by_name["sr01_combined.pdf"].doc_type is DocType.SCHEDULE_OF_RATES  # extract items
+    assert by_name["mm01.pdf"].doc_type is DocType.METHOD_OF_MEASUREMENT       # NOT extracted
+    assert by_name["clarification.pdf"].doc_type is DocType.TENDER_ADDENDUM    # clarification -> addendum
+    assert all(d.trades == [] for d in by_name.values())                      # all general (routing)
+
+
+def test_low_confidence_doc_type_keeps_the_uploaded_kind():
+    tender = _tender([("mystery.pdf", DocType.SCHEDULE_OF_RATES)])
+    client = FakeClient({"mystery.pdf": {"general": True, "doc_type": "method_of_measurement", "confidence": 0.2}})
+    # Low confidence -> the classifier's kind is not trusted; the uploaded doc_type stays.
+    assert classify_documents(tender, client=client).documents[0].doc_type is DocType.SCHEDULE_OF_RATES
+
+
+def test_classify_prompt_requests_doc_type_and_general_for_cross_trade_docs():
+    from pipeline.stage_01_ingest.classify import _system_prompt
+
+    prompt = _system_prompt()
+    assert "doc_type" in prompt and "schedule_of_rates" in prompt and "method_of_measurement" in prompt
+    assert "INDEPENDENT" in prompt                       # doc_type orthogonal to general
+    assert "never leaning to the tender's dominant trade" in prompt  # cross-trade -> general

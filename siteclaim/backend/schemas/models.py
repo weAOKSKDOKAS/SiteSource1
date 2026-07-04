@@ -51,12 +51,17 @@ class SignalType(str, Enum):
 
 
 class DocType(str, Enum):
-    """The four tender documents that make up a :class:`TenderPackage`."""
+    """A tender document's kind. The first four are the classic package members; the
+    scope split extracts priceable ``sor_items`` **only** from ``schedule_of_rates``
+    documents (a Method of Measurement lists item-like rows that are not priceable, so
+    treating everything as an SoR yielded phantom items live). ``general`` covers
+    cross-trade material (conditions of contract, general preliminaries, forms)."""
 
     METHOD_OF_MEASUREMENT = "method_of_measurement"
     PARTICULAR_SPECIFICATION = "particular_specification"
     TENDER_ADDENDUM = "tender_addendum"
     SCHEDULE_OF_RATES = "schedule_of_rates"
+    GENERAL = "general"
 
 
 class DispatchStatus(str, Enum):

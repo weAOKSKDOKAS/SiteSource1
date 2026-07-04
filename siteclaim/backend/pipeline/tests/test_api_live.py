@@ -300,7 +300,7 @@ def _stub_live_ingest(monkeypatch, extracted_name: str):
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: ["page-png"])
     monkeypatch.setattr(
         "api.ingest_tender",
-        lambda tender, images=None, doc_text="": ScopePackages(project_name=extracted_name, packages=[]),
+        lambda tender, images=None, doc_text="", context_text="": ScopePackages(project_name=extracted_name, packages=[]),
     )
     monkeypatch.setattr("api.classify_documents", lambda tender, imgs: tender)
 
@@ -347,3 +347,83 @@ def test_ingest_upload_demo_keeps_the_placeholder_name():
     resp = client.post("/ingest-upload", files={"files": ("tender.pdf", b"%PDF-1.4 fake", "application/pdf")})
     assert resp.status_code == 200
     assert resp.json()["tender"]["project_name"] == "Uploaded tender"
+
+
+# -- /ingest-upload gates item extraction to the Schedule(s) of Rates ------------------
+#
+# Live bug: item extraction ran over the merged text of ALL documents, so the Method of
+# Measurement yielded 57 phantom sor_items. The route now classifies first and feeds only
+# schedule_of_rates text to the extractor; other documents inform the trade split as
+# context but never produce a line item. The model seams are stubbed (offline).
+
+def test_ingest_upload_extracts_items_only_from_schedule_of_rates_text(monkeypatch, tmp_path):
+    from schemas.models import DocType, ScopePackages, SorItem, TenderPackage, TradeWorkPackage
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+
+    # extract_document returns per-file text keyed off the filename passed via content.
+    texts = {"sr01.pdf": "A1 rotary drilling m 300", "mm01.pdf": "Method: measure net in place, 57 rules"}
+    monkeypatch.setattr("api.extract_document", lambda data, ct: (texts[data.decode()], []))
+    monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
+
+    # Classifier: sr01 is the Schedule of Rates, mm01 is the Method of Measurement.
+    def fake_classify(tender, per_doc_images):
+        kinds = {"sr01.pdf": DocType.SCHEDULE_OF_RATES, "mm01.pdf": DocType.METHOD_OF_MEASUREMENT}
+        return TenderPackage(project_name=tender.project_name, documents=[
+            d.model_copy(update={"doc_type": kinds[d.filename], "trades": []}) for d in tender.documents
+        ])
+    monkeypatch.setattr("api.classify_documents", fake_classify)
+
+    captured = {}
+
+    def fake_ingest(tender, images=None, doc_text="", context_text=""):
+        captured["doc_text"] = doc_text
+        captured["context_text"] = context_text
+        return ScopePackages(project_name="GE/2026/14", packages=[TradeWorkPackage(
+            trade="ground_investigation", scope_summary="GI",
+            sor_items=[SorItem(item_ref="A1", description="rotary drilling", unit="m", qty=300.0)],
+        )])
+    monkeypatch.setattr("api.ingest_tender", fake_ingest)
+
+    resp = client.post("/ingest-upload", files=[
+        ("files", ("sr01.pdf", b"sr01.pdf", "application/pdf")),
+        ("files", ("mm01.pdf", b"mm01.pdf", "application/pdf")),
+    ])
+
+    assert resp.status_code == 200
+    # Only the SoR text reaches the priced-item extractor; the MoM is context, not items.
+    assert "rotary drilling" in captured["doc_text"] and "Method: measure" not in captured["doc_text"]
+    assert "Method: measure" in captured["context_text"]
+    assert [i["item_ref"] for i in resp.json()["scope"]["packages"][0]["sor_items"]] == ["A1"]
+
+
+def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
+    # An upload with NO Schedule of Rates (just a Method of Measurement) must produce a
+    # scope split with zero sor_items — never phantom rows from the MoM's item-like text.
+    from schemas.models import DocType, ScopePackages, TenderPackage, TradeWorkPackage
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    monkeypatch.setattr("api.extract_document", lambda data, ct: ("Method of measurement rules, 57 of them", []))
+    monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
+    monkeypatch.setattr("api.classify_documents", lambda tender, imgs: TenderPackage(
+        project_name=tender.project_name,
+        documents=[d.model_copy(update={"doc_type": DocType.METHOD_OF_MEASUREMENT, "trades": []}) for d in tender.documents],
+    ))
+
+    seen = {}
+
+    def fake_ingest(tender, images=None, doc_text="", context_text=""):
+        seen["doc_text"] = doc_text
+        # The real extractor produces no items from empty SoR text; model the split it returns.
+        return ScopePackages(project_name="GE/2026/14", packages=[
+            TradeWorkPackage(trade="ground_investigation", scope_summary="GI", sor_items=[])
+        ])
+    monkeypatch.setattr("api.ingest_tender", fake_ingest)
+
+    resp = client.post("/ingest-upload", files={"files": ("mm01.pdf", b"x", "application/pdf")})
+
+    assert resp.status_code == 200
+    assert seen["doc_text"] == ""  # no schedule_of_rates text fed to the extractor
+    assert resp.json()["scope"]["packages"][0]["sor_items"] == []

@@ -35,38 +35,80 @@ from pydantic import BaseModel, Field, ValidationError
 
 from pipeline.llm_client import LLMClient
 from rules_engine import taxonomy
-from schemas.models import TenderDocument, TenderPackage
+from schemas.models import DocType, TenderDocument, TenderPackage
 
 MIN_CONFIDENCE = 0.5
 
 def _system_prompt() -> str:
     """The classification instruction, embedding the canonical trades so a trade-specific
     document maps to the same keys the scope split and shortlist use — and a geotechnical
-    spec (PS-S07) lands on ``ground_investigation``, not ``foundation_substructure``."""
+    spec (PS-S07) lands on ``ground_investigation``, not ``foundation_substructure``.
+
+    Two INDEPENDENT axes are requested: ``general`` (routing — does every trade get the
+    whole file?) and ``doc_type`` (what KIND of document it is, which gates item
+    extraction). They are orthogonal: a combined Schedule of Rates is ``general=true``
+    (routed to everyone) yet ``doc_type=schedule_of_rates`` (its priced rows are
+    extracted); a Method of Measurement is also ``general=true`` but
+    ``doc_type=method_of_measurement`` so its item-like rows are NOT extracted as prices."""
     trades = ", ".join(sorted(taxonomy.CANONICAL_TRADES))
     return (
-        "You route a Hong Kong tender's documents to subcontractors by trade. Classify the "
-        "ONE attached document (its first pages are shown) as either GENERAL — every trade "
-        "needs it: form of tender, conditions of contract, general preliminaries, method of "
-        "measurement, a COMBINED multi-section or multi-trade Schedule of Rates, or generic "
-        "appendices and forms — or TRADE-SPECIFIC: a particular-specification section or a "
-        "single-trade Schedule of Rates for one discipline. Read the header/first page to "
-        "identify the document. Set general=true for any whole-tender or multi-trade "
-        "document. Otherwise set general=false and list the specific trade(s) in `trades` "
-        f"using ONE OR MORE of these canonical trades: {trades}. Choose the closest key — a "
-        "geotechnical / ground-investigation / site-investigation / drilling spec is "
-        "`ground_investigation`, NOT `foundation_substructure`. Give a confidence 0..1. When "
-        "unsure, prefer general — sending a document to everyone is safe; withholding a "
-        "relevant one is not. Never split or extract pages. Return JSON matching the schema."
+        "You route a Hong Kong tender's documents to subcontractors by trade AND identify "
+        "each document's kind. Read the ONE attached document (its first pages are shown).\n\n"
+        "ROUTING — set `general`=true for any whole-tender or multi-trade document every "
+        "trade needs: form of tender, conditions of contract, general preliminaries, method "
+        "of measurement, a COMBINED multi-section or multi-trade Schedule of Rates, or "
+        "generic appendices and forms. Otherwise set `general`=false and list the specific "
+        f"trade(s) in `trades` using ONE OR MORE of these canonical trades: {trades}. Choose "
+        "the closest key — a geotechnical / ground-investigation / site-investigation / "
+        "drilling spec is `ground_investigation`, NOT `foundation_substructure`. Clarifications, "
+        "addenda, the method of measurement and general conditions are cross-trade: mark them "
+        "`general`=true with an empty `trades`, never leaning to the tender's dominant trade.\n\n"
+        "KIND — set `doc_type` to exactly one of: `schedule_of_rates` (a priced/priceable "
+        "Schedule of Rates, whether single-trade or combined), `particular_specification`, "
+        "`method_of_measurement`, `clarification` (a clarification or tender addendum), or "
+        "`general` (conditions of contract, preliminaries, forms, anything else). `doc_type` "
+        "is INDEPENDENT of `general`: a combined SoR is general=true AND "
+        "doc_type=schedule_of_rates.\n\n"
+        "Give a confidence 0..1. When unsure on routing, prefer general — sending a document "
+        "to everyone is safe; withholding a relevant one is not. Never split or extract "
+        "pages. Return JSON matching the schema."
     )
 
 
 class DocClassification(BaseModel):
-    """Layer-2 result for one document: general, or specific to some trade(s)."""
+    """Layer-2 result for one document: routing (general / trades) plus its kind (doc_type)."""
 
     general: bool = False
     trades: list[str] = Field(default_factory=list)
+    doc_type: str = ""  # schedule_of_rates | particular_specification | method_of_measurement | clarification | general
     confidence: float = 0.0
+
+
+# doc_type label (from the model) -> canonical DocType. Only schedule_of_rates gates item
+# extraction on; the rest are recorded but never feed the priced-item split.
+_DOC_TYPE_ALIASES = {
+    "schedule_of_rates": DocType.SCHEDULE_OF_RATES,
+    "sor": DocType.SCHEDULE_OF_RATES,
+    "particular_specification": DocType.PARTICULAR_SPECIFICATION,
+    "particular_spec": DocType.PARTICULAR_SPECIFICATION,
+    "specification": DocType.PARTICULAR_SPECIFICATION,
+    "spec": DocType.PARTICULAR_SPECIFICATION,
+    "method_of_measurement": DocType.METHOD_OF_MEASUREMENT,
+    "mom": DocType.METHOD_OF_MEASUREMENT,
+    "clarification": DocType.TENDER_ADDENDUM,
+    "addendum": DocType.TENDER_ADDENDUM,
+    "tender_addendum": DocType.TENDER_ADDENDUM,
+    "general": DocType.GENERAL,
+    "conditions_of_contract": DocType.GENERAL,
+    "general_conditions": DocType.GENERAL,
+    "preliminaries": DocType.GENERAL,
+}
+
+
+def _resolve_doc_type(label: str) -> Optional[DocType]:
+    """Map a model doc_type label to a canonical :class:`DocType` (None if unrecognised)."""
+    key = (label or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return _DOC_TYPE_ALIASES.get(key)
 
 
 def _doc_prompt(doc: TenderDocument) -> str:
@@ -118,6 +160,7 @@ def classify_documents(
     tagged: list[TenderDocument] = []
     for index, doc in enumerate(tender.documents):
         images = per_doc_images[index] if per_doc_images and index < len(per_doc_images) else None
+        doc_type = doc.doc_type  # kept if classification fails or the label is unrecognised
         try:
             result = client.complete_json(
                 system=_system_prompt(),
@@ -127,11 +170,14 @@ def classify_documents(
                 images=images,
             )
             trades = _resolve_trades(result)
+            resolved_type = _resolve_doc_type(result.doc_type)
+            if resolved_type is not None and result.confidence >= MIN_CONFIDENCE:
+                doc_type = resolved_type
         except (RuntimeError, FileNotFoundError, ValidationError, ValueError) as exc:
             # Any classification hiccup routes the document general — the safe direction.
             print(f"[classify] classification failed for {doc.filename!r} ({exc}); routing general.")
             trades = []
-        tagged.append(doc.model_copy(update={"trades": trades}))
+        tagged.append(doc.model_copy(update={"trades": trades, "doc_type": doc_type}))
     return TenderPackage(
         project_name=tender.project_name,
         description=tender.description,
