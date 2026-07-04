@@ -26,6 +26,7 @@ no socket offline; the module imports no provider SDK.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -127,6 +128,20 @@ def accumulate_reply(ws: Workspace, tender_id: str, reply: BidReply) -> list[Bid
 def comparison_path(ws: Workspace, tender_id: str) -> Path:
     """Where this tender's accumulating leveled comparison xlsx is written."""
     return ws.artifacts_dir(tender_id, create=True) / "comparison.xlsx"
+
+
+def comparison_file(ws: Workspace, tender_id: str) -> Path:
+    """The comparison xlsx path WITHOUT creating the directory (for a read / serve)."""
+    return ws.artifacts_dir(tender_id) / "comparison.xlsx"
+
+
+def replies_last_received(ws: Workspace, tender_id: str) -> Optional[str]:
+    """ISO-8601 UTC time the tender's replies file last changed (when the newest reply
+    landed), or ``None`` if no reply has arrived yet."""
+    path = _replies_path(ws, tender_id)
+    if not path.is_file():
+        return None
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

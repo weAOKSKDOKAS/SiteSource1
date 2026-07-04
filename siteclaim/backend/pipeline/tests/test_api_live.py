@@ -160,6 +160,53 @@ def test_shortlist_include_public_opens_the_pool():
     assert len(public["per_trade"]["electrical"]) > len(default["per_trade"]["electrical"])
 
 
+def test_tender_replies_endpoint_reports_accumulated_and_outstanding(monkeypatch, tmp_path):
+    # Two firms dispatched; one replies. The endpoint shows the reply, the item count, the
+    # outstanding firm, and that the comparison xlsx is ready — no need to open Excel.
+    from pipeline import reply_loop
+    from pipeline.workspace import Workspace, tender_slug
+
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    ws = Workspace()
+    project = "Kwun Tong"
+    slug = tender_slug(project)  # "kwun-tong"
+    for fid in ("F-EL-02", "F-EL-03"):
+        reply_loop.record_dispatch(ws, reply_loop.make_ref(project, fid, "electrical"), project, fid, "electrical")
+
+    # Before any reply: zero replies, both outstanding, no comparison.
+    empty = client.get(f"/tender/{slug}/replies").json()
+    assert empty["reply_count"] == 0 and empty["last_received"] is None
+    assert {o["firm_id"] for o in empty["outstanding"]} == {"F-EL-02", "F-EL-03"}
+    assert empty["comparison_available"] is False
+    assert client.get(f"/tender/{slug}/comparison.xlsx").status_code == 404
+
+    # F-EL-02 replies (DEMO fixture parse + comparison written).
+    ref = reply_loop.make_ref(project, "F-EL-02", "electrical")
+    assert client.post("/inbound-reply", files={"files": ("r.pdf", b"%PDF-1.4", "application/pdf")}, data={"ref": ref}).status_code == 200
+
+    body = client.get(f"/tender/{slug}/replies").json()
+    assert body["tender_slug"] == slug and body["reply_count"] == 1
+    assert body["last_received"] is not None
+    assert [r["firm_id"] for r in body["replies"]] == ["F-EL-02"]
+    assert body["replies"][0]["line_items"] >= 1
+    assert {o["firm_id"] for o in body["outstanding"]} == {"F-EL-03"}  # F-EL-02 no longer outstanding
+    assert body["comparison_available"] is True
+
+    dl = client.get(f"/tender/{slug}/comparison.xlsx")
+    assert dl.status_code == 200 and dl.content[:2] == b"PK"  # xlsx zip
+
+
+def test_tender_replies_routes_are_registered():
+    paths = {route.path for route in app.routes}
+    assert {"/tender/{slug}/replies", "/tender/{slug}/comparison.xlsx"} <= paths
+
+
+def test_ingest_upload_returns_the_tender_slug():
+    # The client needs the server-derived slug to poll /tender/{slug}/replies.
+    resp = client.post("/ingest-upload", files={"files": ("t.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert resp.json()["tender_slug"] == "uploaded-tender"  # slug of the DEMO placeholder name
+
+
 def test_shortlist_k_caps_the_ranked_list_through_the_api():
     # The live frontend sends include_public + k so a broad trade (22 external_works
     # firms on the real GI tender) does not become 22 dispatch bundles.

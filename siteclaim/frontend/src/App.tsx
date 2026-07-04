@@ -39,6 +39,7 @@ export default function App() {
 
   // Pipeline state
   const [scope, setScope] = useState<ScopePackages | null>(null);
+  const [tenderSlug, setTenderSlug] = useState("");  // server-derived slug for the replies panel
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
   const [dispatch, setDispatch] = useState<DispatchSet | null>(null);
@@ -108,6 +109,7 @@ export default function App() {
       if (!demoMode && files.length > 0) {
         const uploaded = await api.ingestUpload(files);
         setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
+        setTenderSlug(uploaded.tender_slug); // for the live replies panel on the dispatch step
         result = uploaded.scope;
       } else if (tender) {
         result = await api.ingest(tender);
@@ -263,6 +265,8 @@ export default function App() {
                 heroTrade={heroTrade}
                 approvals={approvals}
                 dispatch={dispatch}
+                demoMode={demoMode}
+                tenderSlug={tenderSlug}
                 onToggleApprove={toggleApprove}
                 onSend={sendDispatch}
                 onBack={() => setStep(2)}

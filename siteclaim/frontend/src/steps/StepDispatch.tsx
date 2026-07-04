@@ -1,4 +1,7 @@
-import type { DispatchSet, DispatchStatus, ShortlistSet } from "../types";
+import { useState } from "react";
+
+import { api } from "../api";
+import type { DispatchSet, DispatchStatus, ShortlistSet, TenderReplies } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, cx } from "../ui";
 import { tradeLabel } from "../format";
@@ -9,11 +12,76 @@ const STATUS_LABEL: Record<DispatchStatus, string> = {
   sent_mock: "Sent (mock)",
 };
 
+// Live-mode panel: which replies have accumulated for this tender. Manual refresh only —
+// no polling loop. Hidden in demo mode (there is no live reply loop there).
+function RepliesPanel({ slug }: { slug: string }) {
+  const [data, setData] = useState<TenderReplies | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .tenderReplies(slug)
+      .then(setData)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
+        <h2 className="text-sm font-semibold text-ink">Replies received</h2>
+        <Button variant="ghost" onClick={refresh} loading={busy}>
+          Refresh
+        </Button>
+      </div>
+      <div className="space-y-2 px-4 py-3">
+        {error && <p className="text-xs text-bad">{error}</p>}
+        {!data && !error && <p className="text-xs text-ink-faint">Refresh to check for replies to this tender.</p>}
+        {data && (
+          <>
+            <p className="text-xs text-ink-soft">
+              {data.reply_count} received
+              {data.last_received ? ` · last ${new Date(data.last_received).toLocaleString()}` : ""}
+              {data.outstanding.length ? ` · ${data.outstanding.length} outstanding` : ""}
+            </p>
+            {data.replies.length > 0 && (
+              <ul className="divide-y divide-line-soft">
+                {data.replies.map((r) => (
+                  <li key={`${r.trade}-${r.firm_id}`} className="flex items-center gap-2 py-1.5">
+                    <span className="text-sm text-ink">{r.firm_id}</span>
+                    <Pill tone="brand">{tradeLabel(r.trade)}</Pill>
+                    <span className="tabular ml-auto text-xs text-ink-faint">{r.line_items} items</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {data.comparison_available && (
+              <a
+                className="inline-block text-xs font-semibold text-brand underline"
+                href={api.tenderComparisonUrl(slug)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Download comparison.xlsx
+              </a>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export function StepDispatch({
   shortlist,
   heroTrade,
   approvals,
   dispatch,
+  demoMode,
+  tenderSlug,
   onToggleApprove,
   onSend,
   onBack,
@@ -24,6 +92,8 @@ export function StepDispatch({
   heroTrade: string;
   approvals: Record<string, string[]>;
   dispatch: DispatchSet | null;
+  demoMode: boolean;
+  tenderSlug: string;
   onToggleApprove: (trade: string, firmId: string) => void;
   onSend: () => void;
   onBack: () => void;
@@ -113,6 +183,8 @@ export function StepDispatch({
           </ul>
         </Card>
       )}
+
+      {!demoMode && dispatch && tenderSlug && <RepliesPanel slug={tenderSlug} />}
 
       <StepNav onBack={onBack} onNext={onNext} nextLabel="Level the bids →" loading={loading} nextDisabled={!dispatch} />
     </div>

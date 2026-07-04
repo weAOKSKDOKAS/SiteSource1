@@ -11,6 +11,7 @@ import type {
   ScopePackages,
   ShortlistSet,
   TenderPackage,
+  TenderReplies,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
@@ -79,4 +80,8 @@ export const api = {
     post<Recommendation>("/recommend", { levelled, trade, demo_fixture: rationaleFixture }),
 
   levelingXlsxUrl: () => BASE + "/leveling.xlsx",
+
+  // Reply visibility (live): which replies have landed for a tender, refreshed on demand.
+  tenderReplies: (slug: string) => get<TenderReplies>(`/tender/${encodeURIComponent(slug)}/replies`),
+  tenderComparisonUrl: (slug: string) => BASE + `/tender/${encodeURIComponent(slug)}/comparison.xlsx`,
 };

@@ -33,7 +33,7 @@ from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  
 from pipeline.stage_04_level.level import level_bids, load_demo_replies, merge_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
-from pipeline.workspace import Workspace  # noqa: E402
+from pipeline.workspace import Workspace, tender_slug  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
 from db import refresh, store  # noqa: E402
 from schemas.models import (  # noqa: E402
@@ -289,10 +289,13 @@ class IngestRequest(BaseModel):
 
 class IngestUploadResponse(BaseModel):
     """The scope split plus the trade-tagged tender, so the client can hand the tagged
-    tender to ``/dispatch`` for per-trade document routing."""
+    tender to ``/dispatch`` for per-trade document routing. ``tender_slug`` is the
+    server-derived slug the client uses to poll ``/tender/{slug}/replies`` (so it never
+    re-implements the slug logic)."""
 
     scope: ScopePackages
     tender: TenderPackage
+    tender_slug: str = ""
 
 
 @app.post("/ingest", response_model=ScopePackages)
@@ -329,7 +332,10 @@ def post_ingest_upload(
         documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=f.filename or "upload") for f in files],
     )
     if demo_mode():
-        return IngestUploadResponse(scope=ingest_tender(tender, demo_fixture=SCOPE_FIXTURE), tender=tender)
+        return IngestUploadResponse(
+            scope=ingest_tender(tender, demo_fixture=SCOPE_FIXTURE), tender=tender,
+            tender_slug=tender_slug(project_name),
+        )
 
     workspace = Workspace()
     originals: list[tuple[str, bytes]] = []  # saved late — under the final name (below)
@@ -388,7 +394,7 @@ def post_ingest_upload(
 
     scope = scope.model_copy(update={"project_name": final_name})
     tagged = tagged.model_copy(update={"project_name": final_name})
-    return IngestUploadResponse(scope=scope, tender=tagged)
+    return IngestUploadResponse(scope=scope, tender=tagged, tender_slug=tender_slug(final_name))
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +587,69 @@ def get_leveling_xlsx() -> FileResponse:
         OUT_PATH,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename="leveling.xlsx",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reply visibility — which replies have landed for a tender (Phase A operator view)
+# ---------------------------------------------------------------------------
+class TenderReplyInfo(BaseModel):
+    firm_id: str
+    trade: str
+    line_items: int
+    claimed_total: float | None = None
+
+
+class TenderRepliesResponse(BaseModel):
+    """The accumulator/registry state for one tender: who has replied (with item counts),
+    when the latest reply landed, who is still outstanding, and whether the comparison
+    xlsx is ready to download."""
+
+    tender_slug: str
+    reply_count: int
+    last_received: str | None = None
+    replies: list[TenderReplyInfo] = Field(default_factory=list)
+    outstanding: list[dict] = Field(default_factory=list)  # dispatched, not yet replied
+    comparison_available: bool = False
+
+
+@app.get("/tender/{slug}/replies", response_model=TenderRepliesResponse)
+def get_tender_replies(slug: str) -> TenderRepliesResponse:
+    """Which replies have accumulated for a tender (keyed by slug). Read-only; the
+    frontend refreshes it manually (no polling loop). The path param is re-slugified so
+    either the slug or a slash-free tender name resolves to the same tender."""
+    workspace = Workspace()
+    canonical = tender_slug(slug)
+    replies = reply_loop.tender_replies(workspace, canonical)
+    replied = {(r.firm_id, r.trade) for r in replies}
+    outstanding = [
+        {"firm_id": d["firm_id"], "trade": d["trade"]}
+        for d in reply_loop.outstanding_dispatches(workspace)
+        if tender_slug(d["tender_id"]) == canonical and (d["firm_id"], d["trade"]) not in replied
+    ]
+    return TenderRepliesResponse(
+        tender_slug=canonical,
+        reply_count=len(replies),
+        last_received=reply_loop.replies_last_received(workspace, canonical),
+        replies=[
+            TenderReplyInfo(firm_id=r.firm_id, trade=r.trade, line_items=len(r.line_items), claimed_total=r.claimed_total)
+            for r in replies
+        ],
+        outstanding=outstanding,
+        comparison_available=reply_loop.comparison_file(workspace, canonical).is_file(),
+    )
+
+
+@app.get("/tender/{slug}/comparison.xlsx")
+def get_tender_comparison(slug: str) -> FileResponse:
+    """Download this tender's accumulating leveled comparison xlsx (404 until a reply lands)."""
+    comp = reply_loop.comparison_file(Workspace(), tender_slug(slug))
+    if not comp.is_file():
+        raise HTTPException(status_code=404, detail="No comparison for this tender yet.")
+    return FileResponse(
+        comp,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"comparison-{tender_slug(slug)}.xlsx",
     )
 
 

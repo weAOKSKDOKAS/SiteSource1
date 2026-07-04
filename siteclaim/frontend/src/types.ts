@@ -54,6 +54,23 @@ export interface ScopePackages {
 export interface IngestUpload {
   scope: ScopePackages;
   tender: TenderPackage;
+  tender_slug: string;
+}
+
+export interface TenderReplyInfo {
+  firm_id: string;
+  trade: string;
+  line_items: number;
+  claimed_total: number | null;
+}
+
+export interface TenderReplies {
+  tender_slug: string;
+  reply_count: number;
+  last_received: string | null;
+  replies: TenderReplyInfo[];
+  outstanding: { firm_id: string; trade: string }[];
+  comparison_available: boolean;
 }
 
 export interface FirmProfile {
