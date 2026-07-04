@@ -1,0 +1,14 @@
+{
+  "project_name": "Scanned Field Installation SoR",
+  "packages": [
+    {
+      "trade": "ground_investigation",
+      "scope_summary": "Field installation and instrumentation (no quantity column)",
+      "sor_items": [
+        {"item_ref": "F1", "description": "Install standpipe piezometer", "unit": "no"},
+        {"item_ref": "F2", "description": "Percentage adjustment for out-of-hours working", "unit": "%"}
+      ],
+      "source_refs": ["Field Installation SoR"]
+    }
+  ]
+}

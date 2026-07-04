@@ -132,7 +132,7 @@ class SorItem(BaseModel):
     item_ref: str
     description: str
     unit: str
-    qty: float
+    qty: Optional[float] = None  # a real SoR line often has no quantity column
 
 
 class TradeWorkPackage(BaseModel):

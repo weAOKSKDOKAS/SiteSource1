@@ -10,7 +10,11 @@ import pytest
 
 fitz = pytest.importorskip("fitz")  # PyMuPDF
 
-from pipeline.documents import extract_document, to_images  # noqa: E402
+from pipeline.documents import (  # noqa: E402
+    IMAGE_MAX_PAGES,
+    extract_document,
+    to_images,
+)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -115,3 +119,30 @@ def test_extract_document_image_upload_is_vision_only():
 def test_extract_document_empty_raises():
     with pytest.raises(ValueError):
         extract_document(b"", "application/pdf")
+
+
+def test_image_cap_limits_rendered_scanned_pages():
+    # many scanned pages -> images are capped (vision is expensive)
+    doc = fitz.open()
+    for _ in range(IMAGE_MAX_PAGES + 4):
+        page = doc.new_page()
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 100, 100))
+        pix.clear_with(255)  # blank image page, no text
+        page.insert_image(page.rect, pixmap=pix)
+    data = doc.tobytes()
+    doc.close()
+
+    text, images = extract_document(data, "application/pdf")
+    assert text == "" and len(images) == IMAGE_MAX_PAGES  # capped, not all rendered
+
+
+def test_text_cap_is_generous_well_past_the_old_five_page_limit():
+    doc = fitz.open()
+    for i in range(20):
+        doc.new_page().insert_text((72, 72), f"Page {i}: item {i} rotary drilling in soil and rock")
+    data = doc.tobytes()
+    doc.close()
+
+    text, images = extract_document(data, "application/pdf")
+    assert images == []
+    assert text.count("[page ") == 20  # all 20 text pages extracted (old cap was 5)

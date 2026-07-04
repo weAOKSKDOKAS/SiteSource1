@@ -18,7 +18,10 @@ There is no OCR step — a scanned page is handed to the vision model as an imag
 import base64
 from typing import Optional
 
-MAX_PAGES = 5
+# Caps decoupled by modality: text is cheap, so allow many text pages; vision is
+# expensive, so keep a low cap on rendered images (scanned pages only).
+TEXT_MAX_PAGES = 200
+IMAGE_MAX_PAGES = 8
 DEFAULT_DPI = 150
 MIN_TEXT_CHARS = 20  # a page with fewer usable characters is treated as scanned (image)
 
@@ -55,7 +58,7 @@ def to_images(
     file_bytes: bytes,
     content_type: Optional[str],
     *,
-    max_pages: int = MAX_PAGES,
+    max_pages: int = IMAGE_MAX_PAGES,
     dpi: int = DEFAULT_DPI,
 ) -> list[str]:
     """Rasterise an uploaded document to a list of base64-encoded PNG images."""
@@ -72,7 +75,7 @@ def to_images(
 
 
 def _pdf_text_first(
-    data: bytes, max_pages: int, dpi: int, min_chars: int
+    data: bytes, text_max_pages: int, image_max_pages: int, dpi: int, min_chars: int
 ) -> tuple[str, list[str]]:
     import fitz  # PyMuPDF — lazy
 
@@ -81,14 +84,15 @@ def _pdf_text_first(
     texts: list[str] = []
     images: list[str] = []
     with fitz.open(stream=data, filetype="pdf") as doc:
-        for index in range(min(len(doc), max_pages)):
+        for index in range(min(len(doc), text_max_pages)):
             page = doc[index]
             text = page.get_text("text", sort=True).strip()  # reading order
             if len(text) >= min_chars:
-                texts.append(f"[page {index + 1}]\n{text}")  # usable text layer
-            else:
-                pix = page.get_pixmap(matrix=matrix, alpha=False)  # scanned -> image
+                texts.append(f"[page {index + 1}]\n{text}")  # usable text layer (cheap)
+            elif len(images) < image_max_pages:
+                pix = page.get_pixmap(matrix=matrix, alpha=False)  # scanned -> image (capped)
                 images.append(_b64_png(pix.tobytes("png")))
+            # else: a scanned page beyond the image cap is skipped (vision is expensive)
     if not texts and not images:
         raise ValueError("PDF has no extractable content.")
     return "\n\n".join(texts), images
@@ -98,22 +102,24 @@ def extract_document(
     file_bytes: bytes,
     content_type: Optional[str],
     *,
-    max_pages: int = MAX_PAGES,
+    text_max_pages: int = TEXT_MAX_PAGES,
+    image_max_pages: int = IMAGE_MAX_PAGES,
     dpi: int = DEFAULT_DPI,
     min_chars: int = MIN_TEXT_CHARS,
 ) -> tuple[str, list[str]]:
     """Text-first extraction: return ``(text, images)``.
 
-    For a PDF, text-layer pages contribute their extracted text and only scanned pages
-    (no usable text layer) are rendered to PNG — so a text SoR travels as literal rows,
-    not page pictures. A non-PDF image returns ``("", [png])`` (vision only). ``fitz`` is
-    imported lazily, so this stays offline-safe and unit-testable.
+    For a PDF, text-layer pages contribute their extracted text (up to ``text_max_pages``,
+    generous — text is cheap) and only scanned pages (no usable text layer) are rendered
+    to PNG (up to ``image_max_pages``, low — vision is expensive). A non-PDF image returns
+    ``("", [png])`` (vision only). ``fitz`` is imported lazily, so this stays offline-safe
+    and unit-testable.
     """
     if not file_bytes:
         raise ValueError("Empty file — nothing to extract.")
     ct = (content_type or "").split(";")[0].strip().lower()
     if ct == "application/pdf" or ct.endswith("/pdf"):
-        return _pdf_text_first(file_bytes, max_pages=max_pages, dpi=dpi, min_chars=min_chars)
+        return _pdf_text_first(file_bytes, text_max_pages, image_max_pages, dpi, min_chars)
     if ct.startswith("image/"):
         return "", [_image_to_png(file_bytes)]
     raise ValueError(

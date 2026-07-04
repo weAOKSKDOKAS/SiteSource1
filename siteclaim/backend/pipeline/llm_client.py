@@ -38,7 +38,7 @@ from pydantic import BaseModel, ValidationError
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
-DEFAULT_MAX_TOKENS = 8000
+DEFAULT_MAX_TOKENS = 8000  # a sane per-chunk ceiling; ingest chunks its input so the output never truncates
 _MAX_RETRIES = 4
 _FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 

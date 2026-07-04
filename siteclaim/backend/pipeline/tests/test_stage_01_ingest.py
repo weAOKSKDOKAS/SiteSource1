@@ -4,9 +4,17 @@ DEMO_MODE is forced on by the autouse fixture in ``pipeline/tests/conftest.py``,
 this runs fully offline against the baked fixture.
 """
 
-from pipeline.stage_01_ingest.ingest import ingest_tender
+import pipeline.stage_01_ingest.ingest as ingest_mod
+from pipeline.stage_01_ingest.ingest import _chunk_text, _merge_scopes, ingest_tender
 from rules_engine.taxonomy import CANONICAL_TRADES
-from schemas.models import DocType, ScopePackages, TenderDocument, TenderPackage
+from schemas.models import (
+    DocType,
+    ScopePackages,
+    SorItem,
+    TenderDocument,
+    TenderPackage,
+    TradeWorkPackage,
+)
 
 _FIXTURE = "cases/clean/scope_packages.json"
 
@@ -110,3 +118,80 @@ def test_ingest_threads_extracted_document_text_into_the_prompt():
     ingest_tender(_tender(), client=FakeClient(), doc_text="M1 | rotary drilling in rock | m | 300.00")
     assert "rotary drilling in rock" in captured["user"]
     assert "Extracted tender document text" in captured["user"]
+
+
+# -- chunked, per-section extraction ---------------------------------------
+def test_chunk_text_splits_on_sections_and_never_mid_line():
+    text = "\n".join([
+        "SECTION A", "A-01 rotary drilling m 300", "A-02 undisturbed sampling no 45",
+        "SECTION B", "B-01 trial pit no 12",
+        "SECTION C", "C-01 laboratory testing no 200",
+    ])
+    chunks = _chunk_text(text, max_chars=45)  # small -> forces several chunks
+    assert len(chunks) >= 2
+    # every original line survives intact in some chunk (no item row cut in half)
+    for line in text.splitlines():
+        assert any(line in chunk for chunk in chunks), line
+
+
+def test_chunk_text_small_text_is_one_chunk_and_empty_is_none():
+    assert len(_chunk_text("SECTION A\nA-01 drilling", max_chars=12000)) == 1
+    assert _chunk_text("") == []
+
+
+def test_merge_scopes_concats_items_and_dedupes_by_item_ref():
+    def scope(items):
+        return ScopePackages(project_name="", packages=[TradeWorkPackage(
+            trade="ground_investigation", scope_summary="GI", source_refs=["SR-01"],
+            sor_items=[SorItem(item_ref=r, description=d, unit="no", qty=None) for (r, d) in items],
+        )])
+
+    merged = _merge_scopes(
+        [scope([("A-01", "drilling"), ("A-02", "sampling")]),
+         scope([("B-01", "trial pit")]),
+         scope([("C-01", "lab"), ("A-01", "dup")])],  # A-01 repeats -> deduped
+        TenderPackage(project_name="GE/2026/14"),
+    )
+    assert len(merged.packages) == 1  # one trade, all sections merged
+    assert [i.item_ref for i in merged.packages[0].sor_items] == ["A-01", "A-02", "B-01", "C-01"]
+    assert merged.project_name == "GE/2026/14"  # derived from the tender (chunks had none)
+
+
+def test_ingest_chunks_and_merges_items_across_sections_without_loss_or_dup(monkeypatch):
+    monkeypatch.setattr(ingest_mod, "MAX_CHUNK_CHARS", 45)  # force one call per section
+
+    def pkg(items):
+        return {"project_name": "GI", "packages": [{
+            "trade": "ground_investigation", "scope_summary": "GI", "source_refs": ["SR-01"],
+            "sor_items": [{"item_ref": r, "description": d, "unit": "no"} for (r, d) in items],
+        }]}
+
+    class SectionFakeClient:
+        def complete_json(self, *, user, target_model, **_):
+            for marker, payload in self.by_marker.items():
+                if marker in user:
+                    return target_model(**payload)
+            return target_model(project_name="", packages=[])
+
+    client = SectionFakeClient()
+    client.by_marker = {
+        "SECTION A": pkg([("A-01", "drilling")]),
+        "SECTION B": pkg([("B-01", "trial pit")]),
+        "SECTION C": pkg([("C-01", "lab"), ("A-01", "dup")]),  # A-01 duplicate across chunks
+    }
+    doc_text = "SECTION A\nA-01 drilling\nSECTION B\nB-01 trial pit\nSECTION C\nC-01 lab\nA-01 dup"
+    scope = ingest_tender(_tender(), client=client, doc_text=doc_text)
+    assert len(scope.packages) == 1
+    assert sorted(i.item_ref for i in scope.packages[0].sor_items) == ["A-01", "B-01", "C-01"]
+
+
+# -- SoR with no quantities (qty optional) ---------------------------------
+def test_sor_item_qty_is_optional():
+    item = SorItem(item_ref="M1", description="Percentage adjustment", unit="%")  # no qty column
+    assert item.qty is None
+
+
+def test_ingest_parses_a_sor_with_no_quantities():
+    scope = ingest_tender(_tender(), demo_fixture="cases/messy/scope_no_qty.json")
+    items = scope.packages[0].sor_items
+    assert items and all(item.qty is None for item in items)  # a SoR with no qty column parses

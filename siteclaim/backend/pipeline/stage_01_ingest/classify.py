@@ -39,21 +39,26 @@ from schemas.models import TenderDocument, TenderPackage
 
 MIN_CONFIDENCE = 0.5
 
-_SYSTEM = (
-    "You route a Hong Kong tender's documents to subcontractors by trade. Classify the "
-    "ONE attached document (its first pages are shown) as either GENERAL — every trade "
-    "needs it: form of tender, conditions of contract, general preliminaries, method of "
-    "measurement, a COMBINED multi-section or multi-trade Schedule of Rates, or generic "
-    "appendices and forms — or TRADE-SPECIFIC: a particular-specification section or a "
-    "single-trade Schedule of Rates for one discipline. Read the header/first page to "
-    "identify the document. Set general=true for any whole-tender or multi-trade "
-    "document. Otherwise set general=false and list the specific trade(s) in `trades` "
-    "using Hong Kong construction trade names (e.g. electrical, fire services, "
-    "mechanical & plumbing, joinery / fitting-out, reinforced concrete, foundation / "
-    "substructure, landscape / tree works, external works). Give a confidence 0..1. When "
-    "unsure, prefer general — sending a document to everyone is safe; withholding a "
-    "relevant one is not. Never split or extract pages. Return JSON matching the schema."
-)
+def _system_prompt() -> str:
+    """The classification instruction, embedding the canonical trades so a trade-specific
+    document maps to the same keys the scope split and shortlist use — and a geotechnical
+    spec (PS-S07) lands on ``ground_investigation``, not ``foundation_substructure``."""
+    trades = ", ".join(sorted(taxonomy.CANONICAL_TRADES))
+    return (
+        "You route a Hong Kong tender's documents to subcontractors by trade. Classify the "
+        "ONE attached document (its first pages are shown) as either GENERAL — every trade "
+        "needs it: form of tender, conditions of contract, general preliminaries, method of "
+        "measurement, a COMBINED multi-section or multi-trade Schedule of Rates, or generic "
+        "appendices and forms — or TRADE-SPECIFIC: a particular-specification section or a "
+        "single-trade Schedule of Rates for one discipline. Read the header/first page to "
+        "identify the document. Set general=true for any whole-tender or multi-trade "
+        "document. Otherwise set general=false and list the specific trade(s) in `trades` "
+        f"using ONE OR MORE of these canonical trades: {trades}. Choose the closest key — a "
+        "geotechnical / ground-investigation / site-investigation / drilling spec is "
+        "`ground_investigation`, NOT `foundation_substructure`. Give a confidence 0..1. When "
+        "unsure, prefer general — sending a document to everyone is safe; withholding a "
+        "relevant one is not. Never split or extract pages. Return JSON matching the schema."
+    )
 
 
 class DocClassification(BaseModel):
@@ -115,7 +120,7 @@ def classify_documents(
         images = per_doc_images[index] if per_doc_images and index < len(per_doc_images) else None
         try:
             result = client.complete_json(
-                system=_SYSTEM,
+                system=_system_prompt(),
                 user=_doc_prompt(doc),
                 target_model=DocClassification,
                 demo_fixture=demo_fixture,
