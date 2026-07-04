@@ -62,7 +62,12 @@ def _system_prompt() -> str:
         "— one object per row — copying its item reference, description, unit, and quantity "
         "verbatim (include `qty` when the row states one). Do NOT collapse a section into a "
         "single summary item: `scope_summary` is the prose overview, `sor_items` is the "
-        "row-by-row list. Never invent an item, a rate, or a quantity."
+        "row-by-row list. Never invent an item, a rate, or a quantity.\n\n"
+        "`item_ref` MUST be the EXACT printed item code as it appears in the schedule "
+        '(e.g. "A1a(a)", "M2", "H14"), copied character-for-character — NEVER the section '
+        "letter fused with neighbouring text or an adjacent column value, and NEVER an "
+        "invented or renumbered code. If a row has no printed item code, SKIP that row "
+        "rather than fabricate a ref."
     )
 
 

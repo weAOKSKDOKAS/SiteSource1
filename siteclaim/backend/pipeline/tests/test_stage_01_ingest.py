@@ -185,6 +185,57 @@ def test_ingest_chunks_and_merges_items_across_sections_without_loss_or_dup(monk
     assert sorted(i.item_ref for i in scope.packages[0].sor_items) == ["A-01", "B-01", "C-01"]
 
 
+# -- item_ref exactness (mangled "BA BB BC…" refs seen live on SR-01) -------
+def test_system_prompt_demands_exact_printed_item_codes():
+    # The live SR-01 extraction yielded refs like BA/BB/BC — the section letter fused
+    # with a neighbouring column. The prompt now pins item_ref to the exact printed
+    # code and forbids fabricating one for a code-less row.
+    from pipeline.stage_01_ingest.ingest import _system_prompt
+
+    prompt = _system_prompt()
+    assert "EXACT printed item code" in prompt
+    assert "section" in prompt and "fused" in prompt      # never section-letter concatenation
+    assert "SKIP that row" in prompt                       # code-less row -> skipped, not invented
+    assert 'A1a(a)' in prompt                              # the real SR-01 code shape is shown
+
+
+def test_sr01_shaped_refs_come_through_the_chunked_path_verbatim(monkeypatch):
+    # Rows shaped like the real SR-01 (code | description | PS-ref | unit | rate): a
+    # faithful per-chunk extraction must land every printed code verbatim — parens,
+    # mixed case, digits — through chunking, merging, and taxonomy normalisation,
+    # with no post-hoc mangling. (Exactness at the source is the prompt's job, above.)
+    monkeypatch.setattr(ingest_mod, "MAX_CHUNK_CHARS", 120)  # force one call per section
+
+    class FaithfulClient:
+        """Copies each data row's printed code from the chunk it was given — the
+        behaviour the exactness instruction demands of the model."""
+
+        def complete_json(self, *, user, target_model, **_):
+            refs = [
+                line.split(" | ")[0].strip()
+                for line in user.splitlines()
+                if " | " in line
+            ]
+            return target_model(project_name="", packages=[{
+                "trade": "ground_investigation", "scope_summary": "GI", "source_refs": ["SR-01"],
+                "sor_items": [{"item_ref": r, "description": "row", "unit": "m"} for r in refs],
+            }] if refs else [])
+
+    doc_text = "\n".join([
+        "SECTION A",
+        "A1a(a) | Rotary drilling in soil | PS 1.13.1A | m | ",
+        "A1a(b) | Rotary drilling in rock | PS 1.13.1B | m | ",
+        "M2 | Percentage adjustment, Landfill areas | PS 2.1 | % | ",
+        "SECTION B",
+        "H14 | Standard penetration test | PS 3.4 | no | ",
+    ])
+    scope = ingest_tender(_tender(), client=FaithfulClient(), doc_text=doc_text)
+
+    assert len(scope.packages) == 1
+    refs = [i.item_ref for i in scope.packages[0].sor_items]
+    assert refs == ["A1a(a)", "A1a(b)", "M2", "H14"]  # verbatim — no BA/BB/BC style fusion
+
+
 # -- SoR with no quantities (qty optional) ---------------------------------
 def test_sor_item_qty_is_optional():
     item = SorItem(item_ref="M1", description="Percentage adjustment", unit="%")  # no qty column
