@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from db import store
+from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient
 from pipeline.stage_01_ingest.ingest import _chunk_text  # reuse the ingest text chunker
 from rules_engine.leveling import level_reply, peer_item_reference
@@ -106,13 +107,15 @@ def parse_bid_reply(
     calls += [(base_user, group) for group in _chunk_pages(images or [], IMAGE_PAGES_PER_CHUNK)]
     if not calls:  # no text and no images (DEMO fixture / small reply) -> one call
         calls.append((base_user, None))
-    replies = [
-        client.complete_json(
-            system=_PARSE_SYSTEM, user=user, target_model=BidReply,
-            demo_fixture=demo_fixture, images=call_images,
-        )
-        for (user, call_images) in calls
-    ]
+    # Chunk calls are independent — run bounded-concurrent, in input order (merge_replies
+    # dedupes by item_ref first-wins, so chunk order must be preserved).
+    replies = run_calls(
+        lambda call: client.complete_json(
+            system=_PARSE_SYSTEM, user=call[0], target_model=BidReply,
+            demo_fixture=demo_fixture, images=call[1],
+        ),
+        calls,
+    )
     return merge_replies(replies, firm_id, trade)
 
 

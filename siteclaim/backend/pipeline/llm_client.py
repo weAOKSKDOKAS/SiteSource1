@@ -29,6 +29,7 @@ wire a different OpenAI-style vision provider.
 
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Optional, TypeVar
@@ -119,6 +120,7 @@ class LLMClient:
         self._model_arg = model  # explicit model override, if any
         self.model = model or self._default_model()
         self._clients: dict = {}  # one lazily-built SDK client per provider (routing may switch)
+        self._clients_lock = threading.Lock()  # guards lazy construction under concurrent chunk calls
 
     def _default_model(self) -> str:
         if self.provider == "anthropic":
@@ -220,8 +222,9 @@ class LLMClient:
     def _deepseek_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str) -> str:
         import openai  # lazy: importing this module must not require the SDK
 
-        if "deepseek" not in self._clients:
-            self._clients["deepseek"] = openai.OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=os.getenv("DEEPSEEK_API_KEY"))
+        with self._clients_lock:  # concurrent chunk calls may hit this first-time together
+            if "deepseek" not in self._clients:
+                self._clients["deepseek"] = openai.OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=os.getenv("DEEPSEEK_API_KEY"))
         client = self._clients["deepseek"]
         transient = (
             openai.RateLimitError,
@@ -240,8 +243,9 @@ class LLMClient:
     def _anthropic_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str) -> str:
         import anthropic  # lazy
 
-        if "anthropic" not in self._clients:
-            self._clients["anthropic"] = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+        with self._clients_lock:  # concurrent chunk calls may hit this first-time together
+            if "anthropic" not in self._clients:
+                self._clients["anthropic"] = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
         client = self._clients["anthropic"]
         transient = (
             anthropic.RateLimitError,

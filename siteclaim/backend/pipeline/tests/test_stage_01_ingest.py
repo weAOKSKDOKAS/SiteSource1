@@ -185,6 +185,39 @@ def test_ingest_chunks_and_merges_items_across_sections_without_loss_or_dup(monk
     assert sorted(i.item_ref for i in scope.packages[0].sor_items) == ["A-01", "B-01", "C-01"]
 
 
+def test_parallel_extraction_preserves_chunk_order_and_first_wins_dedupe(monkeypatch):
+    # Chunks now run concurrently (run_calls). Order-stability guard: section A's call
+    # finishes LAST (longest sleep), yet its result must stay FIRST — so the duplicate DUP
+    # keeps section A's description, not section C's. Completion-order merging would fail.
+    import time
+
+    monkeypatch.setattr(ingest_mod, "MAX_CHUNK_CHARS", 45)  # one call per section
+
+    def pkg(items):
+        return {"project_name": "GI", "packages": [{
+            "trade": "ground_investigation", "scope_summary": "GI", "source_refs": ["SR-01"],
+            "sor_items": [{"item_ref": r, "description": d, "unit": "no"} for (r, d) in items],
+        }]}
+
+    class SlowScrambledClient:
+        def complete_json(self, *, user, target_model, **_):
+            if "SECTION A" in user:
+                time.sleep(0.15)
+                return target_model(**pkg([("A-01", "a"), ("DUP", "from-A")]))
+            if "SECTION B" in user:
+                time.sleep(0.05)
+                return target_model(**pkg([("B-01", "b")]))
+            if "SECTION C" in user:
+                return target_model(**pkg([("C-01", "c"), ("DUP", "from-C")]))  # finishes first
+            return target_model(project_name="", packages=[])
+
+    doc_text = "SECTION A\nA-01 drilling\nSECTION B\nB-01 trial pit\nSECTION C\nC-01 lab\nA-01 dup"
+    scope = ingest_tender(_tender(), client=SlowScrambledClient(), doc_text=doc_text)
+    items = scope.packages[0].sor_items
+    assert [i.item_ref for i in items] == ["A-01", "DUP", "B-01", "C-01"]  # chunk order, not completion
+    assert next(i for i in items if i.item_ref == "DUP").description == "from-A"  # first-wins by chunk order
+
+
 # -- item_ref exactness (mangled "BA BB BC…" refs seen live on SR-01) -------
 def test_system_prompt_demands_exact_printed_item_codes():
     # The live SR-01 extraction yielded refs like BA/BB/BC — the section letter fused

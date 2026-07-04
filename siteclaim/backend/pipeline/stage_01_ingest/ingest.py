@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient
 from rules_engine.taxonomy import CANONICAL_TRADES, validate_scope
 from schemas.models import ScopePackages, TenderPackage, TradeWorkPackage
@@ -219,12 +220,15 @@ def _extract(
         user0, imgs0 = calls[0]
         calls[0] = (user0 + block, imgs0)
 
-    results = [
-        client.complete_json(
-            system=system, user=user, target_model=ScopePackages, demo_fixture=demo_fixture, images=call_images
-        )
-        for (user, call_images) in calls
-    ]
+    # Chunk calls are independent — run them bounded-concurrent (a 58-page SoR was ~7 min
+    # sequential). run_calls preserves input order, so the chunk-order dedupe is unchanged.
+    results = run_calls(
+        lambda call: client.complete_json(
+            system=system, user=call[0], target_model=ScopePackages,
+            demo_fixture=demo_fixture, images=call[1],
+        ),
+        calls,
+    )
     return _merge_scopes(results, tender)
 
 
