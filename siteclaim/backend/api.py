@@ -300,17 +300,26 @@ def post_ingest(req: IngestRequest) -> ScopePackages:
     return ingest_tender(req.tender, demo_fixture=req.demo_fixture)
 
 
+DEFAULT_UPLOAD_PROJECT_NAME = "Uploaded tender"  # the /ingest-upload form default
+
+
 @app.post("/ingest-upload", response_model=IngestUploadResponse)
 async def post_ingest_upload(
     files: list[UploadFile] = File(...),
-    project_name: str = Form("Uploaded tender"),
+    project_name: str = Form(DEFAULT_UPLOAD_PROJECT_NAME),
 ) -> IngestUploadResponse:
     """Ingest live tender documents (PDF/image) and return the scope split plus the
     trade-tagged tender. In DEMO_MODE the upload is accepted but the baked scope fixture
     is returned and the tender is left untagged (no model, no network). Live, each
     original is persisted to the tender workspace so dispatch can attach the real files;
     the pages are rasterised for the vision model; and each document is classified by
-    trade (Layer 2) so its ``trades`` route the right whole originals at dispatch."""
+    trade (Layer 2) so its ``trades`` route the right whole originals at dispatch.
+
+    The tender's final name is decided once, after the split: an explicit form
+    ``project_name`` always wins, but when the operator left the default the real
+    contract name the split extracts (``scope.project_name``) is adopted — and the
+    originals are saved only then, so the workspace slug, the ref registry (keyed off
+    this name at dispatch), and the returned scope/tender all agree on one name."""
     tender = TenderPackage(
         project_name=project_name,
         documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=f.filename or "upload") for f in files],
@@ -319,12 +328,13 @@ async def post_ingest_upload(
         return IngestUploadResponse(scope=ingest_tender(tender, demo_fixture=SCOPE_FIXTURE), tender=tender)
 
     workspace = Workspace()
+    originals: list[tuple[str, bytes]] = []  # saved late — under the final name (below)
     per_doc_images: list[list[str]] = []
     text_parts: list[str] = []
     scope_images: list[str] = []
     for upload in files:
         data = await upload.read()
-        workspace.save_upload(project_name, upload.filename or "upload", data)
+        originals.append((upload.filename or "upload", data))
         try:
             # Text-first for the scope split: extract each page's text layer, rendering a
             # page to an image only when it is scanned. Classification stays a small 1-2
@@ -338,7 +348,21 @@ async def post_ingest_upload(
         scope_images += page_images
         per_doc_images.append(class_images)
     scope = ingest_tender(tender, images=scope_images, doc_text="\n\n".join(text_parts))
-    tagged = classify_documents(tender, per_doc_images)
+
+    # Adopt the extracted contract name when the form was left at its default (the split
+    # reads the real name off the documents, e.g. "Contract No. GE/2026/14 — ..."); an
+    # explicit operator value is kept. Either way scope, tender, and the saved originals
+    # carry the SAME final name, so dispatch attaches from — and the ref registry keys
+    # off — the same workspace slug.
+    extracted = scope.project_name.strip()
+    final_name = project_name
+    if project_name == DEFAULT_UPLOAD_PROJECT_NAME and extracted and extracted != DEFAULT_UPLOAD_PROJECT_NAME:
+        final_name = extracted
+    for filename, data in originals:
+        workspace.save_upload(final_name, filename, data)
+
+    scope = scope.model_copy(update={"project_name": final_name})
+    tagged = classify_documents(tender, per_doc_images).model_copy(update={"project_name": final_name})
     return IngestUploadResponse(scope=scope, tender=tagged)
 
 

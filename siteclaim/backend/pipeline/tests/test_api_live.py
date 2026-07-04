@@ -253,3 +253,72 @@ def test_level_upload_rejects_a_non_sor_xlsx_with_a_clear_400(monkeypatch):
 
     assert resp.status_code == 400
     assert "Not a Schedule of Rates sheet" in resp.json()["detail"]
+
+
+# -- /ingest-upload adopts the extracted contract name (project_name propagation) -----
+#
+# Live-verified inconsistency: the split extracts the real contract name into
+# scope.project_name while the returned tender keeps the form default "Uploaded tender",
+# so the workspace, ref registry, and dispatch all key off the placeholder. The route now
+# decides ONE final name after the split (explicit form value wins; otherwise the
+# extracted name is adopted) and saves the originals under it. The model seams are
+# stubbed — offline, no fitz, no LLM.
+
+_GE_NAME = "Contract No. GE/2026/14 — Ground Investigation Works"
+
+
+def _stub_live_ingest(monkeypatch, extracted_name: str):
+    from schemas.models import ScopePackages
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setattr("api.extract_document", lambda data, ct: ("[page 1]\nSoR rows", []))
+    monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: ["page-png"])
+    monkeypatch.setattr(
+        "api.ingest_tender",
+        lambda tender, images=None, doc_text="": ScopePackages(project_name=extracted_name, packages=[]),
+    )
+    monkeypatch.setattr("api.classify_documents", lambda tender, imgs: tender)
+
+
+def test_ingest_upload_adopts_the_extracted_contract_name(monkeypatch, tmp_path):
+    from pipeline.workspace import Workspace
+
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    _stub_live_ingest(monkeypatch, _GE_NAME)
+
+    resp = client.post(  # form project_name left at its default
+        "/ingest-upload", files={"files": ("sr01.pdf", b"%PDF-1.4", "application/pdf")}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tender"]["project_name"] == _GE_NAME  # adopted into the returned tender
+    assert body["scope"]["project_name"] == _GE_NAME
+    ws = Workspace()
+    assert (ws.docs_dir(_GE_NAME) / "sr01.pdf").is_file()  # originals under the final slug
+    assert not ws.tender_dir("Uploaded tender").exists()   # nothing under the placeholder
+
+
+def test_ingest_upload_keeps_an_explicit_project_name(monkeypatch, tmp_path):
+    from pipeline.workspace import Workspace
+
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    _stub_live_ingest(monkeypatch, _GE_NAME)
+
+    resp = client.post(
+        "/ingest-upload",
+        files={"files": ("sr01.pdf", b"%PDF-1.4", "application/pdf")},
+        data={"project_name": "My Tender 7"},
+    )
+
+    body = resp.json()
+    assert body["tender"]["project_name"] == "My Tender 7"  # explicit operator value wins
+    assert body["scope"]["project_name"] == "My Tender 7"   # aligned — one name end-to-end
+    assert (Workspace().docs_dir("My Tender 7") / "sr01.pdf").is_file()
+
+
+def test_ingest_upload_demo_keeps_the_placeholder_name():
+    # DEMO path: baked fixture scope, no adoption, no workspace writes — unchanged.
+    resp = client.post("/ingest-upload", files={"files": ("tender.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert resp.status_code == 200
+    assert resp.json()["tender"]["project_name"] == "Uploaded tender"
