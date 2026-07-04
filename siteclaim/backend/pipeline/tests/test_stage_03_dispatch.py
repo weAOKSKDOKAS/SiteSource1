@@ -111,3 +111,59 @@ def test_dispatch_set_object_payload_still_parses():
     obj = '{"bundles": [{"firm_id": "f1", "firm_name": "F1 Ltd", "trade": "electrical", "email_subject": "S", "email_body": "B"}]}'
     ds = DispatchSet.model_validate_json(obj)
     assert len(ds.bundles) == 1 and ds.bundles[0].firm_id == "f1"
+
+
+# -- email compose is batched (<=6 per call), a failed batch degrades to templates -----
+import re  # noqa: E402
+import threading  # noqa: E402
+
+import pipeline.stage_03_dispatch.dispatch as dispatch_mod  # noqa: E402
+from schemas.models import DispatchBundle  # noqa: E402
+
+
+class _BatchClient:
+    """Records each compose batch's size; composes bundles for the firms named in the
+    prompt, or raises for a batch containing ``fail_if_contains`` (a truncated response)."""
+
+    def __init__(self, fail_if_contains: str | None = None):
+        self.batch_sizes: list[int] = []
+        self._lock = threading.Lock()
+        self._fail = fail_if_contains
+
+    def complete_json(self, *, user, target_model, **_):
+        fids = re.findall(r"\(([^)]+)\)", user)  # "- Firm 0 (F-EL-00) — trade: electrical"
+        with self._lock:
+            self.batch_sizes.append(len(fids))
+        if self._fail and self._fail in fids:
+            raise RuntimeError("truncated JSON")
+        return DispatchSet(bundles=[
+            DispatchBundle(firm_id=f, firm_name=f, trade="electrical", email_subject=f"S-{f}", email_body="B")
+            for f in fids
+        ])
+
+
+def _scaffold(n: int):
+    return [("electrical", f"F-EL-{i:02d}", f"Firm {i}", []) for i in range(n)]
+
+
+def test_compose_emails_batches_to_at_most_six_and_composes_all(monkeypatch):
+    monkeypatch.setattr(dispatch_mod, "demo_mode", lambda: False)  # exercise the live compose path
+    client = _BatchClient()
+
+    emails = dispatch_mod._compose_emails(_scaffold(13), "Proj X", None, client)
+
+    assert sorted(client.batch_sizes) == [1, 6, 6]           # 13 -> bounded batches of <=6
+    assert len(emails) == 13
+    assert all(subj.startswith("S-") for (subj, _body) in emails.values())  # every firm model-composed
+
+
+def test_a_failed_compose_batch_falls_back_to_templates_without_failing_dispatch(monkeypatch):
+    monkeypatch.setattr(dispatch_mod, "demo_mode", lambda: False)
+    client = _BatchClient(fail_if_contains="F-EL-07")  # the second batch (firms 6,7) fails
+
+    emails = dispatch_mod._compose_emails(_scaffold(8), "Proj X", None, client)
+
+    assert len(emails) == 8                                    # nothing dropped
+    assert emails[("electrical", "F-EL-00")][0] == "S-F-EL-00"  # first batch model-composed
+    subj, _body = emails[("electrical", "F-EL-07")]
+    assert subj == "RFQ — Electrical package — Proj X"        # failed batch -> deterministic template

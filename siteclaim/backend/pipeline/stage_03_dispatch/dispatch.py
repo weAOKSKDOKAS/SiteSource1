@@ -22,6 +22,9 @@ from __future__ import annotations
 
 from typing import Optional
 
+from pydantic import ValidationError
+
+from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient, demo_mode
 from pipeline.reply_loop import make_ref, record_dispatch, subject_with_ref
 from pipeline.stage_03_dispatch.attachments import build_attachments
@@ -81,26 +84,48 @@ def _template_email(firm_name: str, trade: str, project_name: str) -> tuple[str,
     return subject, body
 
 
+_COMPOSE_BATCH_SIZE = 6  # bundles per compose call — bounded so the JSON response never truncates
+
+
+def _compose_batch(
+    batch: list[tuple[str, str, str, list[str]]],
+    project_name: str,
+    demo_fixture: Optional[str],
+    client: LLMClient,
+) -> dict[tuple[str, str], tuple[str, str]]:
+    """Compose one bounded batch. Returns {} on any failure so the batch's firms fall back
+    to the deterministic template — a bad or truncated response never fails dispatch."""
+    try:
+        drafted = client.complete_json(
+            system=_EMAIL_SYSTEM,
+            user=_compose_prompt(batch, project_name),
+            target_model=DispatchSet,
+            demo_fixture=demo_fixture,
+        )
+    except (RuntimeError, FileNotFoundError, ValidationError, ValueError):
+        return {}
+    return {(b.trade, b.firm_id): (b.email_subject, b.email_body) for b in drafted.bundles}
+
+
 def _compose_emails(
     scaffold: list[tuple[str, str, str, list[str]]],
     project_name: str,
     demo_fixture: Optional[str],
     client: LLMClient,
 ) -> dict[tuple[str, str], tuple[str, str]]:
-    """Return {(trade, firm_id): (subject, body)} — baked in DEMO_MODE, composed live."""
+    """Return {(trade, firm_id): (subject, body)} — baked in DEMO_MODE, composed live.
+
+    Composition runs in bounded batches (<=6 bundles per call): asking the model for all of
+    a big tender's bundles in one JSON is the same output-size failure that truncated ingest
+    and reply parsing. Batches are independent (run concurrently, order-preserved); a batch
+    that fails leaves its firms to the deterministic template, so dispatch never fails on
+    compose."""
     index: dict[tuple[str, str], tuple[str, str]] = {}
     # Layer 2: DEMO reads the baked DispatchSet fixture; live composes via the model.
     if demo_fixture or not demo_mode():
-        try:
-            drafted = client.complete_json(
-                system=_EMAIL_SYSTEM,
-                user=_compose_prompt(scaffold, project_name),
-                target_model=DispatchSet,
-                demo_fixture=demo_fixture,
-            )
-            index = {(b.trade, b.firm_id): (b.email_subject, b.email_body) for b in drafted.bundles}
-        except (RuntimeError, FileNotFoundError):
-            index = {}
+        batches = [scaffold[i:i + _COMPOSE_BATCH_SIZE] for i in range(0, len(scaffold), _COMPOSE_BATCH_SIZE)]
+        for partial in run_calls(lambda b: _compose_batch(b, project_name, demo_fixture, client), batches):
+            index.update(partial)
     # Any firm not covered by the model/fixture falls back to a deterministic template.
     return {
         (trade, fid): index.get((trade, fid)) or _template_email(name, trade, project_name)
