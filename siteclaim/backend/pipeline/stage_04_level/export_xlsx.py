@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from rules_engine.leveling import computable_amount
 from schemas.models import BidReply, LevelledBid
 
 OUT_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "out" / "leveling.xlsx"
@@ -75,11 +76,14 @@ def export_leveling_xlsx(
             if line is None:
                 row += ["", ""]
                 continue
-            description = description or line.description
-            if line.rate is None:
-                row += ["—", "—"]
-            else:
-                row += [line.rate, round(line.qty * line.rate, 2)]
+            description = description or line.description or ""
+            # Rate is the primary comparison and is always shown; the amount cell is filled
+            # only where an amount is computable — a rate-only line shows the rate and "—".
+            amount = computable_amount(line)
+            row += [
+                line.rate if line.rate is not None else "—",
+                amount if amount is not None else "—",
+            ]
             if item_ref in finding_items.get(firm_id, set()):
                 notes.append(f"{levelled_by_firm[firm_id].firm_name}: arithmetic corrected")
             if item_ref in gap_items.get(firm_id, set()):

@@ -2,44 +2,73 @@
 
 Implements ``references/rubrics/leveling_rules.md``. The LLM parses a reply into a
 :class:`BidReply`; **every calculation and judgement below is pure Python**, never
-the model:
+the model.
 
-* recompute each line ``amount = qty x rate`` and use the recomputed value;
-* record an :class:`ArithmeticFinding` (warning) wherever the bidder's stated amount
-  disagrees with ``qty x rate``;
-* ``corrected_total`` = the sum of the recomputed line amounts;
-* a **missing rate** (including a missing provisional sum) is a **scope gap** —
+A returned Schedule of Rates is compared **rate-first**: the unit rate for each item is
+lined up across firms as the primary comparison, and it works even when nothing on the
+schedule carries a quantity (a rate-only SoR). Amounts are computed only where a quantity
+exists to extend them, so a rate-only line is never forced through ``qty x rate``:
+
+* the **computable amount** of a line is ``qty x rate`` when both are present (recomputed —
+  the recomputed value is authoritative, and *is* the arithmetic correction), a stated
+  lump-sum ``amount`` when there is no rate to extend, and otherwise **nothing** — a
+  rate-only line is compared by rate, not by amount;
+* an :class:`ArithmeticFinding` (warning) is raised only where there is a computable
+  ``qty x rate`` to check a stated amount against — a rate-only line is never a discrepancy;
+* ``corrected_total`` = the sum of the computable line amounts (rate-only lines contribute
+  nothing to it);
+* a line with **no price signal at all** (no rate and no stated amount) is a **scope gap** —
   recorded, never treated as zero, never silently filled;
 * a **stated exclusion** is a flagged, non-comparable item — recorded, never used to
   silently lower the price;
 * ``normalized_total`` puts every bid on the **same scope basis**: it starts from
-  ``corrected_total`` and adds, for each scope gap, the peer median price of that
-  item across the other bids that did price it — so a bid that left scope out is
-  compared like-for-like. Scope differences are surfaced, never absorbed.
+  ``corrected_total`` and adds, for each scope gap, the peer median price of that item
+  across the other bids that did price it — so a bid that left scope out is compared
+  like-for-like. Scope differences are surfaced, never absorbed.
 
-``claimed_total`` (the bidder's own total, on :class:`BidReply`) is recorded upstream
-but never used for ranking — only ``corrected_total`` is.
+``claimed_total`` (the bidder's own total, on :class:`BidReply`) is recorded upstream but
+never used for ranking — only ``corrected_total`` is.
 """
 
 from __future__ import annotations
 
 from statistics import median
+from typing import Optional
 
-from schemas.models import ArithmeticFinding, BidReply, LevelledBid, Severity
+from schemas.models import ArithmeticFinding, BidLineItem, BidReply, ItemRate, LevelledBid, Severity
 
 _EPSILON = 0.005  # currency tolerance for the qty*rate vs stated-amount comparison
 
 
+def computable_amount(line: BidLineItem) -> Optional[float]:
+    """The line's amount, only where one can be computed — never ``None * float``.
+
+    * both ``qty`` and ``rate`` present -> ``qty x rate``, **recomputed** (this is the
+      leveling correction; the recomputed value is authoritative over any stated amount);
+    * a stated lump-sum ``amount`` with no ``rate`` to extend -> taken as stated;
+    * a **rate-only** line (a rate but no quantity) or a wholly unpriced line -> ``None``:
+      it is compared by rate and contributes no amount.
+    """
+    if line.qty is not None and line.rate is not None:
+        return round(line.qty * line.rate, 2)
+    if line.rate is None and line.amount is not None:
+        return round(line.amount, 2)
+    return None
+
+
 def peer_item_reference(replies: list[BidReply]) -> dict[str, float]:
-    """For each item_ref, the median recomputed amount across bids that priced it.
+    """For each item_ref, the median computable amount across bids that priced it.
 
     Used to value another bid's scope gaps at a fair peer price for ``normalized_total``.
+    Rate-only lines contribute no amount here, so a gap is valued only where peers actually
+    extended that item to an amount.
     """
     amounts: dict[str, list[float]] = {}
     for reply in replies:
         for line in reply.line_items:
-            if line.rate is not None:
-                amounts.setdefault(line.item_ref, []).append(round(line.qty * line.rate, 2))
+            amount = computable_amount(line)
+            if amount is not None:
+                amounts.setdefault(line.item_ref, []).append(amount)
     return {item_ref: float(median(values)) for item_ref, values in amounts.items() if values}
 
 
@@ -48,27 +77,45 @@ def level_reply(
 ) -> LevelledBid:
     """Level one :class:`BidReply` into a :class:`LevelledBid` (pure, deterministic)."""
     peer_reference = peer_reference or {}
+    item_rates: list[ItemRate] = []
     findings: list[ArithmeticFinding] = []
     scope_gaps: list[str] = []
     gap_item_refs: list[str] = []
     corrected_total = 0.0
 
     for line in reply.line_items:
-        if line.rate is None:
-            # Missing rate / missing provisional sum -> scope gap. Never zero, never filled.
-            kind = "missing provisional sum" if "provisional" in line.description.lower() else "missing rate"
-            scope_gaps.append(f"{line.item_ref} — {line.description} ({kind})")
+        amount = computable_amount(line)
+        # The rate comparison is the foundation and is recorded for every line, whether or
+        # not it has a quantity; the amount is only shown where it is computable.
+        item_rates.append(ItemRate(
+            item_ref=line.item_ref, description=line.description,
+            unit=line.unit, rate=line.rate, amount=amount,
+        ))
+
+        if line.rate is None and line.amount is None:
+            # No price signal at all -> scope gap. Never zero, never filled; valued at the
+            # peer median in normalized_total below.
+            desc = line.description or ""
+            kind = "missing provisional sum" if "provisional" in desc.lower() else "missing rate"
+            scope_gaps.append(f"{line.item_ref} — {desc} ({kind})")
             gap_item_refs.append(line.item_ref)
             continue
-        recomputed = round(line.qty * line.rate, 2)
-        if line.amount is not None and abs(line.amount - recomputed) > _EPSILON:
-            findings.append(ArithmeticFinding(
-                location=f"line {line.item_ref}",
-                issue=f"stated amount {line.amount:,.0f} != qty x rate {recomputed:,.0f}",
-                corrected_value=recomputed,
-                severity=Severity.WARNING,
-            ))
-        corrected_total += recomputed
+
+        # An arithmetic finding needs a recomputed qty*rate to check the stated amount
+        # against — a rate-only line (no quantity) is never an arithmetic discrepancy.
+        if line.qty is not None and line.rate is not None and line.amount is not None:
+            recomputed = round(line.qty * line.rate, 2)
+            if abs(line.amount - recomputed) > _EPSILON:
+                findings.append(ArithmeticFinding(
+                    location=f"line {line.item_ref}",
+                    issue=f"stated amount {line.amount:,.0f} != qty x rate {recomputed:,.0f}",
+                    corrected_value=recomputed,
+                    severity=Severity.WARNING,
+                ))
+
+        # The total sums computable amounts only; a rate-only line adds nothing to it.
+        if amount is not None:
+            corrected_total += amount
 
     corrected_total = round(corrected_total, 2)
     normalized_total = round(
@@ -81,6 +128,7 @@ def level_reply(
         trade=reply.trade,
         normalized_total=normalized_total,
         corrected_total=corrected_total,
+        item_rates=item_rates,
         arithmetic_findings=findings,
         exclusions=list(reply.exclusions),  # flagged, non-comparable; never lowers the price
         scope_gaps=scope_gaps,

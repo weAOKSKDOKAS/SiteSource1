@@ -130,8 +130,8 @@ class SorItem(BaseModel):
     """One Schedule-of-Rates line a trade package is responsible for."""
 
     item_ref: str
-    description: str
-    unit: str
+    description: Optional[str] = None  # a scanned / rate-only SoR line may omit these
+    unit: Optional[str] = None
     qty: Optional[float] = None  # a real SoR line often has no quantity column
 
 
@@ -283,10 +283,14 @@ class DispatchSet(BaseModel):
 # Stage 04 — bid replies and leveling
 # ---------------------------------------------------------------------------
 class BidLineItem(BaseModel):
+    # Only item_ref is guaranteed on a returned line. A Schedule of Rates can be rate-only
+    # (a unit rate with no quantity or extended amount), and lines sometimes omit the unit
+    # or a tidy description — so every field but the ref is optional. The leveling engine
+    # compares a quantity-less line by its rate and never evaluates ``None * float``.
     item_ref: str
-    description: str
-    unit: str
-    qty: float
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    qty: Optional[float] = None
     rate: Optional[float] = None
     amount: Optional[float] = None
 
@@ -310,6 +314,19 @@ class ArithmeticFinding(BaseModel):
     severity: Severity
 
 
+class ItemRate(BaseModel):
+    """One item's cross-firm comparison basis. The unit ``rate`` is the primary comparison
+    — a Schedule of Rates is compared rate-by-rate, and this is populated even when nothing
+    has a quantity. ``amount`` is filled only where one is computable (``qty * rate``, or a
+    stated lump sum) and is ``None`` for a rate-only line."""
+
+    item_ref: str
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    rate: Optional[float] = None
+    amount: Optional[float] = None
+
+
 class LevelledBid(BaseModel):
     """Stage 04 output: one bid normalized onto the common scope basis."""
 
@@ -318,6 +335,7 @@ class LevelledBid(BaseModel):
     trade: str
     normalized_total: float
     corrected_total: float
+    item_rates: list[ItemRate] = Field(default_factory=list)  # per-item rate comparison (primary)
     arithmetic_findings: list[ArithmeticFinding] = Field(default_factory=list)
     exclusions: list[str] = Field(default_factory=list)
     scope_gaps: list[str] = Field(default_factory=list)

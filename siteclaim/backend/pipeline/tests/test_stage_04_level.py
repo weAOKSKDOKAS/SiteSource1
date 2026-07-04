@@ -18,6 +18,7 @@ from pipeline.stage_04_level.level import (
     load_demo_replies,
     parse_bid_reply,
 )
+from rules_engine.leveling import computable_amount, level_reply, peer_item_reference
 from schemas.models import BidLineItem, BidReply, Severity
 
 _REPLIES_FIXTURE = "cases/messy/bid_replies.json"
@@ -222,3 +223,105 @@ def test_chunk_pages_groups_without_splitting_a_page():
     assert [len(g) for g in groups] == [3, 3, 1]
     assert [p for g in groups for p in g] == pages  # order and completeness preserved
     assert _chunk_pages([], 3) == []
+
+
+# -- rate-aware leveling: rate-first comparison, amounts only where quantities exist -----
+#
+# A real Schedule of Rates (GE/2026/14) is rate-only — most lines have a unit rate and no
+# quantity — so leveling compares rates as the foundation and computes amounts/totals only
+# where a quantity is present, never evaluating qty*rate on a None. level_reply is pure
+# (no DB, no network); these drive it directly with constructed replies.
+
+
+def _rate_only(item_ref: str, rate: float, unit: str = "m") -> BidLineItem:
+    return BidLineItem(item_ref=item_ref, description=f"{item_ref} works", unit=unit, rate=rate)  # qty/amount absent
+
+
+def _boq(item_ref: str, qty: float, rate: float, amount: float) -> BidLineItem:
+    return BidLineItem(item_ref=item_ref, description=f"{item_ref} works", unit="no", qty=qty, rate=rate, amount=amount)
+
+
+def test_rate_only_reply_levels_by_rate_with_no_amount_total_and_no_crash():
+    # (a) a rate-only reply (no qty anywhere) levels by rate, crashes nowhere, no bogus total
+    reply = BidReply(firm_id="F-RO", trade="ground_investigation", line_items=[
+        _rate_only("A-1", 1200.0), _rate_only("A-2", 450.0, unit="hr"), _rate_only("A-3", 800.0),
+    ])
+    lev = level_reply(reply, "GI Firm", peer_item_reference([reply]))
+
+    assert lev.corrected_total == 0.0 and lev.normalized_total == 0.0  # no quantities -> no amount
+    assert lev.arithmetic_findings == []                              # rate-only is not an error
+    assert lev.scope_gaps == []                                       # a rate is a price, not a gap
+    assert {ir.item_ref: ir.rate for ir in lev.item_rates} == {"A-1": 1200.0, "A-2": 450.0, "A-3": 800.0}
+    assert all(ir.amount is None for ir in lev.item_rates)            # amounts stay uncomputed
+
+
+def test_full_boq_reply_totals_by_amount_exactly():
+    # (b) a full BoQ reply totals exactly (qty*rate per line), as before
+    reply = BidReply(firm_id="F-BQ", trade="electrical", line_items=[
+        _boq("E-01", 2.0, 1000.0, 2000.0), _boq("E-02", 100.0, 50.0, 5000.0),
+    ])
+    lev = level_reply(reply, "BoQ Firm", peer_item_reference([reply]))
+
+    assert lev.corrected_total == 7000.0
+    assert lev.arithmetic_findings == []
+    assert [ir.amount for ir in lev.item_rates] == [2000.0, 5000.0]   # amount computed per line
+
+
+def test_mixed_reply_totals_boq_lines_and_compares_rate_only_lines():
+    # (c) a mixed reply handles both per line
+    reply = BidReply(firm_id="F-MX", trade="ground_investigation", line_items=[
+        _boq("M-1", 10.0, 300.0, 3000.0),                                        # BoQ line
+        _rate_only("M-2", 1500.0),                                               # rate-only line
+        BidLineItem(item_ref="M-3", description="Provisional sum — testing", unit="item"),  # unpriced -> gap
+    ])
+    lev = level_reply(reply, "Mixed Firm", peer_item_reference([reply]))
+
+    assert lev.corrected_total == 3000.0                             # only the BoQ line contributes
+    assert lev.arithmetic_findings == []
+    assert any(g.startswith("M-3") and "provisional" in g.lower() for g in lev.scope_gaps)
+    rates = {ir.item_ref: (ir.rate, ir.amount) for ir in lev.item_rates}
+    assert rates["M-1"] == (300.0, 3000.0)                           # BoQ: rate and amount
+    assert rates["M-2"] == (1500.0, None)                            # rate-only: rate, no amount
+    assert rates["M-3"] == (None, None)                              # unpriced
+
+
+def test_rate_present_but_qty_absent_is_not_flagged_as_an_arithmetic_error():
+    # (d) a rate-present / qty-absent line is not an arithmetic error, even with a stray amount,
+    #     and does not inject that amount into the total (compared by rate only).
+    reply = BidReply(firm_id="F-Q", trade="ground_investigation", line_items=[
+        BidLineItem(item_ref="Q-1", description="Rotary drilling", unit="m", rate=1000.0, amount=999999.0),  # no qty
+    ])
+    lev = level_reply(reply, "Q Firm", peer_item_reference([reply]))
+
+    assert lev.arithmetic_findings == []      # no qty -> no qty*rate to check the stated amount against
+    assert lev.corrected_total == 0.0         # excluded from the amount total (point 4)
+    assert lev.scope_gaps == []               # it has a rate, so it is not a gap
+    assert lev.item_rates[0].rate == 1000.0 and lev.item_rates[0].amount is None
+
+
+def test_computable_amount_covers_boq_lumpsum_rateonly_and_unpriced():
+    assert computable_amount(_boq("x", 3.0, 10.0, 999.0)) == 30.0            # qty*rate wins over stated amount
+    assert computable_amount(BidLineItem(item_ref="x", amount=500.0)) == 500.0  # lump sum, no rate basis -> stated
+    assert computable_amount(_rate_only("x", 42.0)) is None                  # rate-only -> no amount
+    assert computable_amount(BidLineItem(item_ref="x")) is None              # wholly unpriced -> no amount
+
+
+def test_demo_hero_corrected_totals_are_unchanged(replies, levelled):
+    # The rate-aware refactor must not move the baked demo/hero figures.
+    corrected = {b.firm_id: b.corrected_total for b in levelled}
+    assert corrected == {"F-EL-01": 9877000.0, "F-EL-02": 12033000.0, "F-EL-03": 12272000.0, "F-EL-04": 13442000.0}
+    f03 = _by_firm(levelled)["F-EL-03"]
+    assert f03.normalized_total == 12572000.0  # E-06 gap valued at the peer median (300000)
+
+
+def test_export_of_a_rate_only_reply_shows_rate_and_blank_amount(conn, tmp_path):
+    # Guards the export arithmetic site: a rate-only line must not crash on qty*rate.
+    reply = BidReply(firm_id="F-RO", trade="ground_investigation", line_items=[
+        _rate_only("A-1", 1200.0), _rate_only("A-2", 450.0, unit="hr"),
+    ])
+    levelled = level_bids([reply], conn=conn)
+    out = export_leveling_xlsx(levelled, [reply], path=tmp_path / "rate_only.xlsx")
+
+    flat = [c.value for row in load_workbook(out).active.iter_rows() for c in row]
+    assert 1200.0 in flat and 450.0 in flat   # rates are shown
+    assert "—" in flat                         # the amount cells are blank for rate-only lines
