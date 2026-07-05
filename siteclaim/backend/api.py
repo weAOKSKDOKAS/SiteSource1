@@ -83,11 +83,13 @@ from schemas.estimate import (  # noqa: E402
     EstimateProjectCreate,
     EstimateProjectUpdate,
     FromPackageRequest,
+    LetterOfOffer,
     RatePrecedent,
     RateSuggestions,
 )
 from pipeline.estimate.checks import ESTIMATE_CHECK_FIXTURE, check_estimate  # noqa: E402
 from pipeline.estimate.draft import ESTIMATE_DRAFT_FIXTURE, draft_estimate  # noqa: E402
+from pipeline.estimate.letter import LETTER_FIXTURE, draft_letter  # noqa: E402
 from pipeline.estimate.rates import suggest_rates  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
@@ -1354,6 +1356,21 @@ def get_estimate_rate_suggestions(estimate_id: int) -> RateSuggestions:
         estimate_id=estimate_id, corpus_empty=result["corpus_empty"], corpus_size=result["corpus_size"],
         suggestions=[RatePrecedent(**s) for s in result["suggestions"]],
     )
+
+
+@app.post("/estimate/{estimate_id}/letter", response_model=LetterOfOffer)
+def post_estimate_letter(estimate_id: int) -> LetterOfOffer:
+    """Draft a letter of offer (Layer-2 assist, purpose ``letter-of-offer``) — a covering body,
+    inclusions, exclusions, and assumptions from the estimate's scope + priced schedule. The
+    person owns and issues the final letter; nothing here invents a total or a rate. DEMO reads
+    the baked fixture; a deterministic fallback keeps a usable letter. Sync ``def``."""
+    conn = store.get_connection()
+    try:
+        project = _require_estimate(conn, estimate_id)
+        items = est.items_for(conn, estimate_id)
+    finally:
+        conn.close()
+    return LetterOfOffer(**draft_letter(project, items, demo_fixture=LETTER_FIXTURE if demo_mode() else None))
 
 
 @app.get("/estimate/{estimate_id}/items", response_model=list[EstimateItem])

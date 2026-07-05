@@ -191,3 +191,14 @@ class EstimateCheckDraft(BaseModel):
     """The L2 output (parsed by ``complete_json``) — scope obligations with no priced line."""
 
     scope_gaps: list[EstimateScopeGap] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Letter of offer (P3e) — a draft; the person owns and issues the final letter.
+# ---------------------------------------------------------------------------
+class LetterOfOffer(BaseModel):
+    subject: str = ""
+    body: str = ""
+    inclusions: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)

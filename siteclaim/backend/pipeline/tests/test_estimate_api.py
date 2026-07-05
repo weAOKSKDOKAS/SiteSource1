@@ -141,6 +141,17 @@ def test_check_flags_omissions_unpriced_and_scope_gaps(est_db):
     assert client.post("/estimate/123456/check", json={"tender": []}).status_code == 404
 
 
+def test_letter_of_offer_draft(est_db):
+    eid = client.post("/estimate/from-package", json={"package": _PACKAGE, "run_ref": "l1"}).json()["id"]
+    # price a line so the total is non-null
+    item_id = client.get(f"/estimate/{eid}/items").json()[0]["id"]
+    client.patch(f"/estimate/{eid}/items/{item_id}", json={"rate": 1200.0})
+    letter = client.post(f"/estimate/{eid}/letter").json()
+    assert letter["subject"] and letter["body"]
+    assert letter["inclusions"] and letter["exclusions"] and letter["assumptions"]
+    assert client.post("/estimate/123456/letter").status_code == 404
+
+
 def test_endpoints_404_on_unknown_estimate(est_db):
     assert client.get("/estimate/projects/123456").status_code == 404
     assert client.post("/estimate/123456/items", json={"items": []}).status_code == 404
