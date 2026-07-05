@@ -12,7 +12,7 @@ import type {
   RatePrecedent,
   RateSuggestions,
 } from "./types";
-import { Button, Card, ErrorBanner, LayerBadge, SectionHeader, StatCallout } from "./ui";
+import { Button, Card, Collapse, Docket, Drawer, ErrorBanner, LayerBadge, MonoLabel, SectionHeader, StatCallout } from "./ui";
 
 // ---------------------------------------------------------------------------
 // Rate precedent — from the benchmark corpus (Layer 3). Suggestion only; the person prices.
@@ -131,6 +131,7 @@ function EstimateDetail({ project, onBack, onChanged }: { project: EstimateProje
   const [rates, setRates] = useState<RateSuggestions | null>(null);
   const [check, setCheck] = useState<EstimateCheckResult | null>(null);
   const [letter, setLetter] = useState<LetterOfOffer | null>(null);
+  const [detail, setDetail] = useState<EstimateItem | null>(null);
   const [scope, setScope] = useState(project.scope_of_works);
   const [newRef, setNewRef] = useState("");
   const [newDesc, setNewDesc] = useState("");
@@ -221,7 +222,14 @@ function EstimateDetail({ project, onBack, onChanged }: { project: EstimateProje
               {items.map((it) => (
                 <tr key={it.id} className="border-b border-line-soft last:border-0 align-top">
                   <td className="px-3 py-2">
-                    <div className="tabular font-medium text-ink">{it.item_ref}</div>
+                    <button
+                      type="button"
+                      onClick={() => setDetail(it)}
+                      title="Open the estimate line record"
+                      className="tabular text-left font-medium text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+                    >
+                      {it.item_ref}
+                    </button>
                     <div className="text-xs text-ink-faint">{it.description}{it.unit ? ` · ${it.unit}` : ""}</div>
                   </td>
                   <td className="px-3 py-2 text-right"><NumCell value={it.qty} onCommit={(v) => priceItem(it.id, "qty", v)} /></td>
@@ -251,7 +259,100 @@ function EstimateDetail({ project, onBack, onChanged }: { project: EstimateProje
 
       {check && <FindingsPanel result={check} />}
       {letter && <LetterPanel letter={letter} />}
+
+      <ItemDrawer
+        item={detail}
+        precedent={detail ? rateFor(detail.id) : undefined}
+        corpusEmpty={rates?.corpus_empty ?? true}
+        onClose={() => setDetail(null)}
+      />
     </div>
+  );
+}
+
+// The estimate line record: the human's pricing state plus the FULL corpus precedent —
+// the inline cell shows only the median; here the band, sample and warnings read whole.
+function ItemDrawer({
+  item,
+  precedent,
+  corpusEmpty,
+  onClose,
+}: {
+  item: EstimateItem | null;
+  precedent: RatePrecedent | undefined;
+  corpusEmpty: boolean;
+  onClose: () => void;
+}) {
+  const p = precedent;
+  return (
+    <Drawer
+      open={item != null}
+      onClose={onClose}
+      eyebrow="Estimate line record"
+      tone="violet"
+      title={item?.item_ref ?? ""}
+      subtitle={item && <span>{item.description}{item.unit ? ` · ${item.unit}` : ""}</span>}
+      footer="Precedent retrieves from the confirmed benchmark corpus — you price every line and own the offer."
+    >
+      {item && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-xl border border-line-soft bg-paper-soft px-3 py-2.5">
+              <MonoLabel>Qty</MonoLabel>
+              <div className="tabular mt-0.5 text-sm font-semibold text-ink">{item.qty ?? "—"}</div>
+            </div>
+            <div className="rounded-xl border border-line-soft bg-paper-soft px-3 py-2.5">
+              <MonoLabel>Your rate</MonoLabel>
+              <div className="tabular mt-0.5 text-sm font-semibold text-ink">{item.rate != null ? money(item.rate) : "unpriced"}</div>
+            </div>
+            <div className="rounded-xl border border-line-soft bg-paper-soft px-3 py-2.5">
+              <MonoLabel>Amount</MonoLabel>
+              <div className="tabular mt-0.5 text-sm font-semibold text-ink">{money(item.amount)}</div>
+            </div>
+          </div>
+
+          <div>
+            <Collapse title="Rate precedent (corpus)" defaultOpen>
+              {corpusEmpty ? (
+                <p className="text-xs text-ink-faint">
+                  The benchmark corpus is empty — no precedent is shown until real confirmed variance records exist.
+                </p>
+              ) : !p || p.tier === 0 ? (
+                <p className="text-xs text-ink-faint">No precedent for this line in the corpus.</p>
+              ) : (
+                <div className="space-y-2 text-xs text-ink-soft">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Pill tone={p.tier === 1 ? "violet" : "brand"}>
+                      {p.tier === 1 ? `exact ref ${p.matched_ref}` : `~${Math.round((p.similarity || 0) * 100)}% similar to ${p.matched_ref}`}
+                    </Pill>
+                    <span className="tabular text-ink-faint">n={p.sample_count}</span>
+                  </div>
+                  <table className="w-full">
+                    <tbody>
+                      {[["Low", p.rate_low], ["Median", p.rate_median], ["High", p.rate_high]].map(([label, v]) => (
+                        <tr key={String(label)} className="border-b border-line-soft last:border-0">
+                          <td className="py-1 text-ink-faint">{label}</td>
+                          <td className="tabular py-1 text-right font-medium text-ink">{money(v as number | null)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {p.rate_warnings.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {p.rate_warnings.map((w, i) => (
+                        <Pill key={i} tone="warn">{`over-ran on rate: ${w.reason_code} ×${w.count}`}</Pill>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </Collapse>
+          </div>
+
+          <Docket label="Line provenance" code={<span className="text-sm">{item.source || "manual"}</span>} />
+        </div>
+      )}
+    </Drawer>
   );
 }
 
