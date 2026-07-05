@@ -170,13 +170,31 @@ function EstimateDetail({ project, onBack, onChanged }: { project: EstimateProje
         {project.trade && <Pill tone="violet">{tradeLabel(project.trade)}</Pill>}
         <Pill tone={project.status === "draft" ? "neutral" : "ok"}>{project.status}</Pill>
       </div>
+      {project.source === "routing" && (
+        <p className="text-xs text-ink-soft">
+          <Pill tone="violet">routed self-perform</Pill>{" "}
+          Opened from the routing gate — the{" "}
+          <span className="font-semibold text-ink">{tradeLabel(project.package_key || project.trade)}</span> package
+          {project.run_ref && (
+            <>
+              {" "}of tender <span className="tabular text-ink">{project.run_ref}</span>
+            </>
+          )}
+          . Its scope items arrived as the unpriced lines below.
+        </p>
+      )}
       {error && <ErrorBanner message={error} />}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCallout label="Lines" value={project.item_count} />
         <StatCallout label="Priced" value={`${project.priced_item_count}/${project.item_count}`} />
         <StatCallout label="Total" value={money(project.total)} tone="brand" hint="computable amounts only" />
-        <StatCallout label="Rate corpus" value={rates ? (rates.corpus_empty ? "empty" : rates.corpus_size) : "—"} tone="violet" />
+        <StatCallout
+          label="Rate corpus"
+          value={rates ? (rates.corpus_empty ? "empty" : rates.corpus_size) : "—"}
+          tone="violet"
+          hint={rates?.corpus_empty ? "fills from real completed projects — nothing is invented" : undefined}
+        />
       </div>
 
       <Card className="p-4">
