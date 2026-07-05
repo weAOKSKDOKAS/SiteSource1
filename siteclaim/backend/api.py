@@ -526,6 +526,17 @@ def post_shortlist(req: ShortlistRequest) -> ShortlistSet:
 # ---------------------------------------------------------------------------
 # Stage 03 — dispatch
 # ---------------------------------------------------------------------------
+class DraftOverride(BaseModel):
+    """A human-edited enquiry draft for one (trade, firm). The approve-before-send gate
+    lets the person edit the composed subject/body; the outbox (and, later, the real
+    send) carries EXACTLY the edited text. An empty field keeps the composed value."""
+
+    trade: str
+    firm_id: str
+    subject: str = ""
+    body: str = ""
+
+
 class DispatchRequest(BaseModel):
     shortlist: ShortlistSet
     approvals: dict[str, list[str]] = Field(default_factory=dict)
@@ -535,6 +546,24 @@ class DispatchRequest(BaseModel):
     send: bool = False
     dry_run: bool = False  # force the mock outbox even when SMTP is configured
     demo_fixture: str | None = DISPATCH_FIXTURE
+    draft_overrides: list[DraftOverride] = Field(default_factory=list)
+
+
+def _apply_draft_overrides(dispatch: DispatchSet, overrides: list[DraftOverride]) -> DispatchSet:
+    """Replace composed subject/body with the human's edits, matched by (trade, firm)."""
+    if not overrides:
+        return dispatch
+    by_key = {(o.trade, o.firm_id): o for o in overrides}
+    bundles = []
+    for bundle in dispatch.bundles:
+        edit = by_key.get((bundle.trade, bundle.firm_id))
+        if edit is not None:
+            bundle = bundle.model_copy(update={
+                "email_subject": edit.subject or bundle.email_subject,
+                "email_body": edit.body or bundle.email_body,
+            })
+        bundles.append(bundle)
+    return DispatchSet(bundles=bundles)
 
 
 @app.post("/dispatch", response_model=DispatchSet)
@@ -547,6 +576,7 @@ def post_dispatch(req: DispatchRequest) -> DispatchSet:
         scope=req.scope, project_name=req.project_name,
         tender=req.tender, tender_id=req.project_name, workspace=workspace,
     )
+    dispatch = _apply_draft_overrides(dispatch, req.draft_overrides)
     return send_bundles(dispatch, dry_run=req.dry_run) if req.send else dispatch
 
 
