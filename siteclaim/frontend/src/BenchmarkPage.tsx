@@ -13,7 +13,7 @@ import type {
   ReasonCode,
   VarianceRecord,
 } from "./types";
-import { Button, Card, ErrorBanner, LayerBadge, Modal, cx } from "./ui";
+import { Button, Card, Collapse, Docket, Drawer, ErrorBanner, LayerBadge, Modal, MonoLabel, cx } from "./ui";
 
 function fmt(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
@@ -297,6 +297,7 @@ function ProjectDetail({
   const [confirmedKeys, setConfirmedKeys] = useState<Set<string>>(new Set());
   const [eos, setEos] = useState<ProjectEOS | null>(null);
   const [suggestions, setSuggestions] = useState<Record<number, ReasonCandidate>>({});
+  const [detail, setDetail] = useState<VarianceRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -412,7 +413,14 @@ function ProjectDetail({
               {variance.map((r) => (
                 <tr key={r.id} className="border-b border-line-soft last:border-0">
                   <td className="px-3 py-2">
-                    <div className="font-medium text-ink">{r.item_ref || "(coarse)"}</div>
+                    <button
+                      type="button"
+                      onClick={() => setDetail(r)}
+                      title="Open the variance record"
+                      className="text-left font-medium text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+                    >
+                      {r.item_ref || "(coarse)"}
+                    </button>
                     <div className="text-xs text-ink-faint">{r.granularity !== "item" ? r.granularity : `T${r.match_tier}`}</div>
                   </td>
                   <td className="tabular px-3 py-2 text-ink-soft">{fmt(r.tender_rate)} → {fmt(r.actual_rate)}</td>
@@ -433,7 +441,107 @@ function ProjectDetail({
           </table>
         </div>
       </Card>
+
+      <VarianceDrawer record={detail} reasonCodes={reasonCodes} onClose={() => setDetail(null)} />
     </div>
+  );
+}
+
+// The variance record: the full rate-primary picture for one line — tender vs outturn,
+// the qty-driven / rate-driven decomposition, the confirmed reason, and provenance.
+function VarianceDrawer({ record, reasonCodes, onClose }: { record: VarianceRecord | null; reasonCodes: ReasonCode[]; onClose: () => void }) {
+  const r = record;
+  const reasonLabel = (code: string) => reasonCodes.find((c) => c.code === code)?.label ?? code;
+  return (
+    <Drawer
+      open={r != null}
+      onClose={onClose}
+      eyebrow="Variance record"
+      tone="violet"
+      title={r ? r.item_ref || "(coarse line)" : ""}
+      subtitle={
+        r && (
+          <span className="tabular">
+            {r.granularity} granularity{r.match_tier != null ? ` · match tier ${r.match_tier}` : ""}
+          </span>
+        )
+      }
+      footer="Variance math is Layer-1 and every record is written only by the human confirm gate — the model never writes a number or a reason."
+    >
+      {r && (
+        <div className="space-y-3">
+          <div>
+            <MonoLabel className="mb-1.5">Tender vs outturn</MonoLabel>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-xl border border-line-soft bg-paper-soft px-4 py-3">
+                <MonoLabel>Tender rate</MonoLabel>
+                <div className="tabular mt-0.5 text-base font-semibold text-ink-soft">{fmt(r.tender_rate)}</div>
+              </div>
+              <div className="rounded-xl border border-line-soft bg-paper-soft px-4 py-3">
+                <MonoLabel>Actual rate</MonoLabel>
+                <div className="tabular mt-0.5 text-base font-semibold text-ink">{fmt(r.actual_rate)}</div>
+              </div>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <DeltaTag value={r.rate_delta} label="rate" />
+              {r.rate_delta_pct != null && <span className="tabular text-[11px] text-ink-faint">{fmt(r.rate_delta_pct)}%</span>}
+            </div>
+          </div>
+
+          <div>
+            <Collapse title="Quantities & amounts" defaultOpen>
+              <table className="w-full text-xs">
+                <tbody>
+                  {[
+                    ["Quantity", r.tender_qty, r.actual_qty],
+                    ["Amount", r.tender_amount, r.actual_amount],
+                  ].map(([label, t, a]) => (
+                    <tr key={String(label)} className="border-b border-line-soft last:border-0">
+                      <td className="py-1.5 text-ink-faint">{label}</td>
+                      <td className="tabular py-1.5 text-right text-ink-soft">{fmt(t as number | null)}</td>
+                      <td className="py-1.5 text-center text-ink-faint">→</td>
+                      <td className="tabular py-1.5 text-right text-ink">{fmt(a as number | null)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {r.amount_delta != null && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <DeltaTag value={r.amount_delta} label="amount" />
+                  {r.amount_delta_qty != null && r.amount_delta_rate != null && (
+                    <span className="tabular text-[11px] text-ink-faint">
+                      qty-driven {fmt(r.amount_delta_qty)} + rate-driven {fmt(r.amount_delta_rate)}
+                    </span>
+                  )}
+                </div>
+              )}
+            </Collapse>
+
+            <Collapse title="Reason" defaultOpen={!!r.reason_code}>
+              {r.reason_code ? (
+                <div className="text-xs leading-relaxed text-ink-soft">
+                  <span className="font-semibold text-ink">{reasonLabel(r.reason_code)}</span>
+                  {r.reason_note && <p className="mt-1 italic">“{r.reason_note}”</p>}
+                </div>
+              ) : (
+                <p className="text-xs text-ink-faint">Not yet tagged — set the reason from the table (a human writes it).</p>
+              )}
+            </Collapse>
+          </div>
+
+          <Docket
+            label="Provenance"
+            code={
+              <span className="text-sm">
+                {r.source}
+                {r.tagged_by ? ` · tagged by ${r.tagged_by}` : ""}
+                {r.confirmed_at ? ` · confirmed ${r.confirmed_at.slice(0, 10)}` : ""}
+              </span>
+            }
+          />
+        </div>
+      )}
+    </Drawer>
   );
 }
 

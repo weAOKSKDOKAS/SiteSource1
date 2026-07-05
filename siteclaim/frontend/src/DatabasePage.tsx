@@ -34,10 +34,17 @@ export function DatabasePage() {
           </div>
 
           <Card className="p-4">
-            <h3 className="mb-2 text-sm font-semibold text-ink">Flags by type</h3>
+            <div className="mb-2 flex flex-wrap items-baseline gap-2">
+              <h3 className="text-sm font-semibold text-ink">Flags by type</h3>
+              <span className="text-xs text-ink-faint">
+                official registers cross-checked — every stored flag carries its issuing source and reference
+              </span>
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(cov.flags_by_type).map(([k, n]) => (
-                <Pill key={k} tone="neutral">{`${k.replace(/_/g, " ")} · ${n}`}</Pill>
+                <span key={k} title={`${n} verified public record(s) of this type across the screened pool`} className="cursor-help">
+                  <Pill tone="neutral">{`${k.replace(/_/g, " ")} · ${n}`}</Pill>
+                </span>
               ))}
             </div>
           </Card>
