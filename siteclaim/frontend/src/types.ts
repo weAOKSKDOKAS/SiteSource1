@@ -317,6 +317,38 @@ export interface LetterOfOffer {
   assumptions: string[];
 }
 
+// --- Unified project dashboard (Phase 4) -----------------------------------
+export interface DashboardPackage {
+  package_key: string;
+  trade: string;
+  scope_summary: string;
+  recommended_route: string;
+  chosen_route: string | null;
+  track: string; // left | right | undecided
+  estimate_id: number | null;
+  decided_by: string;
+}
+
+export interface ProjectSummary {
+  run_ref: string;
+  name: string;
+  provenance: string;
+  package_count: number;
+  self_perform_count: number;
+  sublet_count: number;
+  estimate_count: number;
+  benchmark_project_id: number | null;
+}
+
+export interface ProjectDashboard {
+  run_ref: string;
+  name: string;
+  provenance: string;
+  packages: DashboardPackage[];
+  estimates: EstimateProject[];
+  benchmark_project_id: number | null;
+}
+
 export interface FirmProfile {
   firm_id: string;
   name: string;

@@ -3,6 +3,7 @@ import { api } from "./api";
 import { BenchmarkPage } from "./BenchmarkPage";
 import { DatabasePage } from "./DatabasePage";
 import { EstimatorPage } from "./EstimatorPage";
+import { ProjectsPage } from "./ProjectsPage";
 import { RoutingPage } from "./RoutingPage";
 import { Header, Stepper, type StepIndex, type TopView } from "./components";
 import type {
@@ -228,7 +229,7 @@ export default function App() {
     setError(null);
   }
 
-  if (view === "routing" || view === "estimator" || view === "benchmark" || view === "database") {
+  if (view === "routing" || view === "estimator" || view === "benchmark" || view === "database" || view === "projects") {
     return (
       <div className="min-h-screen">
         <Header demoMode={demoMode} view={view} onNavigate={setView} />
@@ -239,6 +240,8 @@ export default function App() {
             <EstimatorPage />
           ) : view === "benchmark" ? (
             <BenchmarkPage />
+          ) : view === "projects" ? (
+            <ProjectsPage />
           ) : (
             <DatabasePage />
           )}

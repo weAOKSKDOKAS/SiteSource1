@@ -16,7 +16,9 @@ import type {
   LevelledBid,
   MatchConfirm,
   MatchProposal,
+  ProjectDashboard,
   ProjectEOS,
+  ProjectSummary,
   RateSuggestions,
   ReasonCode,
   Recommendation,
@@ -165,6 +167,11 @@ export const api = {
   estimateRateSuggestions: (id: number) => get<RateSuggestions>(`/estimate/${id}/rate-suggestions`),
   checkEstimate: (id: number) => post<EstimateCheckResult>(`/estimate/${id}/check`, { tender: [] }),
   estimateLetter: (id: number) => post<LetterOfOffer>(`/estimate/${id}/letter`, {}),
+  estimateToBenchmark: (id: number) => post<{ estimate: EstimateProject; benchmark_project_id: number; tender_item_count: number }>(`/estimate/${id}/to-benchmark`, {}),
+
+  // --- Unified project dashboard (Phase 4) ---------------------------------
+  projects: () => get<ProjectSummary[]>("/project"),
+  projectDashboard: (runRef: string) => get<ProjectDashboard>(`/project/${encodeURIComponent(runRef)}`),
   uploadBenchmarkFile: (path: string, files: File[]) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
