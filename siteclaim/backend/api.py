@@ -98,6 +98,8 @@ from schemas.models import (  # noqa: E402
     Contact,
     DispatchSet,
     DocType,
+    FirmProfile,
+    FirmsPage,
     LevelledBid,
     Recommendation,
     ScopePackages,
@@ -158,6 +160,39 @@ def contacts() -> list[Contact]:
         return store.all_contacts(conn)
     finally:
         conn.close()
+
+
+_FIRMS_PAGE_SIZES = {10, 25, 50, 100}
+
+
+@app.get("/firms", response_model=FirmsPage)
+def get_firms(q: str = "", trade: str = "", limit: int = 25, offset: int = 0) -> FirmsPage:
+    """Browse the proprietary firm database — the **real-provenance register firms only** (the
+    same 140/46 population ``/coverage`` counts). Illustrative demo firms and partner-archive
+    firms never appear. Optional name substring ``q`` and canonical ``trade`` filter; paginated
+    (``limit`` in {10,25,50,100}, default 25). Pure DB read — offline, no LLM."""
+    lim = limit if limit in _FIRMS_PAGE_SIZES else 25
+    off = max(0, offset)
+    conn = store.get_connection()
+    try:
+        items, total = store.firms_page(conn, q=q, trade=trade, limit=lim, offset=off)
+    finally:
+        conn.close()
+    return FirmsPage(items=items, total=total, limit=lim, offset=off)
+
+
+@app.get("/firms/{firm_id}", response_model=FirmProfile)
+def get_firm(firm_id: str) -> FirmProfile:
+    """The full fused profile for one firm (registration, trades, closeout, public flags with
+    their issuing source/reference, award history). 404 if unknown."""
+    conn = store.get_connection()
+    try:
+        firm = store.firm_profile(conn, firm_id)
+    finally:
+        conn.close()
+    if firm is None:
+        raise HTTPException(status_code=404, detail=f"No firm {firm_id}.")
+    return firm
 
 
 # ---------------------------------------------------------------------------

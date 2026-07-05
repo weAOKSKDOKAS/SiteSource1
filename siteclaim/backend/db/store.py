@@ -160,6 +160,32 @@ def firms_for_trade(conn: sqlite3.Connection, trade: str) -> list[FirmProfile]:
     return [firm for firm in all_firms(conn) if trade in firm.trades]
 
 
+def firms_page(conn: sqlite3.Connection, *, q: str = "", trade: str = "",
+               limit: int = 25, offset: int = 0) -> tuple[list[FirmProfile], int]:
+    """The browseable firm database — **real-provenance register firms only** (never the
+    illustrative demo stubs, never partner_archive), so it reproduces the ``coverage`` 140/46
+    population exactly. Optional case-insensitive name substring ``q`` and canonical ``trade``
+    membership; ordered by name. Returns ``(page, total)`` where total is the full filtered
+    count. Reuses ``_firm_from_row`` for the record mapping (no duplication)."""
+    rows = conn.execute(
+        "SELECT * FROM firms WHERE provenance = ? ORDER BY name_en COLLATE NOCASE, firm_id",
+        (_REAL,),
+    ).fetchall()
+    firms = [_firm_from_row(conn, row) for row in rows]
+
+    needle = (q or "").strip().lower()
+    trade_key = (trade or "").strip()
+    filtered = [
+        firm for firm in firms
+        if (not needle or needle in firm.name.lower())
+        and (not trade_key or trade_key in firm.trades)
+    ]
+    total = len(filtered)
+    start = max(0, offset)
+    page = filtered[start:start + limit] if limit > 0 else filtered[start:]
+    return page, total
+
+
 def eos_firm_ids(conn: sqlite3.Connection) -> set[str]:
     """Firm ids that carry an **assessable EOS closeout record** (baked closeout
     chunks). The per-tender shortlist is drawn only from these; the wider

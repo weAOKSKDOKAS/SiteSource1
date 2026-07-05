@@ -199,6 +199,15 @@ class FirmProfile(BaseModel):
     award_history: list[str] = Field(default_factory=list)
 
 
+class FirmsPage(BaseModel):
+    """A page of the browseable firm database (real-provenance register firms only)."""
+
+    items: list[FirmProfile] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 25
+    offset: int = 0
+
+
 class Contact(BaseModel):
     """A subcontractor address-book entry (Layer 3) — where a trade's RFQ is sent."""
 
