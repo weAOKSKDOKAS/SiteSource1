@@ -101,3 +101,29 @@ class EstimateItemUpdate(BaseModel):
     qty: Optional[float] = None
     rate: Optional[float] = None
     section: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Draft (P3b) — the L2 scope-of-works + candidate item skeleton. The model proposes
+# item refs/descriptions/units only; it never invents a quantity or a rate.
+# ---------------------------------------------------------------------------
+class EstimateDraftItem(BaseModel):
+    item_ref: str = ""
+    description: str = ""
+    unit: str = ""
+
+
+class EstimateDraft(BaseModel):
+    """The LLM output (parsed by ``complete_json``)."""
+
+    scope_of_works: str = ""
+    items: list[EstimateDraftItem] = Field(default_factory=list)
+
+
+class EstimateDraftResult(BaseModel):
+    """The draft endpoint's response: the refreshed estimate plus what the draft added."""
+
+    estimate: EstimateProject
+    scope_of_works: str = ""
+    added_item_refs: list[str] = Field(default_factory=list)
+    trade_mapped: bool = True   # False when the trade is off-taxonomy (surfaced, never dropped)

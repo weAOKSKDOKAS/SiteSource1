@@ -1,0 +1,8 @@
+{
+  "scope_of_works": "Self-perform the ground investigation package: mobilise a rotary drilling rig, sink boreholes through soil and rock as tendered, carry out in-situ standard penetration tests and undisturbed sampling, and reinstate on completion. Allow for rig standing during utility diversions and for laboratory testing of recovered samples.",
+  "items": [
+    {"item_ref": "G-MOB", "description": "Mobilisation and demobilisation of the drilling rig", "unit": "sum"},
+    {"item_ref": "G-STANDBY", "description": "Rig standing time (contingency allowance)", "unit": "hr"},
+    {"item_ref": "G-LAB", "description": "Laboratory testing of recovered samples", "unit": "no"}
+  ]
+}

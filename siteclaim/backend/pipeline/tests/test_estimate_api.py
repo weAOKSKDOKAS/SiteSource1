@@ -86,6 +86,24 @@ def test_item_add_price_and_delete(est_db):
     assert client.patch(f"/estimate/{eid}/items/999999", json={"rate": 1.0}).status_code == 404
 
 
+def test_draft_seeds_scope_and_adds_skeleton_items(est_db):
+    seeded = client.post("/estimate/from-package", json={"package": _PACKAGE, "run_ref": "r1"}).json()
+    eid = seeded["id"]
+    result = client.post(f"/estimate/{eid}/draft").json()
+    assert result["scope_of_works"] and result["trade_mapped"] is True
+    # the demo fixture proposes GI skeleton items not already in the tender SoR
+    assert set(result["added_item_refs"]) >= {"G-MOB", "G-STANDBY"}
+    items = {i["item_ref"] for i in client.get(f"/estimate/{eid}/items").json()}
+    assert {"G1", "G2", "G-MOB", "G-STANDBY"} <= items  # tender lines kept + skeleton added
+    # the added skeleton lines are unpriced/unquantified (the human fills them)
+    added = [i for i in client.get(f"/estimate/{eid}/items").json() if i["item_ref"] == "G-MOB"][0]
+    assert added["qty"] is None and added["rate"] is None
+    # re-drafting dedupes against the now-present refs (no duplicate G-MOB)
+    again = client.post(f"/estimate/{eid}/draft").json()
+    assert "G-MOB" not in again["added_item_refs"]
+    assert client.post("/estimate/123456/draft").status_code == 404
+
+
 def test_endpoints_404_on_unknown_estimate(est_db):
     assert client.get("/estimate/projects/123456").status_code == 404
     assert client.post("/estimate/123456/items", json={"items": []}).status_code == 404

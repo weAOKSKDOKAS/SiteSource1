@@ -72,6 +72,7 @@ from schemas.benchmark import (  # noqa: E402
     VarianceRecord,
 )
 from schemas.estimate import (  # noqa: E402
+    EstimateDraftResult,
     EstimateItem,
     EstimateItemsRequest,
     EstimateItemUpdate,
@@ -80,6 +81,7 @@ from schemas.estimate import (  # noqa: E402
     EstimateProjectUpdate,
     FromPackageRequest,
 )
+from pipeline.estimate.draft import ESTIMATE_DRAFT_FIXTURE, draft_estimate  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
     Contact,
@@ -1267,6 +1269,38 @@ def post_estimate_from_package(req: FromPackageRequest) -> EstimateProject:
         if items:
             est.replace_items(conn, project["id"], items, source="scope-link")
         return EstimateProject(**est.get_project(conn, project["id"]))
+    finally:
+        conn.close()
+
+
+@app.post("/estimate/{estimate_id}/draft", response_model=EstimateDraftResult)
+def post_estimate_draft(estimate_id: int) -> EstimateDraftResult:
+    """Draft the scope-of-works + a candidate item skeleton (Layer-2 assist, purpose
+    ``estimate-draft``) from the estimate's trade + scope + current items. Refreshes the
+    scope narrative and adds any commonly-needed items not already present — unpriced and
+    unquantified (the person prices and quantifies). Never invents a quantity or a rate.
+    DEMO reads the baked fixture; a deterministic fallback keeps the scope from the summary.
+    Sync ``def`` (an LLM read in live)."""
+    conn = store.get_connection()
+    try:
+        project = _require_estimate(conn, estimate_id)
+        existing_refs = [i["item_ref"] for i in est.items_for(conn, estimate_id)]
+        draft = draft_estimate(
+            project["trade"], project["scope_of_works"], existing_refs,
+            demo_fixture=ESTIMATE_DRAFT_FIXTURE if demo_mode() else None,
+        )
+        est.update_project(conn, estimate_id, {"scope_of_works": draft["scope_of_works"]})
+        if draft["additional_items"]:
+            est.add_items(conn, estimate_id, [{
+                "item_ref": it["item_ref"], "description": it["description"], "unit": it["unit"],
+                "qty": None, "rate": None, "section": draft["trade"],
+            } for it in draft["additional_items"]], source="estimate-draft")
+        return EstimateDraftResult(
+            estimate=EstimateProject(**est.get_project(conn, estimate_id)),
+            scope_of_works=draft["scope_of_works"],
+            added_item_refs=[it["item_ref"] for it in draft["additional_items"]],
+            trade_mapped=draft["trade_mapped"],
+        )
     finally:
         conn.close()
 
