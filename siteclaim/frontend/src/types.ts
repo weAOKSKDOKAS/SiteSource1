@@ -168,6 +168,33 @@ export interface BenchmarkSummary {
   coverage_by_granularity: Record<string, number>;
 }
 
+// --- EOS narrative → variance reason (Phase 2) -----------------------------
+export interface ProjectEOS {
+  id: number;
+  project_id: number;
+  narrative: string;
+  summary: string;
+  source_doc: string;
+  has_images: boolean;
+  provenance: string; // demo | live
+  created_at: string;
+}
+
+export interface ReasonCandidate {
+  item_ref: string;
+  granularity: string;
+  reason_code: string;
+  snippet: string;
+  source: string; // reason-from-eos | fallback
+  record_id: number | null;
+}
+
+export interface VarianceReasonSuggestions {
+  project_id: number;
+  eos_attached: boolean;
+  candidates: ReasonCandidate[];
+}
+
 // --- Routing gate (Phase 1) -----------------------------------------------
 export interface RoutePackage {
   id?: number;

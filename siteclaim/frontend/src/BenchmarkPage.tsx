@@ -8,10 +8,12 @@ import type {
   MatchConfirm,
   MatchPair,
   MatchProposal,
+  ProjectEOS,
+  ReasonCandidate,
   ReasonCode,
   VarianceRecord,
 } from "./types";
-import { Button, Card, ErrorBanner, cx } from "./ui";
+import { Button, Card, ErrorBanner, LayerBadge, Modal, cx } from "./ui";
 
 function fmt(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
@@ -168,6 +170,117 @@ function toConfirm(p: MatchPair): MatchConfirm {
   return { tender_item_id: p.tender?.id ?? null, actual_item_id: p.actual?.id ?? null, match_tier: p.tier };
 }
 
+// The reason cell: the EOS-sourced candidate (Layer-2 suggestion) with its narrative
+// snippet and a one-click confirm, over the override dropdown. The human always writes —
+// confirming or overriding routes through the same reason POST (the sole writer).
+function ReasonCell({
+  record,
+  candidate,
+  reasonCodes,
+  onSet,
+}: {
+  record: VarianceRecord;
+  candidate: ReasonCandidate | undefined;
+  reasonCodes: ReasonCode[];
+  onSet: (code: string, note: string) => void;
+}) {
+  const label = (code: string) => reasonCodes.find((c) => c.code === code)?.label ?? code;
+  const confirmed = !!candidate && record.reason_code === candidate.reason_code;
+  return (
+    <div className="min-w-[13rem] space-y-1.5">
+      {candidate && (
+        <div className="rounded-lg border border-brand/30 bg-brand-bg/40 px-2 py-1.5">
+          <div className="flex items-center gap-1.5">
+            <LayerBadge layer="L2" />
+            <span className="text-xs font-semibold text-ink">EOS · {label(candidate.reason_code)}</span>
+            {confirmed ? (
+              <Pill tone="ok">Confirmed</Pill>
+            ) : (
+              <button
+                className="ml-auto rounded bg-brand px-2 py-0.5 text-xs font-semibold text-white hover:opacity-90"
+                onClick={() => onSet(candidate.reason_code, candidate.snippet)}
+              >
+                Confirm
+              </button>
+            )}
+          </div>
+          {candidate.snippet && (
+            <p className="mt-1 text-xs italic leading-snug text-ink-soft">“{candidate.snippet}”</p>
+          )}
+        </div>
+      )}
+      <select
+        className={cx("w-full rounded-lg border px-2 py-1 text-xs", record.reason_code ? "border-line text-ink" : "border-warn/40 text-ink-soft")}
+        value={record.reason_code}
+        onChange={(e) => onSet(e.target.value, record.reason_note)}
+      >
+        <option value="">
+          {candidate
+            ? `Override (EOS: ${label(candidate.reason_code)})`
+            : record.suggested_reason
+              ? `Suggested: ${record.suggested_reason}`
+              : "— set reason —"}
+        </option>
+        {reasonCodes.map((c) => (
+          <option key={c.code} value={c.code}>{c.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// The per-project EOS field report — the narrative account the reason candidates are drawn
+// from. Layer-2 reads it; the human confirms each reason. Illustrative until a partner
+// archive exists. Includes a paste-the-narrative attach affordance (the live path).
+function EosPanel({ eos, onAttach }: { eos: ProjectEOS | null; onAttach: (narrative: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-ink">EOS field report</h3>
+        <LayerBadge layer="L2" />
+        {eos?.provenance === "demo" && <Pill tone="neutral">Illustrative</Pill>}
+        {eos?.has_images && <Pill tone="neutral">has site photos</Pill>}
+        <Button variant="subtle" className="ml-auto" onClick={() => { setText(eos?.narrative ?? ""); setOpen(true); }}>
+          {eos ? "Update narrative" : "Attach narrative"}
+        </Button>
+      </div>
+      {eos ? (
+        <>
+          {eos.summary && <p className="text-sm text-ink">{eos.summary}</p>}
+          <p className="mt-2 text-xs leading-relaxed text-ink-soft">{eos.narrative}</p>
+          <p className="mt-2 text-xs text-ink-faint">
+            The AI reads the narrative and proposes a reason per variance line below; a person confirms it. The
+            reason is never written by the AI.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-ink-faint">
+          No EOS narrative attached. Paste the field account and the AI will propose a reason — with its
+          supporting sentence — for each variance line.
+        </p>
+      )}
+      <Modal open={open} onClose={() => setOpen(false)} title="EOS narrative">
+        <p className="mb-2 text-xs text-ink-soft">
+          Paste the End-of-Site field account — the narrative of what happened on site. It supplies the reason
+          behind each variance, never a number.
+        </p>
+        <textarea
+          className="h-48 w-full rounded-lg border border-line px-2 py-1.5 text-sm"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="On site, the rig stood idle while utility diversions were completed…"
+        />
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button disabled={!text.trim()} onClick={() => { onAttach(text.trim()); setOpen(false); }}>Save narrative</Button>
+        </div>
+      </Modal>
+    </Card>
+  );
+}
+
 function ProjectDetail({
   project,
   reasonCodes,
@@ -182,18 +295,29 @@ function ProjectDetail({
   const [matches, setMatches] = useState<MatchProposal | null>(null);
   const [variance, setVariance] = useState<VarianceRecord[]>([]);
   const [confirmedKeys, setConfirmedKeys] = useState<Set<string>>(new Set());
+  const [eos, setEos] = useState<ProjectEOS | null>(null);
+  const [suggestions, setSuggestions] = useState<Record<number, ReasonCandidate>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const id = project.id;
   const loadMatches = () => api.benchmarkMatches(id).then(setMatches).catch((e) => setError(String(e.message ?? e)));
   const loadVariance = () => api.benchmarkVariance(id).then(setVariance).catch((e) => setError(String(e.message ?? e)));
-  useEffect(() => { loadMatches(); loadVariance(); /* eslint-disable-next-line */ }, [id]);
+  const loadEos = () => api.benchmarkEos(id).then(setEos).catch(() => {});
+  const loadSuggestions = () =>
+    api.reasonSuggestions(id)
+      .then((s) =>
+        setSuggestions(Object.fromEntries(
+          s.candidates.filter((c) => c.record_id != null).map((c) => [c.record_id as number, c]),
+        )),
+      )
+      .catch(() => {});
+  useEffect(() => { loadMatches(); loadVariance(); loadEos(); loadSuggestions(); /* eslint-disable-next-line */ }, [id]);
 
   const upload = (path: string, files: File[]) => {
     setBusy(true); setError(null);
     api.uploadBenchmarkFile(path, files)
-      .then(() => { loadMatches(); loadVariance(); onChanged(); })
+      .then(() => { loadMatches(); loadVariance(); loadSuggestions(); onChanged(); })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
   };
@@ -204,6 +328,7 @@ function ProjectDetail({
       .then((recs) => {
         setVariance(recs);
         setConfirmedKeys((cur) => { const next = new Set(cur); pairs.forEach((p) => next.add(pairKey(p))); return next; });
+        loadSuggestions();  // new variance records -> refresh the EOS reason candidates
         onChanged();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -214,6 +339,13 @@ function ProjectDetail({
     if (!code) return;
     api.setVarianceReason(id, recordId, { reason_code: code, note })
       .then((rec) => setVariance((cur) => cur.map((r) => (r.id === rec.id ? rec : r))))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  const attachEos = (narrative: string) => {
+    setError(null);
+    api.attachEos(id, narrative)
+      .then(() => { loadEos(); loadSuggestions(); })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   };
 
@@ -255,6 +387,8 @@ function ProjectDetail({
         ))}
       </Card>
 
+      <EosPanel eos={eos} onAttach={attachEos} />
+
       <Card className="p-0">
         <div className="border-b border-line-soft px-4 py-2.5">
           <h3 className="text-sm font-semibold text-ink">Variance table</h3>
@@ -285,17 +419,13 @@ function ProjectDetail({
                   <td className="px-3 py-2"><DeltaTag value={r.rate_delta} /></td>
                   <td className="px-3 py-2"><DeltaTag value={r.amount_delta} /></td>
                   <td className="tabular px-3 py-2 text-xs text-ink-soft">{fmt(r.amount_delta_qty)} / {fmt(r.amount_delta_rate)}</td>
-                  <td className="px-3 py-2">
-                    <select
-                      className={cx("rounded-lg border px-2 py-1 text-xs", r.reason_code ? "border-line text-ink" : "border-warn/40 text-ink-soft")}
-                      value={r.reason_code}
-                      onChange={(e) => setReason(r.id, e.target.value, r.reason_note)}
-                    >
-                      <option value="">{r.suggested_reason ? `Suggested: ${r.suggested_reason}` : "— set reason —"}</option>
-                      {reasonCodes.map((c) => (
-                        <option key={c.code} value={c.code}>{c.label}</option>
-                      ))}
-                    </select>
+                  <td className="px-3 py-2 align-top">
+                    <ReasonCell
+                      record={r}
+                      candidate={suggestions[r.id]}
+                      reasonCodes={reasonCodes}
+                      onSet={(code, note) => setReason(r.id, code, note)}
+                    />
                   </td>
                 </tr>
               ))}

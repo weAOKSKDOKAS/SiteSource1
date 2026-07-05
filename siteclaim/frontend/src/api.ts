@@ -11,6 +11,7 @@ import type {
   LevelledBid,
   MatchConfirm,
   MatchProposal,
+  ProjectEOS,
   ReasonCode,
   Recommendation,
   RouteDecision,
@@ -20,6 +21,7 @@ import type {
   ShortlistSet,
   TenderPackage,
   TenderReplies,
+  VarianceReasonSuggestions,
   VarianceRecord,
 } from "./types";
 
@@ -108,6 +110,17 @@ export const api = {
   setVarianceReason: (id: number, recordId: number, body: { reason_code: string; note?: string }) =>
     post<VarianceRecord>(`/benchmark/${id}/variance/${recordId}/reason`, body),
   actualsTemplateUrl: (id: number) => BASE + `/benchmark/actuals-template.xlsx?project=${id}`,
+
+  // EOS narrative → reason (Phase 2): the field account, and the per-record reason candidates
+  // drawn from it (suggestion only — the reason POST stays the sole writer).
+  benchmarkEos: (id: number) => get<ProjectEOS | null>(`/benchmark/${id}/eos`),
+  reasonSuggestions: (id: number) => get<VarianceReasonSuggestions>(`/benchmark/${id}/variance/reason-suggestions`),
+  attachEos: (id: number, narrative: string, summary = "") => {
+    const fd = new FormData();
+    fd.append("narrative", narrative);
+    if (summary) fd.append("summary", summary);
+    return fetch(BASE + `/benchmark/${id}/eos-upload`, { method: "POST", body: fd }).then((r) => handle<ProjectEOS>(r));
+  },
 
   // --- Routing gate (Phase 1) ----------------------------------------------
   routeAnalyze: (scope: ScopePackages, run_ref = "") => post<RouteProposal>("/route/analyze", { scope, run_ref }),
