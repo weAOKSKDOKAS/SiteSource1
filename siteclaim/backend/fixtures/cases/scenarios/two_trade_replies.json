@@ -1,0 +1,234 @@
+[
+  {
+    "firm_id": "F-EL-02",
+    "trade": "electrical",
+    "line_items": [
+      {
+        "item_ref": "E-01",
+        "description": "LV main switchboard, form 4 type 6",
+        "unit": "no",
+        "qty": 1.0,
+        "rate": 1150000.0,
+        "amount": 1150000.0
+      },
+      {
+        "item_ref": "E-02",
+        "description": "Sub-main cabling, XLPE/SWA, 4c 95mm2",
+        "unit": "m",
+        "qty": 420.0,
+        "rate": 2900.0,
+        "amount": 1218000.0
+      },
+      {
+        "item_ref": "E-03",
+        "description": "Final circuits, lighting and small power",
+        "unit": "point",
+        "qty": 860.0,
+        "rate": 8600.0,
+        "amount": 7396000.0
+      },
+      {
+        "item_ref": "E-04",
+        "description": "Cable containment and busbar trunking",
+        "unit": "m",
+        "qty": 530.0,
+        "rate": 2300.0,
+        "amount": 1219000.0
+      },
+      {
+        "item_ref": "E-05",
+        "description": "Testing and commissioning",
+        "unit": "item",
+        "qty": 1.0,
+        "rate": 750000.0,
+        "amount": 750000.0
+      },
+      {
+        "item_ref": "E-06",
+        "description": "Provisional sum \u2014 switchgear upgrade",
+        "unit": "item",
+        "qty": 1.0,
+        "rate": 300000.0,
+        "amount": 300000.0
+      }
+    ],
+    "exclusions": [],
+    "claimed_total": 12033000.0
+  },
+  {
+    "firm_id": "F-EL-04",
+    "trade": "electrical",
+    "line_items": [
+      {
+        "item_ref": "E-01",
+        "description": "LV main switchboard, form 4 type 6",
+        "unit": "no",
+        "qty": 1.0,
+        "rate": 1300000.0,
+        "amount": 1300000.0
+      },
+      {
+        "item_ref": "E-02",
+        "description": "Sub-main cabling, XLPE/SWA, 4c 95mm2",
+        "unit": "m",
+        "qty": 420.0,
+        "rate": 3200.0,
+        "amount": 1344000.0
+      },
+      {
+        "item_ref": "E-03",
+        "description": "Final circuits, lighting and small power",
+        "unit": "point",
+        "qty": 860.0,
+        "rate": 9500.0,
+        "amount": 8170000.0
+      },
+      {
+        "item_ref": "E-04",
+        "description": "Cable containment and busbar trunking",
+        "unit": "m",
+        "qty": 530.0,
+        "rate": 2600.0,
+        "amount": 1378000.0
+      },
+      {
+        "item_ref": "E-05",
+        "description": "Testing and commissioning",
+        "unit": "item",
+        "qty": 1.0,
+        "rate": 900000.0,
+        "amount": 900000.0
+      },
+      {
+        "item_ref": "E-06",
+        "description": "Provisional sum \u2014 switchgear upgrade",
+        "unit": "item",
+        "qty": 1.0,
+        "rate": 350000.0,
+        "amount": 350000.0
+      }
+    ],
+    "exclusions": [],
+    "claimed_total": 13442000.0
+  },
+  {
+    "firm_id": "F-MP-03",
+    "trade": "mechanical_plumbing",
+    "line_items": [
+      {
+        "item_ref": "M-01",
+        "description": "Air handling units and FCUs",
+        "unit": "no",
+        "qty": 24.0,
+        "rate": 88000,
+        "amount": 2112000.0
+      },
+      {
+        "item_ref": "M-02",
+        "description": "Galvanised ductwork",
+        "unit": "m2",
+        "qty": 1850.0,
+        "rate": 780,
+        "amount": 1443000.0
+      },
+      {
+        "item_ref": "M-03",
+        "description": "Chilled-water pipework, insulated",
+        "unit": "m",
+        "qty": 640.0,
+        "rate": 2250,
+        "amount": 1440000.0
+      },
+      {
+        "item_ref": "M-04",
+        "description": "Above-ground drainage and domestic water",
+        "unit": "m",
+        "qty": 380.0,
+        "rate": 1750,
+        "amount": 665000.0
+      }
+    ],
+    "exclusions": [],
+    "claimed_total": 5660000.0
+  },
+  {
+    "firm_id": "F-MP-01",
+    "trade": "mechanical_plumbing",
+    "line_items": [
+      {
+        "item_ref": "M-01",
+        "description": "Air handling units and FCUs",
+        "unit": "no",
+        "qty": 24.0,
+        "rate": 95000,
+        "amount": 2280000.0
+      },
+      {
+        "item_ref": "M-02",
+        "description": "Galvanised ductwork",
+        "unit": "m2",
+        "qty": 1850.0,
+        "rate": 850,
+        "amount": 1572500.0
+      },
+      {
+        "item_ref": "M-03",
+        "description": "Chilled-water pipework, insulated",
+        "unit": "m",
+        "qty": 640.0,
+        "rate": 2400,
+        "amount": 1536000.0
+      },
+      {
+        "item_ref": "M-04",
+        "description": "Above-ground drainage and domestic water",
+        "unit": "m",
+        "qty": 380.0,
+        "rate": 1900,
+        "amount": 722000.0
+      }
+    ],
+    "exclusions": [],
+    "claimed_total": 6110500.0
+  },
+  {
+    "firm_id": "F-MP-02",
+    "trade": "mechanical_plumbing",
+    "line_items": [
+      {
+        "item_ref": "M-01",
+        "description": "Air handling units and FCUs",
+        "unit": "no",
+        "qty": 24.0,
+        "rate": 99000,
+        "amount": 2376000.0
+      },
+      {
+        "item_ref": "M-02",
+        "description": "Galvanised ductwork",
+        "unit": "m2",
+        "qty": 1850.0,
+        "rate": 895,
+        "amount": 1655750.0
+      },
+      {
+        "item_ref": "M-03",
+        "description": "Chilled-water pipework, insulated",
+        "unit": "m",
+        "qty": 640.0,
+        "rate": 2520,
+        "amount": 1612800.0
+      },
+      {
+        "item_ref": "M-04",
+        "description": "Above-ground drainage and domestic water",
+        "unit": "m",
+        "qty": 380.0,
+        "rate": 2050,
+        "amount": 779000.0
+      }
+    ],
+    "exclusions": [],
+    "claimed_total": 6423550.0
+  }
+]

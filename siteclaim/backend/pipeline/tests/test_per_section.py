@@ -104,3 +104,40 @@ def test_single_trade_scenarios_unchanged():
         json={"levelled": levelled, "trade": "electrical", "demo_fixture": "cases/scenarios/hero_rationale.json"},
     ).json()
     assert rec["trade"] == "electrical" and rec["recommended_firm_id"]
+
+
+def test_two_trade_demo_scenario_yields_two_sections_and_two_awards():
+    # the new scenario exists alongside the untouched three
+    ids = {c["id"] for c in client.get("/demo/cases").json()}
+    assert {"clean", "hero", "messy", "two_trade"} <= ids
+
+    case = client.get("/demo/two_trade").json()
+    assert {r["trade"] for r in case["replies"]} == {"electrical", "mechanical_plumbing"}
+    assert set(case["rationale_fixtures"]) == {"electrical", "mechanical_plumbing"}
+
+    sections = client.post("/level-all", json={"replies": case["replies"]}).json()["sections"]
+    assert {s["trade"] for s in sections} == {"electrical", "mechanical_plumbing"}
+
+    flat = [b for s in sections for b in s["levelled"]]
+    recs = {
+        s["trade"]: s["recommendation"]
+        for s in client.post(
+            "/recommend-all", json={"levelled": flat, "demo_fixtures": case["rationale_fixtures"]}
+        ).json()["sections"]
+    }
+    # two recommendations, each awardable on its own: electrical picks the clean cheapest;
+    # mechanical recommends against its cheapest (unpaid adjudication — fatal) per Layer 1
+    assert recs["electrical"]["recommended_firm_id"] == "F-EL-02"
+    assert recs["mechanical_plumbing"]["recommended_firm_id"] == "F-MP-01"
+    pacific = next(r for r in recs["mechanical_plumbing"]["ranked"] if r["firm_id"] == "F-MP-03")
+    assert pacific["recommended_against"]
+    # the baked per-trade rationales land on their trades
+    for trade, fixture in case["rationale_fixtures"].items():
+        baked = json.loads((_FIXTURES / fixture).read_text(encoding="utf-8"))["text"]
+        assert recs[trade]["rationale"] == baked
+
+
+def test_existing_single_trade_demo_cases_carry_hero_fixture_map():
+    for cid in ("clean", "hero", "messy"):
+        case = client.get(f"/demo/{cid}").json()
+        assert case["rationale_fixtures"] == {case["hero_trade"]: case["rationale_fixture"]}

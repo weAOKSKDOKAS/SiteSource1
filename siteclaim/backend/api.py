@@ -331,6 +331,21 @@ _DEMO_CASES = {
         "replies_fixture": REPLIES_FIXTURE,
         "rationale_fixture": RATIONALE_FIXTURE,
     },
+    # Per-section flow (Prompt 1): priced replies for TWO trades, so routing both to
+    # sublet yields two leveling sections and two awards — and the risk catch fires in
+    # the second section too (the cheapest mechanical bidder carries an unpaid
+    # adjudication, a fatal flag).
+    "two_trade": {
+        "name": "Two-trade — electrical + mechanical sourced",
+        "blurb": "Route electrical AND mechanical & plumbing to sublet: two leveling sections and two risk-adjusted awards. The cheapest mechanical bidder carries an unpaid adjudication — recommended against despite price.",
+        "hero_trade": "electrical",
+        "replies_fixture": "cases/scenarios/two_trade_replies.json",
+        "rationale_fixture": "cases/scenarios/two_trade_rationale_electrical.json",
+        "rationale_fixtures": {
+            "electrical": "cases/scenarios/two_trade_rationale_electrical.json",
+            "mechanical_plumbing": "cases/scenarios/two_trade_rationale_mechanical.json",
+        },
+    },
 }
 
 
