@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { tradeLabel } from "./format";
+import { shownEmail } from "./theme";
 import type { Evidence, FirmProfile, RiskFlag } from "./types";
 import { Button, Collapse, Docket, MonoLabel, SeverityTag, cx } from "./ui";
 
@@ -261,12 +262,30 @@ export function FirmRecord({
   return (
     <div className="space-y-3">
       <Docket label="Firm reference" code={firm.firm_id} />
+      {firm.description && <p className="text-xs leading-relaxed text-ink-soft">{firm.description}</p>}
       <div>
         <MonoLabel className="mb-1">Registration</MonoLabel>
         <div className="text-xs text-ink-soft">
           {firm.registered_grade || "—"} · {firm.value_band.replace(/_/g, " ") || "unbanded"}
         </div>
+        {(firm.reg_date || firm.expiry_date) && (
+          <div className="tabular mt-0.5 text-[11px] text-ink-faint">
+            {firm.reg_date || "—"}{firm.expiry_date ? ` → ${firm.expiry_date}` : ""}
+          </div>
+        )}
+        {firm.br_no && <div className="tabular mt-0.5 text-[11px] text-ink-faint">BR {firm.br_no}</div>}
       </div>
+      {(shownEmail(firm.enquiry_email) || firm.address) && (
+        <div>
+          <MonoLabel className="mb-1">Contact</MonoLabel>
+          {shownEmail(firm.enquiry_email) && (
+            <a href={`mailto:${shownEmail(firm.enquiry_email)}`} className="tabular block text-[11.5px] text-brand hover:underline">
+              ✉ {shownEmail(firm.enquiry_email)}
+            </a>
+          )}
+          {firm.address && <div className="mt-0.5 text-[11.5px] leading-snug text-ink-soft">{firm.address}</div>}
+        </div>
+      )}
       {firm.trades.length > 0 && (
         <div>
           <MonoLabel className="mb-1.5">Registered trades</MonoLabel>

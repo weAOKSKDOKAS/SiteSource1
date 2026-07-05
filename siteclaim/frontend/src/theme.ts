@@ -76,6 +76,14 @@ export function flagReference(f: RiskFlag): string | null {
   return f.evidence[0]?.reference || null;
 }
 
+// Display-only: a usable enquiry e-mail, or null when it is blank / has no "@" / is the
+// source's "[email protected]" redaction. The stored value stays faithful.
+export function shownEmail(email: string | null | undefined): string | null {
+  const e = (email || "").trim();
+  if (!e || !e.includes("@") || e.toLowerCase().includes("[email")) return null;
+  return e;
+}
+
 // The worst signal weight across a firm's public flags (null = clean).
 export function worstFlagSeverity(flags: RiskFlag[]): Sev | null {
   if (flags.some((f) => signalSeverity(flagSignal(f)) === "fatal")) return "fatal";

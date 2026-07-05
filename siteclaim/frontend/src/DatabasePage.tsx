@@ -7,6 +7,7 @@ import {
   flagSignal,
   registerFor,
   rgba,
+  shownEmail,
   signalLabel,
   worstFlagSeverity,
   type Register,
@@ -34,14 +35,6 @@ function usePrefersReducedMotion(): boolean {
     return () => mq.removeEventListener("change", on);
   }, []);
   return reduced;
-}
-
-// Display-only: a usable enquiry e-mail, or null when it is blank / has no "@" / is the
-// source's "[email protected]" redaction. The stored value stays faithful.
-function shownEmail(email: string): string | null {
-  const e = (email || "").trim();
-  if (!e || !e.includes("@") || e.toLowerCase().includes("[email")) return null;
-  return e;
 }
 
 function parseRegDate(s: string): Date | null {
