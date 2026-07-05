@@ -202,7 +202,7 @@ export function Drawer({
               ✕
             </button>
           </div>
-          <h3 className="font-display text-xl font-bold tracking-tight text-ink">{title}</h3>
+          <h3 className="font-display text-xl font-bold tracking-display text-ink">{title}</h3>
           {subtitle && <div className="mt-1 text-xs text-ink-soft">{subtitle}</div>}
           <div className="mt-4">{children}</div>
           {footer && <p className="mb-1 mt-5 text-center text-[11.5px] leading-relaxed text-ink-faint">{footer}</p>}

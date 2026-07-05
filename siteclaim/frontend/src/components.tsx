@@ -44,7 +44,9 @@ export function Header({
         onClick={() => onNavigate?.(v)}
         className={cx(
           "rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
-          view === v ? "bg-brand text-white" : "text-ink-soft hover:bg-line-soft hover:text-ink",
+          view === v
+            ? "bg-brand-violet text-white shadow-[0_4px_12px_rgba(31,111,235,0.35)]"
+            : "text-ink-soft hover:bg-line-soft hover:text-ink",
         )}
       >
         {label}
@@ -59,10 +61,12 @@ export function Header({
       </span>
     );
   return (
-    <header className="border-b border-line bg-card">
+    // Frosted sticky chrome: a translucent paper surface with a saturate+blur backdrop, so
+    // page content scrolls under it (ported from the prototype's top bar).
+    <header className="sticky top-0 z-50 border-b border-ink/[0.08] bg-paper/80 backdrop-blur-[12px] backdrop-saturate-150">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-2.5">
-          <span className="font-display text-lg font-bold tracking-tight text-ink">
+          <span className="font-display text-lg font-bold tracking-display text-ink">
             Site<span className="text-brand">Source</span>
           </span>
           {demoMode && (
@@ -94,7 +98,7 @@ export function Stepper({
   onNavigate: (s: StepIndex) => void;
 }) {
   return (
-    <nav aria-label="Progress" className="lg:sticky lg:top-6">
+    <nav aria-label="Progress" className="lg:sticky lg:top-20">
       <ol className="flex gap-2 overflow-x-auto pb-2 lg:flex-col lg:gap-0 lg:overflow-visible lg:pb-0">
         {STEPS.map((label, i) => {
           const step = (i + 1) as StepIndex;
@@ -151,7 +155,7 @@ export function Stepper({
 export function StepHeading({ title, lead }: { title: string; lead: string }) {
   return (
     <div>
-      <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">{title}</h1>
+      <h1 className="font-display text-2xl font-semibold tracking-display text-ink">{title}</h1>
       <p className="mt-1.5 max-w-2xl text-sm text-ink-soft">{lead}</p>
     </div>
   );
