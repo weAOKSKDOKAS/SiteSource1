@@ -1176,8 +1176,11 @@ def post_route_analyze(req: AnalyzeRequest) -> RouteProposal:
 
 @app.post("/route/confirm", response_model=RouteDecisionResult)
 def post_route_confirm(req: ConfirmRoutesRequest) -> RouteDecisionResult:
-    """The Layer-4 gate: record the human's route decisions (the sole writer of
-    chosen_route). Returns the run's proposal plus the sublet / self-perform splits."""
+    """The Layer-4 gate: record the human's route decisions (the sole writer of chosen_route)
+    and return the sublet / self-perform splits. Auto-link on route (P4b): when the scope is
+    supplied, each self-perform package seeds its estimate (idempotent) and the run is recorded
+    as a unified project — so confirming lands the person in the right track (sourcing) or the
+    left track (estimator) per package."""
     for d in req.decisions:
         if d.chosen_route not in ROUTES:
             raise HTTPException(status_code=400, detail=f"unknown route {d.chosen_route!r} (use one of {ROUTES})")
@@ -1186,14 +1189,23 @@ def post_route_confirm(req: ConfirmRoutesRequest) -> RouteDecisionResult:
         saved = routing.confirm_decisions(
             conn, req.run_ref, {d.package_key: d.chosen_route for d in req.decisions}, decided_by=req.decided_by,
         )
+        packages = [RoutePackage(**r) for r in saved]
+        self_perform = [p.package_key for p in packages if p.chosen_route == SELF_PERFORM]
+        sublet = [p.package_key for p in packages if p.chosen_route == SUBLET]
+        estimate_ids: dict[str, int] = {}
+        if req.scope is not None:
+            uproject.get_or_create(conn, req.run_ref, name=req.scope.project_name,
+                                   provenance=("demo" if demo_mode() else "live"))
+            pkg_by_trade = {p.trade: p for p in req.scope.packages}
+            for key in self_perform:
+                pkg = pkg_by_trade.get(key)
+                if pkg is not None:
+                    estimate_ids[key] = _seed_estimate(conn, pkg, run_ref=req.run_ref, project_name=req.scope.project_name)["id"]
     finally:
         conn.close()
-    packages = [RoutePackage(**r) for r in saved]
     return RouteDecisionResult(
-        run_ref=req.run_ref,
-        packages=packages,
-        sublet_packages=[p.package_key for p in packages if p.chosen_route == SUBLET],
-        self_perform_packages=[p.package_key for p in packages if p.chosen_route == SELF_PERFORM],
+        run_ref=req.run_ref, packages=packages, sublet_packages=sublet,
+        self_perform_packages=self_perform, estimate_ids=estimate_ids,
     )
 
 
@@ -1255,34 +1267,44 @@ def patch_estimate_project(estimate_id: int, req: EstimateProjectUpdate) -> Esti
         conn.close()
 
 
+def _seed_estimate(conn, pkg, *, run_ref: str = "", project_name: str = "", client: str = "", contract_ref: str = "") -> dict:
+    """Seed (or return the existing) estimate for a self-perform package — its SoR items
+    become the initial unpriced lines. Idempotent per (run_ref, package_key); the trade is
+    canonicalised against the taxonomy (Layer 1). Shared by /estimate/from-package and the
+    route-confirm auto-link (P4b)."""
+    from rules_engine.taxonomy import normalize as normalize_trade  # Layer 1; local import keeps the graph flat
+
+    trade = normalize_trade(pkg.trade) or pkg.trade
+    existing = est.find_by_route(conn, run_ref, pkg.trade) if run_ref else None
+    if existing is not None:
+        return existing
+    name = (f"{project_name} — {trade}" if project_name else trade).strip(" —") or trade or "Estimate"
+    project = est.create_project(
+        conn, name=name, trade=trade, client=client, contract_ref=contract_ref,
+        source=("routing" if run_ref else "from-package"), run_ref=run_ref, package_key=pkg.trade,
+        scope_of_works=pkg.scope_summary or "",
+    )
+    items = [{
+        "item_ref": it.item_ref, "description": it.description or "", "unit": it.unit or "",
+        "qty": it.qty, "rate": None, "section": trade,
+    } for it in pkg.sor_items]
+    if items:
+        est.replace_items(conn, project["id"], items, source="scope-link")
+    return est.get_project(conn, project["id"])
+
+
 @app.post("/estimate/from-package", response_model=EstimateProject)
 def post_estimate_from_package(req: FromPackageRequest) -> EstimateProject:
     """Seed an estimate from a routed self-perform package (or any TradeWorkPackage). The
     package's SoR items become the initial (unpriced) estimate lines — the human prices.
     Idempotent per (run_ref, package_key): a routed package opens one estimate, not a new one
-    per click. The trade is canonicalised against the taxonomy (Layer 1)."""
-    from rules_engine.taxonomy import normalize as normalize_trade  # Layer 1; local import keeps the graph flat
-
-    pkg = req.package
-    trade = normalize_trade(pkg.trade) or pkg.trade
+    per click."""
     conn = store.get_connection()
     try:
-        existing = est.find_by_route(conn, req.run_ref, pkg.trade) if req.run_ref else None
-        if existing is not None:
-            return EstimateProject(**existing)
-        name = (f"{req.project_name} — {trade}" if req.project_name else trade).strip(" —") or trade or "Estimate"
-        project = est.create_project(
-            conn, name=name, trade=trade, client=req.client, contract_ref=req.contract_ref,
-            source=("routing" if req.run_ref else "from-package"), run_ref=req.run_ref, package_key=pkg.trade,
-            scope_of_works=pkg.scope_summary or "",
-        )
-        items = [{
-            "item_ref": it.item_ref, "description": it.description or "", "unit": it.unit or "",
-            "qty": it.qty, "rate": None, "section": trade,
-        } for it in pkg.sor_items]
-        if items:
-            est.replace_items(conn, project["id"], items, source="scope-link")
-        return EstimateProject(**est.get_project(conn, project["id"]))
+        return EstimateProject(**_seed_estimate(
+            conn, req.package, run_ref=req.run_ref, project_name=req.project_name,
+            client=req.client, contract_ref=req.contract_ref,
+        ))
     finally:
         conn.close()
 

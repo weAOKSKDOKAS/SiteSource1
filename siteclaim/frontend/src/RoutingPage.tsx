@@ -26,6 +26,7 @@ function SignalChips({ signals }: { signals: Record<string, number | boolean | s
 
 export function RoutingPage() {
   const [cases, setCases] = useState<DemoCaseSummary[]>([]);
+  const [scope, setScope] = useState<ScopePackages | null>(null);
   const [proposal, setProposal] = useState<RouteProposal | null>(null);
   const [chosen, setChosen] = useState<Record<string, string>>({});
   const [result, setResult] = useState<RouteDecisionResult | null>(null);
@@ -43,7 +44,10 @@ export function RoutingPage() {
     api
       .demoCase(caseId)
       .then((c) => api.ingest(c.tender))
-      .then((scope: ScopePackages) => api.routeAnalyze(scope))
+      .then((s: ScopePackages) => {
+        setScope(s); // kept so confirm can auto-seed the self-perform estimates (P4b)
+        return api.routeAnalyze(s);
+      })
       .then((p) => {
         setProposal(p);
         setChosen(Object.fromEntries(p.packages.map((pkg) => [pkg.package_key, pkg.recommended_route])));
@@ -61,7 +65,7 @@ export function RoutingPage() {
       chosen_route: chosen[p.package_key] ?? p.recommended_route,
     }));
     api
-      .routeConfirm(proposal.run_ref, decisions)
+      .routeConfirm(proposal.run_ref, decisions, "operator", scope)
       .then(setResult)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
@@ -157,7 +161,10 @@ export function RoutingPage() {
           </div>
           <p className="mt-3 text-xs text-ink-faint">
             The decision is the record of truth (decided by {result.packages[0]?.decided_by || "operator"}). Sublet packages
-            continue to the shortlist; self-perform packages open in the Estimator (Phase 3).
+            continue to the shortlist;{" "}
+            {Object.keys(result.estimate_ids).length > 0
+              ? `${Object.keys(result.estimate_ids).length} self-perform estimate(s) have opened in the Estimator tab.`
+              : "self-perform packages open in the Estimator tab."}
           </p>
         </Card>
       )}

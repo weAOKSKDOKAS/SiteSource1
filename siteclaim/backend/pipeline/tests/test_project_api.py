@@ -63,3 +63,36 @@ def test_dashboard_shows_tracks_and_links_estimates(route_db):
 def test_dashboard_of_unanalysed_run_is_empty_not_404(route_db):
     dash = client.get("/project/never-analysed").json()
     assert dash["run_ref"] == "never-analysed" and dash["packages"] == [] and dash["estimates"] == []
+
+
+# --- P4b: auto-link on route ------------------------------------------------
+def test_confirm_with_scope_auto_seeds_left_track_estimates(route_db):
+    client.post("/route/analyze", json={"scope": _SCOPE})
+    result = client.post("/route/confirm", json={
+        "run_ref": _RUN,
+        "decisions": [
+            {"package_key": "electrical", "chosen_route": "sublet"},
+            {"package_key": "ground_investigation", "chosen_route": "self_perform"},
+        ],
+        "scope": _SCOPE,
+    }).json()
+    assert "ground_investigation" in result["estimate_ids"]   # left track seeded
+    assert "electrical" not in result["estimate_ids"]          # right track goes to sourcing, not seeded
+    eid = result["estimate_ids"]["ground_investigation"]
+    seeded = client.get(f"/estimate/projects/{eid}").json()
+    assert seeded["source"] == "routing" and seeded["run_ref"] == _RUN and seeded["trade"] == "ground_investigation"
+    # idempotent — re-confirming returns the same estimate, never a duplicate
+    again = client.post("/route/confirm", json={
+        "run_ref": _RUN, "scope": _SCOPE,
+        "decisions": [{"package_key": "ground_investigation", "chosen_route": "self_perform"}],
+    }).json()
+    assert again["estimate_ids"]["ground_investigation"] == eid
+    assert len(client.get("/estimate/projects").json()) == 1
+
+
+def test_confirm_without_scope_seeds_nothing(route_db):
+    client.post("/route/analyze", json={"scope": _SCOPE})
+    result = client.post("/route/confirm", json={
+        "run_ref": _RUN, "decisions": [{"package_key": "ground_investigation", "chosen_route": "self_perform"}],
+    }).json()
+    assert result["self_perform_packages"] == ["ground_investigation"] and result["estimate_ids"] == {}

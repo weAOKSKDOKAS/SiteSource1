@@ -54,6 +54,7 @@ class ConfirmRoutesRequest(BaseModel):
     run_ref: str
     decisions: list[RouteDecision] = Field(default_factory=list)
     decided_by: str = "operator"
+    scope: Optional[ScopePackages] = None   # supplied so a self-perform decision seeds its estimate (P4b)
 
 
 class RouteDecisionResult(BaseModel):
@@ -61,6 +62,7 @@ class RouteDecisionResult(BaseModel):
     packages: list[RoutePackage] = Field(default_factory=list)
     sublet_packages: list[str] = Field(default_factory=list)        # -> existing shortlist path
     self_perform_packages: list[str] = Field(default_factory=list)  # -> estimator (Phase 3)
+    estimate_ids: dict[str, int] = Field(default_factory=dict)      # package_key -> seeded estimate id (P4b)
 
 
 # -- the LLM output (parsed by complete_json) --------------------------------

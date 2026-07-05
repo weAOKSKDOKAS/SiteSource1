@@ -143,8 +143,8 @@ export const api = {
 
   // --- Routing gate (Phase 1) ----------------------------------------------
   routeAnalyze: (scope: ScopePackages, run_ref = "") => post<RouteProposal>("/route/analyze", { scope, run_ref }),
-  routeConfirm: (run_ref: string, decisions: RouteDecision[], decided_by = "operator") =>
-    post<RouteDecisionResult>("/route/confirm", { run_ref, decisions, decided_by }),
+  routeConfirm: (run_ref: string, decisions: RouteDecision[], decided_by = "operator", scope: ScopePackages | null = null) =>
+    post<RouteDecisionResult>("/route/confirm", { run_ref, decisions, decided_by, ...(scope ? { scope } : {}) }),
 
   // --- Estimator (Phase 3) — the left track. The person prices every line and owns the offer.
   estimateProjects: () => get<EstimateProject[]>("/estimate/projects"),

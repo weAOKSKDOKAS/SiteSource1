@@ -225,6 +225,7 @@ export interface RouteDecisionResult {
   packages: RoutePackage[];
   sublet_packages: string[];
   self_perform_packages: string[];
+  estimate_ids: Record<string, number>; // package_key -> seeded left-track estimate id (P4b)
 }
 
 // --- Estimator (Phase 3) ---------------------------------------------------
