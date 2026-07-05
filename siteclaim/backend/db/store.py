@@ -250,11 +250,20 @@ _REAL = "public_register"
 
 
 def coverage(conn: sqlite3.Connection) -> dict:
-    """Live database-coverage figures for the UI's screening line — counting **only
-    real-provenance firms** (the actual Hong Kong registry scrape). The illustrative
-    demo firms (fabricated, placeholder references) are deliberately excluded, so the
-    'sourced from official registers … linked to its government source' claim holds."""
+    """Live database-coverage figures for the UI's screening line, as an **honest
+    composition** — counting **only real-provenance firms** (the CIC register + the
+    enforcement overlay), never the illustrative demo firms. The figure is never a bare
+    "1,407 firms" claim: it is stated as ``register_count`` on the CIC register (real firms
+    that carry a Business Registration No. from the register), ``overlay_count`` from the
+    enforcement/offer records (real firms not on the register), and ``flagged_count``
+    flagged. ``flag_sources`` are the distinct issuing bodies on the stored flags and
+    ``registers`` is how many there are — every flag keeps its issuing source and reference."""
     total = conn.execute("SELECT COUNT(*) AS n FROM firms WHERE provenance = ?", (_REAL,)).fetchone()["n"]
+    register_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM firms WHERE provenance = ? "
+        "AND br_number IS NOT NULL AND br_number != ''",
+        (_REAL,),
+    ).fetchone()["n"]
     flagged = conn.execute(
         "SELECT COUNT(DISTINCT pf.firm_id) AS n FROM public_flags pf "
         "JOIN firms f ON f.firm_id = pf.firm_id WHERE f.provenance = ?",
@@ -269,14 +278,29 @@ def coverage(conn: sqlite3.Connection) -> dict:
             (_REAL,),
         )
     }
+    flag_sources = [
+        row["source"]
+        for row in conn.execute(
+            "SELECT DISTINCT pf.source AS source FROM public_flags pf "
+            "JOIN firms f ON f.firm_id = pf.firm_id "
+            "WHERE f.provenance = ? AND pf.source IS NOT NULL AND pf.source != '' "
+            "ORDER BY pf.source",
+            (_REAL,),
+        )
+    ]
     trades: set[str] = set()
     for row in conn.execute("SELECT trades FROM firms WHERE provenance = ?", (_REAL,)):
         trades |= set(_json_list(row["trades"]))
     return {
         "total_firms": int(total),
-        "flagged_firms": int(flagged),
+        "register_count": int(register_count),
+        "overlay_count": int(total) - int(register_count),
+        "flagged_count": int(flagged),
+        "flagged_firms": int(flagged),  # back-compat alias for existing consumers
         "flags_by_type": flags_by_type,
         "trades": sorted(trades),
+        "flag_sources": flag_sources,
+        "registers": len(flag_sources),
         "provenance": _REAL,
     }
 
