@@ -1,7 +1,7 @@
 import type { ChangeEvent } from "react";
 import type { DemoCaseSummary, ScopePackages } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
-import { Button, Card, cx } from "../ui";
+import { Button, Card, ScanLine, cx } from "../ui";
 import { tradeLabel } from "../format";
 
 export function StepIngest({
@@ -45,7 +45,8 @@ export function StepIngest({
         lead="Choose a demo tender or upload the four documents (Method of Measurement, Particular Specification, Tender Addendum, Schedule of Rates). Claude reads them and splits the work into one package per trade; the rules engine validates each trade against the taxonomy."
       />
 
-      <Card className="p-5">
+      <Card className="relative p-5">
+        <ScanLine active={loading && !scope} />
         <label className="mb-2 block text-sm font-semibold text-ink">Choose a scenario</label>
         <p className="mb-3 text-xs text-ink-faint">
           {demoMode

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { BidReply, LevelledBid } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
-import { Button, Card, Collapse, Drawer, MonoLabel, SeverityTag, cx } from "../ui";
+import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine, SeverityTag, cx } from "../ui";
 import { hkd } from "../format";
 
 export function StepLevel({
@@ -47,7 +47,8 @@ export function StepLevel({
       />
 
       {/* Summary: claimed vs corrected */}
-      <Card className="overflow-hidden">
+      <Card className="relative overflow-hidden">
+        <ScanLine active={loading} />
         <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
           Claimed vs corrected
         </h2>

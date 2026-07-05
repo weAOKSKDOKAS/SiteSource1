@@ -144,9 +144,12 @@ function UploadButton({ label, onPick }: { label: string; onPick: (files: File[]
   );
 }
 
-function MatchRow({ pair, onConfirm, confirmed }: { pair: MatchPair; onConfirm: () => void; confirmed: boolean }) {
+function MatchRow({ pair, onConfirm, confirmed, index = 0 }: { pair: MatchPair; onConfirm: () => void; confirmed: boolean; index?: number }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 border-b border-line-soft px-3 py-2 last:border-0">
+    <div
+      className="ssStep flex flex-wrap items-center gap-3 border-b border-line-soft px-3 py-2 last:border-0"
+      style={{ animationDelay: `${index * 35}ms` }}
+    >
       <div className="min-w-0 flex-1">
         <div className="text-xs text-ink-faint">Tender</div>
         <div className="truncate text-sm text-ink">{pair.tender ? `${pair.tender.item_ref} — ${pair.tender.description}` : "— (arrived unpriced)"}</div>
@@ -383,8 +386,8 @@ function ProjectDetail({
           </div>
         </div>
         {allPairs.length === 0 && <p className="px-4 py-3 text-sm text-ink-faint">Upload a tender and actuals to propose matches.</p>}
-        {allPairs.map((p) => (
-          <MatchRow key={pairKey(p)} pair={p} confirmed={confirmedKeys.has(pairKey(p))} onConfirm={() => confirm([p])} />
+        {allPairs.map((p, i) => (
+          <MatchRow key={pairKey(p)} index={i} pair={p} confirmed={confirmedKeys.has(pairKey(p))} onConfirm={() => confirm([p])} />
         ))}
       </Card>
 

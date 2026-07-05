@@ -115,7 +115,10 @@ function CandidateRow({ candidate, rank, top, onOpen }: { candidate: Candidate; 
   const warnings = candidate.risk_flags.filter((f) => f.severity !== "fatal");
 
   return (
-    <li className={cx("px-4 py-3 transition-colors", against ? "bg-bad-bg/40" : "hover:bg-paper-soft/70")}>
+    <li
+      className={cx("ssStep px-4 py-3 transition-colors", against ? "bg-bad-bg/40" : "hover:bg-paper-soft/70")}
+      style={{ animationDelay: `${(rank - 1) * 40}ms` }}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="tabular flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line text-xs font-semibold text-ink-soft">
           {rank}

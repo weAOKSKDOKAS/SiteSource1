@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
 import type { Severity } from "./types";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
@@ -65,11 +65,24 @@ export function Spinner() {
   return <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />;
 }
 
+// A thin "live cross-referencing" sweep — a brand gradient that scans across the top
+// edge of a working surface while a stage runs (ingest split, shortlist screening,
+// level compute, route analyze). Render inside a `relative` container; it shows only
+// when `active` and the reduced-motion guard freezes the sweep.
+export function ScanLine({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 h-1 overflow-hidden rounded-t-[inherit]" aria-hidden>
+      <div className="ssScan" style={{ background: "linear-gradient(90deg, transparent, rgba(31,111,235,0.18), transparent)" }} />
+    </div>
+  );
+}
+
 // Atlas card: set apart by a soft hairline + the ported deep card shadow + 16px radius,
 // never an edge stripe. ssRise gives it a one-shot fade+rise on mount (settles instantly
 // under prefers-reduced-motion) so a step/page enters gently rather than snapping in.
-export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cx("ssRise rounded-card border border-line-soft bg-card shadow-card", className)}>{children}</div>;
+export function Card({ children, className, style }: { children: ReactNode; className?: string; style?: CSSProperties }) {
+  return <div style={style} className={cx("ssRise rounded-card border border-line-soft bg-card shadow-card", className)}>{children}</div>;
 }
 
 // A single instrument reading — the "real visual element" every Atlas view carries. A faint

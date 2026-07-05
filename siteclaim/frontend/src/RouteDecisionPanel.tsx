@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Pill } from "./components";
 import { tradeLabel } from "./format";
 import type { RoutePackage, RouteProposal } from "./types";
-import { Button, Card, Collapse, Drawer, MonoLabel } from "./ui";
+import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine } from "./ui";
 
 export const ROUTE_LABEL: Record<string, string> = { self_perform: "Self-perform", sublet: "Sublet" };
 
@@ -45,7 +45,8 @@ export function RouteDecisionPanel({
 
   return (
     <>
-      <div className="flex items-center justify-between">
+      <div className="relative flex items-center justify-between">
+        <ScanLine active={busy} />
         <p className="text-sm text-ink-soft">
           <span className="tabular">{proposal.run_ref}</span> · {proposal.packages.length} packages
         </p>
@@ -56,10 +57,12 @@ export function RouteDecisionPanel({
       </div>
 
       <div className="space-y-2">
-        {proposal.packages.map((p) => {
+        {proposal.packages.map((p, i) => {
           const pick = chosen[p.package_key] ?? p.recommended_route;
           return (
-            <Card key={p.package_key} className="p-4">
+            // ssStep (declared after ssRise in index.css) wins the cascade so the package
+            // rows step in sequentially; the stagger comes from the per-row delay.
+            <Card key={p.package_key} className="ssStep p-4" style={{ animationDelay: `${i * 45}ms` }}>
               <div className="flex flex-wrap items-start gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
