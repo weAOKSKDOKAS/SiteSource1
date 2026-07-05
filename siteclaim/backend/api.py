@@ -593,7 +593,8 @@ class LevelRequest(BaseModel):
 def post_level(req: LevelRequest) -> list[LevelledBid]:
     replies = req.replies or load_demo_replies(req.demo_fixture)
     levelled = level_bids(replies, req.scope)
-    export_leveling_xlsx(levelled, replies, path=OUT_PATH)  # refresh the downloadable Excel
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH,
+                         project_name=req.scope.project_name if req.scope else "")
     return levelled
 
 
@@ -624,7 +625,8 @@ def post_level_all(req: LevelRequest) -> LevelAllResponse:
         for trade in trades
     ]
     flat = [b for s in sections for b in s.levelled]
-    export_leveling_xlsx(flat, replies, path=OUT_PATH)  # one sheet per trade
+    export_leveling_xlsx(flat, replies, path=OUT_PATH,
+                         project_name=req.scope.project_name if req.scope else "")
     return LevelAllResponse(sections=sections)
 
 
@@ -743,8 +745,8 @@ def post_inbound_reply(
 
     replies = reply_loop.accumulate_reply(workspace, tender_id, reply)
     levelled = level_bids(replies)
-    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id))
-    export_leveling_xlsx(levelled, replies, path=OUT_PATH)  # refresh the /leveling.xlsx download
+    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id), project_name=tender_id)
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=tender_id)  # refresh the /leveling.xlsx download
     return InboundReplyResponse(
         status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
         reply_count=len(replies), comparison=levelled,

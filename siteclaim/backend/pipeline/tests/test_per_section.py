@@ -86,7 +86,8 @@ def test_leveling_workbook_has_one_sheet_per_trade(tmp_path, two_trade_replies):
     out = export_leveling_xlsx(levelled, replies, path=tmp_path / "multi.xlsx")
 
     wb = load_workbook(out)
-    assert wb.sheetnames == [sheet_title("electrical"), sheet_title("joinery_fitting_out")]
+    # a multi-trade workbook opens with a Summary cover tab, then one sheet per trade
+    assert wb.sheetnames == ["Summary", sheet_title("electrical"), sheet_title("joinery_fitting_out")]
     # each sheet prices only its own trade's item refs
     for name, prefix in ((sheet_title("electrical"), "E-"), (sheet_title("joinery_fitting_out"), "J-")):
         refs = [row[0].value for row in wb[name].iter_rows(min_row=2) if row[0].value]

@@ -33,8 +33,11 @@ def export_leveling_xlsx(
     replies: list[BidReply],
     item_order: Optional[list[str]] = None,
     path: Path | str = OUT_PATH,
+    *,
+    project_name: str = "",
 ) -> Path:
-    """Write the levelled comparison to ``path`` and return it — one sheet per trade."""
+    """Write the levelled comparison to ``path`` and return it — one styled sheet per
+    trade, plus a Summary cover tab when the comparison spans more than one trade."""
     from openpyxl import Workbook  # lazy — leveling math must not require openpyxl
 
     # Group by trade, preserving first-seen order. Each trade is written as its own
@@ -45,16 +48,25 @@ def export_leveling_xlsx(
             trades.append(b.trade)
 
     wb = Workbook()
+    first_used = False
     if not trades:  # nothing levelled — keep a single empty comparison sheet
         wb.active.title = "Leveling"
-    for i, trade in enumerate(trades):
-        ws = wb.active if i == 0 else wb.create_sheet()
+        first_used = True
+    if len(trades) > 1:  # the cover tab: each trade's corrected totals at a glance
+        ws = wb.active
+        ws.title = "Summary"
+        first_used = True
+        _write_summary_sheet(ws, trades, levelled, project_name)
+    for trade in trades:
+        ws = wb.create_sheet() if first_used else wb.active
+        first_used = True
         ws.title = sheet_title(trade)
         _write_trade_sheet(
             ws,
             [b for b in levelled if b.trade == trade],
             [r for r in replies if r.trade == trade],
             item_order,
+            project_name,
         )
 
     out = Path(path)
@@ -63,14 +75,52 @@ def export_leveling_xlsx(
     return out
 
 
+def _write_summary_sheet(ws, trades: list[str], levelled: list[LevelledBid], project_name: str) -> None:
+    """The multi-trade cover: one row per trade with its bid count and the lowest
+    corrected total (every value straight from the Layer-1 leveling)."""
+    import datetime as _dt
+
+    from pipeline._xlsx_style import autofit, money_cell, style_body, style_header, title_block
+
+    meta = [m for m in (
+        f"Project: {project_name}" if project_name else "",
+        f"Generated: {_dt.date.today().isoformat()}",
+        "One comparison sheet per trade follows.",
+    ) if m]
+    title_block(ws, "Levelled bid comparison — summary", meta)
+
+    ws.append(["Trade", "Bids", "Lowest corrected total", "Lowest bidder"])
+    header_row = ws.max_row
+    style_header(ws, header_row, 4)
+    for trade in trades:
+        bids = [b for b in levelled if b.trade == trade]
+        low = min(bids, key=lambda b: b.corrected_total)
+        ws.append([sheet_title(trade), len(bids), low.corrected_total, low.firm_name])
+        money_cell(ws.cell(row=ws.max_row, column=3))
+    style_body(ws, header_row + 1, ws.max_row, 4)
+    autofit(ws, min_row=header_row)
+
+
 def _write_trade_sheet(
     ws,
     levelled: list[LevelledBid],
     replies: list[BidReply],
     item_order: Optional[list[str]],
+    project_name: str = "",
 ) -> None:
-    """One trade's comparison table onto ``ws`` (this trade's firms/items only)."""
-    from openpyxl.styles import Font
+    """One trade's comparison table onto ``ws`` (this trade's firms/items only),
+    styled with the shared kit — the table's values are exactly the leveling output."""
+    import datetime as _dt
+
+    from pipeline._xlsx_style import (
+        autofit,
+        footer_note,
+        money_cell,
+        style_body,
+        style_header,
+        style_totals,
+        title_block,
+    )
 
     levelled_by_firm = {b.firm_id: b for b in levelled}
     firm_ids = [b.firm_id for b in levelled]
@@ -97,14 +147,23 @@ def _write_trade_sheet(
         for firm_id, b in levelled_by_firm.items()
     }
 
+    label = sheet_title(ws.title if not levelled else levelled[0].trade)
+    meta = [m for m in (
+        f"Project: {project_name}" if project_name else "",
+        f"Trade: {label}",
+        f"Generated: {_dt.date.today().isoformat()}",
+        "Rates are the primary comparison; amounts appear only where a quantity exists ('—' = rate-only line).",
+    ) if m]
+    title_block(ws, f"Levelled bid comparison — {label}", meta)
+
     header = ["Item", "Description"]
     for firm_id in firm_ids:
         name = levelled_by_firm[firm_id].firm_name
         header += [f"{name} — rate", f"{name} — corrected"]
     header.append("Notes")
     ws.append(header)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
+    header_row = ws.max_row
+    style_header(ws, header_row, len(header))
 
     for item_ref in items:
         description = ""
@@ -130,18 +189,23 @@ def _write_trade_sheet(
         row[1] = description
         row.append("; ".join(notes))
         ws.append(row)
+        for col in range(3, 3 + 2 * len(firm_ids)):  # rate + corrected columns are currency
+            money_cell(ws.cell(row=ws.max_row, column=col))
+    style_body(ws, header_row + 1, ws.max_row, len(header))
 
     totals = ["", "TOTAL (corrected)"]
     for firm_id in firm_ids:
         totals += ["", levelled_by_firm[firm_id].corrected_total]
     totals.append("")
     ws.append(totals)
-    for cell in ws[ws.max_row]:
-        cell.font = Font(bold=True)
+    style_totals(ws, ws.max_row, len(header))
+    for col in range(3, 3 + 2 * len(firm_ids)):
+        money_cell(ws.cell(row=ws.max_row, column=col))
 
     ws.append([])
-    ws.append(["Exclusions (non-comparable — not deducted from price)"])
-    ws[ws.max_row][0].font = Font(bold=True)
+    footer_note(ws, "Exclusions (non-comparable — not deducted from price)")
     for firm_id in firm_ids:
         for exclusion in levelled_by_firm[firm_id].exclusions:
             ws.append([levelled_by_firm[firm_id].firm_name, exclusion])
+
+    autofit(ws, min_row=header_row)
