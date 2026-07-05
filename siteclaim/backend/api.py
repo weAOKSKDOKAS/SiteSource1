@@ -310,12 +310,24 @@ def _demo_tender() -> TenderPackage:
 # Three deterministic demo scenarios — same tender + seeded DB, different bid
 # replies (and focus trade), each isolating one catch. All reproduce identically.
 _DEMO_CASES = {
-    "clean": {
-        "name": "Clean — strong firms, confident pick",
-        "blurb": "Joinery & fitting-out: a shortlist of strong firms, a clean leveling with no corrections, and a confident recommendation.",
-        "hero_trade": "joinery_fitting_out",
-        "replies_fixture": "cases/scenarios/clean_replies.json",
-        "rationale_fixture": "cases/scenarios/clean_rationale.json",
+    # The golden walkthrough — the whole product in one confirm-routing. The Kwun Tong
+    # 4-package tender routes TWO trades to SUBLET (electrical + mechanical & plumbing —
+    # priced replies below, with the risk catch in the mechanical section) and TWO to
+    # SELF-PERFORM (fire services + joinery — their routed estimates open with baked rate
+    # precedent from the demo benchmark corpus). It reuses the verified two-trade sublet
+    # bundle (two sections, the flagged-cheapest mechanical bidder) for the sourcing half,
+    # so the golden path needs no separate reply fixture; the self-perform half is the
+    # seeded corpus (db/golden_demo.py).
+    "golden": {
+        "name": "Golden — the full walkthrough",
+        "blurb": "Full walkthrough — two trades sourced, two self-performed. Route electrical and mechanical & plumbing to sublet for two leveling sections and two awards (the cheapest mechanical bidder carries an unpaid adjudication — recommended against despite price); route fire services and joinery to self-perform and price each line against live rate precedent from the benchmark corpus.",
+        "hero_trade": "electrical",
+        "replies_fixture": "cases/scenarios/two_trade_replies.json",
+        "rationale_fixture": "cases/scenarios/two_trade_rationale_electrical.json",
+        "rationale_fixtures": {
+            "electrical": "cases/scenarios/two_trade_rationale_electrical.json",
+            "mechanical_plumbing": "cases/scenarios/two_trade_rationale_mechanical.json",
+        },
     },
     "hero": {
         "name": "Hero — the cheapest bidder, flagged",

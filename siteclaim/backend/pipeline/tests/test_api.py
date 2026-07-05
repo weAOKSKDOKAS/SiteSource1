@@ -22,7 +22,7 @@ def test_stage_routes_are_registered():
 
 def test_demo_loaders_return_tender_and_replies():
     ids = {c["id"] for c in client.get("/demo/cases").json()}
-    assert {"clean", "hero", "messy"} <= ids
+    assert {"golden", "hero", "messy"} <= ids
     case = client.get("/demo/messy").json()
     assert case["tender"]["documents"]
     assert case["hero_trade"] == "electrical"
@@ -79,11 +79,9 @@ def _run_scenario(case_id: str):
     return rec
 
 
-def test_three_scenarios_reproduce_their_expected_outcome():
-    clean = _run_scenario("clean")
-    assert clean["recommended_firm_id"] == "F-JF-01"
-    assert not any(r["recommended_against"] for r in clean["ranked"])  # confident, no flag
-
+def test_focused_scenarios_reproduce_their_expected_outcome():
+    # hero + messy are the single-trade focused scenarios; the golden two-trade walkthrough
+    # is exercised through the per-section path in test_golden_demo.
     hero = _run_scenario("hero")
     assert hero["recommended_firm_id"] == "F-EL-02"
     assert next(r for r in hero["ranked"] if r["firm_id"] == "F-EL-01")["recommended_against"] is True
@@ -95,7 +93,7 @@ def test_three_scenarios_reproduce_their_expected_outcome():
 
 
 def test_scenarios_are_deterministic_on_repeat():
-    for case_id in ("clean", "hero", "messy"):
+    for case_id in ("hero", "messy"):
         first = _run_scenario(case_id)
         second = _run_scenario(case_id)
         assert first["recommended_firm_id"] == second["recommended_firm_id"]

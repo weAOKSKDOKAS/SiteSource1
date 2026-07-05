@@ -110,7 +110,7 @@ def test_single_trade_scenarios_unchanged():
 def test_two_trade_demo_scenario_yields_two_sections_and_two_awards():
     # the new scenario exists alongside the untouched three
     ids = {c["id"] for c in client.get("/demo/cases").json()}
-    assert {"clean", "hero", "messy", "two_trade"} <= ids
+    assert {"golden", "hero", "messy", "two_trade"} <= ids
 
     case = client.get("/demo/two_trade").json()
     assert {r["trade"] for r in case["replies"]} == {"electrical", "mechanical_plumbing"}
@@ -139,6 +139,7 @@ def test_two_trade_demo_scenario_yields_two_sections_and_two_awards():
 
 
 def test_existing_single_trade_demo_cases_carry_hero_fixture_map():
-    for cid in ("clean", "hero", "messy"):
+    # golden is the multi-trade walkthrough (its own fixture map); hero + messy stay single-trade.
+    for cid in ("hero", "messy"):
         case = client.get(f"/demo/{cid}").json()
         assert case["rationale_fixtures"] == {case["hero_trade"]: case["rationale_fixture"]}

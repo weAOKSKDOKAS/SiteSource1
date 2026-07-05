@@ -2,7 +2,7 @@
   "suggestions": [
     {"package_key": "electrical", "recommended_route": "sublet", "rationale": "A deep pool of assessable electrical subcontractors — sublet for competitive tension and specialist labour."},
     {"package_key": "mechanical_plumbing", "recommended_route": "sublet", "rationale": "Assessable MEP specialists are available — sublet the plant-heavy scope."},
-    {"package_key": "fire_services", "recommended_route": "sublet", "rationale": "A licensed fire-services trade with an assessable pool — sublet to a registered specialist."},
+    {"package_key": "fire_services", "recommended_route": "self_perform", "rationale": "An established in-house fire-services capability with completed projects on record — self-perform to hold programme certainty and protect margin."},
     {"package_key": "joinery_fitting_out", "recommended_route": "self_perform", "rationale": "Strong in-house fitting-out capability and a broad pool — self-perform to protect margin and programme."},
     {"package_key": "ground_investigation", "recommended_route": "sublet", "rationale": "A specialist GI trade with a thin in-house pool but assessable drillers — sublet."}
   ]
