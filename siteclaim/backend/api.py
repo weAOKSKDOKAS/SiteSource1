@@ -38,6 +38,7 @@ from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
 from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E402
+from pipeline.benchmark.eos_reason import EOS_REASON_FIXTURE, extract_reason_candidates  # noqa: E402
 from pipeline.routing.recommend import ROUTE_SUGGESTIONS_FIXTURE, recommend_routes  # noqa: E402
 from pipeline.routing.signal import package_signal  # noqa: E402
 from db import benchmark as bench, refresh, routing, store  # noqa: E402
@@ -62,10 +63,12 @@ from schemas.benchmark import (  # noqa: E402
     ProjectCreate,
     ProjectEOS,
     ProjectUpdate,
+    ReasonCandidate,
     ReasonCode,
     ReasonRequest,
     TenderItem,
     TenderUploadResponse,
+    VarianceReasonSuggestions,
     VarianceRecord,
 )
 from schemas.models import (  # noqa: E402
@@ -1057,10 +1060,40 @@ def get_benchmark_variance(project_id: int) -> list[VarianceRecord]:
         conn.close()
 
 
+@app.get("/benchmark/{project_id}/variance/reason-suggestions", response_model=VarianceReasonSuggestions)
+def get_variance_reason_suggestions(project_id: int) -> VarianceReasonSuggestions:
+    """EOS-derived reason candidates per variance record (Phase 2, Layer-2 suggestion only).
+
+    Reads the project's attached EOS narrative and its variance table, and returns one
+    candidate reason code + supporting narrative snippet per line the report explains. The
+    reason POST below stays the SOLE writer — this endpoint never mutates a record. Empty
+    (``eos_attached=false``) when no EOS narrative is attached: the honest empty state.
+    DEMO reads the baked candidate fixture; no network. Sync ``def`` (an LLM read in live)."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        eos = bench.get_eos(conn, project_id)
+        records = bench.variance_records(conn, project_id)
+    finally:
+        conn.close()
+    narrative = (eos or {}).get("narrative", "").strip()
+    if not narrative:
+        return VarianceReasonSuggestions(project_id=project_id, eos_attached=bool(eos), candidates=[])
+    candidates = extract_reason_candidates(
+        narrative, records, demo_fixture=EOS_REASON_FIXTURE if demo_mode() else None,
+    )
+    return VarianceReasonSuggestions(
+        project_id=project_id, eos_attached=True,
+        candidates=[ReasonCandidate(**c) for c in candidates],
+    )
+
+
 @app.post("/benchmark/{project_id}/variance/{record_id}/reason", response_model=VarianceRecord)
 def post_variance_reason(project_id: int, record_id: int, req: ReasonRequest) -> VarianceRecord:
     """Set a variance record's reason — the human's code (validated against the ten-code
-    vocabulary) is required; a deterministic hint may pre-suggest but never writes."""
+    vocabulary) is required. The candidate may come from the EOS narrative
+    (``/variance/reason-suggestions``) or a deterministic hint, with its snippet passed as the
+    note; either way this write is the SOLE writer and requires the human's confirmed code."""
     conn = store.get_connection()
     try:
         _require_project(conn, project_id)

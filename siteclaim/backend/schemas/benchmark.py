@@ -208,6 +208,16 @@ class ReasonCandidateSet(BaseModel):
     candidates: list[ReasonCandidate] = Field(default_factory=list)
 
 
+class VarianceReasonSuggestions(BaseModel):
+    """The reason-suggestions endpoint's response: the EOS-derived candidates per variance
+    record. ``eos_attached`` is False (and ``candidates`` empty) when no EOS narrative is
+    attached — the honest empty state. Advisory; the reason POST remains the sole writer."""
+
+    project_id: int
+    eos_attached: bool = False
+    candidates: list[ReasonCandidate] = Field(default_factory=list)
+
+
 class BenchmarkSummary(BaseModel):
     projects: int = 0
     tender_items: int = 0

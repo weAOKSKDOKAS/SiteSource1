@@ -186,6 +186,19 @@ requires the human's code**. `GET /benchmark/{project}/variance` is the table;
 `GET /benchmark/summary` reports projects / record counts / coverage by trade and granularity,
 **counting the live profile only** (`provenance='live'`) — demo fixtures never leak in.
 
+**The reason now originates from the project's EOS narrative (Phase 2).** A per-project EOS
+field report is attached (`POST /benchmark/{project}/eos-upload` → `project_eos`; narrative
+text is the default deterministic path, a PDF's text layer only when `EOS_PDF_PARSE=true`).
+`GET /benchmark/{project}/variance/reason-suggestions` runs a Layer-2 extractor (purpose
+`reason-from-eos`) over the narrative + the variance records that moved, and returns one
+candidate reason code + the supporting narrative snippet per line — with a deterministic
+fallback (the shape-based `matcher.suggest_reason` hint + a keyword snippet) so a candidate
+always surfaces, and the honest empty state (`eos_attached=false`) when no report is attached.
+This is **suggestion only**; the reason POST above stays the **sole writer**, and the human
+confirms the EOS-suggested code (storing the snippet as the note) or overrides it. DEMO reads
+a baked narrative + candidate fixture, fully offline. The EOS layer is illustrative until a
+partner archive exists — the same disclosure the rest of the benchmark carries.
+
 ## 6. Variance math (§6, rate-primary — mirrors `computable_amount`)
 
 The same rate-primary discipline as the leveling engine:
