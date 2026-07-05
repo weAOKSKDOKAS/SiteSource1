@@ -194,7 +194,12 @@ export function EvidenceList({ evidence }: { evidence: Evidence[] }) {
       {evidence.map((e, j) => (
         <li key={j} className="text-xs leading-relaxed text-ink-soft">
           <span className="font-semibold text-ink">{e.source}</span>
-          <span className="tabular text-ink-faint"> · {e.reference}</span>
+          <span
+            className="tabular ml-1.5 inline-flex cursor-help items-center rounded border border-line px-1.5 py-px text-[11px] text-ink-soft transition-colors hover:border-brand/40 hover:bg-brand-bg/50"
+            title={`${e.source} — reference ${e.reference}`}
+          >
+            {e.reference}
+          </span>
           <div className="text-ink-soft">{e.snippet}</div>
         </li>
       ))}

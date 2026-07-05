@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Candidate, Coverage, ShortlistSet } from "../types";
 import { Pill, RiskFlagList, StepHeading, StepNav } from "../components";
-import { Card, MatchChip, cx } from "../ui";
+import { Card, Collapse, Docket, Drawer, MatchChip, MonoLabel, cx } from "../ui";
 import { tradeLabel } from "../format";
 
 export function StepShortlist({
@@ -21,6 +21,7 @@ export function StepShortlist({
 }) {
   // Hero trade stays expanded; the rest collapse so the hero reads on a projector.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [detail, setDetail] = useState<Candidate | null>(null);
   const trades = Object.keys(shortlist.per_trade).sort((a, b) =>
     a === heroTrade ? -1 : b === heroTrade ? 1 : a.localeCompare(b),
   );
@@ -70,7 +71,7 @@ export function StepShortlist({
             {open ? (
               <ol className="divide-y divide-line-soft">
                 {candidates.map((c, i) => (
-                  <CandidateRow key={c.firm.firm_id} candidate={c} rank={i + 1} top={i === 0} />
+                  <CandidateRow key={c.firm.firm_id} candidate={c} rank={i + 1} top={i === 0} onOpen={() => setDetail(c)} />
                 ))}
               </ol>
             ) : (
@@ -83,23 +84,32 @@ export function StepShortlist({
       })}
 
       <StepNav onBack={onBack} onNext={onNext} nextLabel="Dispatch enquiries →" loading={loading} />
+
+      <FirmDrawer candidate={detail} onClose={() => setDetail(null)} />
     </div>
   );
 }
 
-function CandidateRow({ candidate, rank, top }: { candidate: Candidate; rank: number; top: boolean }) {
+function CandidateRow({ candidate, rank, top, onOpen }: { candidate: Candidate; rank: number; top: boolean; onOpen: () => void }) {
   const { firm } = candidate;
   const against = candidate.recommended_against;
   const fatal = candidate.risk_flags.filter((f) => f.severity === "fatal");
   const warnings = candidate.risk_flags.filter((f) => f.severity !== "fatal");
 
   return (
-    <li className={cx("px-4 py-3", against && "bg-bad-bg/40")}>
+    <li className={cx("px-4 py-3 transition-colors", against ? "bg-bad-bg/40" : "hover:bg-paper-soft/70")}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="tabular flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line text-xs font-semibold text-ink-soft">
           {rank}
         </span>
-        <span className="text-sm font-semibold text-ink">{firm.name}</span>
+        <button
+          type="button"
+          onClick={onOpen}
+          title="Open the firm record"
+          className="text-sm font-semibold text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+        >
+          {firm.name}
+        </button>
         <span className="tabular text-xs text-ink-faint">{firm.firm_id}</span>
         <MatchChip score={candidate.match_score} />
         {top && !against && <Pill tone="ok">Top pick</Pill>}
@@ -126,5 +136,94 @@ function CandidateRow({ candidate, rank, top }: { candidate: Candidate; rank: nu
         </div>
       )}
     </li>
+  );
+}
+
+// The firm record drawer — the full fused profile already delivered with the shortlist
+// (no extra fetch): registration, trades, closeout record, adjudicated flags with their
+// cited evidence, and award history.
+function FirmDrawer({ candidate, onClose }: { candidate: Candidate | null; onClose: () => void }) {
+  const firm = candidate?.firm;
+  return (
+    <Drawer
+      open={candidate != null}
+      onClose={onClose}
+      eyebrow="Firm record"
+      tone={candidate?.recommended_against ? "bad" : "violet"}
+      title={firm?.name ?? ""}
+      subtitle={
+        firm && (
+          <span className="flex flex-wrap items-center gap-2">
+            <MatchChip score={candidate.match_score} />
+            {candidate.recommended_against && <Pill tone="bad">⛔ Recommend against</Pill>}
+            <span>
+              {firm.registered_grade} · {firm.value_band.replace(/_/g, " ")}
+            </span>
+          </span>
+        )
+      }
+      footer="SiteSource asserts nothing without a record — every flag above carries its issuing source and reference."
+    >
+      {candidate && firm && (
+        <div className="space-y-3">
+          <Docket label="Firm reference" code={firm.firm_id} />
+
+          {firm.trades.length > 0 && (
+            <div>
+              <MonoLabel className="mb-1.5">Registered trades</MonoLabel>
+              <div className="flex flex-wrap gap-1.5">
+                {firm.trades.map((t) => (
+                  <Pill key={t} tone="violet">{tradeLabel(t)}</Pill>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <Collapse title="Closeout record" defaultOpen>
+              <p className="text-xs leading-relaxed text-ink-soft">
+                {firm.closeout_summary || "No assessable closeout record."}
+              </p>
+            </Collapse>
+
+            <Collapse title="Risk flags" count={candidate.risk_flags.length} defaultOpen={candidate.risk_flags.length > 0}>
+              {candidate.risk_flags.length > 0 ? (
+                <RiskFlagList flags={candidate.risk_flags} />
+              ) : (
+                <p className="text-xs text-ink-faint">No adjudicated flags for this scope.</p>
+              )}
+            </Collapse>
+
+            <Collapse title="Award history" count={firm.award_history.length}>
+              {firm.award_history.length > 0 ? (
+                <ul className="space-y-1 text-xs text-ink-soft">
+                  {firm.award_history.map((a, i) => (
+                    <li key={i}>{a}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-ink-faint">No recorded public awards.</p>
+              )}
+            </Collapse>
+
+            <Collapse title="Scope evidence" count={candidate.evidence.length}>
+              {candidate.evidence.length > 0 ? (
+                <ul className="space-y-2">
+                  {candidate.evidence.map((e, i) => (
+                    <li key={i} className="text-xs leading-relaxed text-ink-soft">
+                      <span className="font-semibold text-ink">{e.source}</span>
+                      <span className="tabular text-ink-faint"> · {e.reference}</span>
+                      <div>{e.snippet}</div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-ink-faint">No matched closeout evidence.</p>
+              )}
+            </Collapse>
+          </div>
+        </div>
+      )}
+    </Drawer>
   );
 }
