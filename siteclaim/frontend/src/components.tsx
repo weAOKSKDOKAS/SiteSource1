@@ -16,12 +16,11 @@ const GATE_HINT: Record<number, string> = {
 // --- Chrome ----------------------------------------------------------------
 export type TopView = "wizard" | "routing" | "estimator" | "benchmark" | "database";
 
-// The app shell sections. Estimator (Phase 3) is stubbed disabled until that phase
-// lands; each phase flips its `enabled` flag on.
+// The app shell sections. Each track flips its `enabled` flag on as its phase lands.
 const NAV: { view: TopView; label: string; enabled: boolean; soon?: string }[] = [
   { view: "wizard", label: "Sourcing", enabled: true },
   { view: "routing", label: "Routing", enabled: true },
-  { view: "estimator", label: "Estimator", enabled: false, soon: "Phase 3" },
+  { view: "estimator", label: "Estimator", enabled: true },
   { view: "benchmark", label: "Benchmark", enabled: true },
   { view: "database", label: "Database", enabled: true },
 ];

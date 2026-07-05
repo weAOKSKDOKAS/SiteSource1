@@ -227,6 +227,95 @@ export interface RouteDecisionResult {
   self_perform_packages: string[];
 }
 
+// --- Estimator (Phase 3) ---------------------------------------------------
+export interface EstimateProject {
+  id: number;
+  name: string;
+  trade: string;
+  client: string;
+  contract_ref: string;
+  status: string; // draft | submitted | awarded | closed
+  provenance: string;
+  source: string;
+  run_ref: string;
+  package_key: string;
+  scope_of_works: string;
+  notes: string;
+  created_at: string;
+  closed_at: string;
+  item_count: number;
+  priced_item_count: number;
+  total: number | null;
+}
+
+export interface EstimateItem {
+  id: number;
+  estimate_id: number;
+  item_ref: string;
+  description: string;
+  unit: string;
+  qty: number | null;
+  rate: number | null;
+  amount: number | null;
+  section: string;
+  source: string;
+}
+
+export interface EstimateDraftResult {
+  estimate: EstimateProject;
+  scope_of_works: string;
+  added_item_refs: string[];
+  trade_mapped: boolean;
+}
+
+export interface RateWarning {
+  reason_code: string;
+  count: number;
+}
+
+export interface RatePrecedent {
+  item_id: number | null;
+  item_ref: string;
+  tier: number; // 1 exact | 2 similar | 0 none
+  matched_ref: string;
+  similarity: number | null;
+  sample_count: number;
+  rate_low: number | null;
+  rate_median: number | null;
+  rate_high: number | null;
+  rate_warnings: RateWarning[];
+}
+
+export interface RateSuggestions {
+  estimate_id: number;
+  corpus_empty: boolean;
+  corpus_size: number;
+  suggestions: RatePrecedent[];
+}
+
+export interface EstimateFinding {
+  kind: string; // omission | unit_mismatch | unpriced | rubric | scope_gap
+  severity: string; // warning | info
+  item_ref: string;
+  message: string;
+  source: string;
+}
+
+export interface EstimateCheckResult {
+  estimate_id: number;
+  findings: EstimateFinding[];
+  tender_checked: boolean;
+  rubric_size: number;
+}
+
+export interface LetterOfOffer {
+  subject: string;
+  body: string;
+  inclusions: string[];
+  exclusions: string[];
+  assumptions: string[];
+}
+
 export interface FirmProfile {
   firm_id: string;
   name: string;

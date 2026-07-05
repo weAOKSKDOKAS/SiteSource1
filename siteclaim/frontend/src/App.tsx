@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { BenchmarkPage } from "./BenchmarkPage";
 import { DatabasePage } from "./DatabasePage";
+import { EstimatorPage } from "./EstimatorPage";
 import { RoutingPage } from "./RoutingPage";
 import { Header, Stepper, type StepIndex, type TopView } from "./components";
 import type {
@@ -227,12 +228,20 @@ export default function App() {
     setError(null);
   }
 
-  if (view === "routing" || view === "benchmark" || view === "database") {
+  if (view === "routing" || view === "estimator" || view === "benchmark" || view === "database") {
     return (
       <div className="min-h-screen">
         <Header demoMode={demoMode} view={view} onNavigate={setView} />
         <main className="mx-auto max-w-6xl px-5 py-8">
-          {view === "routing" ? <RoutingPage /> : view === "benchmark" ? <BenchmarkPage /> : <DatabasePage />}
+          {view === "routing" ? (
+            <RoutingPage />
+          ) : view === "estimator" ? (
+            <EstimatorPage />
+          ) : view === "benchmark" ? (
+            <BenchmarkPage />
+          ) : (
+            <DatabasePage />
+          )}
         </main>
       </div>
     );

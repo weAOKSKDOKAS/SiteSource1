@@ -6,12 +6,18 @@ import type {
   DemoCase,
   DemoCaseSummary,
   DispatchSet,
+  EstimateCheckResult,
+  EstimateDraftResult,
+  EstimateItem,
+  EstimateProject,
   Health,
   IngestUpload,
+  LetterOfOffer,
   LevelledBid,
   MatchConfirm,
   MatchProposal,
   ProjectEOS,
+  RateSuggestions,
   ReasonCode,
   Recommendation,
   RouteDecision,
@@ -21,6 +27,7 @@ import type {
   ShortlistSet,
   TenderPackage,
   TenderReplies,
+  TradeWorkPackage,
   VarianceReasonSuggestions,
   VarianceRecord,
 } from "./types";
@@ -51,6 +58,18 @@ function post<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }).then((r) => handle<T>(r));
+}
+
+function patch<T>(path: string, body: unknown): Promise<T> {
+  return fetch(BASE + path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
+}
+
+function del<T>(path: string): Promise<T> {
+  return fetch(BASE + path, { method: "DELETE" }).then((r) => handle<T>(r));
 }
 
 export interface DispatchRequest {
@@ -126,6 +145,26 @@ export const api = {
   routeAnalyze: (scope: ScopePackages, run_ref = "") => post<RouteProposal>("/route/analyze", { scope, run_ref }),
   routeConfirm: (run_ref: string, decisions: RouteDecision[], decided_by = "operator") =>
     post<RouteDecisionResult>("/route/confirm", { run_ref, decisions, decided_by }),
+
+  // --- Estimator (Phase 3) — the left track. The person prices every line and owns the offer.
+  estimateProjects: () => get<EstimateProject[]>("/estimate/projects"),
+  estimateProject: (id: number) => get<EstimateProject>(`/estimate/projects/${id}`),
+  createEstimate: (body: { name: string; trade?: string; client?: string; contract_ref?: string }) =>
+    post<EstimateProject>("/estimate/projects", body),
+  patchEstimate: (id: number, body: Partial<Pick<EstimateProject, "name" | "trade" | "client" | "contract_ref" | "notes" | "status" | "scope_of_works">>) =>
+    patch<EstimateProject>(`/estimate/projects/${id}`, body),
+  estimateFromPackage: (pkg: TradeWorkPackage, opts?: { project_name?: string; run_ref?: string; client?: string; contract_ref?: string }) =>
+    post<EstimateProject>("/estimate/from-package", { package: pkg, ...opts }),
+  estimateItems: (id: number) => get<EstimateItem[]>(`/estimate/${id}/items`),
+  addEstimateItems: (id: number, items: Array<{ item_ref: string; description?: string; unit?: string; qty?: number | null; rate?: number | null }>) =>
+    post<EstimateItem[]>(`/estimate/${id}/items`, { items }),
+  patchEstimateItem: (id: number, itemId: number, body: { description?: string; unit?: string; qty?: number | null; rate?: number | null }) =>
+    patch<EstimateItem>(`/estimate/${id}/items/${itemId}`, body),
+  deleteEstimateItem: (id: number, itemId: number) => del<{ deleted: number }>(`/estimate/${id}/items/${itemId}`),
+  draftEstimate: (id: number) => post<EstimateDraftResult>(`/estimate/${id}/draft`, {}),
+  estimateRateSuggestions: (id: number) => get<RateSuggestions>(`/estimate/${id}/rate-suggestions`),
+  checkEstimate: (id: number) => post<EstimateCheckResult>(`/estimate/${id}/check`, { tender: [] }),
+  estimateLetter: (id: number) => post<LetterOfOffer>(`/estimate/${id}/letter`, {}),
   uploadBenchmarkFile: (path: string, files: File[]) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
