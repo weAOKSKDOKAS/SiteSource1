@@ -28,6 +28,8 @@ DROP TABLE IF EXISTS reason_codes;
 DROP TABLE IF EXISTS projects;
 -- Unified engine (Phase 1+).
 DROP TABLE IF EXISTS package_routes;
+DROP TABLE IF EXISTS estimate_items;
+DROP TABLE IF EXISTS estimate_projects;
 
 -- One row per firm — the fused identity (public record + private closeout archive).
 CREATE TABLE firms (
@@ -302,6 +304,45 @@ CREATE TABLE package_routes (
     created_at        TEXT NOT NULL
 );
 
+-- ===========================================================================
+-- Estimator (Phase 3) — the LEFT track. Our own priced tender being built for a
+-- self-perform package (seeded from a routed package or opened manually). This is a
+-- DRAFT, deliberately separate from the confirmed benchmark corpus (tender_items /
+-- variance_records) so a work-in-progress estimate never pollutes rate precedent; on
+-- award it is promoted into a tender_items snapshot (Phase 4). Rate-primary and
+-- rate-optional: the human prices every line and a quantity is never invented.
+-- ===========================================================================
+CREATE TABLE estimate_projects (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    trade          TEXT,                            -- canonical taxonomy key
+    client         TEXT,
+    contract_ref   TEXT,
+    status         TEXT NOT NULL DEFAULT 'draft',   -- draft | submitted | awarded | closed
+    provenance     TEXT NOT NULL DEFAULT 'live',    -- demo | live
+    source         TEXT,                            -- routing | manual | from-package
+    run_ref        TEXT,                            -- the routing run that seeded it (provenance)
+    package_key    TEXT,                            -- the routed package (provenance)
+    scope_of_works TEXT,                            -- the L2-drafted scope narrative (human-editable)
+    notes          TEXT,
+    created_at     TEXT NOT NULL,
+    closed_at      TEXT
+);
+
+CREATE TABLE estimate_items (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    estimate_id  INTEGER NOT NULL REFERENCES estimate_projects(id),
+    item_ref     TEXT NOT NULL,
+    description  TEXT,
+    unit         TEXT,
+    qty          REAL,          -- optional (rate-only lines are first-class)
+    rate         REAL,          -- the human's price (null until priced)
+    amount       REAL,          -- computable extension (qty*rate) where both present; never fabricated
+    section      TEXT,
+    source       TEXT,          -- estimate-draft | scope-link | manual  (provenance)
+    created_at   TEXT NOT NULL
+);
+
 CREATE INDEX idx_public_flags_firm  ON public_flags(firm_id);
 CREATE INDEX idx_closeouts_firm     ON project_closeouts(firm_id);
 CREATE INDEX idx_awards_firm        ON award_history(firm_id);
@@ -321,3 +362,6 @@ CREATE INDEX idx_variance_reason      ON variance_records(reason_code);
 CREATE INDEX idx_project_eos_project  ON project_eos(project_id);
 CREATE INDEX idx_projects_provenance  ON projects(provenance);
 CREATE INDEX idx_package_routes_run   ON package_routes(run_ref);
+CREATE INDEX idx_estimate_items_est   ON estimate_items(estimate_id);
+CREATE INDEX idx_estimate_items_ref   ON estimate_items(item_ref);
+CREATE INDEX idx_estimate_projects_prov ON estimate_projects(provenance);

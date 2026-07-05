@@ -243,3 +243,38 @@ Every tender the sourcing pipeline runs can be **linked** into a benchmark proje
 `tender_items`); when that project completes, its actuals close the loop into variance records.
 So the sourcing side feeds the estimating side, and the estimating corpus grows with normal
 operation — the compounding advantage.
+
+## 11. Estimator (Phase 3 — the left track)
+
+The B2 estimator (out of scope for B1, §9) is built here as the **left track**: for a
+self-perform package the person builds our own priced tender, assisted but never auto-decided.
+
+**Table decision (dedicated, not a `tender_items` flag).** An estimate lives in its own
+`estimate_projects` / `estimate_items` pair, **deliberately separate** from the confirmed
+benchmark corpus (`tender_items` / `variance_records`). A `source='estimate'` flag on
+`tender_items` was considered (less duplication) and rejected: a work-in-progress estimate must
+never appear as rate precedent, and the benchmark tables stay authoritative for cost data. On
+**award** an estimate is *promoted* into a `tender_items` snapshot (Phase 4) — a clean copy, not
+a shared row. The estimate columns mirror `tender_items` so that promotion is a straight map.
+
+### `estimate_projects`
+`id`, `name`, `trade` (canonical taxonomy key), `client`, `contract_ref`,
+`status` (`draft` | `submitted` | `awarded` | `closed`),
+`provenance` (`demo` | `live`), `source` (`routing` | `manual` | `from-package`),
+`run_ref` + `package_key` (the routed package that seeded it — provenance),
+`scope_of_works` (the L2-drafted, human-editable narrative), `notes`, `created_at`, `closed_at`.
+Seeded from a routed self-perform package (`POST /estimate/from-package`, idempotent per
+`run_ref`+`package_key`) or opened manually.
+
+### `estimate_items`
+`id`, `estimate_id` → estimate_projects, `item_ref`, `description`, `unit`,
+`qty` (optional), `rate` (**null until the human prices**), `amount` (only ever the computable
+`qty·rate` extension — never fabricated), `section`, `source` (`estimate-draft` | `scope-link` |
+`manual`), `created_at`. **Rate-primary and rate-optional**: the human prices every line and a
+quantity is never invented. A project `total` sums the **computable amounts only**.
+
+The estimator's "smart" outputs are **corpus-gated** (§9/§10): item-level rate precedent and the
+`rubric_items` missing-item warnings light up only once real confirmed variance records exist —
+a populated demo scenario and an honest empty state in live, exactly as B1 scoped. Drafting, the
+tender-vs-estimate check, and the letter of offer operate on the current tender, so they work
+immediately.

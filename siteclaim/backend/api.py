@@ -41,7 +41,7 @@ from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E
 from pipeline.benchmark.eos_reason import EOS_REASON_FIXTURE, extract_reason_candidates  # noqa: E402
 from pipeline.routing.recommend import ROUTE_SUGGESTIONS_FIXTURE, recommend_routes  # noqa: E402
 from pipeline.routing.signal import package_signal  # noqa: E402
-from db import benchmark as bench, refresh, routing, store  # noqa: E402
+from db import benchmark as bench, estimate as est, refresh, routing, store  # noqa: E402
 from schemas.routing import (  # noqa: E402
     ROUTES,
     SUBLET,
@@ -70,6 +70,15 @@ from schemas.benchmark import (  # noqa: E402
     TenderUploadResponse,
     VarianceReasonSuggestions,
     VarianceRecord,
+)
+from schemas.estimate import (  # noqa: E402
+    EstimateItem,
+    EstimateItemsRequest,
+    EstimateItemUpdate,
+    EstimateProject,
+    EstimateProjectCreate,
+    EstimateProjectUpdate,
+    FromPackageRequest,
 )
 from schemas.models import (  # noqa: E402
     BidReply,
@@ -1170,3 +1179,142 @@ def post_route_confirm(req: ConfirmRoutesRequest) -> RouteDecisionResult:
         sublet_packages=[p.package_key for p in packages if p.chosen_route == SUBLET],
         self_perform_packages=[p.package_key for p in packages if p.chosen_route == SELF_PERFORM],
     )
+
+
+# ===========================================================================
+# Estimator (Phase 3) — the LEFT track. Our own priced tender for a self-perform
+# package. A DRAFT surface, separate from the confirmed benchmark corpus; the human
+# prices every line and owns the offer. Seeded from a routed self-perform package
+# (/estimate/from-package) or opened manually. One endpoint per step — no monolith.
+# ===========================================================================
+def _require_estimate(conn, estimate_id: int) -> dict:
+    project = est.get_project(conn, estimate_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"No estimate {estimate_id}.")
+    return project
+
+
+@app.post("/estimate/projects", response_model=EstimateProject)
+def post_estimate_project(req: EstimateProjectCreate) -> EstimateProject:
+    conn = store.get_connection()
+    try:
+        return EstimateProject(**est.create_project(
+            conn, name=req.name, trade=req.trade, client=req.client,
+            contract_ref=req.contract_ref, notes=req.notes, source="manual",
+        ))
+    finally:
+        conn.close()
+
+
+@app.get("/estimate/projects", response_model=list[EstimateProject])
+def get_estimate_projects() -> list[EstimateProject]:
+    conn = store.get_connection()
+    try:
+        return [EstimateProject(**p) for p in est.list_projects(conn)]
+    finally:
+        conn.close()
+
+
+@app.get("/estimate/projects/{estimate_id}", response_model=EstimateProject)
+def get_estimate_project(estimate_id: int) -> EstimateProject:
+    conn = store.get_connection()
+    try:
+        return EstimateProject(**_require_estimate(conn, estimate_id))
+    finally:
+        conn.close()
+
+
+@app.patch("/estimate/projects/{estimate_id}", response_model=EstimateProject)
+def patch_estimate_project(estimate_id: int, req: EstimateProjectUpdate) -> EstimateProject:
+    """Update estimate fields; ``status='closed'`` closes it (stamps closed_at)."""
+    conn = store.get_connection()
+    try:
+        _require_estimate(conn, estimate_id)
+        try:
+            updated = est.update_project(conn, estimate_id, req.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return EstimateProject(**updated)
+    finally:
+        conn.close()
+
+
+@app.post("/estimate/from-package", response_model=EstimateProject)
+def post_estimate_from_package(req: FromPackageRequest) -> EstimateProject:
+    """Seed an estimate from a routed self-perform package (or any TradeWorkPackage). The
+    package's SoR items become the initial (unpriced) estimate lines — the human prices.
+    Idempotent per (run_ref, package_key): a routed package opens one estimate, not a new one
+    per click. The trade is canonicalised against the taxonomy (Layer 1)."""
+    from rules_engine.taxonomy import normalize as normalize_trade  # Layer 1; local import keeps the graph flat
+
+    pkg = req.package
+    trade = normalize_trade(pkg.trade) or pkg.trade
+    conn = store.get_connection()
+    try:
+        existing = est.find_by_route(conn, req.run_ref, pkg.trade) if req.run_ref else None
+        if existing is not None:
+            return EstimateProject(**existing)
+        name = (f"{req.project_name} — {trade}" if req.project_name else trade).strip(" —") or trade or "Estimate"
+        project = est.create_project(
+            conn, name=name, trade=trade, client=req.client, contract_ref=req.contract_ref,
+            source=("routing" if req.run_ref else "from-package"), run_ref=req.run_ref, package_key=pkg.trade,
+            scope_of_works=pkg.scope_summary or "",
+        )
+        items = [{
+            "item_ref": it.item_ref, "description": it.description or "", "unit": it.unit or "",
+            "qty": it.qty, "rate": None, "section": trade,
+        } for it in pkg.sor_items]
+        if items:
+            est.replace_items(conn, project["id"], items, source="scope-link")
+        return EstimateProject(**est.get_project(conn, project["id"]))
+    finally:
+        conn.close()
+
+
+@app.get("/estimate/{estimate_id}/items", response_model=list[EstimateItem])
+def get_estimate_items(estimate_id: int) -> list[EstimateItem]:
+    conn = store.get_connection()
+    try:
+        _require_estimate(conn, estimate_id)
+        return [EstimateItem(**it) for it in est.items_for(conn, estimate_id)]
+    finally:
+        conn.close()
+
+
+@app.post("/estimate/{estimate_id}/items", response_model=list[EstimateItem])
+def post_estimate_items(estimate_id: int, req: EstimateItemsRequest) -> list[EstimateItem]:
+    """Append item lines to the estimate (manual add). Rows with no item_ref are skipped."""
+    conn = store.get_connection()
+    try:
+        _require_estimate(conn, estimate_id)
+        written = est.add_items(conn, estimate_id, [i.model_dump() for i in req.items], source="manual")
+        return [EstimateItem(**it) for it in written]
+    finally:
+        conn.close()
+
+
+@app.patch("/estimate/{estimate_id}/items/{item_id}", response_model=EstimateItem)
+def patch_estimate_item(estimate_id: int, item_id: int, req: EstimateItemUpdate) -> EstimateItem:
+    """Edit one line — the human prices (qty / rate / description / unit / section). The
+    computable amount is recomputed; nothing is ever fabricated for a rate-only line."""
+    conn = store.get_connection()
+    try:
+        _require_estimate(conn, estimate_id)
+        updated = est.update_item(conn, estimate_id, item_id, req.model_dump(exclude_none=True))
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"No item {item_id} in estimate {estimate_id}.")
+        return EstimateItem(**updated)
+    finally:
+        conn.close()
+
+
+@app.delete("/estimate/{estimate_id}/items/{item_id}")
+def delete_estimate_item(estimate_id: int, item_id: int) -> dict:
+    conn = store.get_connection()
+    try:
+        _require_estimate(conn, estimate_id)
+        if not est.delete_item(conn, estimate_id, item_id):
+            raise HTTPException(status_code=404, detail=f"No item {item_id} in estimate {estimate_id}.")
+        return {"deleted": item_id}
+    finally:
+        conn.close()
