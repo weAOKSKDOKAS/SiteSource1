@@ -2,14 +2,11 @@ import { useEffect, useState } from "react";
 
 import { api } from "./api";
 import { Pill } from "./components";
+import { tradeLabel } from "./format";
 import type { DemoCaseSummary, RouteDecision, RouteDecisionResult, RouteProposal, ScopePackages } from "./types";
 import { Button, Card, ErrorBanner, LayerBadge, SectionHeader } from "./ui";
 
 const ROUTE_LABEL: Record<string, string> = { self_perform: "Self-perform", sublet: "Sublet" };
-
-function tradeLabel(t: string): string {
-  return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 function SignalChips({ signals }: { signals: Record<string, number | boolean | string> }) {
   const chip = (label: string, key: string) =>

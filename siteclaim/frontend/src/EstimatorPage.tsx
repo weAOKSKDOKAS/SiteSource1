@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "./api";
 import { Pill, StepHeading } from "./components";
+import { money, tradeLabel } from "./format";
 import type {
   EstimateCheckResult,
   EstimateFinding,
@@ -12,15 +13,6 @@ import type {
   RateSuggestions,
 } from "./types";
 import { Button, Card, ErrorBanner, LayerBadge, SectionHeader, StatCallout } from "./ui";
-
-function money(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "—";
-  return "HK$" + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-function tradeLabel(t: string): string {
-  return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 // ---------------------------------------------------------------------------
 // Rate precedent — from the benchmark corpus (Layer 3). Suggestion only; the person prices.

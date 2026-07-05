@@ -2,17 +2,9 @@ import { useEffect, useState } from "react";
 
 import { api } from "./api";
 import { Pill } from "./components";
+import { money, tradeLabel } from "./format";
 import type { ProjectDashboard, ProjectSummary } from "./types";
 import { Card, ErrorBanner, SectionHeader, StatCallout, cx } from "./ui";
-
-function money(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "—";
-  return "HK$" + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-function tradeLabel(t: string): string {
-  return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 function TrackBadge({ track, chosen }: { track: string; chosen: string | null }) {
   if (track === "left") return <Pill tone="violet">Self-perform → Estimator</Pill>;
