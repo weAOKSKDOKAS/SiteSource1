@@ -124,7 +124,7 @@ function PackageDrawer({ pkg, onClose }: { pkg: RoutePackage | null; onClose: ()
           {pkg.scope_summary && <p className="text-xs leading-relaxed text-ink-soft">{pkg.scope_summary}</p>}
 
           <div>
-            <Collapse title="AI recommendation" defaultOpen>
+            <Collapse title="Recommendation (advisory)" defaultOpen>
               <div className="flex flex-wrap items-center gap-1.5">
                 <Pill tone="ok">{ROUTE_LABEL[pkg.recommended_route] ?? pkg.recommended_route}</Pill>
                 <Pill tone="neutral">{pkg.source === "fallback" ? "rule-based" : pkg.source}</Pill>

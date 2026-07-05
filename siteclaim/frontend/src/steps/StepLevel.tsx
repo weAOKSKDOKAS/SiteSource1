@@ -36,7 +36,7 @@ export function StepLevel({
   return (
     <div className="space-y-6">
       <StepHeading
-        title="Level the bids"
+        title="Level & compare"
         lead="Claude parses each returned Schedule of Rates; the rules engine recomputes every amount as qty × rate, sums the corrected total, flags arithmetic errors, treats a missing rate or provisional sum as a scope gap, and keeps exclusions as non-comparable. Each sublet trade is levelled only against its own bids — one comparison section per trade. Edit a rate and recompute to see the ranking move."
       />
 

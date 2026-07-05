@@ -201,7 +201,7 @@ function EstimateDetail({ project, onBack, onChanged }: { project: EstimateProje
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold text-ink">Scope of works</h3>
           <LayerBadge layer="L2" />
-          <Button variant="ghost" className="ml-auto" loading={busy} onClick={draft}>Draft with AI</Button>
+          <Button variant="ghost" className="ml-auto" loading={busy} onClick={draft}>Draft scope &amp; items</Button>
         </div>
         <textarea
           className="h-24 w-full rounded-lg border border-line px-2 py-1.5 text-sm"

@@ -58,7 +58,7 @@ export function StepShortlist({
           >
             <option value="">All trades ({trades.length})</option>
             {trades.map((t) => (
-              <option key={t} value={t}>{tradeLabel(t)}{t === heroTrade ? " — watch this" : ""}</option>
+              <option key={t} value={t}>{tradeLabel(t)}{t === heroTrade ? " — focus" : ""}</option>
             ))}
           </select>
         </div>
@@ -74,7 +74,7 @@ export function StepShortlist({
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-4 py-2.5">
               <h2 className="text-sm font-semibold text-ink">
                 {tradeLabel(trade)}
-                {isHero && <span className="ml-2 text-xs font-normal text-brand">— watch this trade</span>}
+                {isHero && <span className="ml-2 text-xs font-normal text-brand">— focus trade</span>}
               </h2>
               <div className="flex items-center gap-2">
                 {flagged > 0 && <Pill tone="bad">{flagged} flagged</Pill>}

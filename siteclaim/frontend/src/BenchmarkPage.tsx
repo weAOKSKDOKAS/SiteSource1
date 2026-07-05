@@ -254,14 +254,14 @@ function EosPanel({ eos, onAttach }: { eos: ProjectEOS | null; onAttach: (narrat
           {eos.summary && <p className="text-sm text-ink">{eos.summary}</p>}
           <p className="mt-2 text-xs leading-relaxed text-ink-soft">{eos.narrative}</p>
           <p className="mt-2 text-xs text-ink-faint">
-            The AI reads the narrative and proposes a reason per variance line below; a person confirms it. The
-            reason is never written by the AI.
+            Claude (Layer 2) reads the narrative and proposes a reason per variance line below; a person confirms
+            it. The recorded reason is never written by the model.
           </p>
         </>
       ) : (
         <p className="text-sm text-ink-faint">
-          No EOS narrative attached. Paste the field account and the AI will propose a reason — with its
-          supporting sentence — for each variance line.
+          No EOS narrative attached. Paste the field account and a reason candidate is proposed — with its
+          supporting sentence — for each variance line; a person confirms every reason.
         </p>
       )}
       <Modal open={open} onClose={() => setOpen(false)} title="EOS narrative">

@@ -392,7 +392,7 @@ export default function App() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <StepHeading
                     title="Route the packages"
-                    lead="For each package the AI recommends self-perform vs sublet with the coverage signal behind it. You decide: sublet packages go to sourcing next; self-perform packages open in the Estimator (they leave the sourcing flow). The recommendation is advisory."
+                    lead="Each package carries a self-perform vs sublet recommendation with the coverage signal behind it. You decide: sublet packages go to sourcing next; self-perform packages open in the Estimator (they leave the sourcing flow). The recommendation is advisory."
                   />
                   <LayerBadge layer="L4" />
                 </div>

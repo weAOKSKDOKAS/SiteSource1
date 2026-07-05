@@ -197,7 +197,7 @@ export function StepDispatch({
 
       {!demoMode && dispatch && tenderSlug && <RepliesPanel slug={tenderSlug} />}
 
-      <StepNav onBack={onBack} onNext={onNext} nextLabel="Level the bids →" loading={loading} nextDisabled={!dispatch} />
+      <StepNav onBack={onBack} onNext={onNext} nextLabel="Level & compare →" loading={loading} nextDisabled={!dispatch} />
 
       <DispatchReviewModal
         open={reviewOpen}

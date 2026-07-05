@@ -4,14 +4,14 @@ import { shownEmail } from "./theme";
 import type { Evidence, FirmProfile, RiskFlag } from "./types";
 import { Button, Collapse, Docket, MonoLabel, SeverityTag, cx } from "./ui";
 
-export const STEPS = ["Ingest", "Route", "Shortlist", "Dispatch", "Level", "Recommend"] as const;
+export const STEPS = ["Ingest", "Route", "Shortlist", "Dispatch", "Level & compare", "Award"] as const;
 export type StepIndex = 1 | 2 | 3 | 4 | 5 | 6;
 
 const GATE_HINT: Record<number, string> = {
   1: "Split the tender by trade",
   2: "Self-perform vs sublet per package",
   3: "Rank firms with evidence",
-  4: "Invite & send (mock)",
+  4: "Approve & send enquiries",
   5: "Correct & compare bids",
   6: "Risk-adjusted award",
 };
