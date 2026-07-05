@@ -126,6 +126,21 @@ def test_rate_suggestions_empty_on_the_live_profile(est_db):
     assert body["corpus_empty"] is True and body["suggestions"][0]["tier"] == 0
 
 
+def test_check_flags_omissions_unpriced_and_scope_gaps(est_db):
+    eid = client.post("/estimate/from-package", json={"package": _PACKAGE, "run_ref": "c1"}).json()["id"]
+    result = client.post(f"/estimate/{eid}/check", json={"tender": [
+        {"item_ref": "G1", "description": "Rotary drilling in soil", "unit": "m"},
+        {"item_ref": "G2", "description": "SPT", "unit": "no"},
+        {"item_ref": "G9", "description": "Grouting", "unit": "no"},   # not in the estimate
+    ]}).json()
+    assert result["tender_checked"] is True and result["rubric_size"] == 0
+    kinds = {f["kind"] for f in result["findings"]}
+    assert "omission" in kinds and any(f["item_ref"] == "G9" for f in result["findings"])
+    assert "unpriced" in kinds                       # the seeded lines are unpriced
+    assert "scope_gap" in kinds                       # the DEMO fixture flags a reinstatement gap
+    assert client.post("/estimate/123456/check", json={"tender": []}).status_code == 404
+
+
 def test_endpoints_404_on_unknown_estimate(est_db):
     assert client.get("/estimate/projects/123456").status_code == 404
     assert client.post("/estimate/123456/items", json={"items": []}).status_code == 404

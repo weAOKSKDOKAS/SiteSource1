@@ -1,0 +1,5 @@
+{
+  "scope_gaps": [
+    {"item_ref": "", "message": "The scope allows for reinstatement on completion, but no reinstatement line is priced in the estimate."}
+  ]
+}

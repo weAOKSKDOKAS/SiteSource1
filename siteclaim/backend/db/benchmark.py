@@ -490,6 +490,20 @@ def corpus_rate_rows(conn: sqlite3.Connection) -> list[dict]:
     } for r in rows]
 
 
+def rubric_items_for_trade(conn: sqlite3.Connection, trade: str) -> list[dict]:
+    """The evidence-linked ``rubric_items`` guidance for a trade (Phase 3 error-check). Ships
+    EMPTY (an entry needs a real ``variance_record`` as evidence), so this is [] until an
+    archive fills it — the honest corpus-gated state."""
+    if not has_benchmark_tables(conn):
+        return []
+    rows = conn.execute(
+        "SELECT item_ref, guidance, trade, evidence_variance_id, source FROM rubric_items WHERE trade = ?",
+        (trade,),
+    ).fetchall()
+    return [{"item_ref": r["item_ref"] or "", "guidance": r["guidance"] or "", "trade": r["trade"] or "",
+             "evidence_variance_id": r["evidence_variance_id"], "source": r["source"] or ""} for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Summary — counts the LIVE profile only (provenance='live'), never demo fixtures.
 # ---------------------------------------------------------------------------

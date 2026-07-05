@@ -72,7 +72,10 @@ from schemas.benchmark import (  # noqa: E402
     VarianceRecord,
 )
 from schemas.estimate import (  # noqa: E402
+    EstimateCheckRequest,
+    EstimateCheckResult,
     EstimateDraftResult,
+    EstimateFinding,
     EstimateItem,
     EstimateItemsRequest,
     EstimateItemUpdate,
@@ -83,6 +86,7 @@ from schemas.estimate import (  # noqa: E402
     RatePrecedent,
     RateSuggestions,
 )
+from pipeline.estimate.checks import ESTIMATE_CHECK_FIXTURE, check_estimate  # noqa: E402
 from pipeline.estimate.draft import ESTIMATE_DRAFT_FIXTURE, draft_estimate  # noqa: E402
 from pipeline.estimate.rates import suggest_rates  # noqa: E402
 from schemas.models import (  # noqa: E402
@@ -1306,6 +1310,29 @@ def post_estimate_draft(estimate_id: int) -> EstimateDraftResult:
         )
     finally:
         conn.close()
+
+
+@app.post("/estimate/{estimate_id}/check", response_model=EstimateCheckResult)
+def post_estimate_check(estimate_id: int, req: EstimateCheckRequest) -> EstimateCheckResult:
+    """Error / omission check (Phase 3) — reports, never auto-fixes. Layer-1 deterministic
+    checks against the supplied tender requirements (omissions, unit mismatches, unpriced
+    lines), the corpus-gated ``rubric_items`` (empty until an archive fills it), and a Layer-2
+    read of the scope-of-works for scope gaps. DEMO reads the baked fixture. Sync ``def``."""
+    conn = store.get_connection()
+    try:
+        project = _require_estimate(conn, estimate_id)
+        items = est.items_for(conn, estimate_id)
+        rubric = bench.rubric_items_for_trade(conn, project["trade"])
+    finally:
+        conn.close()
+    result = check_estimate(
+        items, [t.model_dump() for t in req.tender], rubric, project["scope_of_works"],
+        demo_fixture=ESTIMATE_CHECK_FIXTURE if demo_mode() else None,
+    )
+    return EstimateCheckResult(
+        estimate_id=estimate_id, tender_checked=result["tender_checked"], rubric_size=result["rubric_size"],
+        findings=[EstimateFinding(**f) for f in result["findings"]],
+    )
 
 
 @app.get("/estimate/{estimate_id}/rate-suggestions", response_model=RateSuggestions)

@@ -155,3 +155,39 @@ class RateSuggestions(BaseModel):
     corpus_empty: bool = True     # True in live pre-archive — the honest empty state
     corpus_size: int = 0
     suggestions: list[RatePrecedent] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Error / omission check (P3d) — reports only; never edits or prices.
+# ---------------------------------------------------------------------------
+class EstimateFinding(BaseModel):
+    kind: str                     # omission | unit_mismatch | unpriced | rubric | scope_gap
+    severity: str = "warning"     # warning | info
+    item_ref: str = ""
+    message: str = ""
+    source: str = ""              # rules | rubric | estimate-check
+
+
+class EstimateCheckRequest(BaseModel):
+    """The tender requirements to check the estimate against (optional — when empty, the
+    omission/unit checks are skipped and only the rubric + unpriced checks run)."""
+
+    tender: list[EstimateItemInput] = Field(default_factory=list)
+
+
+class EstimateCheckResult(BaseModel):
+    estimate_id: int
+    findings: list[EstimateFinding] = Field(default_factory=list)
+    tender_checked: bool = False
+    rubric_size: int = 0
+
+
+class EstimateScopeGap(BaseModel):
+    item_ref: str = ""
+    message: str = ""
+
+
+class EstimateCheckDraft(BaseModel):
+    """The L2 output (parsed by ``complete_json``) — scope obligations with no priced line."""
+
+    scope_gaps: list[EstimateScopeGap] = Field(default_factory=list)
