@@ -202,3 +202,12 @@ class LetterOfOffer(BaseModel):
     inclusions: list[str] = Field(default_factory=list)
     exclusions: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Estimate -> benchmark capture (P4c) — a self-performed job feeds the corpus on award.
+# ---------------------------------------------------------------------------
+class ToBenchmarkResult(BaseModel):
+    estimate: EstimateProject
+    benchmark_project_id: int
+    tender_item_count: int

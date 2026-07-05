@@ -86,6 +86,7 @@ from schemas.estimate import (  # noqa: E402
     LetterOfOffer,
     RatePrecedent,
     RateSuggestions,
+    ToBenchmarkResult,
 )
 from pipeline.estimate.checks import ESTIMATE_CHECK_FIXTURE, check_estimate  # noqa: E402
 from pipeline.estimate.draft import ESTIMATE_DRAFT_FIXTURE, draft_estimate  # noqa: E402
@@ -1383,6 +1384,44 @@ def get_estimate_rate_suggestions(estimate_id: int) -> RateSuggestions:
         estimate_id=estimate_id, corpus_empty=result["corpus_empty"], corpus_size=result["corpus_size"],
         suggestions=[RatePrecedent(**s) for s in result["suggestions"]],
     )
+
+
+@app.post("/estimate/{estimate_id}/to-benchmark", response_model=ToBenchmarkResult)
+def post_estimate_to_benchmark(estimate_id: int) -> ToBenchmarkResult:
+    """Capture an awarded estimate as a benchmark tender snapshot (Phase 4c — the compounding
+    loop). Creates (or reuses) a benchmark project and copies the estimate's priced lines into
+    its tender_items, so a self-performed job also feeds the benchmark corpus on completion.
+    Idempotent for a routed estimate via its run_ref (re-capture reuses the linked benchmark
+    project). Marks the estimate 'awarded'. The benchmark project's provenance follows the mode
+    (demo captures never count in the live summary)."""
+    conn = store.get_connection()
+    try:
+        estimate = _require_estimate(conn, estimate_id)
+        pid = None
+        if estimate["run_ref"]:
+            up = uproject.get_or_create(conn, estimate["run_ref"], name=estimate["name"])
+            if up["benchmark_project_id"] and bench.get_project(conn, up["benchmark_project_id"]):
+                pid = up["benchmark_project_id"]
+        if pid is None:
+            created = bench.create_project(
+                conn, name=estimate["name"], trade=estimate["trade"], client=estimate["client"],
+                contract_ref=estimate["contract_ref"], source="estimate",
+                provenance=("demo" if demo_mode() else "live"),
+                notes=f"Captured from estimate #{estimate_id} (self-perform).",
+            )
+            pid = created["id"]
+            if estimate["run_ref"]:
+                uproject.link_benchmark(conn, estimate["run_ref"], pid)
+        items = [{
+            "item_ref": it["item_ref"], "description": it["description"], "unit": it["unit"],
+            "qty": it["qty"], "rate": it["rate"], "amount": it["amount"], "section": it["section"],
+        } for it in est.items_for(conn, estimate_id)]
+        written = bench.replace_tender_items(conn, pid, items, source="estimate", source_doc=estimate["name"])
+        est.update_project(conn, estimate_id, {"status": "awarded"})
+        updated = est.get_project(conn, estimate_id)
+    finally:
+        conn.close()
+    return ToBenchmarkResult(estimate=EstimateProject(**updated), benchmark_project_id=pid, tender_item_count=len(written))
 
 
 @app.post("/estimate/{estimate_id}/letter", response_model=LetterOfOffer)

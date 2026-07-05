@@ -152,6 +152,28 @@ def test_letter_of_offer_draft(est_db):
     assert client.post("/estimate/123456/letter").status_code == 404
 
 
+def test_to_benchmark_captures_the_priced_tender(est_db):
+    eid = client.post("/estimate/from-package", json={"package": _PACKAGE, "run_ref": "b1"}).json()["id"]
+    for it in client.get(f"/estimate/{eid}/items").json():
+        client.patch(f"/estimate/{eid}/items/{it['id']}", json={"rate": 1000.0})
+    result = client.post(f"/estimate/{eid}/to-benchmark").json()
+    bpid = result["benchmark_project_id"]
+    assert result["tender_item_count"] == 2 and result["estimate"]["status"] == "awarded"
+    proj = client.get(f"/benchmark/projects/{bpid}").json()
+    assert proj["tender_item_count"] == 2 and proj["source"] == "estimate"
+    assert proj["provenance"] == "demo"                              # captured under DEMO autouse
+    assert client.get("/benchmark/summary").json()["projects"] == 0  # demo capture never counts in live
+    # the compounding loop: the captured tender is now rate precedent for the next estimate
+    assert client.get(f"/estimate/{eid}/rate-suggestions").json()["corpus_size"] >= 2
+    # idempotent for a routed estimate — re-capture reuses the same benchmark project
+    again = client.post(f"/estimate/{eid}/to-benchmark").json()
+    assert again["benchmark_project_id"] == bpid and len(client.get("/benchmark/projects").json()) == 1
+
+
+def test_to_benchmark_404_on_unknown_estimate(est_db):
+    assert client.post("/estimate/123456/to-benchmark").status_code == 404
+
+
 def test_endpoints_404_on_unknown_estimate(est_db):
     assert client.get("/estimate/projects/123456").status_code == 404
     assert client.post("/estimate/123456/items", json={"items": []}).status_code == 404
