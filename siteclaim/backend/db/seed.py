@@ -262,13 +262,18 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
         demo_benchmark = 0
         if profile == "demo":
             from db.benchmark_demo import seed_demo_benchmark
+            from db.golden_demo import seed_golden_benchmark
             from db.unified_demo import seed_unified_demo
 
             benchmark_pid = seed_demo_benchmark(conn, now=built_at)
             # The unified-engine demo run ties the tracks together and links to that benchmark
             # project (Phase 5b) — the whole loop, pitchable offline.
             seed_unified_demo(conn, now=built_at, benchmark_project_id=benchmark_pid)
-            demo_benchmark = 1
+            # The golden scenario's self-perform corpus (Prompt A): completed Fire Services +
+            # Joinery projects whose item_refs match the clean scope packages, so those routed
+            # estimates open with real rate precedent. provenance='demo' — never counts in live.
+            golden_pids = seed_golden_benchmark(conn, now=built_at)
+            demo_benchmark = 1 + len(golden_pids)
 
         for key, value in {
             "embed_method": method,

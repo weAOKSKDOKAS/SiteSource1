@@ -91,7 +91,9 @@ def test_demo_project_reason_suggestions_resolve_from_the_eos(tmp_path, monkeypa
     db = tmp_path / "demo.db"
     seed.build_database(db, profile="demo")
     monkeypatch.setenv("SITESOURCE_DB", str(db))
-    pid = client.get("/benchmark/projects").json()[0]["id"]  # the single seeded demo project
+    # the GI demo project — selected by trade (the demo profile also carries the golden
+    # scenario's self-perform corpus, and /benchmark/projects is id-desc)
+    pid = next(p for p in client.get("/benchmark/projects").json() if p["trade"] == "ground_investigation")["id"]
     body = client.get(f"/benchmark/{pid}/variance/reason-suggestions").json()
     assert body["eos_attached"] is True
     by_ref = {c["item_ref"]: c for c in body["candidates"]}

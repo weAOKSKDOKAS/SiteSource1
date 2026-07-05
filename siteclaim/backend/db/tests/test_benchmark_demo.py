@@ -27,16 +27,24 @@ def live_conn(tmp_path_factory):
     conn.close()
 
 
+def _gi_project(conn):
+    """The GI demo project — selected by trade, since the demo profile now also carries the
+    golden scenario's self-perform corpus (Fire Services + Joinery), and list_projects is id-desc."""
+    return next(p for p in benchmark.list_projects(conn) if p["trade"] == "ground_investigation")
+
+
 def test_demo_profile_carries_the_fictional_project(demo_conn):
     projects = benchmark.list_projects(demo_conn)
-    assert len(projects) == 1
-    proj = projects[0]
-    assert proj["name"].startswith("DEMO —") and proj["provenance"] == "demo"
+    # the GI demo plus the golden scenario's two self-perform corpus projects (Fire, Joinery)
+    assert len(projects) == 3
+    assert all(p["provenance"] == "demo" for p in projects)
+    proj = _gi_project(demo_conn)
+    assert proj["name"].startswith("DEMO —")
     assert proj["tender_item_count"] == 4 and proj["actual_item_count"] == 5 and proj["variance_count"] == 5
 
 
 def test_demo_variance_story_is_coherent_and_engine_computed(demo_conn):
-    pid = benchmark.list_projects(demo_conn)[0]["id"]
+    pid = _gi_project(demo_conn)["id"]
     recs = {r["item_ref"]: r for r in benchmark.variance_records(demo_conn, pid)}
     # two standing_time rate over-runs + one omission_at_tender (the required shape)
     reasons = [r["reason_code"] for r in recs.values()]
@@ -56,7 +64,7 @@ def test_demo_variance_story_is_coherent_and_engine_computed(demo_conn):
 def test_demo_project_carries_a_fictional_eos_narrative(demo_conn):
     # Phase 2: the demo project has an attached EOS field report (provenance='demo') whose
     # sentences are the evidence for the reason candidates.
-    pid = benchmark.list_projects(demo_conn)[0]["id"]
+    pid = _gi_project(demo_conn)["id"]
     eos = benchmark.get_eos(demo_conn, pid)
     assert eos is not None and eos["provenance"] == "demo" and eos["has_images"] is True
     assert eos["narrative"].startswith("The rotary drilling rig stood idle")
