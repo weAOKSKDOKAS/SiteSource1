@@ -16,7 +16,7 @@ const SEVERITY: Record<Severity, { label: string; classes: string; dot: string }
 export function SeverityTag({ severity }: { severity: Severity }) {
   const s = SEVERITY[severity];
   return (
-    <span className={cx("inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-wide", s.classes)}>
+    <span className={cx("inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-eyebrow", s.classes)}>
       <span className={cx("h-1.5 w-1.5 rounded-full", s.dot)} />
       {s.label}
     </span>
@@ -47,7 +47,9 @@ export function Button({ variant = "primary", loading, children, className, disa
   const base =
     "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright focus-visible:ring-offset-2 disabled:cursor-not-allowed";
   const variants = {
-    primary: "bg-brand text-white hover:bg-brand-bright disabled:bg-ink-faint",
+    // Primary CTA: the brand→violet accent gradient + brand glow (the prototype's emphasis).
+    primary:
+      "bg-brand-violet text-white shadow-glow transition hover:brightness-110 disabled:bg-none disabled:bg-ink-faint disabled:shadow-none",
     ghost: "border border-line bg-card text-ink hover:bg-line-soft disabled:text-ink-faint",
     subtle: "text-ink-soft hover:text-ink disabled:text-ink-faint",
   };
@@ -63,16 +65,19 @@ export function Spinner() {
   return <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />;
 }
 
-// Atlas card: set apart by a soft hairline + subtle shadow, never an edge stripe.
+// Atlas card: set apart by a soft hairline + the ported deep card shadow + 16px radius,
+// never an edge stripe.
 export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cx("rounded-xl border border-line-soft bg-card shadow-sm", className)}>{children}</div>;
+  return <div className={cx("rounded-card border border-line-soft bg-card shadow-card", className)}>{children}</div>;
 }
 
-// A single instrument reading — the "real visual element" every Atlas view carries.
+// A single instrument reading — the "real visual element" every Atlas view carries. A faint
+// tone-matched tint wash lifts it off the panel (neutral depth, signal colours stay reserved).
 export function StatCallout({ label, value, hint, tone = "ink" }: { label: string; value: ReactNode; hint?: string; tone?: "ink" | "brand" | "ok" | "violet" }) {
   const accent = { ink: "text-ink", brand: "text-brand", ok: "text-ok", violet: "text-violet" }[tone];
+  const tint = { ink: "", brand: "tint-brand", ok: "tint-ok", violet: "tint-violet" }[tone];
   return (
-    <Card className="px-4 py-3">
+    <Card className={cx("px-4 py-3", tint)}>
       <div className={cx("tabular text-2xl font-bold leading-none", accent)}>{value}</div>
       <div className="mt-1 text-xs font-medium text-ink-faint">{label}</div>
       {hint && <div className="mt-0.5 text-[11px] text-ink-faint">{hint}</div>}
@@ -85,7 +90,7 @@ export function SectionHeader({ title, lead, right }: { title: string; lead?: st
   return (
     <div className="flex flex-wrap items-end justify-between gap-2">
       <div>
-        <h2 className="font-display text-lg font-semibold tracking-tight text-ink">{title}</h2>
+        <h2 className="font-display text-lg font-semibold tracking-display text-ink">{title}</h2>
         {lead && <p className="mt-0.5 max-w-2xl text-sm text-ink-soft">{lead}</p>}
       </div>
       {right}
@@ -101,7 +106,7 @@ export function LayerBadge({ layer }: { layer: "L1" | "L2" | "L3" | "L4" }) {
     L3: { label: "Layer 3 · database", cls: "bg-violet-bg text-violet" },
     L4: { label: "Layer 4 · human gate", cls: "bg-warn-bg text-warn" },
   }[layer];
-  return <span className={cx("inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide", map.cls)}>{map.label}</span>;
+  return <span className={cx("inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-eyebrow", map.cls)}>{map.label}</span>;
 }
 
 // A lightweight centered modal (pop-up forms per Section 8). Escape/backdrop closes.
