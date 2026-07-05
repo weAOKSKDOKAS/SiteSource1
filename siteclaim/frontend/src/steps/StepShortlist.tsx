@@ -22,9 +22,11 @@ export function StepShortlist({
   // Hero trade stays expanded; the rest collapse so the hero reads on a projector.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [detail, setDetail] = useState<Candidate | null>(null);
+  const [focusTrade, setFocusTrade] = useState(""); // "" = show every trade
   const trades = Object.keys(shortlist.per_trade).sort((a, b) =>
     a === heroTrade ? -1 : b === heroTrade ? 1 : a.localeCompare(b),
   );
+  const shownTrades = focusTrade ? trades.filter((t) => t === focusTrade) : trades;
 
   return (
     <div className="space-y-6">
@@ -42,7 +44,23 @@ export function StepShortlist({
         </div>
       )}
 
-      {trades.map((trade) => {
+      {trades.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-ink-soft">Focus a trade:</span>
+          <select
+            value={focusTrade}
+            onChange={(e) => setFocusTrade(e.target.value)}
+            className="rounded-lg border border-line px-2 py-1.5 text-sm text-ink-soft focus:border-brand focus:outline-none"
+          >
+            <option value="">All trades ({trades.length})</option>
+            {trades.map((t) => (
+              <option key={t} value={t}>{tradeLabel(t)}{t === heroTrade ? " — watch this" : ""}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {shownTrades.map((trade) => {
         const candidates = shortlist.per_trade[trade];
         const isHero = trade === heroTrade;
         const open = isHero || !!expanded[trade];
