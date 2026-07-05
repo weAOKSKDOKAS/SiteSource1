@@ -199,7 +199,7 @@ function EstimateDetail({ project, onBack, onChanged }: { project: EstimateProje
         <div className="flex items-center justify-between border-b border-line-soft px-4 py-2.5">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-ink">Priced schedule</h3>
-            <span className="text-xs text-ink-faint">you price every line</span>
+            <span className="text-xs text-ink-faint">you price every line — nothing is priced for you</span>
           </div>
           <span className="inline-flex items-center gap-1 text-xs text-ink-faint"><LayerBadge layer="L3" /> rate precedent</span>
         </div>
@@ -327,16 +327,12 @@ function ItemDrawer({
                     </Pill>
                     <span className="tabular text-ink-faint">n={p.sample_count}</span>
                   </div>
-                  <table className="w-full">
-                    <tbody>
-                      {[["Low", p.rate_low], ["Median", p.rate_median], ["High", p.rate_high]].map(([label, v]) => (
-                        <tr key={String(label)} className="border-b border-line-soft last:border-0">
-                          <td className="py-1 text-ink-faint">{label}</td>
-                          <td className="tabular py-1 text-right font-medium text-ink">{money(v as number | null)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {/* the precedent band as instrument tiles — retrieved values, never a price */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <StatCallout label="Low" value={money(p.rate_low)} tone="violet" />
+                    <StatCallout label="Median" value={money(p.rate_median)} tone="violet" />
+                    <StatCallout label="High" value={money(p.rate_high)} tone="violet" />
+                  </div>
                   {p.rate_warnings.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {p.rate_warnings.map((w, i) => (
