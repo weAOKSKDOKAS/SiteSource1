@@ -168,6 +168,38 @@ export interface BenchmarkSummary {
   coverage_by_granularity: Record<string, number>;
 }
 
+// --- Routing gate (Phase 1) -----------------------------------------------
+export interface RoutePackage {
+  id?: number;
+  package_key: string;
+  trade: string;
+  scope_summary: string;
+  recommended_route: string; // self_perform | sublet
+  rationale: string;
+  signals: Record<string, number | boolean | string>;
+  chosen_route: string | null;
+  decided_by: string;
+  decided_at: string;
+  source: string;
+}
+
+export interface RouteProposal {
+  run_ref: string;
+  packages: RoutePackage[];
+}
+
+export interface RouteDecision {
+  package_key: string;
+  chosen_route: string;
+}
+
+export interface RouteDecisionResult {
+  run_ref: string;
+  packages: RoutePackage[];
+  sublet_packages: string[];
+  self_perform_packages: string[];
+}
+
 export interface FirmProfile {
   firm_id: string;
   name: string;

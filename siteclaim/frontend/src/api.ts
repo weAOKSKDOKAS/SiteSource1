@@ -13,6 +13,9 @@ import type {
   MatchProposal,
   ReasonCode,
   Recommendation,
+  RouteDecision,
+  RouteDecisionResult,
+  RouteProposal,
   ScopePackages,
   ShortlistSet,
   TenderPackage,
@@ -105,6 +108,11 @@ export const api = {
   setVarianceReason: (id: number, recordId: number, body: { reason_code: string; note?: string }) =>
     post<VarianceRecord>(`/benchmark/${id}/variance/${recordId}/reason`, body),
   actualsTemplateUrl: (id: number) => BASE + `/benchmark/actuals-template.xlsx?project=${id}`,
+
+  // --- Routing gate (Phase 1) ----------------------------------------------
+  routeAnalyze: (scope: ScopePackages, run_ref = "") => post<RouteProposal>("/route/analyze", { scope, run_ref }),
+  routeConfirm: (run_ref: string, decisions: RouteDecision[], decided_by = "operator") =>
+    post<RouteDecisionResult>("/route/confirm", { run_ref, decisions, decided_by }),
   uploadBenchmarkFile: (path: string, files: File[]) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
