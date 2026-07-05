@@ -1,4 +1,6 @@
 import type {
+  BenchmarkProject,
+  BenchmarkSummary,
   BidReply,
   Coverage,
   DemoCase,
@@ -7,11 +9,15 @@ import type {
   Health,
   IngestUpload,
   LevelledBid,
+  MatchConfirm,
+  MatchProposal,
+  ReasonCode,
   Recommendation,
   ScopePackages,
   ShortlistSet,
   TenderPackage,
   TenderReplies,
+  VarianceRecord,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
@@ -84,4 +90,24 @@ export const api = {
   // Reply visibility (live): which replies have landed for a tender, refreshed on demand.
   tenderReplies: (slug: string) => get<TenderReplies>(`/tender/${encodeURIComponent(slug)}/replies`),
   tenderComparisonUrl: (slug: string) => BASE + `/tender/${encodeURIComponent(slug)}/comparison.xlsx`,
+
+  // --- Benchmark estimator (Phase B1) --------------------------------------
+  benchmarkProjects: () => get<BenchmarkProject[]>("/benchmark/projects"),
+  benchmarkProject: (id: number) => get<BenchmarkProject>(`/benchmark/projects/${id}`),
+  benchmarkSummary: () => get<BenchmarkSummary>("/benchmark/summary"),
+  reasonCodes: () => get<ReasonCode[]>("/benchmark/reason-codes"),
+  createBenchmarkProject: (body: { name: string; trade?: string; client?: string; contract_ref?: string }) =>
+    post<BenchmarkProject>("/benchmark/projects", body),
+  benchmarkMatches: (id: number) => get<MatchProposal>(`/benchmark/${id}/matches`),
+  confirmMatches: (id: number, confirm: MatchConfirm[]) =>
+    post<VarianceRecord[]>(`/benchmark/${id}/matches/confirm`, { confirm }),
+  benchmarkVariance: (id: number) => get<VarianceRecord[]>(`/benchmark/${id}/variance`),
+  setVarianceReason: (id: number, recordId: number, body: { reason_code: string; note?: string }) =>
+    post<VarianceRecord>(`/benchmark/${id}/variance/${recordId}/reason`, body),
+  actualsTemplateUrl: (id: number) => BASE + `/benchmark/actuals-template.xlsx?project=${id}`,
+  uploadBenchmarkFile: (path: string, files: File[]) => {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    return fetch(BASE + path, { method: "POST", body: fd }).then((r) => handle<unknown>(r));
+  },
 };

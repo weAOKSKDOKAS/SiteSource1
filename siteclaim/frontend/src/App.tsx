@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { Header, Stepper, type StepIndex } from "./components";
+import { BenchmarkPage } from "./BenchmarkPage";
+import { Header, Stepper, type StepIndex, type TopView } from "./components";
 import type {
   BidReply,
   Coverage,
@@ -22,6 +23,7 @@ import { StepRecommend } from "./steps/StepRecommend";
 export default function App() {
   // Meta
   const [demoMode, setDemoMode] = useState(true);
+  const [view, setView] = useState<TopView>("wizard");
   const [demoCases, setDemoCases] = useState<DemoCaseSummary[]>([]);
   const [coverage, setCoverage] = useState<Coverage | null>(null);
 
@@ -223,9 +225,20 @@ export default function App() {
     setError(null);
   }
 
+  if (view === "benchmark") {
+    return (
+      <div className="min-h-screen">
+        <Header demoMode={demoMode} view={view} onNavigate={setView} />
+        <main className="mx-auto max-w-6xl px-5 py-8">
+          <BenchmarkPage />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
-      <Header demoMode={demoMode} />
+      <Header demoMode={demoMode} view={view} onNavigate={setView} />
       <main className="mx-auto max-w-6xl px-5 py-8">
         <div className="grid gap-8 lg:grid-cols-[16rem_1fr]">
           <Stepper current={step} maxReached={maxReached} onNavigate={setStep} />

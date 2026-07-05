@@ -73,6 +73,101 @@ export interface TenderReplies {
   comparison_available: boolean;
 }
 
+// --- Benchmark estimator (Phase B1) ---------------------------------------
+export interface BenchmarkProject {
+  id: number;
+  name: string;
+  trade: string;
+  client: string;
+  contract_ref: string;
+  status: string;
+  provenance: string;
+  source: string;
+  notes: string;
+  created_at: string;
+  closed_at: string;
+  tender_item_count: number;
+  actual_item_count: number;
+  variance_count: number;
+}
+
+export interface BenchmarkItem {
+  id: number;
+  project_id: number;
+  item_ref: string;
+  description: string;
+  unit: string;
+  qty: number | null;
+  rate: number | null;
+  amount: number | null;
+  section: string;
+  granularity?: string;
+}
+
+export interface MatchPair {
+  tier: number;
+  similarity: number | null;
+  tender: BenchmarkItem | null;
+  actual: BenchmarkItem | null;
+}
+
+export interface MatchProposal {
+  project_id: number;
+  tier1: MatchPair[];
+  tier2: MatchPair[];
+  tier3: MatchPair[];
+}
+
+export interface MatchConfirm {
+  tender_item_id?: number | null;
+  actual_item_id?: number | null;
+  match_tier: number;
+}
+
+export interface VarianceRecord {
+  id: number;
+  project_id: number;
+  tender_item_id: number | null;
+  actual_item_id: number | null;
+  item_ref: string;
+  granularity: string;
+  match_tier: number | null;
+  tender_rate: number | null;
+  actual_rate: number | null;
+  tender_qty: number | null;
+  actual_qty: number | null;
+  tender_amount: number | null;
+  actual_amount: number | null;
+  rate_delta: number | null;
+  rate_delta_pct: number | null;
+  amount_delta: number | null;
+  amount_delta_qty: number | null;
+  amount_delta_rate: number | null;
+  reason_code: string;
+  reason_note: string;
+  tagged_by: string;
+  confirmed_at: string;
+  source: string;
+  suggested_reason: string | null;
+}
+
+export interface ReasonCode {
+  code: string;
+  label: string;
+  description: string;
+  category: string;
+}
+
+export interface BenchmarkSummary {
+  projects: number;
+  tender_items: number;
+  actual_items: number;
+  variance_records: number;
+  reasoned_records: number;
+  coverage_by_trade: Record<string, number>;
+  coverage_by_granularity: Record<string, number>;
+}
+
 export interface FirmProfile {
   firm_id: string;
   name: string;

@@ -14,7 +14,28 @@ const GATE_HINT: Record<number, string> = {
 };
 
 // --- Chrome ----------------------------------------------------------------
-export function Header({ demoMode }: { demoMode: boolean }) {
+export type TopView = "wizard" | "benchmark";
+
+export function Header({
+  demoMode,
+  view,
+  onNavigate,
+}: {
+  demoMode: boolean;
+  view?: TopView;
+  onNavigate?: (v: TopView) => void;
+}) {
+  const tab = (v: TopView, label: string) => (
+    <button
+      onClick={() => onNavigate?.(v)}
+      className={cx(
+        "rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
+        view === v ? "bg-brand text-white" : "text-ink-soft hover:bg-line-soft hover:text-ink",
+      )}
+    >
+      {label}
+    </button>
+  );
   return (
     <header className="border-b border-line bg-card">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
@@ -32,6 +53,12 @@ export function Header({ demoMode }: { demoMode: boolean }) {
             </span>
           )}
         </div>
+        {onNavigate && (
+          <nav className="flex items-center gap-1">
+            {tab("wizard", "Sourcing")}
+            {tab("benchmark", "Benchmark")}
+          </nav>
+        )}
         <p className="w-full text-xs text-ink-faint sm:ml-auto sm:w-auto sm:max-w-sm sm:text-right">
           Subcontractor sourcing &amp; bid-leveling — the proprietary data, brought to the award decision.
         </p>
