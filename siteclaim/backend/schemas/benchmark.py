@@ -98,3 +98,87 @@ class ActualsUploadResponse(BaseModel):
     item_count: int
     granularities: list[str] = Field(default_factory=list)  # distinct granularities seen
     items: list[ActualItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Reason vocabulary
+# ---------------------------------------------------------------------------
+class ReasonCode(BaseModel):
+    code: str
+    label: str
+    description: str = ""
+    category: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Matching (the tiered proposal — the confirm gate is the sole writer)
+# ---------------------------------------------------------------------------
+class MatchPair(BaseModel):
+    tier: int                       # 1 exact | 2 embedding | 3 unmatched
+    similarity: Optional[float] = None
+    tender: Optional[TenderItem] = None
+    actual: Optional[ActualItem] = None
+
+
+class MatchProposal(BaseModel):
+    project_id: int
+    tier1: list[MatchPair] = Field(default_factory=list)
+    tier2: list[MatchPair] = Field(default_factory=list)
+    tier3: list[MatchPair] = Field(default_factory=list)
+
+
+class MatchConfirm(BaseModel):
+    tender_item_id: Optional[int] = None
+    actual_item_id: Optional[int] = None
+    match_tier: int = 3
+
+
+class ConfirmMatchesRequest(BaseModel):
+    confirm: list[MatchConfirm] = Field(default_factory=list)
+    confirmed_by: str = "operator"
+
+
+# ---------------------------------------------------------------------------
+# Variance records
+# ---------------------------------------------------------------------------
+class VarianceRecord(BaseModel):
+    id: int
+    project_id: int
+    tender_item_id: Optional[int] = None
+    actual_item_id: Optional[int] = None
+    item_ref: str = ""
+    granularity: str = "item"
+    match_tier: Optional[int] = None
+    tender_rate: Optional[float] = None
+    actual_rate: Optional[float] = None
+    tender_qty: Optional[float] = None
+    actual_qty: Optional[float] = None
+    tender_amount: Optional[float] = None
+    actual_amount: Optional[float] = None
+    rate_delta: Optional[float] = None
+    rate_delta_pct: Optional[float] = None
+    amount_delta: Optional[float] = None
+    amount_delta_qty: Optional[float] = None
+    amount_delta_rate: Optional[float] = None
+    reason_code: str = ""
+    reason_note: str = ""
+    tagged_by: str = ""
+    confirmed_at: str = ""
+    source: str = ""
+    suggested_reason: Optional[str] = None  # a deterministic hint; the human still sets the code
+
+
+class ReasonRequest(BaseModel):
+    reason_code: str
+    note: str = ""
+    tagged_by: str = "operator"
+
+
+class BenchmarkSummary(BaseModel):
+    projects: int = 0
+    tender_items: int = 0
+    actual_items: int = 0
+    variance_records: int = 0
+    reasoned_records: int = 0
+    coverage_by_trade: dict[str, int] = Field(default_factory=dict)
+    coverage_by_granularity: dict[str, int] = Field(default_factory=dict)

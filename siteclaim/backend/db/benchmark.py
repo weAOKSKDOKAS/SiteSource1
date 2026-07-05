@@ -303,3 +303,144 @@ def actual_items(conn: sqlite3.Connection, project_id: int) -> list[dict]:
         return []
     rows = conn.execute("SELECT * FROM actual_items WHERE project_id = ? ORDER BY id", (project_id,)).fetchall()
     return [_actual_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Variance records — WRITTEN ONLY by the confirm gate (Layer 4). Variance math is
+# Layer 1 (rules_engine.variance); this module only persists and reads.
+# ---------------------------------------------------------------------------
+def _variance_dict(row: sqlite3.Row) -> dict:
+    keys = ("id", "project_id", "tender_item_id", "actual_item_id", "item_ref", "granularity",
+            "match_tier", "tender_rate", "actual_rate", "tender_qty", "actual_qty",
+            "tender_amount", "actual_amount", "rate_delta", "rate_delta_pct", "amount_delta",
+            "amount_delta_qty", "amount_delta_rate", "reason_code", "reason_note", "tagged_by",
+            "confirmed_at", "source")
+    d = {k: row[k] for k in keys}
+    d["item_ref"] = d["item_ref"] or ""
+    d["reason_code"] = d["reason_code"] or ""
+    d["reason_note"] = d["reason_note"] or ""
+    d["tagged_by"] = d["tagged_by"] or ""
+    return d
+
+
+def confirm_matches(conn: sqlite3.Connection, project_id: int, confirmations: list[dict], *,
+                    confirmed_by: str = "operator") -> list[dict]:
+    """The ONLY writer of ``variance_records`` (the Layer-4 confirm gate). Each confirmation
+    is ``{tender_item_id?, actual_item_id?, match_tier}``; the referenced items are resolved
+    within the project, the rate-primary variance is computed (Layer 1), and one record is
+    upserted per pair identity (re-confirming updates, never duplicates). Atomic. Returns the
+    project's full variance table. Raises ``ValueError`` if an id is not in the project."""
+    from rules_engine.variance import variance_between  # Layer 1; local import keeps the graph flat
+
+    ensure_benchmark_tables(conn)
+    tmap = {r["id"]: _item_dict(r) for r in conn.execute("SELECT * FROM tender_items WHERE project_id = ?", (project_id,))}
+    amap = {r["id"]: _actual_dict(r) for r in conn.execute("SELECT * FROM actual_items WHERE project_id = ?", (project_id,))}
+    try:
+        for c in confirmations:
+            tid, aid = c.get("tender_item_id"), c.get("actual_item_id")
+            tier = int(c.get("match_tier") or 3)
+            if tid and tid not in tmap:
+                raise ValueError(f"tender_item {tid} is not in project {project_id}")
+            if aid and aid not in amap:
+                raise ValueError(f"actual_item {aid} is not in project {project_id}")
+            tender = tmap.get(tid) if tid else None
+            actual = amap.get(aid) if aid else None
+            if tender is None and actual is None:
+                continue
+            v = variance_between(tender, actual)
+            item_ref = ((tender or {}).get("item_ref") or (actual or {}).get("item_ref") or "")
+            granularity = actual.get("granularity") if actual else "item"
+            # Upsert by pair identity (NULL-safe via IS), so re-confirming a pair updates it.
+            conn.execute(
+                "DELETE FROM variance_records WHERE project_id = ? AND tender_item_id IS ? AND actual_item_id IS ?",
+                (project_id, tid, aid),
+            )
+            conn.execute(
+                "INSERT INTO variance_records (project_id, tender_item_id, actual_item_id, item_ref, granularity, "
+                "match_tier, tender_rate, actual_rate, tender_qty, actual_qty, tender_amount, actual_amount, "
+                "rate_delta, rate_delta_pct, amount_delta, amount_delta_qty, amount_delta_rate, "
+                "confirmed_at, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (project_id, tid, aid, item_ref, granularity, tier,
+                 v["tender_rate"], v["actual_rate"], v["tender_qty"], v["actual_qty"],
+                 v["tender_amount"], v["actual_amount"], v["rate_delta"], v["rate_delta_pct"],
+                 v["amount_delta"], v["amount_delta_qty"], v["amount_delta_rate"], _now(), "confirm-gate", _now()),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return variance_records(conn, project_id)
+
+
+def variance_records(conn: sqlite3.Connection, project_id: int) -> list[dict]:
+    if not has_benchmark_tables(conn):
+        return []
+    rows = conn.execute("SELECT * FROM variance_records WHERE project_id = ? ORDER BY id", (project_id,)).fetchall()
+    return [_variance_dict(r) for r in rows]
+
+
+def set_reason(conn: sqlite3.Connection, project_id: int, record_id: int, *,
+               reason_code: str, note: str = "", tagged_by: str = "operator") -> Optional[dict]:
+    """Set a variance record's reason (the human's code — required and validated). Returns
+    the updated record, or None if the record is not in the project. Raises ``ValueError``
+    on an unknown reason code."""
+    ensure_benchmark_tables(conn)
+    if reason_code not in REASON_CODE_SET:
+        raise ValueError(f"unknown reason_code {reason_code!r}")
+    row = conn.execute(
+        "SELECT id FROM variance_records WHERE id = ? AND project_id = ?", (record_id, project_id)
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE variance_records SET reason_code = ?, reason_note = ?, tagged_by = ? WHERE id = ?",
+        (reason_code, note, tagged_by, record_id),
+    )
+    conn.commit()
+    rec = conn.execute("SELECT * FROM variance_records WHERE id = ?", (record_id,)).fetchone()
+    return _variance_dict(rec)
+
+
+# ---------------------------------------------------------------------------
+# Summary — counts the LIVE profile only (provenance='live'), never demo fixtures.
+# ---------------------------------------------------------------------------
+def summary(conn: sqlite3.Connection) -> dict:
+    """Projects / record counts / coverage by trade and granularity across LIVE projects
+    only. Demo-provenance projects (the pitch scenario) are excluded, so the live profile
+    reads zero until real data lands."""
+    empty = {"projects": 0, "tender_items": 0, "actual_items": 0, "variance_records": 0,
+             "reasoned_records": 0, "coverage_by_trade": {}, "coverage_by_granularity": {}}
+    if not has_benchmark_tables(conn):
+        return empty
+    live_ids = [r["id"] for r in conn.execute("SELECT id FROM projects WHERE provenance = 'live'")]
+    if not live_ids:
+        return empty
+    placeholders = ",".join("?" * len(live_ids))
+
+    def count(table: str, extra: str = "") -> int:
+        return int(conn.execute(
+            f"SELECT COUNT(*) AS n FROM {table} WHERE project_id IN ({placeholders}) {extra}", live_ids
+        ).fetchone()["n"])
+
+    by_trade: dict[str, int] = {}
+    for r in conn.execute(
+        f"SELECT trade, COUNT(*) AS n FROM projects WHERE provenance = 'live' GROUP BY trade"
+    ):
+        by_trade[r["trade"] or ""] = int(r["n"])
+
+    by_gran: dict[str, int] = {}
+    for r in conn.execute(
+        f"SELECT granularity, COUNT(*) AS n FROM variance_records WHERE project_id IN ({placeholders}) "
+        f"GROUP BY granularity", live_ids
+    ):
+        by_gran[r["granularity"]] = int(r["n"])
+
+    return {
+        "projects": len(live_ids),
+        "tender_items": count("tender_items"),
+        "actual_items": count("actual_items"),
+        "variance_records": count("variance_records"),
+        "reasoned_records": count("variance_records", "AND reason_code IS NOT NULL"),
+        "coverage_by_trade": by_trade,
+        "coverage_by_granularity": by_gran,
+    }

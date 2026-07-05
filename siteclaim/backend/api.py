@@ -36,16 +36,23 @@ from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  #
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
-from pipeline.benchmark import actuals_xlsx, tender_snapshot  # noqa: E402
+from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E402
 from db import benchmark as bench, refresh, store  # noqa: E402
 from schemas.benchmark import (  # noqa: E402
     ActualItem,
     ActualsUploadResponse,
+    BenchmarkSummary,
+    ConfirmMatchesRequest,
+    MatchPair,
+    MatchProposal,
     Project,
     ProjectCreate,
     ProjectUpdate,
+    ReasonCode,
+    ReasonRequest,
     TenderItem,
     TenderUploadResponse,
+    VarianceRecord,
 )
 from schemas.models import (  # noqa: E402
     BidReply,
@@ -871,5 +878,105 @@ def post_actuals_upload(
             project_id=project_id, source=source, item_count=len(written),
             granularities=granularities, items=[ActualItem(**it) for it in written],
         )
+    finally:
+        conn.close()
+
+
+# -- Matching, the confirm gate, variance table, reasons, summary --------------------
+def _variance_response(records: list[dict]) -> list[VarianceRecord]:
+    """Attach the deterministic reason hint (never written without the human's code)."""
+    return [VarianceRecord(**{**r, "suggested_reason": matcher.suggest_reason(r)}) for r in records]
+
+
+@app.get("/benchmark/reason-codes", response_model=list[ReasonCode])
+def get_reason_codes() -> list[ReasonCode]:
+    conn = store.get_connection()
+    try:
+        return [ReasonCode(**c) for c in bench.all_reason_codes(conn)]
+    finally:
+        conn.close()
+
+
+@app.get("/benchmark/summary", response_model=BenchmarkSummary)
+def get_benchmark_summary() -> BenchmarkSummary:
+    """Coverage across the LIVE profile only — demo-provenance projects never count."""
+    conn = store.get_connection()
+    try:
+        return BenchmarkSummary(**bench.summary(conn))
+    finally:
+        conn.close()
+
+
+@app.get("/benchmark/{project_id}/matches", response_model=MatchProposal)
+def get_benchmark_matches(project_id: int) -> MatchProposal:
+    """The tiered match proposal (Tier 1 exact ref, Tier 2 embedding, Tier 3 unmatched).
+    Read-only — nothing is written until the confirm gate."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        pairs = matcher.match(bench.tender_items(conn, project_id), bench.actual_items(conn, project_id))
+    finally:
+        conn.close()
+
+    def to_pair(p: dict) -> MatchPair:
+        return MatchPair(
+            tier=p["tier"], similarity=p["similarity"],
+            tender=TenderItem(**p["tender"]) if p["tender"] else None,
+            actual=ActualItem(**p["actual"]) if p["actual"] else None,
+        )
+
+    return MatchProposal(
+        project_id=project_id,
+        tier1=[to_pair(p) for p in pairs if p["tier"] == 1],
+        tier2=[to_pair(p) for p in pairs if p["tier"] == 2],
+        tier3=[to_pair(p) for p in pairs if p["tier"] == 3],
+    )
+
+
+@app.post("/benchmark/{project_id}/matches/confirm", response_model=list[VarianceRecord])
+def post_confirm_matches(project_id: int, req: ConfirmMatchesRequest) -> list[VarianceRecord]:
+    """The Layer-4 confirm gate — the ONLY writer of variance_records. Confirm-all for
+    Tier 1 or individual confirm/repair for Tier 2/3 (the frontend sends the chosen pairs).
+    Each confirmed pair's rate-primary variance is computed and upserted."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        try:
+            records = bench.confirm_matches(
+                conn, project_id, [c.model_dump() for c in req.confirm], confirmed_by=req.confirmed_by,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _variance_response(records)
+    finally:
+        conn.close()
+
+
+@app.get("/benchmark/{project_id}/variance", response_model=list[VarianceRecord])
+def get_benchmark_variance(project_id: int) -> list[VarianceRecord]:
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        return _variance_response(bench.variance_records(conn, project_id))
+    finally:
+        conn.close()
+
+
+@app.post("/benchmark/{project_id}/variance/{record_id}/reason", response_model=VarianceRecord)
+def post_variance_reason(project_id: int, record_id: int, req: ReasonRequest) -> VarianceRecord:
+    """Set a variance record's reason — the human's code (validated against the ten-code
+    vocabulary) is required; a deterministic hint may pre-suggest but never writes."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        try:
+            updated = bench.set_reason(
+                conn, project_id, record_id, reason_code=req.reason_code, note=req.note, tagged_by=req.tagged_by,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"No variance record {record_id} in project {project_id}.")
+        return _variance_response([updated])[0]
     finally:
         conn.close()
