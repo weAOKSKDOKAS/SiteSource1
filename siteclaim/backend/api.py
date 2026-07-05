@@ -35,7 +35,15 @@ from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  #
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
-from db import refresh, store  # noqa: E402
+from pipeline.benchmark import tender_snapshot  # noqa: E402
+from db import benchmark as bench, refresh, store  # noqa: E402
+from schemas.benchmark import (  # noqa: E402
+    Project,
+    ProjectCreate,
+    ProjectUpdate,
+    TenderItem,
+    TenderUploadResponse,
+)
 from schemas.models import (  # noqa: E402
     BidReply,
     Contact,
@@ -665,3 +673,120 @@ class RecommendRequest(BaseModel):
 @app.post("/recommend", response_model=Recommendation)
 def post_recommend(req: RecommendRequest) -> Recommendation:
     return recommend(req.levelled, req.trade, demo_fixture=req.demo_fixture)
+
+
+# ===========================================================================
+# Benchmark estimator (Phase B1 — the variance spine)
+#
+# Projects capture the priced tender (tender_items) vs the actual outturn
+# (actual_items), item-matched behind a human confirm gate into variance_records.
+# Cost data is local SQLite only. Writes target the active DB (SITESOURCE_DB or the
+# packaged demo DB) — benchmark CRUD is NOT gated to the live profile (unlike
+# /refresh), because the pitch flow must work in demo too; the demo/live separation
+# is by projects.provenance ('demo' seeded, 'live' operator-created), and
+# /benchmark/summary counts only 'live'. See docs/PRODUCT_ARCHITECTURE_benchmark_estimator.md.
+# ===========================================================================
+def _require_project(conn, project_id: int) -> dict:
+    project = bench.get_project(conn, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"No benchmark project {project_id}.")
+    return project
+
+
+@app.post("/benchmark/projects", response_model=Project)
+def post_benchmark_project(req: ProjectCreate) -> Project:
+    conn = store.get_connection()
+    try:
+        return Project(**bench.create_project(
+            conn, name=req.name, trade=req.trade, client=req.client,
+            contract_ref=req.contract_ref, notes=req.notes, source="manual",
+        ))
+    finally:
+        conn.close()
+
+
+@app.get("/benchmark/projects", response_model=list[Project])
+def get_benchmark_projects() -> list[Project]:
+    conn = store.get_connection()
+    try:
+        return [Project(**p) for p in bench.list_projects(conn)]
+    finally:
+        conn.close()
+
+
+@app.get("/benchmark/projects/{project_id}", response_model=Project)
+def get_benchmark_project(project_id: int) -> Project:
+    conn = store.get_connection()
+    try:
+        return Project(**_require_project(conn, project_id))
+    finally:
+        conn.close()
+
+
+@app.patch("/benchmark/projects/{project_id}", response_model=Project)
+def patch_benchmark_project(project_id: int, req: ProjectUpdate) -> Project:
+    """Update project fields; ``status='closed'`` closes it (stamps closed_at)."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        updated = bench.update_project(conn, project_id, req.model_dump(exclude_none=True))
+        return Project(**updated)
+    finally:
+        conn.close()
+
+
+@app.post("/benchmark/{project_id}/tender-upload", response_model=TenderUploadResponse)
+def post_benchmark_tender_upload(
+    project_id: int,
+    files: list[UploadFile] = File(...),
+    source_doc: str = Form(""),
+) -> TenderUploadResponse:
+    """Capture the old priced tender. xlsx (our SoR-sheet layout) parses deterministically
+    with openpyxl (rates kept, qty optional); a PDF/image is parsed by the chunked reply
+    parser on the live engine (in DEMO_MODE a PDF is rejected — upload the xlsx)."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        items: list[dict] = []
+        source = "tender-upload"
+        for upload in files:
+            data = upload.file.read()
+            try:
+                if is_xlsx_upload(upload.filename, upload.content_type):
+                    items += tender_snapshot.tender_items_from_xlsx(data)
+                    source = "tender-xlsx"
+                elif demo_mode():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="PDF tender parsing runs on the live engine — upload the SoR-sheet xlsx in DEMO.",
+                    )
+                else:
+                    items += tender_snapshot.tender_items_from_document(data, upload.content_type)
+                    source = "tender-pdf"
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        written = bench.replace_tender_items(conn, project_id, items, source=source, source_doc=source_doc)
+        return TenderUploadResponse(
+            project_id=project_id, source=source, item_count=len(written),
+            items=[TenderItem(**it) for it in written],
+        )
+    finally:
+        conn.close()
+
+
+@app.post("/benchmark/{project_id}/link-scope", response_model=TenderUploadResponse)
+def post_benchmark_link_scope(project_id: int, scope: ScopePackages) -> TenderUploadResponse:
+    """The compounding loop (§10): capture a tender already run through the sourcing
+    pipeline (its ScopePackages) into this project's tender snapshot. Scope items are
+    unpriced (rate stays null) — the item_refs seed later matching."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        items = tender_snapshot.tender_items_from_scope(scope)
+        written = bench.replace_tender_items(conn, project_id, items, source="pipeline-link", source_doc=scope.project_name)
+        return TenderUploadResponse(
+            project_id=project_id, source="pipeline-link", item_count=len(written),
+            items=[TenderItem(**it) for it in written],
+        )
+    finally:
+        conn.close()
