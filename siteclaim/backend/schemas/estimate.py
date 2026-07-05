@@ -127,3 +127,31 @@ class EstimateDraftResult(BaseModel):
     scope_of_works: str = ""
     added_item_refs: list[str] = Field(default_factory=list)
     trade_mapped: bool = True   # False when the trade is off-taxonomy (surfaced, never dropped)
+
+
+# ---------------------------------------------------------------------------
+# Rate precedent (P3c) — corpus-gated. Retrieval only; the person prices.
+# ---------------------------------------------------------------------------
+class RateWarning(BaseModel):
+    reason_code: str
+    count: int = 0
+
+
+class RatePrecedent(BaseModel):
+    item_id: Optional[int] = None
+    item_ref: str = ""
+    tier: int = 0                 # 1 exact ref | 2 similar description | 0 no precedent
+    matched_ref: str = ""
+    similarity: Optional[float] = None
+    sample_count: int = 0
+    rate_low: Optional[float] = None
+    rate_median: Optional[float] = None
+    rate_high: Optional[float] = None
+    rate_warnings: list[RateWarning] = Field(default_factory=list)
+
+
+class RateSuggestions(BaseModel):
+    estimate_id: int
+    corpus_empty: bool = True     # True in live pre-archive — the honest empty state
+    corpus_size: int = 0
+    suggestions: list[RatePrecedent] = Field(default_factory=list)

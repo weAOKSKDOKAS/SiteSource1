@@ -466,6 +466,31 @@ def get_eos(conn: sqlite3.Connection, project_id: int) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Rate-precedent corpus (Phase 3) — the priced tender history the estimator prices
+# against. All benchmark projects in THIS DB, each priced tender line left-joined to its
+# confirmed variance (reason_code + rate movement). The DB profile is the gate: the demo
+# DB carries the fictional demo project, the live DB is empty until a real archive lands.
+# ---------------------------------------------------------------------------
+def corpus_rate_rows(conn: sqlite3.Connection) -> list[dict]:
+    """Priced tender lines across the benchmark corpus, each with the confirmed variance's
+    ``reason_code`` and ``rate_delta`` (both null when the line was never matched/varied).
+    Only rated lines (a rate-only precedent is meaningful; an unpriced line is not)."""
+    if not has_benchmark_tables(conn):
+        return []
+    rows = conn.execute(
+        "SELECT ti.item_ref AS item_ref, ti.description AS description, ti.rate AS tender_rate, "
+        "ti.project_id AS project_id, vr.reason_code AS reason_code, vr.rate_delta AS rate_delta "
+        "FROM tender_items ti LEFT JOIN variance_records vr ON vr.tender_item_id = ti.id "
+        "WHERE ti.rate IS NOT NULL"
+    ).fetchall()
+    return [{
+        "item_ref": r["item_ref"] or "", "description": r["description"] or "",
+        "tender_rate": r["tender_rate"], "project_id": r["project_id"],
+        "reason_code": r["reason_code"] or "", "rate_delta": r["rate_delta"],
+    } for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Summary — counts the LIVE profile only (provenance='live'), never demo fixtures.
 # ---------------------------------------------------------------------------
 def summary(conn: sqlite3.Connection) -> dict:

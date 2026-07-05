@@ -104,7 +104,30 @@ def test_draft_seeds_scope_and_adds_skeleton_items(est_db):
     assert client.post("/estimate/123456/draft").status_code == 404
 
 
+def test_rate_suggestions_light_up_on_the_demo_corpus(tmp_path, monkeypatch):
+    db = tmp_path / "demo.db"
+    seed.build_database(db, profile="demo")   # carries the demo benchmark project (the corpus)
+    monkeypatch.setenv("SITESOURCE_DB", str(db))
+    eid = client.post("/estimate/projects", json={"name": "GI est", "trade": "ground_investigation"}).json()["id"]
+    client.post(f"/estimate/{eid}/items", json={"items": [
+        {"item_ref": "G1", "description": "Rotary drilling in soil", "unit": "m", "qty": 100.0},
+    ]})
+    body = client.get(f"/estimate/{eid}/rate-suggestions").json()
+    assert body["corpus_empty"] is False and body["corpus_size"] >= 4
+    g1 = body["suggestions"][0]
+    assert g1["tier"] == 1 and g1["rate_median"] == 1200.0
+    assert any(w["reason_code"] == "standing_time" for w in g1["rate_warnings"])
+
+
+def test_rate_suggestions_empty_on_the_live_profile(est_db):
+    eid = client.post("/estimate/projects", json={"name": "P", "trade": "ground_investigation"}).json()["id"]
+    client.post(f"/estimate/{eid}/items", json={"items": [{"item_ref": "G1", "description": "Drilling", "unit": "m"}]})
+    body = client.get(f"/estimate/{eid}/rate-suggestions").json()
+    assert body["corpus_empty"] is True and body["suggestions"][0]["tier"] == 0
+
+
 def test_endpoints_404_on_unknown_estimate(est_db):
     assert client.get("/estimate/projects/123456").status_code == 404
     assert client.post("/estimate/123456/items", json={"items": []}).status_code == 404
     assert client.get("/estimate/123456/items").status_code == 404
+    assert client.get("/estimate/123456/rate-suggestions").status_code == 404

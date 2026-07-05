@@ -80,8 +80,11 @@ from schemas.estimate import (  # noqa: E402
     EstimateProjectCreate,
     EstimateProjectUpdate,
     FromPackageRequest,
+    RatePrecedent,
+    RateSuggestions,
 )
 from pipeline.estimate.draft import ESTIMATE_DRAFT_FIXTURE, draft_estimate  # noqa: E402
+from pipeline.estimate.rates import suggest_rates  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
     Contact,
@@ -1303,6 +1306,27 @@ def post_estimate_draft(estimate_id: int) -> EstimateDraftResult:
         )
     finally:
         conn.close()
+
+
+@app.get("/estimate/{estimate_id}/rate-suggestions", response_model=RateSuggestions)
+def get_estimate_rate_suggestions(estimate_id: int) -> RateSuggestions:
+    """Rate precedent per line from the benchmark corpus (Phase 3, corpus-gated). Tier-1 exact
+    ``item_ref`` + Tier-2 embedding retrieval over the confirmed tender/variance archive; each
+    precedent carries the historical rate band and any rate warnings (reason codes under which
+    the ref historically moved on rate). ``corpus_empty=true`` is the honest live pre-archive
+    state — no rate is ever fabricated. Deterministic (no LLM); the person prices."""
+    conn = store.get_connection()
+    try:
+        _require_estimate(conn, estimate_id)
+        items = est.items_for(conn, estimate_id)
+        corpus = bench.corpus_rate_rows(conn)
+    finally:
+        conn.close()
+    result = suggest_rates(items, corpus)
+    return RateSuggestions(
+        estimate_id=estimate_id, corpus_empty=result["corpus_empty"], corpus_size=result["corpus_size"],
+        suggestions=[RatePrecedent(**s) for s in result["suggestions"]],
+    )
 
 
 @app.get("/estimate/{estimate_id}/items", response_model=list[EstimateItem])
