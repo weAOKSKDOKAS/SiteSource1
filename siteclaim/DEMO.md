@@ -37,13 +37,56 @@ starts the wizard on `:5173`. Open <http://localhost:5173> and pick a scenario.
 5. **Recommend** — the risk-adjusted ranking, the bid distribution against the
    historical band, Claude's rationale, and the human award.
 
+## The unified engine — one tender, both tracks
+
+The top nav carries the tender past sourcing into the full engine. Every screen is
+offline in DEMO_MODE, and each AI output is a **suggestion a human confirms**.
+
+- **Routing** — after ingest splits the tender, the AI recommends **self-perform vs
+  sublet** per package with a rationale and the coverage signal (register firms,
+  assessable subcontractors, in-house history). A person decides; the recommendation is
+  advisory. Sublet packages go **right** (the sourcing wizard above); self-perform
+  packages go **left** (the estimator) and their estimate is seeded on confirm.
+- **Estimator** (the left track) — build our own priced tender: the AI drafts the
+  scope-of-works and a candidate item skeleton (never a quantity), suggests **rate
+  precedent** from the benchmark corpus with **"over-ran on rate" warnings**, checks the
+  estimate for **omissions / unit mismatches / scope gaps**, and drafts a **letter of
+  offer**. The human prices every line and owns the offer.
+- **Benchmark** — for a completed project, the priced tender vs the actual outturn,
+  item-matched behind a human confirm gate into variance records. The **EOS field
+  report** narrative then explains **why** each line moved: the reason candidate (e.g.
+  `standing_time`, `omission_at_tender`) and its supporting sentence sit on the variance
+  row; a person confirms the code.
+- **Projects** — one view of a run: its packages, each package's track and decision, the
+  left-track estimates, and where it sits in the lifecycle (analysed → routed →
+  sourcing / estimating → awarded → benchmarked).
+
+### The unified demo run (Projects → "DEMO — Illustrative GI + Fit-out Tender")
+
+One seeded run shows the whole loop offline: an **electrical** package routed *sublet*
+(→ sourcing) and a **ground-investigation** package where the AI leaned sublet but the
+team **overrode** it to *self-perform* (→ a priced estimate). Open that estimate and the
+GI lines light up with rate precedent from the corpus and a **standing-time** rate
+warning; the run links to the completed benchmark project whose **EOS narrative** explains
+the outturn variance. Ingest → route → estimate + source → benchmark ← EOS, from one seed.
+
 ## The one principle
 
-The LLM reads, splits, composes, and explains. The deterministic rules engine
-computes and checks (arithmetic, risk flags, ranking). The proprietary fused
-database makes the recommendation defensible. **The LLM never invents a number, a
-risk flag, or a ranking** — and the data it cross-references is what a generic
-chatbot cannot reach.
+The LLM reads, splits, drafts, and explains. The deterministic rules engine computes and
+checks (arithmetic, risk flags, ranking, variance). A proprietary fused database — public
+records + private closeout reports — makes the decision defensible. **The LLM never invents
+a number, a risk flag, a ranking, a match, or a reason** — and the data it cross-references
+is what a generic chatbot cannot reach. The moat is that data applied at the moment of a
+decision, never the AI's reasoning.
 
-> The seed data is synthetic and illustrative; the named cautionary firm is
-> fictional. The award is always a human decision.
+## Honesty footnotes (kept visible in the pitch)
+
+- Coverage is **140 real public-register firms / 46 flagged** (134 building-trade + 6
+  ground-investigation). The illustrative firms — including the named cautionary electrical
+  firm — are **present-but-excluded** in the demo profile and **absent** in live.
+- The **benchmark, EOS, and estimator-precedent** layers are **illustrative** until a real
+  partner archive exists: the demo profile carries a fictional scenario, the live profile
+  ships the empty state honestly (`/benchmark/summary` reads zero, rate suggestion reads
+  "no corpus yet"). No rate history or rubric entry is fabricated to look fuller.
+- The award, every rate, every match, every reason code, and the letter of offer are
+  **human decisions**. The AI proposes; a person confirms.
