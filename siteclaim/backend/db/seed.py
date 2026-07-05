@@ -248,13 +248,20 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
         from db.benchmark import seed_reason_codes  # local import: keeps the seed's import graph flat
 
         reason_codes_written = seed_reason_codes(conn)
+        built_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        demo_benchmark = 0
+        if profile == "demo":
+            from db.benchmark_demo import seed_demo_benchmark
+
+            seed_demo_benchmark(conn, now=built_at)
+            demo_benchmark = 1
 
         for key, value in {
             "embed_method": method,
             "embed_dim": str(dim),
             "seed_version": SEED_VERSION,
             "profile": profile,
-            "built_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "built_at": built_at,
             "firm_count": str(len(firm_ids)),
         }.items():
             conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (key, value))
@@ -273,6 +280,7 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
         "contacts": contacts_written,
         "closeout_chunks": len(chunk_rows),
         "reason_codes": reason_codes_written,
+        "demo_benchmark_projects": demo_benchmark,
         "embed_method": method,
         "embed_dim": dim,
     }
