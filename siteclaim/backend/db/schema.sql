@@ -20,6 +20,7 @@ DROP TABLE IF EXISTS staged_flags;
 DROP TABLE IF EXISTS meta;
 -- Benchmark estimator (Phase B1) — dropped child-first so the FKs unwind cleanly.
 DROP TABLE IF EXISTS rubric_items;
+DROP TABLE IF EXISTS project_eos;
 DROP TABLE IF EXISTS variance_records;
 DROP TABLE IF EXISTS actual_items;
 DROP TABLE IF EXISTS tender_items;
@@ -250,6 +251,23 @@ CREATE TABLE variance_records (
     created_at        TEXT NOT NULL
 );
 
+-- Per-project End-of-Site (EOS) narrative attached to a benchmark project (Phase 2).
+-- One report per project: the field account of WHY prices moved between tender and
+-- outturn. Narrative-only (a company already keeps this) — it supplies reasons, never
+-- numbers, so the cost-data posture is untouched. Images are noted (has_images), not
+-- parsed for figures. provenance ('demo' | 'live') keeps the fictional pitch narrative
+-- out of any live surface. The reason still comes from a human confirm (variance_records).
+CREATE TABLE project_eos (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id),
+    narrative   TEXT,               -- the field account (narrative sentences joined)
+    summary     TEXT,               -- a short headline of the account
+    source_doc  TEXT,               -- original filename                (provenance)
+    has_images  INTEGER NOT NULL DEFAULT 0,   -- 1 = the report carried images (noted, not parsed)
+    provenance  TEXT NOT NULL DEFAULT 'live', -- 'demo' (fictional) | 'live' (real)
+    created_at  TEXT NOT NULL
+);
+
 -- The B2 estimator's evidence-linked guidance. Ships EMPTY (needs real evidence).
 CREATE TABLE rubric_items (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -300,5 +318,6 @@ CREATE INDEX idx_actual_items_project ON actual_items(project_id);
 CREATE INDEX idx_actual_items_ref     ON actual_items(item_ref);
 CREATE INDEX idx_variance_project     ON variance_records(project_id);
 CREATE INDEX idx_variance_reason      ON variance_records(reason_code);
+CREATE INDEX idx_project_eos_project  ON project_eos(project_id);
 CREATE INDEX idx_projects_provenance  ON projects(provenance);
 CREATE INDEX idx_package_routes_run   ON package_routes(run_ref);

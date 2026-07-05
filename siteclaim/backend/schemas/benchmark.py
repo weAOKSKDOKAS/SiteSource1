@@ -174,6 +174,21 @@ class ReasonRequest(BaseModel):
     tagged_by: str = "operator"
 
 
+# ---------------------------------------------------------------------------
+# EOS narrative (Phase 2) — the per-project End-of-Site field report. Narrative-only
+# (it supplies the reason behind a variance, never a number). One report per project.
+# ---------------------------------------------------------------------------
+class ProjectEOS(BaseModel):
+    id: int
+    project_id: int
+    narrative: str = ""
+    summary: str = ""
+    source_doc: str = ""
+    has_images: bool = False
+    provenance: str = "live"       # demo | live
+    created_at: str = ""
+
+
 class BenchmarkSummary(BaseModel):
     projects: int = 0
     tender_items: int = 0

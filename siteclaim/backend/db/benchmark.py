@@ -129,12 +129,18 @@ def ensure_benchmark_tables(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT, trade TEXT, item_ref TEXT, guidance TEXT,
             evidence_variance_id INTEGER REFERENCES variance_records(id), source TEXT, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS project_eos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id),
+            narrative TEXT, summary TEXT, source_doc TEXT, has_images INTEGER NOT NULL DEFAULT 0,
+            provenance TEXT NOT NULL DEFAULT 'live', created_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_tender_items_project ON tender_items(project_id);
         CREATE INDEX IF NOT EXISTS idx_tender_items_ref     ON tender_items(item_ref);
         CREATE INDEX IF NOT EXISTS idx_actual_items_project ON actual_items(project_id);
         CREATE INDEX IF NOT EXISTS idx_actual_items_ref     ON actual_items(item_ref);
         CREATE INDEX IF NOT EXISTS idx_variance_project     ON variance_records(project_id);
         CREATE INDEX IF NOT EXISTS idx_variance_reason      ON variance_records(reason_code);
+        CREATE INDEX IF NOT EXISTS idx_project_eos_project  ON project_eos(project_id);
         CREATE INDEX IF NOT EXISTS idx_projects_provenance  ON projects(provenance);
         """
     )
@@ -406,6 +412,57 @@ def set_reason(conn: sqlite3.Connection, project_id: int, record_id: int, *,
     conn.commit()
     rec = conn.execute("SELECT * FROM variance_records WHERE id = ?", (record_id,)).fetchone()
     return _variance_dict(rec)
+
+
+# ---------------------------------------------------------------------------
+# EOS narrative (Phase 2) — one per-project End-of-Site field report attached to a
+# benchmark project. Narrative-only (reasons, never numbers); the reason still comes
+# from a human confirm on variance_records. attach_eos replaces (one report per project).
+# ---------------------------------------------------------------------------
+def _has_project_eos_table(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='project_eos'"
+    ).fetchone()
+    return row is not None
+
+
+def _eos_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "project_id": row["project_id"], "narrative": row["narrative"] or "",
+        "summary": row["summary"] or "", "source_doc": row["source_doc"] or "",
+        "has_images": bool(row["has_images"]), "provenance": row["provenance"] or "live",
+        "created_at": row["created_at"] or "",
+    }
+
+
+def attach_eos(conn: sqlite3.Connection, project_id: int, *, narrative: str, summary: str = "",
+               source_doc: str = "", has_images: bool = False, provenance: str = "live") -> dict:
+    """Attach (or replace) the project's EOS narrative. One report per project — a
+    re-upload replaces, never double-attaches. Atomic. Returns the stored record."""
+    ensure_benchmark_tables(conn)
+    try:
+        conn.execute("DELETE FROM project_eos WHERE project_id = ?", (project_id,))
+        conn.execute(
+            "INSERT INTO project_eos (project_id, narrative, summary, source_doc, has_images, provenance, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (project_id, narrative, summary, source_doc, int(bool(has_images)), provenance, _now()),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return get_eos(conn, project_id)
+
+
+def get_eos(conn: sqlite3.Connection, project_id: int) -> Optional[dict]:
+    """The project's EOS narrative, or None if none is attached (or the table predates
+    Phase 2)."""
+    if not _has_project_eos_table(conn):
+        return None
+    row = conn.execute(
+        "SELECT * FROM project_eos WHERE project_id = ? ORDER BY id DESC LIMIT 1", (project_id,)
+    ).fetchone()
+    return _eos_dict(row) if row is not None else None
 
 
 # ---------------------------------------------------------------------------

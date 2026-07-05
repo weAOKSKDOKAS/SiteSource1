@@ -13,6 +13,7 @@ returned Schedule of Rates; ``/contacts`` exposes the address book.
 
 import os
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -59,6 +60,7 @@ from schemas.benchmark import (  # noqa: E402
     MatchProposal,
     Project,
     ProjectCreate,
+    ProjectEOS,
     ProjectUpdate,
     ReasonCode,
     ReasonRequest,
@@ -826,6 +828,13 @@ def _actuals_pdf_enabled() -> bool:
     return os.getenv("ACTUALS_PDF_PARSE", "").strip().lower() in _ACTUALS_PDF_TRUTHY
 
 
+def _eos_pdf_enabled() -> bool:
+    """PDF EOS-narrative extraction is opt-in — default off (mirrors ACTUALS_PDF_PARSE).
+    The narrative can always be pasted as text; a PDF is only read when explicitly enabled,
+    keeping the cost-data-never-leaves posture intact (EOS supplies reasons, not numbers)."""
+    return os.getenv("EOS_PDF_PARSE", "").strip().lower() in _ACTUALS_PDF_TRUTHY
+
+
 @app.get("/benchmark/actuals-template.xlsx")
 def get_actuals_template(project: int) -> FileResponse:
     """Download the Final Account template for a project, pre-filled with its tender item
@@ -893,6 +902,77 @@ def post_actuals_upload(
             project_id=project_id, source=source, item_count=len(written),
             granularities=granularities, items=[ActualItem(**it) for it in written],
         )
+    finally:
+        conn.close()
+
+
+# -- EOS narrative (Phase 2) — the field account behind the variances -----------------
+@app.post("/benchmark/{project_id}/eos-upload", response_model=ProjectEOS)
+def post_eos_upload(
+    project_id: int,
+    files: list[UploadFile] = File(default=[]),
+    narrative: str = Form(""),
+    summary: str = Form(""),
+    source_doc: str = Form(""),
+) -> ProjectEOS:
+    """Attach the project's End-of-Site (EOS) narrative — the field account of WHY prices
+    moved between tender and outturn. Narrative-only: it supplies reasons, never numbers, so
+    the cost-data posture is untouched. Paste the narrative as text (the default, deterministic,
+    offline path), or upload the EOS PDF when ``EOS_PDF_PARSE=true`` (its text layer is
+    extracted deterministically; images are noted, not parsed for figures). One report per
+    project — a re-upload replaces. The reason is still written only by the human confirm gate."""
+    conn = store.get_connection()
+    try:
+        project = _require_project(conn, project_id)
+        text = (narrative or "").strip()
+        has_images = False
+        doc = source_doc.strip()
+        for upload in files:
+            data = upload.file.read()
+            if not data:
+                continue
+            if not _eos_pdf_enabled():
+                raise HTTPException(
+                    status_code=400,
+                    detail="EOS file parsing is off. Paste the narrative text, or set "
+                    "EOS_PDF_PARSE=true to extract the EOS PDF's text layer.",
+                )
+            if demo_mode():
+                raise HTTPException(
+                    status_code=400,
+                    detail="EOS PDF extraction runs on the live engine — paste the narrative text in DEMO.",
+                )
+            try:
+                extracted, images = extract_document(data, upload.content_type)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            text = (text + "\n\n" + extracted).strip() if text else extracted.strip()
+            has_images = has_images or bool(images)
+            doc = doc or (upload.filename or "")
+        if not text:
+            raise HTTPException(
+                status_code=400,
+                detail="No EOS narrative provided. Paste the narrative text or upload the EOS PDF "
+                "(with EOS_PDF_PARSE=true).",
+            )
+        # An EOS on a demo project stays 'demo' so the fictional narrative never reads as live.
+        stored = bench.attach_eos(
+            conn, project_id, narrative=text, summary=summary.strip(),
+            source_doc=doc, has_images=has_images, provenance=project["provenance"],
+        )
+        return ProjectEOS(**stored)
+    finally:
+        conn.close()
+
+
+@app.get("/benchmark/{project_id}/eos", response_model=Optional[ProjectEOS])
+def get_eos(project_id: int) -> Optional[ProjectEOS]:
+    """The project's attached EOS narrative, or null when none is attached."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        stored = bench.get_eos(conn, project_id)
+        return ProjectEOS(**stored) if stored else None
     finally:
         conn.close()
 
