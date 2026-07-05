@@ -98,7 +98,8 @@ def test_excel_is_produced(replies, levelled):
     assert out.is_file()
     wb = load_workbook(out)
     ws = wb.active
-    assert ws.title == "Leveling"
+    # per-trade workbook: a single-trade comparison is one sheet, titled by its trade
+    assert wb.sheetnames == ["Electrical"]
     # the totals row carries the corrected totals
     flat = [c.value for row in ws.iter_rows() for c in row]
     assert 12272000.0 in flat and 12033000.0 in flat

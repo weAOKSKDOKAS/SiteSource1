@@ -345,6 +345,10 @@ class DemoCase(DemoCaseSummary):
     tender: TenderPackage
     replies: list[BidReply]
     rationale_fixture: str
+    # Per-trade rationale fixtures for the per-section recommend path. Single-trade
+    # scenarios carry {hero_trade: rationale_fixture}; a multi-trade scenario names one
+    # fixture per sourced trade. A trade with no entry narrates via the offline template.
+    rationale_fixtures: dict[str, str] = Field(default_factory=dict)
 
 
 @app.get("/demo/cases", response_model=list[DemoCaseSummary])
@@ -368,6 +372,7 @@ def demo_case(case_id: str) -> DemoCase:
         tender=_demo_tender(),
         replies=load_demo_replies(m["replies_fixture"]),
         rationale_fixture=m["rationale_fixture"],
+        rationale_fixtures=m.get("rationale_fixtures") or {m["hero_trade"]: m["rationale_fixture"]},
     )
 
 
@@ -545,6 +550,37 @@ def post_level(req: LevelRequest) -> list[LevelledBid]:
     levelled = level_bids(replies, req.scope)
     export_leveling_xlsx(levelled, replies, path=OUT_PATH)  # refresh the downloadable Excel
     return levelled
+
+
+class LevelSection(BaseModel):
+    """One sublet trade's leveling — that trade's bids only, never mixed."""
+
+    trade: str
+    levelled: list[LevelledBid] = Field(default_factory=list)
+
+
+class LevelAllResponse(BaseModel):
+    sections: list[LevelSection] = Field(default_factory=list)
+
+
+@app.post("/level-all", response_model=LevelAllResponse)
+def post_level_all(req: LevelRequest) -> LevelAllResponse:
+    """Per-section leveling: group the replies by their ``trade`` and level each trade
+    only against its own bids (the peer item reference never crosses trades). Returns one
+    section per trade, in first-seen reply order, and refreshes the downloadable Excel as
+    a multi-sheet workbook (one sheet per trade). Sync handler — pure Layer-1 math."""
+    replies = req.replies or load_demo_replies(req.demo_fixture)
+    trades: list[str] = []
+    for reply in replies:
+        if reply.trade not in trades:
+            trades.append(reply.trade)
+    sections = [
+        LevelSection(trade=trade, levelled=level_bids([r for r in replies if r.trade == trade], req.scope))
+        for trade in trades
+    ]
+    flat = [b for s in sections for b in s.levelled]
+    export_leveling_xlsx(flat, replies, path=OUT_PATH)  # one sheet per trade
+    return LevelAllResponse(sections=sections)
 
 
 def _read_reply_uploads(files: list[UploadFile]) -> tuple[list[BidReply], list[str]]:
@@ -757,6 +793,44 @@ class RecommendRequest(BaseModel):
 @app.post("/recommend", response_model=Recommendation)
 def post_recommend(req: RecommendRequest) -> Recommendation:
     return recommend(req.levelled, req.trade, demo_fixture=req.demo_fixture)
+
+
+class RecommendSection(BaseModel):
+    """One sublet trade's risk-adjusted recommendation (its own award downstream)."""
+
+    trade: str
+    recommendation: Recommendation
+
+
+class RecommendAllRequest(BaseModel):
+    levelled: list[LevelledBid] = Field(default_factory=list)
+    # trade -> rationale fixture (DEMO). A trade with no entry narrates via the offline
+    # deterministic template — Layer 2 only ever narrates; the ranking is Layer 1's.
+    demo_fixtures: dict[str, str] = Field(default_factory=dict)
+
+
+class RecommendAllResponse(BaseModel):
+    sections: list[RecommendSection] = Field(default_factory=list)
+
+
+@app.post("/recommend-all", response_model=RecommendAllResponse)
+def post_recommend_all(req: RecommendAllRequest) -> RecommendAllResponse:
+    """Per-section recommend: one risk-adjusted recommendation per trade present in the
+    levelled set (``recommend`` already filters to the trade's own bids). The award for
+    each stays a human decision recorded by the UI. Sync handler."""
+    trades: list[str] = []
+    for bid in req.levelled:
+        if bid.trade not in trades:
+            trades.append(bid.trade)
+    return RecommendAllResponse(
+        sections=[
+            RecommendSection(
+                trade=trade,
+                recommendation=recommend(req.levelled, trade, demo_fixture=req.demo_fixtures.get(trade)),
+            )
+            for trade in trades
+        ]
+    )
 
 
 # ===========================================================================

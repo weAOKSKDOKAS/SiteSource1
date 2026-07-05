@@ -1,9 +1,10 @@
 """Excel export of the levelled comparison (openpyxl, imported lazily).
 
-One sheet: a row per SoR item with each firm's rate and corrected amount, a totals
-row of each firm's ``corrected_total``, and a Notes column calling out corrected
-lines and scope gaps; stated exclusions are listed below the table. Saved to
-``backend/fixtures/out/leveling.xlsx`` by default.
+A multi-sheet workbook — ONE sheet per trade: each sheet carries a row per SoR item
+with each of that trade's firms' rate and corrected amount, a totals row of each
+firm's ``corrected_total``, and a Notes column calling out corrected lines and scope
+gaps; stated exclusions are listed below the table. Two trades' items are never
+merged into one table. Saved to ``backend/fixtures/out/leveling.xlsx`` by default.
 
 openpyxl is imported inside the function so the leveling arithmetic (and DEMO_MODE)
 never depend on it.
@@ -20,22 +21,64 @@ from schemas.models import BidReply, LevelledBid
 OUT_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "out" / "leveling.xlsx"
 
 
+def sheet_title(trade: str) -> str:
+    """A valid worksheet name for a trade key ("mechanical_plumbing" -> "Mechanical
+    Plumbing"), capped at Excel's 31-character sheet-name limit."""
+    label = (trade or "").replace("_", " ").strip().title() or "Leveling"
+    return label[:31]
+
+
 def export_leveling_xlsx(
     levelled: list[LevelledBid],
     replies: list[BidReply],
     item_order: Optional[list[str]] = None,
     path: Path | str = OUT_PATH,
 ) -> Path:
-    """Write the levelled comparison to ``path`` and return it."""
+    """Write the levelled comparison to ``path`` and return it — one sheet per trade."""
     from openpyxl import Workbook  # lazy — leveling math must not require openpyxl
+
+    # Group by trade, preserving first-seen order. Each trade is written as its own
+    # sheet so a multi-trade comparison never mixes two trades' items in one table.
+    trades: list[str] = []
+    for b in levelled:
+        if b.trade not in trades:
+            trades.append(b.trade)
+
+    wb = Workbook()
+    if not trades:  # nothing levelled — keep a single empty comparison sheet
+        wb.active.title = "Leveling"
+    for i, trade in enumerate(trades):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = sheet_title(trade)
+        _write_trade_sheet(
+            ws,
+            [b for b in levelled if b.trade == trade],
+            [r for r in replies if r.trade == trade],
+            item_order,
+        )
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out)
+    return out
+
+
+def _write_trade_sheet(
+    ws,
+    levelled: list[LevelledBid],
+    replies: list[BidReply],
+    item_order: Optional[list[str]],
+) -> None:
+    """One trade's comparison table onto ``ws`` (this trade's firms/items only)."""
     from openpyxl.styles import Font
 
-    replies_by_firm = {r.firm_id: r for r in replies}
     levelled_by_firm = {b.firm_id: b for b in levelled}
     firm_ids = [b.firm_id for b in levelled]
 
-    # Item rows in scope order, then any extra item the bids introduced.
-    items: list[str] = list(item_order or [])
+    # Item rows in scope order (only refs this trade's bids actually price), then any
+    # extra item the bids introduced.
+    priced_refs = {line.item_ref for r in replies for line in r.line_items}
+    items: list[str] = [ref for ref in (item_order or []) if ref in priced_refs]
     for reply in replies:
         for line in reply.line_items:
             if line.item_ref not in items:
@@ -53,10 +96,6 @@ def export_leveling_xlsx(
         firm_id: {gap.split(" — ")[0] for gap in b.scope_gaps}
         for firm_id, b in levelled_by_firm.items()
     }
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Leveling"
 
     header = ["Item", "Description"]
     for firm_id in firm_ids:
@@ -106,8 +145,3 @@ def export_leveling_xlsx(
     for firm_id in firm_ids:
         for exclusion in levelled_by_firm[firm_id].exclusions:
             ws.append([levelled_by_firm[firm_id].firm_name, exclusion])
-
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out)
-    return out
