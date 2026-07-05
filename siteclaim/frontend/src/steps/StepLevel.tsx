@@ -1,6 +1,7 @@
+import { useState } from "react";
 import type { BidReply, LevelledBid } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
-import { Button, Card, cx } from "../ui";
+import { Button, Card, Collapse, Drawer, MonoLabel, SeverityTag, cx } from "../ui";
 import { hkd } from "../format";
 
 export function StepLevel({
@@ -28,6 +29,7 @@ export function StepLevel({
   const nameOf = new Map(levelled.map((b) => [b.firm_id, b.firm_name]));
   const correctedOf = new Map(levelled.map((b) => [b.firm_id, b.corrected_total]));
   const claimedOf = new Map(replies.map((r) => [r.firm_id, r.claimed_total ?? 0]));
+  const [detail, setDetail] = useState<LevelledBid | null>(null);
 
   // Item order from the first reply; qty/rate per (firm,item) from the replies.
   const items = replies[0]?.line_items.map((l) => ({ ref: l.item_ref, description: l.description })) ?? [];
@@ -67,9 +69,14 @@ export function StepLevel({
                 const delta = b.corrected_total - claimed;
                 const isCheapest = b.corrected_total === cheapest;
                 return (
-                  <tr key={b.firm_id} className={cx(isCheapest && "bg-ok-bg/30")}>
+                  <tr
+                    key={b.firm_id}
+                    onClick={() => setDetail(b)}
+                    title="Open the levelled-bid record"
+                    className={cx("cursor-pointer transition-colors", isCheapest ? "bg-ok-bg/30" : "hover:bg-paper-soft/70")}
+                  >
                     <td className="px-4 py-2.5 text-ink">
-                      <span className="font-medium">{b.firm_name}</span>{" "}
+                      <span className="font-medium hover:text-brand">{b.firm_name}</span>{" "}
                       <span className="tabular text-xs text-ink-faint">{b.firm_id}</span>
                     </td>
                     <td className="tabular px-4 py-2.5 text-right text-ink-soft">{hkd(claimed)}</td>
@@ -199,7 +206,90 @@ export function StepLevel({
       </div>
 
       <StepNav onBack={onBack} onNext={onNext} nextLabel="Recommend an award →" loading={loading} nextDisabled={stale} />
+
+      <BidDrawer bid={detail} claimed={detail ? claimedOf.get(detail.firm_id) ?? 0 : 0} onClose={() => setDetail(null)} />
     </div>
+  );
+}
+
+// The levelled-bid record: claimed vs corrected up top, then the engine's findings —
+// every value already computed by the rules engine and shown in the tables above.
+function BidDrawer({ bid, claimed, onClose }: { bid: LevelledBid | null; claimed: number; onClose: () => void }) {
+  const delta = bid ? bid.corrected_total - claimed : 0;
+  return (
+    <Drawer
+      open={bid != null}
+      onClose={onClose}
+      eyebrow="Levelled bid record"
+      tone="ink"
+      title={bid?.firm_name ?? ""}
+      subtitle={bid && <span className="tabular">{bid.firm_id} · {bid.trade}</span>}
+      footer="Every corrected figure is recomputed by the deterministic rules engine as qty × rate — the model parses, it never prices."
+    >
+      {bid && (
+        <div className="space-y-3">
+          <div>
+            <MonoLabel className="mb-1.5">Claimed vs corrected</MonoLabel>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-xl border border-line-soft bg-paper-soft px-4 py-3">
+                <MonoLabel>Claimed</MonoLabel>
+                <div className="tabular mt-0.5 text-base font-semibold text-ink-soft">{hkd(claimed)}</div>
+              </div>
+              <div className="rounded-xl border border-line-soft bg-paper-soft px-4 py-3">
+                <MonoLabel>Corrected</MonoLabel>
+                <div className="tabular mt-0.5 text-base font-semibold text-ink">
+                  {hkd(bid.corrected_total)}
+                  {Math.abs(delta) > 0.5 && (
+                    <span className="ml-1 text-xs text-bad">({delta > 0 ? "+" : ""}{hkd(delta)})</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="tabular mt-1.5 text-[11px] text-ink-faint">Normalised (exclusions held out): {hkd(bid.normalized_total)}</div>
+          </div>
+
+          <div>
+            <Collapse title="Arithmetic corrections" count={bid.arithmetic_findings.length} defaultOpen={bid.arithmetic_findings.length > 0}>
+              {bid.arithmetic_findings.length > 0 ? (
+                <ul className="space-y-2">
+                  {bid.arithmetic_findings.map((f, i) => (
+                    <li key={i} className="text-xs leading-relaxed text-ink-soft">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <SeverityTag severity={f.severity} />
+                        <span className="tabular text-ink-faint">{f.location}</span>
+                      </div>
+                      <div className="mt-0.5">{f.issue} → <span className="tabular font-semibold text-ink">{hkd(f.corrected_value)}</span></div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-ink-faint">The bid sheet's arithmetic checks out.</p>
+              )}
+            </Collapse>
+
+            <Collapse title="Scope gaps" count={bid.scope_gaps.length} defaultOpen={bid.scope_gaps.length > 0}>
+              {bid.scope_gaps.length > 0 ? (
+                <ul className="space-y-1 text-xs text-ink-soft">
+                  {bid.scope_gaps.map((g, i) => <li key={i}>{g}</li>)}
+                </ul>
+              ) : (
+                <p className="text-xs text-ink-faint">Every scheduled item is priced.</p>
+              )}
+            </Collapse>
+
+            <Collapse title="Exclusions (non-comparable)" count={bid.exclusions.length}>
+              {bid.exclusions.length > 0 ? (
+                <ul className="space-y-1 text-xs text-ink-soft">
+                  {bid.exclusions.map((x, i) => <li key={i}>{x}</li>)}
+                </ul>
+              ) : (
+                <p className="text-xs text-ink-faint">No exclusions declared.</p>
+              )}
+            </Collapse>
+          </div>
+        </div>
+      )}
+    </Drawer>
   );
 }
 

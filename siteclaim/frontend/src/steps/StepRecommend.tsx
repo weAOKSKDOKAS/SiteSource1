@@ -10,9 +10,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useState } from "react";
 import type { RankedFirm, Recommendation } from "../types";
 import { Pill, RiskFlagList, StepHeading } from "../components";
-import { Button, Card, cx } from "../ui";
+import { Button, Card, Collapse, Docket, Drawer, cx } from "../ui";
 import { hkd, tradeLabel } from "../format";
 
 const INK = "#15212e";
@@ -40,6 +41,7 @@ export function StepRecommend({
   const against = rec.ranked.filter((r) => r.recommended_against);
   const awarded = rec.ranked.find((r) => r.firm_id === award) ?? null;
   const overriding = awarded != null && awarded.recommended_against;
+  const [detail, setDetail] = useState<RankedFirm | null>(null);
 
   return (
     <div className="space-y-6">
@@ -96,9 +98,22 @@ export function StepRecommend({
         </h2>
         <ol className="divide-y divide-line-soft">
           {rec.ranked.map((r, i) => (
-            <li key={r.firm_id} className={cx("flex flex-wrap items-center gap-2 px-4 py-2.5", r.recommended_against && "bg-bad-bg/30")}>
+            <li
+              key={r.firm_id}
+              className={cx(
+                "flex flex-wrap items-center gap-2 px-4 py-2.5 transition-colors",
+                r.recommended_against ? "bg-bad-bg/30" : "hover:bg-paper-soft/70",
+              )}
+            >
               <span className="tabular flex h-6 w-6 items-center justify-center rounded-full border border-line text-xs font-semibold text-ink-soft">{i + 1}</span>
-              <span className="text-sm font-medium text-ink">{r.firm_name}</span>
+              <button
+                type="button"
+                onClick={() => setDetail(r)}
+                title="Open the ranking record"
+                className="text-sm font-medium text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+              >
+                {r.firm_name}
+              </button>
               <span className="tabular text-xs text-ink-faint">{r.firm_id}</span>
               {r.firm_id === rec.recommended_firm_id && <Pill tone="ok">recommended</Pill>}
               {r.recommended_against && <Pill tone="bad">recommended against</Pill>}
@@ -145,7 +160,53 @@ export function StepRecommend({
         <Button variant="ghost" onClick={onBack}>← Back</Button>
         <Button variant="ghost" onClick={onReset}>Start over</Button>
       </div>
+
+      <RankingDrawer
+        firm={detail}
+        recommended={detail != null && detail.firm_id === rec.recommended_firm_id}
+        onClose={() => setDetail(null)}
+      />
     </div>
+  );
+}
+
+// The ranking record: why this firm sits where it does — its corrected price, the
+// engine's reason line, and the adjudicated flags with their cited evidence.
+function RankingDrawer({ firm, recommended, onClose }: { firm: RankedFirm | null; recommended: boolean; onClose: () => void }) {
+  return (
+    <Drawer
+      open={firm != null}
+      onClose={onClose}
+      eyebrow="Ranking record"
+      tone={firm?.recommended_against ? "bad" : recommended ? "ok" : "ink"}
+      title={firm?.firm_name ?? ""}
+      subtitle={
+        firm && (
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="tabular">{firm.firm_id}</span>
+            {recommended && <Pill tone="ok">recommended</Pill>}
+            {firm.recommended_against && <Pill tone="bad">recommended against</Pill>}
+          </span>
+        )
+      }
+      footer="The ranking is decision support — the award is a human decision, and an override onto a flagged firm is recorded."
+    >
+      {firm && (
+        <div className="space-y-3">
+          <Docket label="Corrected total" code={hkd(firm.corrected_total)} />
+          {firm.reason && <p className="text-xs leading-relaxed text-ink-soft">{firm.reason}</p>}
+          <div>
+            <Collapse title="Risk flags" count={firm.risk_flags.length} defaultOpen={firm.risk_flags.length > 0}>
+              {firm.risk_flags.length > 0 ? (
+                <RiskFlagList flags={firm.risk_flags} />
+              ) : (
+                <p className="text-xs text-ink-faint">No adjudicated flags — a clean public record.</p>
+              )}
+            </Collapse>
+          </div>
+        </div>
+      )}
+    </Drawer>
   );
 }
 
