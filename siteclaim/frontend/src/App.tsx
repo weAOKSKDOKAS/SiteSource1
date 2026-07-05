@@ -44,7 +44,8 @@ export default function App() {
   const [heroTrade, setHeroTrade] = useState("electrical");
   const [tender, setTender] = useState<TenderPackage | null>(null);
   const [replies, setReplies] = useState<BidReply[]>([]);
-  const [rationaleFixture, setRationaleFixture] = useState<string | null>(null);
+  // trade -> baked rationale fixture (DEMO); a trade with no entry narrates offline.
+  const [rationaleFixtures, setRationaleFixtures] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<File[]>([]);
 
   // Pipeline state
@@ -61,8 +62,9 @@ export default function App() {
   // levelled against its own bids (Prompt 1).
   const [levelledByTrade, setLevelledByTrade] = useState<Record<string, LevelledBid[]> | null>(null);
   const [levelStale, setLevelStale] = useState(false);
-  const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
-  const [award, setAward] = useState<string | null>(null);
+  // One recommendation and one HUMAN award per sublet trade ("" = explicitly skipped).
+  const [recommendationByTrade, setRecommendationByTrade] = useState<Record<string, Recommendation> | null>(null);
+  const [awardByTrade, setAwardByTrade] = useState<Record<string, string>>({});
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +111,10 @@ export default function App() {
       setLevelledByTrade(null);
       setLevelStale(false);
     }
-    if (keep < 6) setRecommendation(null);
+    if (keep < 6) {
+      setRecommendationByTrade(null);
+      setAwardByTrade({});
+    }
     setMaxReached((m) => (m > keep ? keep : m));
   }
 
@@ -120,7 +125,7 @@ export default function App() {
       setHeroTrade(source.hero_trade);
       setTender(source.tender);
       setReplies(source.replies);
-      setRationaleFixture(source.rationale_fixture);
+      setRationaleFixtures(source.rationale_fixtures ?? {});
       setFiles([]);
       setScope(null);
       invalidateAfter(1);
@@ -251,7 +256,8 @@ export default function App() {
       ),
     );
     setLevelStale(true);
-    setRecommendation(null);
+    setRecommendationByTrade(null);
+    setAwardByTrade({});
     setMaxReached((m) => (m > 5 ? 5 : m));
   }
 
@@ -266,9 +272,15 @@ export default function App() {
     run(async () => {
       if (!levelledByTrade) return;
       const flat = Object.values(levelledByTrade).flat();
-      const result = await api.recommend(flat, heroTrade, rationaleFixture);
-      setRecommendation(result);
-      setAward(result.recommended_firm_id);
+      const result = await api.recommendAll(flat, rationaleFixtures);
+      setRecommendationByTrade(Object.fromEntries(result.sections.map((s) => [s.trade, s.recommendation])));
+      // Default each package's award to the engine's recommended firm — the human
+      // changes/overrides/skips per package (the award stays a Layer-4 decision).
+      const defaults: Record<string, string> = {};
+      for (const s of result.sections) {
+        if (s.recommendation.recommended_firm_id) defaults[s.trade] = s.recommendation.recommended_firm_id;
+      }
+      setAwardByTrade(defaults);
       advance(6);
     });
 
@@ -278,7 +290,7 @@ export default function App() {
     setCaseId(null);
     setTender(null);
     setReplies([]);
-    setRationaleFixture(null);
+    setRationaleFixtures({});
     setFiles([]);
     setScope(null);
     setProposal(null);
@@ -290,8 +302,8 @@ export default function App() {
     setDispatch(null);
     setLevelledByTrade(null);
     setLevelStale(false);
-    setRecommendation(null);
-    setAward(null);
+    setRecommendationByTrade(null);
+    setAwardByTrade({});
     setError(null);
   }
 
@@ -407,11 +419,12 @@ export default function App() {
               />
             )}
 
-            {step === 6 && recommendation && (
+            {step === 6 && recommendationByTrade && (
               <StepRecommend
-                recommendation={recommendation}
-                award={award}
-                onSetAward={setAward}
+                sections={recommendationByTrade}
+                awards={awardByTrade}
+                onSetAward={(trade, firmId) => setAwardByTrade((cur) => ({ ...cur, [trade]: firmId }))}
+                onSkip={(trade) => setAwardByTrade((cur) => ({ ...cur, [trade]: "" }))}
                 onBack={() => setStep(5)}
                 onReset={reset}
               />

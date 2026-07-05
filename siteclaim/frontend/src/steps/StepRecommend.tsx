@@ -23,32 +23,108 @@ const FAINT = "#8595a3";
 const BRAND_BG = "#e7eef8";
 const BRAND = "#1f4e8c";
 
+// Per-section recommend: one risk-adjusted recommendation and ONE award control per
+// sublet trade. Every award is the human's (Layer 4) — the engine ranks, Claude only
+// narrates. The step is complete when each trade carries an award or is explicitly
+// skipped ("" in `awards`).
 export function StepRecommend({
-  recommendation,
-  award,
+  sections,
+  awards,
   onSetAward,
+  onSkip,
   onBack,
   onReset,
 }: {
-  recommendation: Recommendation;
-  award: string | null;
-  onSetAward: (firmId: string) => void;
+  sections: Record<string, Recommendation>;
+  awards: Record<string, string>;
+  onSetAward: (trade: string, firmId: string) => void;
+  onSkip: (trade: string) => void;
   onBack: () => void;
   onReset: () => void;
 }) {
-  const rec = recommendation;
-  const winner = rec.ranked.find((r) => r.firm_id === rec.recommended_firm_id) ?? null;
-  const against = rec.ranked.filter((r) => r.recommended_against);
-  const awarded = rec.ranked.find((r) => r.firm_id === award) ?? null;
-  const overriding = awarded != null && awarded.recommended_against;
-  const [detail, setDetail] = useState<RankedFirm | null>(null);
+  const trades = Object.keys(sections);
+  const decided = trades.filter((t) => awards[t] !== undefined);
+  const [detail, setDetail] = useState<{ firm: RankedFirm; recommended: boolean } | null>(null);
 
   return (
     <div className="space-y-6">
       <StepHeading
         title="Risk-adjusted recommendation"
-        lead={`For the ${tradeLabel(rec.trade)} package the engine ranks by corrected price but reads each firm against the database. A firm with a fatal flag is recommended against regardless of price. Claude narrates the rationale — it never chooses the winner.`}
+        lead="Each sourced package gets its own recommendation and its own award. The engine ranks by corrected price but reads each firm against the database — a firm with a fatal flag is recommended against regardless of price. Claude narrates the rationale per package; it never chooses the winner. You award each package (or skip it)."
       />
+
+      {trades.length > 1 && (
+        <div
+          className={cx(
+            "rounded-lg border px-4 py-2.5 text-sm",
+            decided.length === trades.length ? "border-ok/30 bg-ok-bg text-ink" : "border-line bg-card text-ink-soft",
+          )}
+        >
+          {decided.length === trades.length ? (
+            <>All <span className="tabular font-semibold">{trades.length}</span> packages decided — each award below is recorded.</>
+          ) : (
+            <><span className="tabular font-semibold">{decided.length}/{trades.length}</span> packages decided — award or skip each package to finish.</>
+          )}
+        </div>
+      )}
+
+      {trades.map((trade) => (
+        <TradeRecommendation
+          key={trade}
+          trade={trade}
+          rec={sections[trade]}
+          award={awards[trade]}
+          onSetAward={(firmId) => onSetAward(trade, firmId)}
+          onSkip={() => onSkip(trade)}
+          onOpenDetail={(firm, recommended) => setDetail({ firm, recommended })}
+        />
+      ))}
+
+      <div className="flex items-center justify-between gap-3 pt-2">
+        <Button variant="ghost" onClick={onBack}>← Back</Button>
+        <Button variant="ghost" onClick={onReset}>Start over</Button>
+      </div>
+
+      <RankingDrawer
+        firm={detail?.firm ?? null}
+        recommended={detail?.recommended ?? false}
+        onClose={() => setDetail(null)}
+      />
+    </div>
+  );
+}
+
+// One sublet trade's recommendation block: headline, bid distribution, ranked firms,
+// the narrated rationale, and that trade's Layer-4 award control.
+function TradeRecommendation({
+  trade,
+  rec,
+  award,
+  onSetAward,
+  onSkip,
+  onOpenDetail,
+}: {
+  trade: string;
+  rec: Recommendation;
+  award: string | undefined;
+  onSetAward: (firmId: string) => void;
+  onSkip: () => void;
+  onOpenDetail: (firm: RankedFirm, recommended: boolean) => void;
+}) {
+  const winner = rec.ranked.find((r) => r.firm_id === rec.recommended_firm_id) ?? null;
+  const against = rec.ranked.filter((r) => r.recommended_against);
+  const skipped = award === "";
+  const awarded = award ? rec.ranked.find((r) => r.firm_id === award) ?? null : null;
+  const overriding = awarded != null && awarded.recommended_against;
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-1.5">
+        <h2 className="font-display text-lg font-semibold tracking-display text-ink">{tradeLabel(trade)}</h2>
+        <button type="button" onClick={onSkip} className="text-xs font-semibold text-ink-faint hover:text-ink">
+          {skipped ? "Skipped — no award for this package" : "Skip this package"}
+        </button>
+      </div>
 
       {/* Headline */}
       <Card className="overflow-hidden">
@@ -81,7 +157,7 @@ export function StepRecommend({
       {/* Bid distribution chart */}
       <Card className="overflow-hidden">
         <div className="border-b border-line-soft px-4 py-2.5">
-          <h2 className="text-sm font-semibold text-ink">Bid distribution &amp; historical band</h2>
+          <h3 className="text-sm font-semibold text-ink">Bid distribution &amp; historical band</h3>
           <p className="text-xs text-ink-faint">
             Corrected totals; the shaded region is the historical band (low–high), the dashed line the median.
           </p>
@@ -93,9 +169,9 @@ export function StepRecommend({
 
       {/* Ranked firms */}
       <Card className="overflow-hidden">
-        <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
+        <h3 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
           Ranked — clean firms first, flagged firms demoted
-        </h2>
+        </h3>
         <ol className="divide-y divide-line-soft">
           {rec.ranked.map((r, i) => (
             <li
@@ -108,7 +184,7 @@ export function StepRecommend({
               <span className="tabular flex h-6 w-6 items-center justify-center rounded-full border border-line text-xs font-semibold text-ink-soft">{i + 1}</span>
               <button
                 type="button"
-                onClick={() => setDetail(r)}
+                onClick={() => onOpenDetail(r, r.firm_id === rec.recommended_firm_id)}
                 title="Open the ranking record"
                 className="text-sm font-medium text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
               >
@@ -125,7 +201,7 @@ export function StepRecommend({
 
       {/* Rationale */}
       <Card className="p-4">
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">Rationale — written by Claude (Layer 2)</h2>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">Rationale — written by Claude (Layer 2)</h3>
         <blockquote className="border-l-3 border-brand bg-brand-bg/40 px-3 py-2 text-sm leading-relaxed text-ink">
           {rec.rationale}
         </blockquote>
@@ -133,14 +209,26 @@ export function StepRecommend({
 
       {/* Override & award (Layer 4) */}
       <Card className="p-4">
-        <h2 className="mb-1 text-sm font-semibold text-ink">Award (human decision)</h2>
+        <h3 className="mb-1 text-sm font-semibold text-ink">Award — {tradeLabel(trade)} (human decision)</h3>
         <p className="mb-3 text-xs text-ink-faint">
-          The recommendation is decision support. Select the firm to award — you may override, but overriding onto a flagged firm is recorded.
+          The recommendation is decision support. Select the firm to award this package — you may override, but overriding onto a flagged firm is recorded.
         </p>
         <div className="space-y-1.5">
           {rec.ranked.map((r) => (
-            <label key={r.firm_id} className={cx("flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2", award === r.firm_id ? "border-brand bg-brand-bg" : "border-line bg-card hover:bg-line-soft")}>
-              <input type="radio" name="award" checked={award === r.firm_id} onChange={() => onSetAward(r.firm_id)} className="h-4 w-4 accent-[var(--color-brand)]" />
+            <label
+              key={r.firm_id}
+              className={cx(
+                "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2",
+                award === r.firm_id ? "border-brand bg-brand-bg" : "border-line bg-card hover:bg-line-soft",
+              )}
+            >
+              <input
+                type="radio"
+                name={`award-${trade}`}
+                checked={award === r.firm_id}
+                onChange={() => onSetAward(r.firm_id)}
+                className="h-4 w-4 accent-[var(--color-brand)]"
+              />
               <span className="text-sm font-medium text-ink">{r.firm_name}</span>
               <span className="tabular text-xs text-ink-faint">{hkd(r.corrected_total)}</span>
               {r.recommended_against && <Pill tone="bad">flagged</Pill>}
@@ -150,23 +238,17 @@ export function StepRecommend({
         {awarded && (
           <div className={cx("mt-3 rounded-lg px-3 py-2 text-sm", overriding ? "bg-bad-bg text-bad" : "bg-ok-bg text-ok")}>
             {overriding
-              ? `Override recorded: awarding ${awarded.firm_name}, which the engine recommends against.`
-              : `Award recorded: ${awarded.firm_name} (${hkd(awarded.corrected_total)}).`}
+              ? `Override recorded: awarding ${awarded.firm_name} for ${tradeLabel(trade)}, which the engine recommends against.`
+              : `Award recorded: ${awarded.firm_name} for ${tradeLabel(trade)} (${hkd(awarded.corrected_total)}).`}
+          </div>
+        )}
+        {skipped && (
+          <div className="mt-3 rounded-lg bg-line-soft px-3 py-2 text-sm text-ink-soft">
+            Skipped — no award recorded for this package. Pick a firm above to award it after all.
           </div>
         )}
       </Card>
-
-      <div className="flex items-center justify-between gap-3 pt-2">
-        <Button variant="ghost" onClick={onBack}>← Back</Button>
-        <Button variant="ghost" onClick={onReset}>Start over</Button>
-      </div>
-
-      <RankingDrawer
-        firm={detail}
-        recommended={detail != null && detail.firm_id === rec.recommended_firm_id}
-        onClose={() => setDetail(null)}
-      />
-    </div>
+    </section>
   );
 }
 
