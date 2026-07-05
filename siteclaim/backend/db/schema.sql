@@ -25,6 +25,8 @@ DROP TABLE IF EXISTS actual_items;
 DROP TABLE IF EXISTS tender_items;
 DROP TABLE IF EXISTS reason_codes;
 DROP TABLE IF EXISTS projects;
+-- Unified engine (Phase 1+).
+DROP TABLE IF EXISTS package_routes;
 
 -- One row per firm — the fused identity (public record + private closeout archive).
 CREATE TABLE firms (
@@ -259,6 +261,29 @@ CREATE TABLE rubric_items (
     created_at           TEXT NOT NULL
 );
 
+-- ===========================================================================
+-- Routing gate (Phase 1) — after ingest splits a tender into packages, the AI
+-- recommends self-perform vs sublet per package (recommended_route + rationale,
+-- with the deterministic signals it used); a human confirms (chosen_route,
+-- decided_by, decided_at — the Layer-4 gate and the only writer of chosen_route).
+-- Scoped to an analysis run (run_ref). Advisory until confirmed.
+-- ===========================================================================
+CREATE TABLE package_routes (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_ref           TEXT NOT NULL,       -- stable id for the tender/analysis run
+    package_key       TEXT NOT NULL,       -- the package identifier (the trade, today)
+    trade             TEXT,
+    scope_summary     TEXT,
+    recommended_route TEXT,                -- self_perform | sublet (advisory)
+    rationale         TEXT,
+    signals           TEXT,                -- JSON: the deterministic inputs used
+    chosen_route      TEXT,                -- self_perform | sublet (human decision; null until decided)
+    decided_by        TEXT,                -- provenance: who decided
+    decided_at        TEXT,                -- provenance: when
+    source            TEXT,                -- route-suggest | fallback | demo
+    created_at        TEXT NOT NULL
+);
+
 CREATE INDEX idx_public_flags_firm  ON public_flags(firm_id);
 CREATE INDEX idx_closeouts_firm     ON project_closeouts(firm_id);
 CREATE INDEX idx_awards_firm        ON award_history(firm_id);
@@ -276,3 +301,4 @@ CREATE INDEX idx_actual_items_ref     ON actual_items(item_ref);
 CREATE INDEX idx_variance_project     ON variance_records(project_id);
 CREATE INDEX idx_variance_reason      ON variance_records(reason_code);
 CREATE INDEX idx_projects_provenance  ON projects(provenance);
+CREATE INDEX idx_package_routes_run   ON package_routes(run_ref);
