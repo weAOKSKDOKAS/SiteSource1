@@ -149,9 +149,16 @@ export default function App() {
     });
 
   // Step 2 — Route. Analyse the ingested scope; default each package to its recommendation.
+  // The decision is durable: if a proposal already exists for this scope (only a re-ingest
+  // clears it, via invalidateAfter(1)), returning here shows the confirmed decision — the
+  // chosen routes and split summary — never a blank re-analyze.
   const goRoute = () =>
     run(async () => {
       if (!scope) return;
+      if (proposal) {
+        advance(2);
+        return;
+      }
       const p = await api.routeAnalyze(scope);
       setProposal(p);
       setChosen(Object.fromEntries(p.packages.map((pkg) => [pkg.package_key, pkg.recommended_route])));
@@ -366,7 +373,7 @@ export default function App() {
                   onAcceptAll={acceptAllRoutes}
                   onConfirm={confirmRoute}
                   busy={loading}
-                  confirmLabel="Confirm routing →"
+                  confirmLabel={routeResult ? "Re-confirm routing →" : "Confirm routing →"}
                 />
                 {routeResult && <RouteBranch result={routeResult} onOpenEstimator={() => setView("estimator")} />}
                 <div className="pt-1">
@@ -433,28 +440,41 @@ export default function App() {
   );
 }
 
-// The self-perform / sublet split after the routing gate is confirmed: sublet packages
-// continue to sourcing; self-perform packages branch to the Estimator (left track) and leave
-// the sourcing flow. When nothing is left to source, the empty state says so plainly.
+// The durable split summary after the routing gate is confirmed. It persists on the Route
+// step (App-level state survives tab switches and stepping back): sublet packages continue
+// to sourcing; self-perform packages are opened in the Estimator, each chip linking to its
+// seeded estimate (idempotent per run — re-confirming re-derives without duplicates). When
+// nothing is left to source, the empty state says so plainly.
 function RouteBranch({ result, onOpenEstimator }: { result: RouteDecisionResult; onOpenEstimator: () => void }) {
+  const sublet = result.sublet_packages;
   const selfPerform = result.self_perform_packages;
-  const nothingToSource = result.sublet_packages.length === 0;
   return (
-    <Card className="p-4">
-      {nothingToSource ? (
+    <Card className="border-ok/30 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-ok text-[11px] text-white" aria-hidden>✓</span>
+        <span className="text-sm font-semibold text-ink">Routing confirmed</span>
+        <span className="text-xs text-ink-faint">— the decision persists; re-confirming re-derives the split without duplicating estimates.</span>
+      </div>
+      {sublet.length === 0 ? (
         <div className="rounded-lg border border-warn/40 bg-warn-bg px-3 py-2 text-sm text-ink">
-          All packages are self-performed — nothing to source. Their estimates are in the Estimator.
+          All packages are self-performed — nothing to source. Their estimates are open in the Estimator.
         </div>
       ) : (
         <p className="text-sm text-ink-soft">
-          <span className="font-semibold text-ink">{result.sublet_packages.length}</span> sublet package(s) continue to the
-          shortlist{selfPerform.length > 0 ? ", the rest branch to the Estimator" : ""}.
+          <span className="tabular font-semibold text-ink">{sublet.length}</span> package{sublet.length === 1 ? "" : "s"} sublet → continuing to sourcing
+          {" ("}{sublet.map(tradeLabel).join(", ")}{")"}
+          {selfPerform.length > 0 && (
+            <>
+              {" · "}
+              <span className="tabular font-semibold text-ink">{selfPerform.length}</span> self-perform → opened in the Estimator
+            </>
+          )}
         </p>
       )}
       {selfPerform.length > 0 && (
         <div className="mt-3">
           <div className="mb-1.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-faint">
-            {selfPerform.length} package(s) sent to the Estimator — left track
+            Self-perform estimates — left track
           </div>
           <div className="flex flex-wrap gap-1.5">
             {selfPerform.map((k) => (
@@ -462,7 +482,7 @@ function RouteBranch({ result, onOpenEstimator }: { result: RouteDecisionResult;
                 key={k}
                 type="button"
                 onClick={onOpenEstimator}
-                title="Open the Estimator"
+                title="Open this estimate in the Estimator"
                 className="inline-flex items-center gap-1 rounded-full bg-violet-bg px-2.5 py-1 text-xs font-medium text-violet transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
               >
                 {tradeLabel(k)}
@@ -471,7 +491,7 @@ function RouteBranch({ result, onOpenEstimator }: { result: RouteDecisionResult;
               </button>
             ))}
           </div>
-          <p className="mt-1.5 text-xs text-ink-faint">These open in the Estimator; they do not enter the sourcing flow.</p>
+          <p className="mt-1.5 text-xs text-ink-faint">These live in the Estimator tab and persist there; they do not enter the sourcing flow.</p>
         </div>
       )}
     </Card>
