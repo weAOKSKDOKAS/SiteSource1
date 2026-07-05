@@ -17,13 +17,14 @@ starts the wizard on `:5173`. Open <http://localhost:5173> and pick a scenario.
 > (the demo only needs the standard library + FastAPI; numpy/openpyxl are used by
 > a couple of stages, sentence-transformers is **not** needed in DEMO_MODE).
 
-## The three scenarios (one selector on the first screen)
+## The scenarios (one selector on the first screen)
 
-| Scenario | Trade | What it shows |
+| Scenario | Trade(s) | What it shows |
 | --- | --- | --- |
-| **Clean** | Joinery & fitting-out | A shortlist of strong firms, a clean leveling with no corrections, a confident recommendation (Artisan Interior, F-JF-01). |
+| **Golden** | Full walkthrough | The whole product in one confirm-routing. The Kwun Tong 4-package tender splits two ways: **electrical + mechanical & plumbing** to **sublet** (two leveling sections, two awards — the cheapest mechanical bidder carries an **unpaid adjudication**, recommended against despite price) and **fire services + joinery** to **self-perform** (their estimates open with real **rate precedent** from the benchmark corpus, with an *over-ran on rate* warning on one line each). Routing split → per-section sourcing with the risk catch → self-perform estimator with live precedent. |
 | **Hero** | Electrical | The cheapest, best-matching bidder — *Subcontractor E (illustrative)*, F-EL-01 — looks clean on the bid sheet but the cross-reference flags an **active winding-up petition** and **two safety prosecutions**. Recommended against despite the lowest price; the clean runner-up Vantage E&M (F-EL-02) wins. |
 | **Messy** | Electrical | A reply hides an understated line, an **unpriced provisional sum**, and an **exclusion**; leveling corrects the total (+HK$2.0m) and the cheapest *clean* bid changes to F-EL-02. |
+| **Two-trade** | Electrical + M&P | Route both to sublet: two leveling sections and two risk-adjusted awards. The cheapest mechanical bidder carries an unpaid adjudication — recommended against despite price. |
 
 ## The five-minute path
 
