@@ -57,6 +57,9 @@ export default function App() {
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
   const [dispatch, setDispatch] = useState<DispatchSet | null>(null);
+  // Human-edited enquiry drafts, keyed "trade:firmId" — they persist across the dispatch
+  // pop-up being closed and reopened (the send carries exactly the edited text).
+  const [drafts, setDrafts] = useState<Record<string, { subject: string; body: string }>>({});
   // Per-section leveling: one LevelledBid[] per sublet trade — a trade is only ever
   // levelled against its own bids (Prompt 1).
   const [levelledByTrade, setLevelledByTrade] = useState<Record<string, LevelledBid[]> | null>(null);
@@ -104,6 +107,7 @@ export default function App() {
     if (keep < 3) {
       setShortlist(null);
       setApprovals({});
+      setDrafts({});
     }
     if (keep < 4) setDispatch(null);
     if (keep < 5) {
@@ -219,15 +223,40 @@ export default function App() {
     setDispatch(null); // re-send required after changing approvals
   }
 
+  // Compose the enquiry drafts WITHOUT sending — the pop-up's review surface. The person
+  // edits any draft; only the confirm writes the outbox.
+  const composeDrafts = () => {
+    if (!shortlist || !sourceScope) return Promise.reject(new Error("nothing to compose"));
+    return api.dispatch({
+      shortlist,
+      approvals,
+      scope: sourceScope,
+      project_name: sourceScope.project_name,
+      send: false,
+    });
+  };
+
+  const editDraft = (trade: string, firmId: string, value: { subject: string; body: string }) =>
+    setDrafts((cur) => ({ ...cur, [`${trade}:${firmId}`]: value }));
+
   const sendDispatch = () =>
     run(async () => {
       if (!shortlist || !sourceScope) return;
+      // Only edits for currently-approved firms ride along; the outbox stores exactly
+      // the edited text (a blank field keeps the composed value).
+      const draft_overrides = Object.entries(drafts)
+        .map(([key, value]) => {
+          const [trade, firm_id] = key.split(":");
+          return { trade, firm_id, subject: value.subject, body: value.body };
+        })
+        .filter((o) => (approvals[o.trade] ?? []).includes(o.firm_id));
       const result = await api.dispatch({
         shortlist,
         approvals,
         scope: sourceScope,
         project_name: sourceScope.project_name,
         send: true,
+        draft_overrides,
       });
       setDispatch(result);
     });
@@ -305,6 +334,7 @@ export default function App() {
     setSourceScope(null);
     setShortlist(null);
     setApprovals({});
+    setDrafts({});
     setDispatch(null);
     setLevelledByTrade(null);
     setLevelStale(false);
@@ -403,7 +433,10 @@ export default function App() {
                 dispatch={dispatch}
                 demoMode={demoMode}
                 tenderSlug={tenderSlug}
+                drafts={drafts}
                 onToggleApprove={toggleApprove}
+                onEditDraft={editDraft}
+                onComposeDrafts={composeDrafts}
                 onSend={sendDispatch}
                 onBack={() => setStep(3)}
                 onNext={goLevel}

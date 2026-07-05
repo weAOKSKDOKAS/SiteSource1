@@ -396,6 +396,15 @@ export interface ShortlistSet {
   per_trade: Record<string, Candidate[]>;
 }
 
+// A human-edited enquiry draft for one (trade, firm) — the approve-before-send gate.
+// A blank field keeps the composed value; the outbox stores exactly the edited text.
+export interface DraftOverride {
+  trade: string;
+  firm_id: string;
+  subject: string;
+  body: string;
+}
+
 export interface DispatchBundle {
   firm_id: string;
   firm_name: string;

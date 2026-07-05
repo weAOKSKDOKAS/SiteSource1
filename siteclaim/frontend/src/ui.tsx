@@ -124,16 +124,37 @@ export function LayerBadge({ layer }: { layer: "L1" | "L2" | "L3" | "L4" }) {
 }
 
 // A lightweight centered modal (pop-up forms per Section 8). Escape/backdrop closes.
-export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+// `wide` opens the larger review surface (the dispatch draft editor); tall content
+// scrolls inside the box, never the page.
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  wide = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  wide?: boolean;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4" onClick={onClose}>
-      <Card className="w-full max-w-lg p-5" >
+      <Card className={cx("flex max-h-[88vh] w-full flex-col p-5", wide ? "max-w-3xl" : "max-w-lg")}>
         <div className="mb-3 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
           <h3 className="font-display text-base font-semibold text-ink">{title}</h3>
           <button className="text-ink-faint hover:text-ink" onClick={onClose} aria-label="Close">✕</button>
         </div>
-        <div onClick={(e) => e.stopPropagation()}>{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto" onClick={(e) => e.stopPropagation()}>{children}</div>
       </Card>
     </div>
   );

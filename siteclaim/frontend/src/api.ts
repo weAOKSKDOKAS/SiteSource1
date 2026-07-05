@@ -6,6 +6,7 @@ import type {
   DemoCase,
   DemoCaseSummary,
   DispatchSet,
+  DraftOverride,
   EstimateCheckResult,
   EstimateDraftResult,
   EstimateItem,
@@ -84,6 +85,8 @@ export interface DispatchRequest {
   scope: ScopePackages | null;
   project_name: string;
   send: boolean;
+  // Human-edited drafts per (trade, firm); the outbox stores exactly the edited text.
+  draft_overrides?: DraftOverride[];
 }
 
 export const api = {
