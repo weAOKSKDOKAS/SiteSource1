@@ -194,10 +194,17 @@ def get_project(conn: sqlite3.Connection, project_id: int) -> Optional[dict]:
 _UPDATABLE = ("name", "trade", "client", "contract_ref", "notes", "status")
 
 
+_STATUSES = ("open", "closed")
+
+
 def update_project(conn: sqlite3.Connection, project_id: int, patch: dict) -> Optional[dict]:
     """Patch the given fields (only known columns). Setting status='closed' stamps
-    closed_at; reopening clears it. Returns the updated project, or None if unknown."""
+    closed_at; reopening ('open') clears it. Returns the updated project, or None if
+    unknown. Raises ``ValueError`` on an out-of-vocabulary status (so a bad value cannot
+    enter the store or un-stamp closed_at)."""
     ensure_benchmark_tables(conn)
+    if patch.get("status") is not None and patch["status"] not in _STATUSES:
+        raise ValueError(f"unknown status {patch['status']!r} (use one of {_STATUSES})")
     if conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
         return None
     sets, params = [], []

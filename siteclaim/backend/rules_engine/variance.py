@@ -11,7 +11,9 @@ rate-first way the leveling engine computes amounts (mirrors
   **qty-driven** and a **rate-driven** component:
   ``amount_delta_qty = (actual_qty − tender_qty)·tender_rate``,
   ``amount_delta_rate = actual_qty·(actual_rate − tender_rate)``,
-  and ``amount_delta_qty + amount_delta_rate = amount_delta`` (exactly).
+  and ``amount_delta = amount_delta_qty + amount_delta_rate`` (additive to the cent —
+  ``amount_delta`` is defined as the rounded sum of the two rounded components, so the
+  decomposition always reconciles; compare rounded, never bare float ``==``).
 
 Either side may be ``None`` (a Tier-3 unmatched line): an omission-at-tender has no
 tender side, an arrived-unpriced / coarse actual has no matching tender.

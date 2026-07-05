@@ -739,7 +739,10 @@ def patch_benchmark_project(project_id: int, req: ProjectUpdate) -> Project:
     conn = store.get_connection()
     try:
         _require_project(conn, project_id)
-        updated = bench.update_project(conn, project_id, req.model_dump(exclude_none=True))
+        try:
+            updated = bench.update_project(conn, project_id, req.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Project(**updated)
     finally:
         conn.close()

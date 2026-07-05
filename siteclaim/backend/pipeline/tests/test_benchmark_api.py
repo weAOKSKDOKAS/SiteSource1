@@ -81,6 +81,20 @@ def test_project_crud_lifecycle(bench_db):
     assert client.get("/benchmark/projects/9999").status_code == 404
 
 
+def test_patch_rejects_an_out_of_vocabulary_status(bench_db):
+    created = client.post("/benchmark/projects", json={"name": "P"}).json()
+    pid = created["id"]
+    closed = client.patch(f"/benchmark/projects/{pid}", json={"status": "closed"}).json()
+    assert closed["status"] == "closed" and closed["closed_at"]
+    # a bogus status is rejected (400) and does not un-stamp closed_at
+    bad = client.patch(f"/benchmark/projects/{pid}", json={"status": "banana"})
+    assert bad.status_code == 400
+    assert client.get(f"/benchmark/projects/{pid}").json()["closed_at"] == closed["closed_at"]
+    # reopening clears the stamp
+    reopened = client.patch(f"/benchmark/projects/{pid}", json={"status": "open"}).json()
+    assert reopened["status"] == "open" and reopened["closed_at"] == ""
+
+
 def test_tender_upload_xlsx_keeps_rates(bench_db):
     pid = client.post("/benchmark/projects", json={"name": "P", "trade": "ground_investigation"}).json()["id"]
     xlsx = _sor_sheet_bytes([("A1a(a)", "Rotary drilling", "m", 100.0, 1200.0),
