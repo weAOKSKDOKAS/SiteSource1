@@ -360,6 +360,13 @@ export interface FirmProfile {
   award_history: string[];
 }
 
+export interface FirmsPage {
+  items: FirmProfile[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface Candidate {
   firm: FirmProfile;
   trade: string;

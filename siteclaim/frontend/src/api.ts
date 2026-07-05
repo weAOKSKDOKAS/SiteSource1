@@ -10,6 +10,8 @@ import type {
   EstimateDraftResult,
   EstimateItem,
   EstimateProject,
+  FirmProfile,
+  FirmsPage,
   Health,
   IngestUpload,
   LetterOfOffer,
@@ -86,6 +88,18 @@ export const api = {
   base: BASE,
   health: () => get<Health>("/health"),
   coverage: () => get<Coverage>("/coverage"),
+
+  // The browseable firm database (Layer 3) — real-provenance register firms only.
+  firms: (opts?: { q?: string; trade?: string; limit?: number; offset?: number }) => {
+    const p = new URLSearchParams();
+    if (opts?.q) p.set("q", opts.q);
+    if (opts?.trade) p.set("trade", opts.trade);
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.offset != null) p.set("offset", String(opts.offset));
+    const qs = p.toString();
+    return get<FirmsPage>(`/firms${qs ? `?${qs}` : ""}`);
+  },
+  firm: (id: string) => get<FirmProfile>(`/firms/${encodeURIComponent(id)}`),
   demoCases: () => get<DemoCaseSummary[]>("/demo/cases"),
   demoCase: (id: string) => get<DemoCase>(`/demo/${id}`),
 
