@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { BenchmarkPage } from "./BenchmarkPage";
+import { DatabasePage } from "./DatabasePage";
 import { Header, Stepper, type StepIndex, type TopView } from "./components";
 import type {
   BidReply,
@@ -225,12 +226,12 @@ export default function App() {
     setError(null);
   }
 
-  if (view === "benchmark") {
+  if (view === "benchmark" || view === "database") {
     return (
       <div className="min-h-screen">
         <Header demoMode={demoMode} view={view} onNavigate={setView} />
         <main className="mx-auto max-w-6xl px-5 py-8">
-          <BenchmarkPage />
+          {view === "benchmark" ? <BenchmarkPage /> : <DatabasePage />}
         </main>
       </div>
     );

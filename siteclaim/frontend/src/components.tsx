@@ -14,7 +14,17 @@ const GATE_HINT: Record<number, string> = {
 };
 
 // --- Chrome ----------------------------------------------------------------
-export type TopView = "wizard" | "benchmark";
+export type TopView = "wizard" | "routing" | "estimator" | "benchmark" | "database";
+
+// The app shell sections. Routing (Phase 1) and Estimator (Phase 3) are stubbed disabled
+// until those phases land; each phase flips its `enabled` flag on.
+const NAV: { view: TopView; label: string; enabled: boolean; soon?: string }[] = [
+  { view: "wizard", label: "Sourcing", enabled: true },
+  { view: "routing", label: "Routing", enabled: false, soon: "Phase 1" },
+  { view: "estimator", label: "Estimator", enabled: false, soon: "Phase 3" },
+  { view: "benchmark", label: "Benchmark", enabled: true },
+  { view: "database", label: "Database", enabled: true },
+];
 
 export function Header({
   demoMode,
@@ -25,17 +35,27 @@ export function Header({
   view?: TopView;
   onNavigate?: (v: TopView) => void;
 }) {
-  const tab = (v: TopView, label: string) => (
-    <button
-      onClick={() => onNavigate?.(v)}
-      className={cx(
-        "rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
-        view === v ? "bg-brand text-white" : "text-ink-soft hover:bg-line-soft hover:text-ink",
-      )}
-    >
-      {label}
-    </button>
-  );
+  const tab = ({ view: v, label, enabled, soon }: (typeof NAV)[number]) =>
+    enabled ? (
+      <button
+        key={v}
+        onClick={() => onNavigate?.(v)}
+        className={cx(
+          "rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
+          view === v ? "bg-brand text-white" : "text-ink-soft hover:bg-line-soft hover:text-ink",
+        )}
+      >
+        {label}
+      </button>
+    ) : (
+      <span
+        key={v}
+        title={`${label} — coming in ${soon}`}
+        className="cursor-not-allowed rounded-lg px-3 py-1.5 text-sm font-semibold text-ink-faint/70"
+      >
+        {label}
+      </span>
+    );
   return (
     <header className="border-b border-line bg-card">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
@@ -53,12 +73,7 @@ export function Header({
             </span>
           )}
         </div>
-        {onNavigate && (
-          <nav className="flex items-center gap-1">
-            {tab("wizard", "Sourcing")}
-            {tab("benchmark", "Benchmark")}
-          </nav>
-        )}
+        {onNavigate && <nav className="flex flex-wrap items-center gap-1">{NAV.map(tab)}</nav>}
         <p className="w-full text-xs text-ink-faint sm:ml-auto sm:w-auto sm:max-w-sm sm:text-right">
           Subcontractor sourcing &amp; bid-leveling — the proprietary data, brought to the award decision.
         </p>
