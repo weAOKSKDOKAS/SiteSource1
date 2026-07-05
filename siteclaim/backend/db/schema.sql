@@ -33,17 +33,29 @@ DROP TABLE IF EXISTS estimate_items;
 DROP TABLE IF EXISTS estimate_projects;
 
 -- One row per firm — the fused identity (public record + private closeout archive).
+-- The CIC-register columns (enquiry_email … description, Prompt E) carry the real
+-- Registered Subcontractors data for a register-provenance firm; they are empty on
+-- the overlay/illustrative rows that never came from the register.
 CREATE TABLE firms (
     firm_id          TEXT PRIMARY KEY,
     name_en          TEXT NOT NULL,
     name_zh          TEXT,
     registered_grade TEXT,
     value_band       TEXT,
-    br_number        TEXT,   -- Business Registration number, when known (entity resolution for partner ingest)
+    br_number        TEXT,   -- Business Registration number, when known (entity resolution for partner ingest); the register's BR No.
     registers        TEXT,   -- JSON array of registration schemes (lossless for the scrape)
     trades           TEXT,   -- JSON array of canonical taxonomy keys
     closeout_summary TEXT,
-    provenance       TEXT NOT NULL DEFAULT 'illustrative'  -- 'public_register' (real scrape) | 'illustrative' (demo stub) | 'partner_archive' (closeout ingest)
+    provenance       TEXT NOT NULL DEFAULT 'illustrative',  -- 'public_register' (real scrape) | 'illustrative' (demo stub) | 'partner_archive' (closeout ingest)
+    -- CIC Registered Subcontractors register fields (Prompt E). Empty for overlay/illustrative rows.
+    enquiry_email    TEXT,   -- the firm's registered enquiry e-mail
+    address          TEXT,   -- registered address
+    phone            TEXT,   -- office contact number
+    fax              TEXT,   -- office fax number
+    reg_date         TEXT,   -- date of registration (as printed on the register)
+    expiry_date      TEXT,   -- expiry of the current registration
+    registered_trades TEXT,  -- JSON array of {code, group, specialty} — the raw registered trades
+    description      TEXT     -- short factual description generated from register data only
 );
 
 -- Public-record signals (winding-up, safety prosecutions, debarment, adjudication,
