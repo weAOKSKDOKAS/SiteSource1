@@ -1,11 +1,13 @@
 """Phase C — the seed profile split (demo vs live).
 
-'demo' (the default) is the full pitch database (156 firms: 140 real + 16
-illustrative); 'live' is the clean engine database of only the 140 real
-public-register firms, with none of the fabricated layer. (140 real = 134
-building-trade firms + 6 ground-investigation firms added in taxonomy v2.) Both are
-built into hermetic temp DBs so the committed sitesource.db and the shared session
-DB are never touched.
+Post-register (Prompt E), 'demo' (the default) is the full pitch database (the CIC
+register + the enforcement overlay + the 16 illustrative firms with their fabricated
+EOS layer); 'live' is the clean engine database of the register + overlay only, with
+none of the fabricated layer. The real-provenance population is ~1,407 (the CIC
+register merged with the enforcement overlay); demo adds the 16 illustrative firms
+on top. Both profiles are built into hermetic temp DBs so the committed sitesource.db
+and the shared session DB are never touched. Counts are asserted as ranges so a minor
+register refresh does not break the suite.
 """
 
 import pytest
@@ -38,7 +40,10 @@ def _count(conn, table):
 
 def test_live_profile_holds_only_real_firms(live_conn):
     firms = store.all_firms(live_conn)
-    assert len(firms) == 140  # 134 building-trade + 6 ground-investigation (v2)
+    # live = the CIC register + the enforcement overlay (~1,407 today). Assert a range and
+    # that it matches the coverage total (the same real-provenance population).
+    assert 1350 <= len(firms) <= 1450
+    assert len(firms) == store.coverage(live_conn)["total_firms"]
     assert not any(f.firm_id.startswith("F-") for f in firms)  # no illustrative stubs
     provenances = {row["provenance"] for row in live_conn.execute("SELECT provenance FROM firms")}
     assert provenances == {"public_register"}
@@ -55,8 +60,8 @@ def test_live_profile_drops_the_fabricated_layer(live_conn):
 
 def test_live_profile_coverage_matches_the_demo_claim(live_conn):
     cov = store.coverage(live_conn)
-    assert cov["total_firms"] == 140
-    assert cov["flagged_firms"] == 46
+    assert 1350 <= cov["total_firms"] <= 1450
+    assert cov["flagged_firms"] == 46  # every enforcement-flagged firm survives the merge
     assert set(cov["flags_by_type"]) == {"debarment", "safety_prosecution", "winding_up"}
     assert store._meta(live_conn, "profile", "") == "live"
 
@@ -71,24 +76,32 @@ def test_live_include_public_shortlists_real_firms_default_is_empty(live_conn):
 
 
 def test_demo_profile_keeps_all_firms_and_the_hero(demo_conn):
-    assert len(store.all_firms(demo_conn)) == 156  # 140 real + 16 illustrative
+    all_firms = store.all_firms(demo_conn)
+    illustrative = [f for f in all_firms if f.firm_id.startswith("F-")]
+    assert len(illustrative) == 16  # the fabricated layer is intact in demo
+    # demo = the real register/overlay + the 16 illustrative firms; coverage counts real only.
+    assert len(all_firms) == store.coverage(demo_conn)["total_firms"] + 16
     assert store._meta(demo_conn, "profile", "") == "demo"
-    # the demo hero order is intact (GI firms are a different trade — no bearing on it)
+    # the demo hero order is intact — the shortlist still draws from the illustrative
+    # assessable firms (the register firms carry no EOS closeout record).
     from db.tests.conftest import ELECTRICAL_SCOPE_QUERY
 
     order = [c.firm.firm_id for c in cross_reference(demo_conn, "electrical", ELECTRICAL_SCOPE_QUERY)]
     assert order == ["F-EL-02", "F-EL-04", "F-EL-03", "F-EL-01"]
-    assert store.coverage(demo_conn)["total_firms"] == 140  # counts only real, both profiles
+    assert 1350 <= store.coverage(demo_conn)["total_firms"] <= 1450  # counts only real, both profiles
 
 
-def test_ground_investigation_firms_are_real_clean_and_ungraded_except_kin_wing(live_conn):
+def test_ground_investigation_is_register_backed_and_real(live_conn):
+    # Post-register, ground investigation is a register specialty (of foundation/piling and
+    # civil contractors) plus the curated GI specialists — many firms now, all real-provenance,
+    # never illustrative. The specialty groupings the loader derives are present too.
     gi = [f for f in store.all_firms(live_conn) if "ground_investigation" in f.trades]
-    assert len(gi) == 6
+    assert len(gi) >= 6
     assert not any(f.firm_id.startswith("F-") for f in gi)  # verified-real only, no illustrative
-    # honesty guard: no invented flags, and only Kin Wing carries a (confirmed) grade
-    assert all(not f.public_flags for f in gi)
-    graded = {f.name for f in gi if f.registered_grade}
-    assert graded == {"Kin Wing Engineering Limited"}
+    assert {row["provenance"] for row in live_conn.execute(
+        "SELECT provenance FROM firms WHERE trades LIKE '%ground_investigation%'")} == {"public_register"}
+    trades = {t for f in store.all_firms(live_conn) for t in f.trades}
+    assert {"ground_investigation", "field_testing", "field_installations"} <= trades
 
 
 def test_ground_investigation_shortlists_through_include_public(live_conn):
@@ -118,13 +131,14 @@ def test_get_connection_honours_sitesource_db_env(tmp_path, monkeypatch):
     monkeypatch.setenv("SITESOURCE_DB", str(live))
     conn = store.get_connection()  # no arg -> env
     try:
-        assert len(store.all_firms(conn)) == 140
+        live_n = len(store.all_firms(conn))
+        assert 1350 <= live_n <= 1450  # live = register + overlay
     finally:
         conn.close()
 
-    # an explicit path always beats the env override
+    # an explicit path always beats the env override; demo adds the 16 illustrative firms
     conn2 = store.get_connection(demo)
     try:
-        assert len(store.all_firms(conn2)) == 156
+        assert len(store.all_firms(conn2)) == live_n + 16
     finally:
         conn2.close()

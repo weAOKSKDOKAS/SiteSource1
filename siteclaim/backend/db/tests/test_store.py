@@ -49,10 +49,10 @@ def test_historical_pricing_band(conn):
 def test_coverage_counts_only_real_provenance(conn):
     cov = store.coverage(conn)
     assert cov["provenance"] == "public_register"
-    # the 16 illustrative demo firms are excluded from the public-register claim.
-    # 140 real = 134 building-trade firms + 6 verified ground-investigation firms (v2);
-    # the GI firms carry no verified flags, so flagged stays 46.
-    assert cov["total_firms"] == 140
+    # Post-register (Prompt E): coverage counts the full CIC register + the enforcement
+    # overlay (all real provenance), never the 16 illustrative demo firms. ~1,407 real
+    # today; a range keeps the test robust to a minor register refresh.
+    assert 1350 <= cov["total_firms"] <= 1450
     assert cov["flagged_firms"] == 46
     # demo-only signal types (illustrative references) never appear in the claim
     assert "adjudication" not in cov["flags_by_type"]

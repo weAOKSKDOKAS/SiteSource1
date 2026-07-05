@@ -33,34 +33,24 @@ from .embeddings import DETERMINISTIC_DIM, build_embeddings, deterministic_embed
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.sql"
 SEED_DATA_DIR = _HERE / "seed_data"
-DEFAULT_DB_PATH = _HERE / "sitesource.db"       # profile 'demo' (real + illustrative firms)
-LIVE_DB_PATH = _HERE / "sitesource_live.db"     # profile 'live' (clean real firms only)
+CSV_REGISTER_PATH = SEED_DATA_DIR / "source" / "RSRC_01_combined.csv"  # the real CIC register
+DEFAULT_DB_PATH = _HERE / "sitesource.db"       # profile 'demo' (register + overlay + illustrative)
+LIVE_DB_PATH = _HERE / "sitesource_live.db"     # profile 'live' (register + overlay only)
 SEED_VERSION = "1"
 
-# Profiles. 'demo' is the pitch database (real + the 16 illustrative firms + their
-# fabricated EOS records, pricing, and contacts). 'live' is the clean engine database:
-# only the real public-register firms, none of the fabricated layer. The mode flag on
-# cross_reference (include_public) is what lets the live engine shortlist real firms
-# against this clean database; see BUILD_PLAN.md sections 3 and 6.
+# Profiles. 'demo' is the pitch database (the CIC register + the enforcement overlay + the
+# 16 illustrative firms with their fabricated EOS records, pricing, and contacts). 'live' is
+# the clean engine database: the register + overlay only, none of the fabricated layer. The
+# mode flag on cross_reference (include_public) is what lets the live engine shortlist real
+# firms against this clean database; see BUILD_PLAN.md sections 3 and 6.
 PROFILES = ("demo", "live")
 _REAL = "public_register"
 
-# Reuse the Layer-1 taxonomy normaliser to screen real-scrape trade names (e.g.
-# "fire services", "mechanical and plumbing") into canonical keys at build time.
+# register_loader parses the CIC register CSV and fuses the curated records onto it. It
+# imports rules_engine.taxonomy, so put backend/ on the path first.
 if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
-from rules_engine.taxonomy import normalize as _normalize_trade  # noqa: E402
-
-
-def _canonical_trades(raw_trades: list[str]) -> list[str]:
-    """Screen raw trade names against the taxonomy; keep canonical keys and preserve
-    an unmapped trade rather than drop it. De-duplicated, order-stable."""
-    out: list[str] = []
-    for trade in raw_trades or []:
-        key = _normalize_trade(trade) or trade
-        if key not in out:
-            out.append(key)
-    return out
+from db import register_loader  # noqa: E402
 
 
 
@@ -157,13 +147,24 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
     pricing = _load_records("pricing") if profile == "demo" else []
     contacts = _load_records("contacts") if profile == "demo" else []
 
-    public_by_id = {r["firm_id"]: r for r in public}
     eos_by_id = {r["firm_id"]: r for r in eos}
-    firm_ids = sorted(set(public_by_id) | set(eos_by_id))
-    if profile == "live":
-        # Keep only real-provenance firms — drop the 16 illustrative stubs. Provenance
-        # (not an id-prefix guess) is the source-of-truth discriminator.
-        firm_ids = [fid for fid in firm_ids if provenance_by_id.get(fid) == _REAL]
+
+    # Split the curated public records by provenance: the real-provenance rows merge onto
+    # the CIC register (keeping their id/flags/awards, gaining the register's e-mail/BR/
+    # address/trades); the illustrative F-* rows carry their own closeout/EOS layer and are
+    # seeded separately (demo profile only). The register is the authoritative base — a plain
+    # curated row with no flag that isn't on the register is superseded and dropped.
+    curated_real = [r for r in public if provenance_by_id.get(r["firm_id"]) == _REAL]
+    curated_illustrative = [r for r in public if provenance_by_id.get(r["firm_id"]) != _REAL]
+
+    register = register_loader.load_csv_register(CSV_REGISTER_PATH)
+    firm_dicts = register_loader.merge_register(register, curated_real, eos_by_id)  # public_register rows
+    if profile == "demo":
+        firm_dicts += [
+            register_loader.illustrative_firm(r, eos_by_id.get(r["firm_id"], {}))
+            for r in curated_illustrative
+        ]
+    firm_ids = [fd["firm_id"] for fd in firm_dicts]
 
     if db_path.exists():
         db_path.unlink()
@@ -172,44 +173,53 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
         chunk_rows: list[tuple[str, int, str]] = []  # (firm_id, chunk_id, text)
-        for fid in firm_ids:
-            pub = public_by_id.get(fid, {})
-            rep = eos_by_id.get(fid, {})
-
+        for fd in firm_dicts:
+            fid = fd["firm_id"]
             conn.execute(
                 "INSERT INTO firms (firm_id, name_en, name_zh, registered_grade, value_band, "
-                "registers, trades, closeout_summary, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "br_number, registers, trades, closeout_summary, provenance, enquiry_email, "
+                "address, phone, fax, reg_date, expiry_date, registered_trades, description) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     fid,
-                    pub.get("name_en") or fid,
-                    pub.get("name_zh"),
-                    pub.get("registered_grade"),
-                    pub.get("value_band"),
-                    json.dumps(pub.get("registers", [])),
-                    json.dumps(_canonical_trades(pub.get("trades", []))),
-                    rep.get("closeout_summary", ""),
-                    provenance_by_id.get(fid, "illustrative"),
+                    fd.get("name_en") or fid,
+                    fd.get("name_zh"),
+                    fd.get("registered_grade"),
+                    fd.get("value_band"),
+                    fd.get("br_no") or "",
+                    json.dumps(fd.get("registers", [])),
+                    json.dumps(fd.get("trades", [])),  # already canonical (register_loader)
+                    fd.get("closeout_summary", ""),
+                    fd["provenance"],
+                    fd.get("enquiry_email", ""),
+                    fd.get("address", ""),
+                    fd.get("phone", ""),
+                    fd.get("fax", ""),
+                    fd.get("reg_date", ""),
+                    fd.get("expiry_date", ""),
+                    json.dumps(fd.get("registered_trades", [])),
+                    fd.get("description", ""),
                 ),
             )
-            for flag in pub.get("public_flags", []):
+            for flag in fd.get("public_flags", []):
                 conn.execute(
                     "INSERT INTO public_flags (firm_id, signal_type, label, date, source, reference) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (fid, flag["signal_type"], flag["label"], flag.get("date"), flag.get("source"), flag.get("reference")),
                 )
-            for proj in rep.get("projects", []):
+            for proj in fd.get("projects", []):
                 conn.execute(
                     "INSERT INTO project_closeouts (firm_id, project, client, year, delayed, note, source, reference) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (fid, proj.get("project"), proj.get("client"), proj.get("year"),
                      int(proj.get("delayed", 0)), proj.get("note"), proj.get("source"), proj.get("reference")),
                 )
-            for award in pub.get("award_history", []):
+            for award in fd.get("award_history", []):
                 conn.execute(
                     "INSERT INTO award_history (firm_id, project, client, year, source) VALUES (?, ?, ?, ?, ?)",
                     (fid, award.get("project"), award.get("client"), award.get("year"), award.get("source")),
                 )
-            for idx, text in enumerate(rep.get("report_text", [])):
+            for idx, text in enumerate(fd.get("report_text", [])):
                 if text and text.strip():
                     chunk_rows.append((fid, idx, text.strip()))
 
