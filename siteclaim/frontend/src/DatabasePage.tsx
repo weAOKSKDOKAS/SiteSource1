@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
+import { CiteProvider, useCite, type Citation } from "./cite";
 import { FirmRecord, Pill } from "./components";
 import { tradeLabel } from "./format";
 import {
+  flagReference,
   flagSignal,
+  flagSource,
   registerFor,
   rgba,
   shownEmail,
@@ -61,8 +64,18 @@ function pageWindow(current: number, totalPages: number, span = 1): (number | "�
 
 // The proprietary database (Layer 3) — the animated data-asset showcase over the full CIC
 // register. Coverage is stated as an honest composition; the browse and every figure count
-// the real-provenance population only (illustrative demo firms never appear).
+// the real-provenance population only (illustrative demo firms never appear). Wrapped in the
+// CiteProvider so a register chip or a flag reference opens the shared government-record panel.
 export function DatabasePage() {
+  return (
+    <CiteProvider>
+      <DatabaseView />
+    </CiteProvider>
+  );
+}
+
+function DatabaseView() {
+  const cite = useCite();
   const [cov, setCov] = useState<Coverage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -190,14 +203,21 @@ export function DatabasePage() {
             <Figure value={counts.registers} label="Issuing registers cross-checked" />
             <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
               {registerChips.map((r) => (
-                <span
+                <button
                   key={r.short}
-                  title={`${r.name} — cross-checked against all ${total.toLocaleString("en-HK")} screened firms`}
-                  className="tabular inline-flex cursor-help items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] text-[#dbe5f4]"
+                  type="button"
+                  onClick={() => cite.open({
+                    source: r.name,
+                    reference: r.home,
+                    detail: `${r.name} — cross-checked against all ${total.toLocaleString("en-HK")} screened firms; adverse records matched by company name and registration number.`,
+                    date: null,
+                  })}
+                  title={`${r.name} — open the government record`}
+                  className="tabular inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] text-[#dbe5f4] transition hover:brightness-125"
                   style={{ background: "rgba(255,255,255,0.04)", borderColor: rgba(r.color, 0.4) }}
                 >
                   <span className="h-[7px] w-[7px] rounded-full" style={{ background: r.color }} />{r.short}
-                </span>
+                </button>
               ))}
             </div>
           </div>
@@ -262,7 +282,7 @@ export function DatabasePage() {
               </tr>
             </thead>
             <tbody>
-              {page?.items.map((f) => <FirmRow key={f.firm_id} firm={f} onOpen={() => setDetail(f)} />)}
+              {page?.items.map((f) => <FirmRow key={f.firm_id} firm={f} onOpen={() => setDetail(f)} onCite={cite.open} />)}
               {!loading && (page?.items.length ?? 0) === 0 && (
                 <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-ink-faint">No registered subcontractor matches “{debouncedQ}”.</td></tr>
               )}
@@ -352,7 +372,7 @@ function PagerBtn({ label, disabled, onClick }: { label: string; disabled: boole
   );
 }
 
-function FirmRow({ firm, onOpen }: { firm: FirmProfile; onOpen: () => void }) {
+function FirmRow({ firm, onOpen, onCite }: { firm: FirmProfile; onOpen: () => void; onCite: (c: Citation) => void }) {
   const flags = firm.public_flags;
   const worst = worstFlagSeverity(flags);
   const flagged = flags.length > 0;
@@ -402,7 +422,14 @@ function FirmRow({ firm, onOpen }: { firm: FirmProfile; onOpen: () => void }) {
       <td className="px-4 py-3 align-top">
         {flagged ? (
           <>
-            <Pill tone={worst === "warning" ? "warn" : "bad"}>{`⚑ ${flags.length} flag${flags.length === 1 ? "" : "s"}`}</Pill>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onCite({ source: flagSource(flags[0]), reference: flagReference(flags[0]), detail: flags[0].label, date: null }); }}
+              title="Open the government record"
+              className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+            >
+              <Pill tone={worst === "warning" ? "warn" : "bad"}>{`⚑ ${flags.length} flag${flags.length === 1 ? "" : "s"}`}</Pill>
+            </button>
             <div className="mt-1 text-[11px] text-warn">{signalLabel(flagSignal(flags[0]))}</div>
           </>
         ) : (
