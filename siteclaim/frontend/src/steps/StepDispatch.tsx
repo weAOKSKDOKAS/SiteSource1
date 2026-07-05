@@ -9,7 +9,7 @@ import { tradeLabel } from "../format";
 const STATUS_LABEL: Record<DispatchStatus, string> = {
   drafted: "Draft",
   approved: "Approved",
-  sent_mock: "Sent (mock)",
+  sent_mock: "In outbox",
 };
 
 type Draft = { subject: string; body: string };
@@ -122,7 +122,7 @@ export function StepDispatch({
     <div className="space-y-6">
       <StepHeading
         title="Dispatch enquiries"
-        lead="The approve-before-send gate: review the selected firms and their enquiry emails in the pop-up, edit any draft, then confirm. Each firm receives only its trade's documents — the electrical firm gets the electrical scope, not the whole tender. Nothing is actually sent: confirming writes the mock outbox with exactly your edited text."
+        lead="The approve-before-send gate: review the selected firms and their enquiry emails in the pop-up, edit any draft, then confirm. Each firm receives only its trade's documents — the electrical firm gets the electrical scope, not the whole tender. Confirming prepares each enquiry in the outbox with exactly your edited text, ready to send."
       />
 
       {/* Selection summary per trade — firms are picked on the shortlist or in the pop-up. */}
@@ -159,14 +159,14 @@ export function StepDispatch({
         </div>
       </Card>
 
-      {/* Persistent post-confirm summary + the mock outbox (the audit trail). */}
+      {/* Persistent post-confirm summary + the outbox (the audit trail). */}
       {dispatch && (
         <Card className="overflow-hidden">
           <div className="flex items-center justify-between border-b border-line-soft bg-ok-bg/40 px-4 py-2.5">
             <h2 className="text-sm font-semibold text-ink">
-              {dispatch.bundles.length} enquir{dispatch.bundles.length === 1 ? "y" : "ies"} prepared — mock outbox
+              Outbox — {dispatch.bundles.length} enquir{dispatch.bundles.length === 1 ? "y" : "ies"} prepared
             </h2>
-            <Pill tone="ok">{dispatch.bundles.length} written</Pill>
+            <Pill tone="ok">{dispatch.bundles.length} ready</Pill>
           </div>
           <ul className="divide-y divide-line-soft">
             {dispatch.bundles.map((b) => (
@@ -192,6 +192,9 @@ export function StepDispatch({
               </li>
             ))}
           </ul>
+          <p className="border-t border-line-soft px-4 py-2 text-[11px] text-ink-faint">
+            Live sending is wired separately — enquiries are prepared here with their trade-only bundles, ready to send.
+          </p>
         </Card>
       )}
 
@@ -355,7 +358,7 @@ function DispatchReviewModal({
 
         <div className="flex items-center justify-between gap-3 border-t border-line-soft pt-3">
           <span className="text-xs text-ink-faint">
-            Confirming writes the mock outbox with exactly the text above — the human gate before anything is sent.
+            Confirming prepares each enquiry in the outbox with exactly the text above — the human gate before anything leaves.
           </span>
           <Button onClick={onConfirm} loading={sending} disabled={approvedCount === 0 || composing}>
             Confirm — write {approvedCount} enquir{approvedCount === 1 ? "y" : "ies"} →
