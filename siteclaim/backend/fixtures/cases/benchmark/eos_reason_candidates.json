@@ -1,0 +1,8 @@
+{
+  "candidates": [
+    {"item_ref": "G1", "granularity": "item", "reason_code": "standing_time", "snippet": "The rotary drilling rig stood idle for extended periods while utility diversions were completed, which pushed the achieved rate for the soil drilling item above the tendered rate."},
+    {"item_ref": "G2", "granularity": "item", "reason_code": "standing_time", "snippet": "The rig also stood waiting for the Engineer's instruction to core into rock, raising the rock drilling rate over the tendered rate."},
+    {"item_ref": "G3", "granularity": "item", "reason_code": "quantity_remeasure", "snippet": "Five additional standard penetration tests were instructed and remeasured on site beyond the tendered quantity."},
+    {"item_ref": "G5", "granularity": "item", "reason_code": "omission_at_tender", "snippet": "During excavation an unforeseen obstruction was encountered that required removal; this work was not priced in the tender and was carried out as an additional item."}
+  ]
+}

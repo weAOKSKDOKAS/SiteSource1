@@ -189,6 +189,25 @@ class ProjectEOS(BaseModel):
     created_at: str = ""
 
 
+class ReasonCandidate(BaseModel):
+    """An EOS-derived reason suggestion for a variance line: a code from the ten-code
+    vocabulary and the supporting narrative snippet. ``source`` and ``record_id`` are set by
+    the extractor / endpoint, not the model. Advisory — the human confirm gate writes it."""
+
+    item_ref: str = ""
+    granularity: str = "item"
+    reason_code: str = ""
+    snippet: str = ""
+    source: str = ""                     # reason-from-eos | fallback
+    record_id: Optional[int] = None      # the variance record it maps to (set by the endpoint)
+
+
+class ReasonCandidateSet(BaseModel):
+    """The LLM output (parsed by ``complete_json``) — one candidate per explained line."""
+
+    candidates: list[ReasonCandidate] = Field(default_factory=list)
+
+
 class BenchmarkSummary(BaseModel):
     projects: int = 0
     tender_items: int = 0
