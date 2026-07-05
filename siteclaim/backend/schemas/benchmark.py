@@ -72,3 +72,29 @@ class TenderUploadResponse(BaseModel):
     source: str
     item_count: int
     items: list[TenderItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Actuals (the outturn / final account)
+# ---------------------------------------------------------------------------
+class ActualItem(BaseModel):
+    id: int
+    project_id: int
+    item_ref: str = ""
+    description: str = ""
+    unit: str = ""
+    qty: Optional[float] = None
+    rate: Optional[float] = None
+    amount: Optional[float] = None
+    section: str = ""
+    granularity: str = "item"       # item | section | project
+    source: str = ""
+    source_doc: str = ""
+
+
+class ActualsUploadResponse(BaseModel):
+    project_id: int
+    source: str
+    item_count: int
+    granularities: list[str] = Field(default_factory=list)  # distinct granularities seen
+    items: list[ActualItem] = Field(default_factory=list)

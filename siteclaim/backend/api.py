@@ -11,6 +11,7 @@ send real email (gated — see ``mailer``); ``/level-upload`` catches a subcontr
 returned Schedule of Rates; ``/contacts`` exposes the address book.
 """
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -35,9 +36,11 @@ from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  #
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
-from pipeline.benchmark import tender_snapshot  # noqa: E402
+from pipeline.benchmark import actuals_xlsx, tender_snapshot  # noqa: E402
 from db import benchmark as bench, refresh, store  # noqa: E402
 from schemas.benchmark import (  # noqa: E402
+    ActualItem,
+    ActualsUploadResponse,
     Project,
     ProjectCreate,
     ProjectUpdate,
@@ -787,6 +790,86 @@ def post_benchmark_link_scope(project_id: int, scope: ScopePackages) -> TenderUp
         return TenderUploadResponse(
             project_id=project_id, source="pipeline-link", item_count=len(written),
             items=[TenderItem(**it) for it in written],
+        )
+    finally:
+        conn.close()
+
+
+_ACTUALS_PDF_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _actuals_pdf_enabled() -> bool:
+    """PDF actuals parsing (the chunked LLM fallback) is opt-in — default off, so cost
+    data stays deterministic and local unless the operator turns it on."""
+    return os.getenv("ACTUALS_PDF_PARSE", "").strip().lower() in _ACTUALS_PDF_TRUTHY
+
+
+@app.get("/benchmark/actuals-template.xlsx")
+def get_actuals_template(project: int) -> FileResponse:
+    """Download the Final Account template for a project, pre-filled with its tender item
+    refs/descriptions so the operator only types the actual numbers."""
+    conn = store.get_connection()
+    try:
+        proj = _require_project(conn, project)
+        items = bench.tender_items(conn, project)
+    finally:
+        conn.close()
+    out = Workspace().artifacts_dir(f"benchmark-{project}", create=True) / "actuals-template.xlsx"
+    actuals_xlsx.build_actuals_template(proj["name"], items, out)
+    return FileResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"actuals-template-{project}.xlsx",
+    )
+
+
+@app.post("/benchmark/{project_id}/actuals-upload", response_model=ActualsUploadResponse)
+def post_actuals_upload(
+    project_id: int,
+    files: list[UploadFile] = File(...),
+    source_doc: str = Form(""),
+) -> ActualsUploadResponse:
+    """Capture the actual outturn. xlsx (the Final Account template) parses
+    deterministically with openpyxl — granularity detected per row (item vs section-totals
+    vs project-total), tolerant of blank cells and typed-in numbers. A wrong-layout
+    workbook returns a clean 400. A PDF is rejected unless ``ACTUALS_PDF_PARSE=true`` (and
+    then only on the live engine), keeping cost data deterministic and local by default."""
+    conn = store.get_connection()
+    try:
+        _require_project(conn, project_id)
+        items: list[dict] = []
+        source = "actuals-xlsx"
+        for upload in files:
+            data = upload.file.read()
+            try:
+                if is_xlsx_upload(upload.filename, upload.content_type):
+                    items += actuals_xlsx.parse_actuals_xlsx(data)
+                elif not _actuals_pdf_enabled():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="PDF actuals parsing is off. Use the Final Account xlsx template, "
+                        "or set ACTUALS_PDF_PARSE=true to enable the LLM parse fallback.",
+                    )
+                elif demo_mode():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="PDF actuals parsing runs on the live engine — upload the xlsx template in DEMO.",
+                    )
+                else:
+                    text, images = extract_document(data, upload.content_type)
+                    reply = parse_bid_reply(firm_id="", trade="", images=images, doc_text=text)
+                    items += [{
+                        "item_ref": li.item_ref, "description": li.description or "", "unit": li.unit or "",
+                        "qty": li.qty, "rate": li.rate, "amount": li.amount, "section": "", "granularity": "item",
+                    } for li in reply.line_items]
+                    source = "actuals-pdf"
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        written = bench.replace_actual_items(conn, project_id, items, source=source, source_doc=source_doc)
+        granularities = sorted({it["granularity"] for it in written})
+        return ActualsUploadResponse(
+            project_id=project_id, source=source, item_count=len(written),
+            granularities=granularities, items=[ActualItem(**it) for it in written],
         )
     finally:
         conn.close()

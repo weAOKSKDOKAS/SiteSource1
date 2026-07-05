@@ -257,3 +257,49 @@ def tender_items(conn: sqlite3.Connection, project_id: int) -> list[dict]:
         return []
     rows = conn.execute("SELECT * FROM tender_items WHERE project_id = ? ORDER BY id", (project_id,)).fetchall()
     return [_item_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Actuals (the outturn). replace_actual_items overwrites the project's actuals.
+# ---------------------------------------------------------------------------
+def _actual_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "project_id": row["project_id"], "item_ref": row["item_ref"] or "",
+        "description": row["description"] or "", "unit": row["unit"] or "",
+        "qty": row["qty"], "rate": row["rate"], "amount": row["amount"],
+        "section": row["section"] or "", "granularity": row["granularity"],
+        "source": row["source"] or "", "source_doc": row["source_doc"] or "",
+    }
+
+
+def replace_actual_items(conn: sqlite3.Connection, project_id: int, items: list[dict], *,
+                         source: str, source_doc: str = "") -> list[dict]:
+    """Replace the project's actuals with ``items`` (each carries an explicit granularity:
+    item | section | project). Item-granularity rows with no item_ref are skipped; coarse
+    (section/project) rows are kept even without an item_ref. Atomic."""
+    ensure_benchmark_tables(conn)
+    try:
+        conn.execute("DELETE FROM actual_items WHERE project_id = ?", (project_id,))
+        for it in items:
+            gran = it.get("granularity") or "item"
+            ref = (it.get("item_ref") or "").strip()
+            if gran == "item" and not ref:
+                continue  # an item row must have a ref; coarse rows may not
+            conn.execute(
+                "INSERT INTO actual_items (project_id, item_ref, description, unit, qty, rate, amount, section, "
+                "granularity, source, source_doc, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (project_id, ref or None, it.get("description"), it.get("unit"), it.get("qty"), it.get("rate"),
+                 it.get("amount"), it.get("section"), gran, source, source_doc, _now()),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return actual_items(conn, project_id)
+
+
+def actual_items(conn: sqlite3.Connection, project_id: int) -> list[dict]:
+    if not has_benchmark_tables(conn):
+        return []
+    rows = conn.execute("SELECT * FROM actual_items WHERE project_id = ? ORDER BY id", (project_id,)).fetchall()
+    return [_actual_dict(r) for r in rows]
