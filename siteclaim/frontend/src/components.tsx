@@ -40,7 +40,7 @@ export function Header({
     <header className="border-b border-line bg-card">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-2.5">
-          <span className="text-lg font-bold tracking-tight text-ink">
+          <span className="font-display text-lg font-bold tracking-tight text-ink">
             Site<span className="text-brand">Source</span>
           </span>
           {demoMode && (
@@ -134,7 +134,7 @@ export function Stepper({
 export function StepHeading({ title, lead }: { title: string; lead: string }) {
   return (
     <div>
-      <h1 className="text-xl font-bold tracking-tight text-ink">{title}</h1>
+      <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">{title}</h1>
       <p className="mt-1.5 max-w-2xl text-sm text-ink-soft">{lead}</p>
     </div>
   );
@@ -215,12 +215,14 @@ export function RiskFlagList({ flags }: { flags: RiskFlag[] }) {
   );
 }
 
-export function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "ok" | "bad" | "brand" }) {
+export function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "ok" | "bad" | "brand" | "violet" | "warn" }) {
   const tones = {
     neutral: "bg-line-soft text-ink-soft",
     ok: "bg-ok-bg text-ok",
     bad: "bg-bad-bg text-bad",
     brand: "bg-brand-bg text-brand",
+    violet: "bg-violet-bg text-violet",
+    warn: "bg-warn-bg text-warn",
   };
   return <span className={cx("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", tones[tone])}>{children}</span>;
 }
