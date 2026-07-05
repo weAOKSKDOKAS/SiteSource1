@@ -26,6 +26,7 @@ export function DatabasePage() {
   const [page, setPage] = useState<FirmsPage | null>(null);
   const [detail, setDetail] = useState<FirmProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadingFirms, setLoadingFirms] = useState(false);
 
   useEffect(() => {
     api.coverage().then(setCov).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
@@ -33,10 +34,12 @@ export function DatabasePage() {
 
   useEffect(() => {
     const id = setTimeout(() => {
+      setLoadingFirms(true);
       api
         .firms({ q: q || undefined, trade: trade || undefined, limit, offset })
         .then(setPage)
-        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+        .finally(() => setLoadingFirms(false));
     }, 160); // light debounce so typing does not spam the endpoint
     return () => clearTimeout(id);
   }, [q, trade, limit, offset]);
@@ -94,6 +97,7 @@ export function DatabasePage() {
                 placeholder="Search by name…"
                 className="min-w-40 flex-1 rounded-lg border border-line px-2.5 py-1.5 text-sm focus:border-brand focus:outline-none"
               />
+              {loadingFirms && <span className="ssLive h-2 w-2 shrink-0 rounded-full bg-brand" title="Searching the register…" aria-hidden />}
               <select
                 value={trade}
                 onChange={(e) => setFilter(() => setTrade(e.target.value))}

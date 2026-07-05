@@ -74,7 +74,7 @@ export function Header({
               className="inline-flex items-center gap-1.5 rounded-full bg-ink px-2.5 py-1 text-xs font-bold uppercase tracking-eyebrow text-white"
               title="Running offline against the seeded database — zero network calls."
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-ok" />
+              <span className="ssDot h-1.5 w-1.5 rounded-full bg-ok" />
               Demo mode
             </span>
           )}
@@ -139,6 +139,7 @@ export function Stepper({
                 <span className="pr-2">
                   <span className={cx("block text-sm font-semibold", state === "upcoming" ? "text-ink-faint" : "text-ink")}>
                     {label}
+                    {state === "active" && <span className="ssLive ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-brand align-middle" aria-hidden />}
                   </span>
                   <span className="hidden text-xs text-ink-faint lg:block">{GATE_HINT[step]}</span>
                 </span>
