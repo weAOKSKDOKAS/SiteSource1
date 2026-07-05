@@ -57,7 +57,9 @@ export default function App() {
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
   const [dispatch, setDispatch] = useState<DispatchSet | null>(null);
-  const [levelled, setLevelled] = useState<LevelledBid[] | null>(null);
+  // Per-section leveling: one LevelledBid[] per sublet trade — a trade is only ever
+  // levelled against its own bids (Prompt 1).
+  const [levelledByTrade, setLevelledByTrade] = useState<Record<string, LevelledBid[]> | null>(null);
   const [levelStale, setLevelStale] = useState(false);
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [award, setAward] = useState<string | null>(null);
@@ -104,7 +106,7 @@ export default function App() {
     }
     if (keep < 4) setDispatch(null);
     if (keep < 5) {
-      setLevelled(null);
+      setLevelledByTrade(null);
       setLevelStale(false);
     }
     if (keep < 6) setRecommendation(null);
@@ -219,10 +221,18 @@ export default function App() {
       setDispatch(result);
     });
 
+  // Only replies for trades the routing gate sent to sourcing are levelled — a trade
+  // routed to self-perform never enters the comparison.
+  function subletReplies(): BidReply[] {
+    if (!sourceScope) return replies;
+    const sublet = new Set(sourceScope.packages.map((p) => p.trade));
+    return replies.filter((r) => sublet.has(r.trade));
+  }
+
   const goLevel = () =>
     run(async () => {
-      const result = await api.level(replies, sourceScope);
-      setLevelled(result);
+      const result = await api.levelAll(subletReplies(), sourceScope);
+      setLevelledByTrade(Object.fromEntries(result.sections.map((s) => [s.trade, s.levelled])));
       setLevelStale(false);
       advance(5);
     });
@@ -247,15 +257,16 @@ export default function App() {
 
   const recompute = () =>
     run(async () => {
-      const result = await api.level(replies, sourceScope);
-      setLevelled(result);
+      const result = await api.levelAll(subletReplies(), sourceScope);
+      setLevelledByTrade(Object.fromEntries(result.sections.map((s) => [s.trade, s.levelled])));
       setLevelStale(false);
     });
 
   const goRecommend = () =>
     run(async () => {
-      if (!levelled) return;
-      const result = await api.recommend(levelled, heroTrade, rationaleFixture);
+      if (!levelledByTrade) return;
+      const flat = Object.values(levelledByTrade).flat();
+      const result = await api.recommend(flat, heroTrade, rationaleFixture);
       setRecommendation(result);
       setAward(result.recommended_firm_id);
       advance(6);
@@ -277,7 +288,7 @@ export default function App() {
     setShortlist(null);
     setApprovals({});
     setDispatch(null);
-    setLevelled(null);
+    setLevelledByTrade(null);
     setLevelStale(false);
     setRecommendation(null);
     setAward(null);
@@ -382,10 +393,10 @@ export default function App() {
               />
             )}
 
-            {step === 5 && levelled && (
+            {step === 5 && levelledByTrade && (
               <StepLevel
-                levelled={levelled}
-                replies={replies}
+                sections={levelledByTrade}
+                replies={subletReplies()}
                 stale={levelStale}
                 xlsxUrl={api.levelingXlsxUrl()}
                 onEditRate={editRate}

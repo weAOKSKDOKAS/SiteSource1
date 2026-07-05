@@ -2,10 +2,14 @@ import { useState } from "react";
 import type { BidReply, LevelledBid } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine, SeverityTag, cx } from "../ui";
-import { hkd } from "../format";
+import { hkd, tradeLabel } from "../format";
 
+// Per-section leveling: one labelled comparison block PER SUBLET TRADE — a trade's bids
+// are levelled only against each other, and two trades' items are never merged into one
+// table. The rate edits and recompute operate within a trade (the recompute re-levels
+// every section so the totals stay consistent).
 export function StepLevel({
-  levelled,
+  sections,
   replies,
   stale,
   xlsxUrl,
@@ -15,7 +19,7 @@ export function StepLevel({
   onNext,
   loading,
 }: {
-  levelled: LevelledBid[];
+  sections: Record<string, LevelledBid[]>;
   replies: BidReply[];
   stale: boolean;
   xlsxUrl: string;
@@ -25,11 +29,79 @@ export function StepLevel({
   onNext: () => void;
   loading: boolean;
 }) {
+  const [detail, setDetail] = useState<LevelledBid | null>(null);
+  const trades = Object.keys(sections);
+  const claimedOf = new Map(replies.map((r) => [`${r.trade}:${r.firm_id}`, r.claimed_total ?? 0]));
+
+  return (
+    <div className="space-y-6">
+      <StepHeading
+        title="Level the bids"
+        lead="Claude parses each returned Schedule of Rates; the rules engine recomputes every amount as qty × rate, sums the corrected total, flags arithmetic errors, treats a missing rate or provisional sum as a scope gap, and keeps exclusions as non-comparable. Each sublet trade is levelled only against its own bids — one comparison section per trade. Edit a rate and recompute to see the ranking move."
+      />
+
+      {trades.map((trade, i) => (
+        <TradeSection
+          key={trade}
+          trade={trade}
+          levelled={sections[trade]}
+          replies={replies.filter((r) => r.trade === trade)}
+          claimedOf={claimedOf}
+          loading={loading && i === 0}
+          onEditRate={onEditRate}
+          onOpenDetail={setDetail}
+        />
+      ))}
+
+      {stale && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-warn/40 bg-warn-bg px-4 py-2.5 text-sm">
+          <span className="text-ink">A rate changed — the corrected totals are stale.</span>
+          <Button onClick={onRecompute} loading={loading}>Recompute</Button>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-3">
+        <a
+          href={xlsxUrl}
+          className="inline-flex items-center gap-2 rounded-lg border border-line bg-card px-4 py-2.5 text-sm font-semibold text-ink hover:bg-line-soft"
+        >
+          ⤓ Download Excel comparison{trades.length > 1 ? " — one sheet per trade" : ""}
+        </a>
+      </div>
+
+      <StepNav onBack={onBack} onNext={onNext} nextLabel="Recommend an award →" loading={loading} nextDisabled={stale} />
+
+      <BidDrawer
+        bid={detail}
+        claimed={detail ? claimedOf.get(`${detail.trade}:${detail.firm_id}`) ?? 0 : 0}
+        onClose={() => setDetail(null)}
+      />
+    </div>
+  );
+}
+
+// One sublet trade's full leveling block: claimed-vs-corrected, the editable rate matrix,
+// and that trade's corrections/gaps/exclusions. Never mixes another trade's items.
+function TradeSection({
+  trade,
+  levelled,
+  replies,
+  claimedOf,
+  loading,
+  onEditRate,
+  onOpenDetail,
+}: {
+  trade: string;
+  levelled: LevelledBid[];
+  replies: BidReply[];
+  claimedOf: Map<string, number>;
+  loading: boolean;
+  onEditRate: (firmId: string, itemRef: string, rate: number | null) => void;
+  onOpenDetail: (bid: LevelledBid) => void;
+}) {
   const firms = replies.map((r) => r.firm_id);
   const nameOf = new Map(levelled.map((b) => [b.firm_id, b.firm_name]));
   const correctedOf = new Map(levelled.map((b) => [b.firm_id, b.corrected_total]));
-  const claimedOf = new Map(replies.map((r) => [r.firm_id, r.claimed_total ?? 0]));
-  const [detail, setDetail] = useState<LevelledBid | null>(null);
 
   // Item order from the first reply; qty/rate per (firm,item) from the replies.
   const items = replies[0]?.line_items.map((l) => ({ ref: l.item_ref, description: l.description })) ?? [];
@@ -40,17 +112,12 @@ export function StepLevel({
   const cheapest = cleanCorrected.length ? Math.min(...cleanCorrected) : 0;
 
   return (
-    <div className="space-y-6">
-      <StepHeading
-        title="Level the bids"
-        lead="Claude parses each returned Schedule of Rates; the rules engine recomputes every amount as qty × rate, sums the corrected total, flags arithmetic errors, treats a missing rate or provisional sum as a scope gap, and keeps exclusions as non-comparable. Edit a rate and recompute to see the ranking move."
-      />
-
+    <section className="space-y-4">
       {/* Summary: claimed vs corrected */}
       <Card className="relative overflow-hidden">
         <ScanLine active={loading} />
         <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
-          Claimed vs corrected
+          {tradeLabel(trade)} — claimed vs corrected
         </h2>
         <table className="w-full text-sm">
           <thead>
@@ -66,13 +133,13 @@ export function StepLevel({
             {[...levelled]
               .sort((a, b) => a.corrected_total - b.corrected_total)
               .map((b) => {
-                const claimed = claimedOf.get(b.firm_id) ?? 0;
+                const claimed = claimedOf.get(`${b.trade}:${b.firm_id}`) ?? 0;
                 const delta = b.corrected_total - claimed;
                 const isCheapest = b.corrected_total === cheapest;
                 return (
                   <tr
                     key={b.firm_id}
-                    onClick={() => setDetail(b)}
+                    onClick={() => onOpenDetail(b)}
                     title="Open the levelled-bid record"
                     className={cx("cursor-pointer transition-colors", isCheapest ? "bg-ok-bg/30" : "hover:bg-paper-soft/70")}
                   >
@@ -105,7 +172,7 @@ export function StepLevel({
       {/* Editable rate matrix */}
       <Card className="overflow-x-auto">
         <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
-          Rates by item — edit a rate to re-level
+          {tradeLabel(trade)} — rates by item (edit a rate to re-level)
         </h2>
         <table className="w-full min-w-[640px] text-sm">
           <thead>
@@ -155,14 +222,7 @@ export function StepLevel({
         </table>
       </Card>
 
-      {stale && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-warn/40 bg-warn-bg px-4 py-2.5 text-sm">
-          <span className="text-ink">A rate changed — the corrected totals are stale.</span>
-          <Button onClick={onRecompute} loading={loading}>Recompute</Button>
-        </div>
-      )}
-
-      {/* Called-out corrections, gaps, exclusions */}
+      {/* Called-out corrections, gaps, exclusions — this trade only */}
       <div className="grid gap-4 md:grid-cols-3">
         <CalloutCard title="Arithmetic corrections" tone="bad">
           {levelled.flatMap((b) =>
@@ -196,20 +256,7 @@ export function StepLevel({
           )}
         </CalloutCard>
       </div>
-
-      <div className="flex items-center justify-between gap-3">
-        <a
-          href={xlsxUrl}
-          className="inline-flex items-center gap-2 rounded-lg border border-line bg-card px-4 py-2.5 text-sm font-semibold text-ink hover:bg-line-soft"
-        >
-          ⤓ Download Excel comparison
-        </a>
-      </div>
-
-      <StepNav onBack={onBack} onNext={onNext} nextLabel="Recommend an award →" loading={loading} nextDisabled={stale} />
-
-      <BidDrawer bid={detail} claimed={detail ? claimedOf.get(detail.firm_id) ?? 0 : 0} onClose={() => setDetail(null)} />
-    </div>
+    </section>
   );
 }
 
