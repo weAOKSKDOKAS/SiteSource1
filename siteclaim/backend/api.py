@@ -37,7 +37,19 @@ from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
 from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E402
-from db import benchmark as bench, refresh, store  # noqa: E402
+from pipeline.routing.recommend import ROUTE_SUGGESTIONS_FIXTURE, recommend_routes  # noqa: E402
+from pipeline.routing.signal import package_signal  # noqa: E402
+from db import benchmark as bench, refresh, routing, store  # noqa: E402
+from schemas.routing import (  # noqa: E402
+    ROUTES,
+    SUBLET,
+    SELF_PERFORM,
+    AnalyzeRequest,
+    ConfirmRoutesRequest,
+    RouteDecisionResult,
+    RoutePackage,
+    RouteProposal,
+)
 from schemas.benchmark import (  # noqa: E402
     ActualItem,
     ActualsUploadResponse,
@@ -983,3 +995,65 @@ def post_variance_reason(project_id: int, record_id: int, req: ReasonRequest) ->
         return _variance_response([updated])[0]
     finally:
         conn.close()
+
+
+# ===========================================================================
+# Routing gate (Phase 1) — self-perform (left) vs sublet (right), per package.
+#
+# After ingest splits the tender, /route/analyze computes the Layer-1 coverage
+# signal per package and drafts an AI recommendation (suggestion only, with a
+# deterministic fallback), persisting the proposal with chosen_route null.
+# /route/confirm is the Layer-4 gate — the only writer of chosen_route — and
+# returns the sublet packages (for the existing shortlist path) and the
+# self-perform packages (for the Phase-3 estimator).
+# ===========================================================================
+@app.post("/route/analyze", response_model=RouteProposal)
+def post_route_analyze(req: AnalyzeRequest) -> RouteProposal:
+    """Recommend a route per package (advisory) and persist the proposal."""
+    run_ref = req.run_ref.strip() or tender_slug(req.scope.project_name)
+
+    conn = store.get_connection()
+    try:
+        packages = [
+            {
+                "package_key": pkg.trade, "trade": pkg.trade, "scope_summary": pkg.scope_summary,
+                "signals": package_signal(conn, pkg.trade, pkg.scope_summary),
+            }
+            for pkg in req.scope.packages
+        ]
+    finally:
+        conn.close()
+
+    recommended = recommend_routes(
+        packages, demo_fixture=ROUTE_SUGGESTIONS_FIXTURE if demo_mode() else None,
+    )
+
+    conn = store.get_connection()
+    try:
+        saved = routing.write_proposal(conn, run_ref, recommended)
+    finally:
+        conn.close()
+    return RouteProposal(run_ref=run_ref, packages=[RoutePackage(**r) for r in saved])
+
+
+@app.post("/route/confirm", response_model=RouteDecisionResult)
+def post_route_confirm(req: ConfirmRoutesRequest) -> RouteDecisionResult:
+    """The Layer-4 gate: record the human's route decisions (the sole writer of
+    chosen_route). Returns the run's proposal plus the sublet / self-perform splits."""
+    for d in req.decisions:
+        if d.chosen_route not in ROUTES:
+            raise HTTPException(status_code=400, detail=f"unknown route {d.chosen_route!r} (use one of {ROUTES})")
+    conn = store.get_connection()
+    try:
+        saved = routing.confirm_decisions(
+            conn, req.run_ref, {d.package_key: d.chosen_route for d in req.decisions}, decided_by=req.decided_by,
+        )
+    finally:
+        conn.close()
+    packages = [RoutePackage(**r) for r in saved]
+    return RouteDecisionResult(
+        run_ref=req.run_ref,
+        packages=packages,
+        sublet_packages=[p.package_key for p in packages if p.chosen_route == SUBLET],
+        self_perform_packages=[p.package_key for p in packages if p.chosen_route == SELF_PERFORM],
+    )
