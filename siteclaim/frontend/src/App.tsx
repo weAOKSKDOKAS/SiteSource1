@@ -387,6 +387,8 @@ export default function App() {
                 shortlist={shortlist}
                 heroTrade={heroTrade}
                 coverage={coverage}
+                approvals={approvals}
+                onToggleApprove={toggleApprove}
                 onBack={() => setStep(2)}
                 onNext={goDispatchStep}
                 loading={loading}

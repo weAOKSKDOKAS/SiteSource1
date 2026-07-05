@@ -8,6 +8,8 @@ export function StepShortlist({
   shortlist,
   heroTrade,
   coverage,
+  approvals,
+  onToggleApprove,
   onBack,
   onNext,
   loading,
@@ -15,6 +17,8 @@ export function StepShortlist({
   shortlist: ShortlistSet;
   heroTrade: string;
   coverage: Coverage | null;
+  approvals: Record<string, string[]>;
+  onToggleApprove: (trade: string, firmId: string) => void;
   onBack: () => void;
   onNext: () => void;
   loading: boolean;
@@ -89,7 +93,15 @@ export function StepShortlist({
             {open ? (
               <ol className="divide-y divide-line-soft">
                 {candidates.map((c, i) => (
-                  <CandidateRow key={c.firm.firm_id} candidate={c} rank={i + 1} top={i === 0} onOpen={() => setDetail(c)} />
+                  <CandidateRow
+                    key={c.firm.firm_id}
+                    candidate={c}
+                    rank={i + 1}
+                    top={i === 0}
+                    selected={(approvals[trade] ?? []).includes(c.firm.firm_id)}
+                    onToggleSelect={() => onToggleApprove(trade, c.firm.firm_id)}
+                    onOpen={() => setDetail(c)}
+                  />
                 ))}
               </ol>
             ) : (
@@ -108,7 +120,21 @@ export function StepShortlist({
   );
 }
 
-function CandidateRow({ candidate, rank, top, onOpen }: { candidate: Candidate; rank: number; top: boolean; onOpen: () => void }) {
+function CandidateRow({
+  candidate,
+  rank,
+  top,
+  selected,
+  onToggleSelect,
+  onOpen,
+}: {
+  candidate: Candidate;
+  rank: number;
+  top: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
+  onOpen: () => void;
+}) {
   const { firm } = candidate;
   const against = candidate.recommended_against;
   const fatal = candidate.risk_flags.filter((f) => f.severity === "fatal");
@@ -135,8 +161,25 @@ function CandidateRow({ candidate, rank, top, onOpen }: { candidate: Candidate; 
         <MatchChip score={candidate.match_score} />
         {top && !against && <Pill tone="ok">Top pick</Pill>}
         {against && <Pill tone="bad">⛔ Recommend against</Pill>}
-        <span className="ml-auto text-xs text-ink-faint">
-          {firm.registered_grade} · {firm.value_band.replace(/_/g, " ")}
+        <span className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-ink-faint">
+            {firm.registered_grade} · {firm.value_band.replace(/_/g, " ")}
+          </span>
+          {/* The enquiry selection (feeds the dispatch gate). Selecting a
+              recommended-against firm is allowed but visibly warned. */}
+          <button
+            type="button"
+            onClick={onToggleSelect}
+            title={against && !selected ? "This firm is recommended against — selecting it is allowed but flagged" : "Toggle enquiry selection"}
+            className={cx(
+              "rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright",
+              selected && against && "border-bad/50 bg-bad-bg text-bad",
+              selected && !against && "border-brand bg-brand text-white",
+              !selected && "border-line bg-card text-ink-soft hover:bg-line-soft",
+            )}
+          >
+            {selected ? (against ? "Selected — flagged ⚠" : "Selected ✓") : "Select for enquiry"}
+          </button>
         </span>
       </div>
 
