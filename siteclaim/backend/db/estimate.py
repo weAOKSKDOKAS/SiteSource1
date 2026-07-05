@@ -53,6 +53,7 @@ def ensure_estimate_tables(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_estimate_items_est     ON estimate_items(estimate_id);
         CREATE INDEX IF NOT EXISTS idx_estimate_items_ref     ON estimate_items(item_ref);
         CREATE INDEX IF NOT EXISTS idx_estimate_projects_prov ON estimate_projects(provenance);
+        CREATE INDEX IF NOT EXISTS idx_estimate_projects_run  ON estimate_projects(run_ref);
         """
     )
 
@@ -117,6 +118,15 @@ def get_project(conn: sqlite3.Connection, estimate_id: int) -> Optional[dict]:
         return None
     row = conn.execute("SELECT * FROM estimate_projects WHERE id = ?", (estimate_id,)).fetchone()
     return _project_dict(conn, row) if row is not None else None
+
+
+def list_by_run(conn: sqlite3.Connection, run_ref: str) -> list[dict]:
+    """Every estimate seeded for an analysis run (the left-track packages of a unified
+    project, Phase 4)."""
+    if not has_estimate_tables(conn) or not run_ref:
+        return []
+    rows = conn.execute("SELECT * FROM estimate_projects WHERE run_ref = ? ORDER BY id", (run_ref,)).fetchall()
+    return [_project_dict(conn, r) for r in rows]
 
 
 def find_by_route(conn: sqlite3.Connection, run_ref: str, package_key: str) -> Optional[dict]:

@@ -25,6 +25,7 @@ DROP TABLE IF EXISTS variance_records;
 DROP TABLE IF EXISTS actual_items;
 DROP TABLE IF EXISTS tender_items;
 DROP TABLE IF EXISTS reason_codes;
+DROP TABLE IF EXISTS unified_projects;   -- Phase 4 umbrella (references projects) — dropped first
 DROP TABLE IF EXISTS projects;
 -- Unified engine (Phase 1+).
 DROP TABLE IF EXISTS package_routes;
@@ -343,6 +344,22 @@ CREATE TABLE estimate_items (
     created_at   TEXT NOT NULL
 );
 
+-- ===========================================================================
+-- Unified project (Phase 4) — a THIN umbrella keyed by the analysis run (run_ref)
+-- that ties a tender through the tracks: routing (package_routes.run_ref) -> the
+-- left estimates (estimate_projects.run_ref) and the right sourcing, and, on award,
+-- a benchmark project. It holds NO cost data — the benchmark tables stay authoritative;
+-- benchmark_project_id is only the link set when an estimate is captured (Phase 4c).
+-- ===========================================================================
+CREATE TABLE unified_projects (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_ref               TEXT NOT NULL UNIQUE,   -- the tender/analysis run identity
+    name                  TEXT,
+    provenance            TEXT NOT NULL DEFAULT 'live',   -- demo | live
+    benchmark_project_id  INTEGER REFERENCES projects(id),  -- set on estimate->benchmark capture
+    created_at            TEXT NOT NULL
+);
+
 CREATE INDEX idx_public_flags_firm  ON public_flags(firm_id);
 CREATE INDEX idx_closeouts_firm     ON project_closeouts(firm_id);
 CREATE INDEX idx_awards_firm        ON award_history(firm_id);
@@ -365,3 +382,5 @@ CREATE INDEX idx_package_routes_run   ON package_routes(run_ref);
 CREATE INDEX idx_estimate_items_est   ON estimate_items(estimate_id);
 CREATE INDEX idx_estimate_items_ref   ON estimate_items(item_ref);
 CREATE INDEX idx_estimate_projects_prov ON estimate_projects(provenance);
+CREATE INDEX idx_estimate_projects_run  ON estimate_projects(run_ref);
+CREATE INDEX idx_unified_projects_run   ON unified_projects(run_ref);

@@ -41,7 +41,7 @@ from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E
 from pipeline.benchmark.eos_reason import EOS_REASON_FIXTURE, extract_reason_candidates  # noqa: E402
 from pipeline.routing.recommend import ROUTE_SUGGESTIONS_FIXTURE, recommend_routes  # noqa: E402
 from pipeline.routing.signal import package_signal  # noqa: E402
-from db import benchmark as bench, estimate as est, refresh, routing, store  # noqa: E402
+from db import benchmark as bench, estimate as est, project as uproject, refresh, routing, store  # noqa: E402
 from schemas.routing import (  # noqa: E402
     ROUTES,
     SUBLET,
@@ -91,6 +91,7 @@ from pipeline.estimate.checks import ESTIMATE_CHECK_FIXTURE, check_estimate  # n
 from pipeline.estimate.draft import ESTIMATE_DRAFT_FIXTURE, draft_estimate  # noqa: E402
 from pipeline.estimate.letter import LETTER_FIXTURE, draft_letter  # noqa: E402
 from pipeline.estimate.rates import suggest_rates  # noqa: E402
+from schemas.project import DashboardPackage, ProjectDashboard, ProjectSummary  # noqa: E402
 from schemas.models import (  # noqa: E402
     BidReply,
     Contact,
@@ -1164,6 +1165,10 @@ def post_route_analyze(req: AnalyzeRequest) -> RouteProposal:
     conn = store.get_connection()
     try:
         saved = routing.write_proposal(conn, run_ref, recommended)
+        # Record the run as a unified project (Phase 4) — the identity that carries this
+        # tender through the tracks. Thin umbrella, no cost data.
+        uproject.get_or_create(conn, run_ref, name=req.scope.project_name,
+                               provenance=("demo" if demo_mode() else "live"))
     finally:
         conn.close()
     return RouteProposal(run_ref=run_ref, packages=[RoutePackage(**r) for r in saved])
@@ -1418,5 +1423,65 @@ def delete_estimate_item(estimate_id: int, item_id: int) -> dict:
         if not est.delete_item(conn, estimate_id, item_id):
             raise HTTPException(status_code=404, detail=f"No item {item_id} in estimate {estimate_id}.")
         return {"deleted": item_id}
+    finally:
+        conn.close()
+
+
+# ===========================================================================
+# Unified project (Phase 4) — the run_ref-keyed spine that ties a tender across the
+# tracks: routing decisions (left/right), the left-track estimates, and the benchmark
+# link. A read-model assembled from the existing tables; it holds no cost data of its own.
+# ===========================================================================
+def _dashboard(conn, run_ref: str) -> ProjectDashboard:
+    up = uproject.get_or_create(conn, run_ref)
+    routes = routing.read_proposal(conn, run_ref)
+    estimates = est.list_by_run(conn, run_ref)
+    est_by_pkg: dict = {}
+    for e in estimates:
+        est_by_pkg.setdefault(e["package_key"], e)
+    packages = []
+    for r in routes:
+        chosen = r["chosen_route"]
+        track = "left" if chosen == SELF_PERFORM else "right" if chosen == SUBLET else "undecided"
+        e = est_by_pkg.get(r["package_key"])
+        packages.append(DashboardPackage(
+            package_key=r["package_key"], trade=r["trade"], scope_summary=r["scope_summary"],
+            recommended_route=r["recommended_route"], chosen_route=chosen, track=track,
+            estimate_id=(e["id"] if e else None), decided_by=r["decided_by"],
+        ))
+    return ProjectDashboard(
+        run_ref=run_ref, name=up["name"], provenance=up["provenance"], packages=packages,
+        estimates=[EstimateProject(**e) for e in estimates], benchmark_project_id=up["benchmark_project_id"],
+    )
+
+
+@app.get("/project", response_model=list[ProjectSummary])
+def get_unified_projects() -> list[ProjectSummary]:
+    """Every unified project (analysis run) with its track split — the dashboard list."""
+    conn = store.get_connection()
+    try:
+        out = []
+        for up in uproject.list_projects(conn):
+            routes = routing.read_proposal(conn, up["run_ref"])
+            estimates = est.list_by_run(conn, up["run_ref"])
+            out.append(ProjectSummary(
+                run_ref=up["run_ref"], name=up["name"], provenance=up["provenance"],
+                package_count=len(routes),
+                self_perform_count=sum(1 for r in routes if r["chosen_route"] == SELF_PERFORM),
+                sublet_count=sum(1 for r in routes if r["chosen_route"] == SUBLET),
+                estimate_count=len(estimates), benchmark_project_id=up["benchmark_project_id"],
+            ))
+        return out
+    finally:
+        conn.close()
+
+
+@app.get("/project/{run_ref}", response_model=ProjectDashboard)
+def get_unified_project(run_ref: str) -> ProjectDashboard:
+    """One project's dashboard: its packages (each track + status), the left-track estimates,
+    and the benchmark link. Assembled from routing + estimates keyed by run_ref."""
+    conn = store.get_connection()
+    try:
+        return _dashboard(conn, run_ref)
     finally:
         conn.close()
