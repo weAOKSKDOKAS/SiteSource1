@@ -186,17 +186,37 @@ class ScopePackages(BaseModel):
 # ---------------------------------------------------------------------------
 # Layer 3 — firm profiles and shortlist
 # ---------------------------------------------------------------------------
+class RegisteredTrade(BaseModel):
+    """One raw registered-trade line from the CIC register (code / group / specialty)."""
+
+    code: str = ""
+    group: str = ""
+    specialty: str = ""
+
+
 class FirmProfile(BaseModel):
-    """A subcontractor's fused database record (Layer 3 — the moat)."""
+    """A subcontractor's fused database record (Layer 3 — the moat).
+
+    The CIC-register fields (``name_zh`` … ``expiry_date``) carry the real Registered
+    Subcontractors data for a register-provenance firm; they are empty on the overlay/
+    illustrative rows that never came from the register."""
 
     firm_id: str
     name: str
+    name_zh: str = ""
     registered_grade: str
     value_band: str
     trades: list[str] = Field(default_factory=list)
+    registered_trades: list[RegisteredTrade] = Field(default_factory=list)
     public_flags: list[RiskFlag] = Field(default_factory=list)
     closeout_summary: str = ""
     award_history: list[str] = Field(default_factory=list)
+    description: str = ""
+    enquiry_email: str = ""
+    br_no: str = ""
+    address: str = ""
+    reg_date: str = ""
+    expiry_date: str = ""
 
 
 class FirmsPage(BaseModel):

@@ -349,15 +349,31 @@ export interface ProjectDashboard {
   benchmark_project_id: number | null;
 }
 
+// One raw registered-trade line from the CIC register (code / group / specialty).
+export interface RegisteredTrade {
+  code: string;
+  group: string;
+  specialty: string;
+}
+
 export interface FirmProfile {
   firm_id: string;
   name: string;
+  name_zh: string;
   registered_grade: string;
   value_band: string;
   trades: string[];
+  registered_trades: RegisteredTrade[];
   public_flags: RiskFlag[];
   closeout_summary: string;
   award_history: string[];
+  // CIC-register fields (Prompt E) — empty on overlay/illustrative firms.
+  description: string;
+  enquiry_email: string;
+  br_no: string;
+  address: string;
+  reg_date: string;
+  expiry_date: string;
 }
 
 export interface FirmsPage {
@@ -476,12 +492,17 @@ export interface Health {
   demo_mode: boolean;
 }
 
-// Coverage of the real-provenance registry scrape only (the illustrative demo
-// firms are excluded from this claim).
+// Coverage of the real-provenance population only (the CIC register + the enforcement
+// overlay), stated as an honest composition. The illustrative demo firms are excluded.
 export interface Coverage {
   total_firms: number;
-  flagged_firms: number;
+  register_count: number; // real firms on the CIC register (carry a BR No.)
+  overlay_count: number; // real firms from the enforcement/offer overlay (not on the register)
+  flagged_count: number;
+  flagged_firms: number; // back-compat alias for flagged_count
   flags_by_type: Record<string, number>;
   trades: string[];
+  flag_sources: string[]; // distinct issuing bodies on the stored flags
+  registers: number; // how many distinct issuing registers
   provenance: string;
 }

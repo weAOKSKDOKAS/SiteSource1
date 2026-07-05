@@ -22,7 +22,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from schemas.models import Contact, Evidence, FirmProfile, RiskFlag, Severity, SignalType
+from schemas.models import Contact, Evidence, FirmProfile, RegisteredTrade, RiskFlag, Severity, SignalType
 from db.embeddings import deterministic_embedding
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "sitesource.db"
@@ -132,15 +132,33 @@ def _award_strings(conn: sqlite3.Connection, firm_id: str) -> list[str]:
 
 def _firm_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> FirmProfile:
     firm_id = row["firm_id"]
+    cols = set(row.keys())
+
+    def g(key: str) -> str:  # tolerate an older firms row that predates the register columns
+        return (row[key] if key in cols else None) or ""
+
+    registered_trades = [
+        RegisteredTrade(code=str(rt.get("code", "")), group=str(rt.get("group", "")), specialty=str(rt.get("specialty", "")))
+        for rt in (_json_list(row["registered_trades"]) if "registered_trades" in cols else [])
+        if isinstance(rt, dict)
+    ]
     return FirmProfile(
         firm_id=firm_id,
         name=row["name_en"],
-        registered_grade=row["registered_grade"] or "",
-        value_band=row["value_band"] or "",
+        name_zh=g("name_zh"),
+        registered_grade=g("registered_grade"),
+        value_band=g("value_band"),
         trades=_json_list(row["trades"]),
+        registered_trades=registered_trades,
         public_flags=_public_flag_rows(conn, firm_id) + _closeout_flag_rows(conn, firm_id),
-        closeout_summary=row["closeout_summary"] or "",
+        closeout_summary=g("closeout_summary"),
         award_history=_award_strings(conn, firm_id),
+        description=g("description"),
+        enquiry_email=g("enquiry_email"),
+        br_no=g("br_number"),
+        address=g("address"),
+        reg_date=g("reg_date"),
+        expiry_date=g("expiry_date"),
     )
 
 
