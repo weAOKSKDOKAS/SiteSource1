@@ -93,7 +93,7 @@ export function StepRecommend({
 
       {/* Ranked firms */}
       <Card className="overflow-hidden">
-        <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-ink-soft">
+        <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
           Ranked — clean firms first, flagged firms demoted
         </h2>
         <ol className="divide-y divide-line-soft">
@@ -125,7 +125,7 @@ export function StepRecommend({
 
       {/* Rationale */}
       <Card className="p-4">
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-soft">Rationale — written by Claude (Layer 2)</h2>
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">Rationale — written by Claude (Layer 2)</h2>
         <blockquote className="border-l-3 border-brand bg-brand-bg/40 px-3 py-2 text-sm leading-relaxed text-ink">
           {rec.rationale}
         </blockquote>

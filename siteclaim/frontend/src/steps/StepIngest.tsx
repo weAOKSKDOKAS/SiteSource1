@@ -65,7 +65,7 @@ export function StepIngest({
             >
               <span className={cx("text-sm font-semibold", caseId === c.id ? "text-brand" : "text-ink")}>{c.name}</span>
               <span className="mt-1 text-xs leading-relaxed text-ink-soft">{c.blurb}</span>
-              <span className="mt-2 text-[11px] uppercase tracking-wide text-ink-faint">{tradeLabel(c.hero_trade)}</span>
+              <span className="mt-2 text-[11px] uppercase tracking-eyebrow text-ink-faint">{tradeLabel(c.hero_trade)}</span>
             </button>
           ))}
           {demoCases.length === 0 && (

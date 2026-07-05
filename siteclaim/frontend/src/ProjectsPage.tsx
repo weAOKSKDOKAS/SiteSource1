@@ -57,7 +57,7 @@ function DashboardView({ dash, onBack }: { dash: ProjectDashboard; onBack: () =>
       </div>
 
       <Card className="p-4">
-        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-faint">Lifecycle</div>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-eyebrow text-ink-faint">Lifecycle</div>
         <Lifecycle dash={dash} />
       </Card>
 

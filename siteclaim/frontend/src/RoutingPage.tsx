@@ -91,13 +91,13 @@ export function RoutingPage() {
           <h3 className="mb-2 font-display text-base font-semibold text-ink">Routed</h3>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-faint">Sublet → Sourcing (right track)</div>
+              <div className="mb-1 text-xs font-semibold uppercase tracking-eyebrow text-ink-faint">Sublet → Sourcing (right track)</div>
               {result.sublet_packages.length ? (
                 <div className="flex flex-wrap gap-1.5">{result.sublet_packages.map((k) => <Pill key={k} tone="brand">{tradeLabel(k)}</Pill>)}</div>
               ) : <p className="text-sm text-ink-faint">none</p>}
             </div>
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-faint">Self-perform → Estimator (left track)</div>
+              <div className="mb-1 text-xs font-semibold uppercase tracking-eyebrow text-ink-faint">Self-perform → Estimator (left track)</div>
               {result.self_perform_packages.length ? (
                 <div className="flex flex-wrap gap-1.5">{result.self_perform_packages.map((k) => <Pill key={k} tone="violet">{tradeLabel(k)}</Pill>)}</div>
               ) : <p className="text-sm text-ink-faint">none</p>}

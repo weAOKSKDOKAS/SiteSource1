@@ -432,7 +432,7 @@ function RouteBranch({ result, onOpenEstimator }: { result: RouteDecisionResult;
       )}
       {selfPerform.length > 0 && (
         <div className="mt-3">
-          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-faint">
             {selfPerform.length} package(s) sent to the Estimator — left track
           </div>
           <div className="flex flex-wrap gap-1.5">

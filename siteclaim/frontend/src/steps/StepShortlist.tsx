@@ -141,7 +141,7 @@ function CandidateRow({ candidate, rank, top, onOpen }: { candidate: Candidate; 
 
       {against && (
         <div className="mt-2 rounded-lg border border-bad/40 bg-card p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-bad">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-eyebrow text-bad">
             Disqualifying — do not award regardless of price
           </p>
           <RiskFlagList flags={fatal} />

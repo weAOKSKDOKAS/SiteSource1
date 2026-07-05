@@ -71,7 +71,7 @@ export function Header({
           </span>
           {demoMode && (
             <span
-              className="inline-flex items-center gap-1.5 rounded-full bg-ink px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-white"
+              className="inline-flex items-center gap-1.5 rounded-full bg-ink px-2.5 py-1 text-xs font-bold uppercase tracking-eyebrow text-white"
               title="Running offline against the seeded database — zero network calls."
             >
               <span className="h-1.5 w-1.5 rounded-full bg-ok" />

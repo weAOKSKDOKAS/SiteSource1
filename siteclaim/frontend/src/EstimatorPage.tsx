@@ -98,7 +98,7 @@ function LetterPanel({ letter }: { letter: LetterOfOffer }) {
   const List = ({ title, items }: { title: string; items: string[] }) =>
     items.length ? (
       <div>
-        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-faint">{title}</div>
+        <div className="mb-1 text-xs font-semibold uppercase tracking-eyebrow text-ink-faint">{title}</div>
         <ul className="list-disc space-y-0.5 pl-5 text-sm text-ink-soft">
           {items.map((x, i) => <li key={i}>{x}</li>)}
         </ul>

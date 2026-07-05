@@ -48,12 +48,12 @@ export function StepLevel({
 
       {/* Summary: claimed vs corrected */}
       <Card className="overflow-hidden">
-        <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-ink-soft">
+        <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
           Claimed vs corrected
         </h2>
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-line-soft text-left text-xs uppercase tracking-wide text-ink-faint">
+            <tr className="border-b border-line-soft text-left text-xs uppercase tracking-eyebrow text-ink-faint">
               <th className="px-4 py-2 font-semibold">Firm</th>
               <th className="px-4 py-2 text-right font-semibold">Claimed</th>
               <th className="px-4 py-2 text-right font-semibold">Corrected</th>
@@ -103,12 +103,12 @@ export function StepLevel({
 
       {/* Editable rate matrix */}
       <Card className="overflow-x-auto">
-        <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-ink-soft">
+        <h2 className="border-b border-line-soft px-4 py-2.5 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">
           Rates by item — edit a rate to re-level
         </h2>
         <table className="w-full min-w-[640px] text-sm">
           <thead>
-            <tr className="border-b border-line-soft text-left text-xs uppercase tracking-wide text-ink-faint">
+            <tr className="border-b border-line-soft text-left text-xs uppercase tracking-eyebrow text-ink-faint">
               <th className="px-3 py-2 font-semibold">Item</th>
               {firms.map((f) => (
                 <th key={f} className="tabular px-3 py-2 text-right font-semibold">{f}</th>
@@ -143,7 +143,7 @@ export function StepLevel({
               </tr>
             ))}
             <tr className="border-t-2 border-line bg-paper/40">
-              <td className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-ink-soft">Corrected total</td>
+              <td className="px-3 py-2 text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">Corrected total</td>
               {firms.map((f) => (
                 <td key={f} className="tabular px-3 py-2 text-right text-sm font-bold text-ink">
                   {hkd(correctedOf.get(f) ?? 0)}
@@ -299,7 +299,7 @@ function CalloutCard({ title, tone, children }: { title: string; tone: "bad" | "
   const accent = tone === "bad" ? "text-bad" : tone === "brand" ? "text-brand" : "text-ink-soft";
   return (
     <Card className="overflow-hidden">
-      <h3 className={cx("border-b border-line-soft px-3 py-2 text-xs font-semibold uppercase tracking-wide", accent)}>{title}</h3>
+      <h3 className={cx("border-b border-line-soft px-3 py-2 text-xs font-semibold uppercase tracking-eyebrow", accent)}>{title}</h3>
       {empty ? (
         <p className="px-3 py-2 text-xs text-ink-faint">None.</p>
       ) : (
