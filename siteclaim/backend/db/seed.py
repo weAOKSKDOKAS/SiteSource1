@@ -252,8 +252,12 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
         demo_benchmark = 0
         if profile == "demo":
             from db.benchmark_demo import seed_demo_benchmark
+            from db.unified_demo import seed_unified_demo
 
-            seed_demo_benchmark(conn, now=built_at)
+            benchmark_pid = seed_demo_benchmark(conn, now=built_at)
+            # The unified-engine demo run ties the tracks together and links to that benchmark
+            # project (Phase 5b) — the whole loop, pitchable offline.
+            seed_unified_demo(conn, now=built_at, benchmark_project_id=benchmark_pid)
             demo_benchmark = 1
 
         for key, value in {

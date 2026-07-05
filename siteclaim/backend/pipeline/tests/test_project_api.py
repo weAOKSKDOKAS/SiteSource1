@@ -87,7 +87,7 @@ def test_confirm_with_scope_auto_seeds_left_track_estimates(route_db):
         "decisions": [{"package_key": "ground_investigation", "chosen_route": "self_perform"}],
     }).json()
     assert again["estimate_ids"]["ground_investigation"] == eid
-    assert len(client.get("/estimate/projects").json()) == 1
+    assert len(client.get(f"/project/{_RUN}").json()["estimates"]) == 1   # one estimate for this run
 
 
 def test_confirm_without_scope_seeds_nothing(route_db):
