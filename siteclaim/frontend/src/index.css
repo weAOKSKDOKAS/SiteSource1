@@ -1,34 +1,48 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   SiteClaim design tokens — "site office meets statute".
-   Chrome is quiet (ink + cool paper + hairlines, IBM Plex superfamily); the
-   semantic traffic-light colours are load-bearing (confidence + verdict) so
-   they carry meaning rather than decorate. One brand accent: drafting blue.
+   Atlas design system (Phase 0). Quiet chrome — navy ink + cool panels +
+   hairlines; the semantic signal colours are load-bearing and reserved:
+     red    = fatal flags only
+     green  = recommended / approved only
+     violet = database / Layer 3
+     amber  = human gate / Layer 4
+     blue   = brand / Layer-2 (Claude) accent
+   Cards are set apart by a subtle tint or shadow, never edge stripes.
+   Type: Bricolage Grotesque (display), Spline Sans (body), Spline Sans Mono
+   (codes, refs, citations). Token NAMES are preserved from the chassis so every
+   existing utility class (text-ink, bg-brand, …) resolves straight into Atlas.
 --------------------------------------------------------------------------- */
 @theme {
-  --color-ink: #15212e;
-  --color-ink-soft: #4a5a6b;
-  --color-ink-faint: #8595a3;
-  --color-paper: #eceff3;
+  --color-ink: #0f1b2d;        /* deep navy — dark surfaces, headings */
+  --color-ink-soft: #46566b;   /* primary text / slate */
+  --color-ink-faint: #8a98ab;  /* secondary / muted */
+  --color-paper: #eef2f7;      /* panel / app background */
+  --color-paper-soft: #f6f9fc; /* very light background */
   --color-card: #ffffff;
-  --color-line: #d4dbe2;
-  --color-line-soft: #e6ebf0;
+  --color-line: #dbe3ec;
+  --color-line-soft: #eaeff5;
 
-  --color-brand: #1f4e8c;
-  --color-brand-bright: #2f6fd0;
-  --color-brand-bg: #e7eef8;
+  --color-brand: #1f6feb;        /* brand blue — Layer-2 (Claude) accent */
+  --color-brand-bright: #4c8dff; /* hover / focus ring */
+  --color-brand-bg: #e7f0fe;
 
-  --color-ok: #1a7f55;
-  --color-ok-bg: #e3f3ea;
-  --color-warn: #9a5b08;
-  --color-warn-bg: #fbeed5;
-  --color-bad: #b42318;
-  --color-bad-bg: #fbe5e2;
+  --color-ok: #2ea56a;         /* recommended / approved ONLY */
+  --color-ok-bg: #e4f5ec;
+  --color-warn: #d99513;       /* human gate / Layer 4 (amber) */
+  --color-warn-bg: #fbefd6;
+  --color-bad: #e5484d;        /* fatal flags ONLY */
+  --color-bad-bg: #fce9e9;
 
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
-  --font-serif: "IBM Plex Serif", ui-serif, Georgia, serif;
+  --color-violet: #6e56cf;     /* database / Layer 3 */
+  --color-violet-bg: #ede9fb;
+  --color-teal: #0fb5a6;       /* accent */
+  --color-teal-bg: #def5f2;
+
+  --font-sans: "Spline Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Spline Sans Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-display: "Bricolage Grotesque", "Spline Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Spline Sans", ui-serif, Georgia, serif;
 }
 
 html {
