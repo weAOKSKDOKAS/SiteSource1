@@ -242,6 +242,13 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
                 (fid, cid, text, json.dumps(vec)),
             )
 
+        # Benchmark estimator (Phase B1): seed the ten-code reason vocabulary in EVERY
+        # profile (a controlled vocabulary, not fabricated data). rubric_items ships empty;
+        # the fictional demo benchmark scenario is loaded only for the demo profile (B1f).
+        from db.benchmark import seed_reason_codes  # local import: keeps the seed's import graph flat
+
+        reason_codes_written = seed_reason_codes(conn)
+
         for key, value in {
             "embed_method": method,
             "embed_dim": str(dim),
@@ -265,6 +272,7 @@ def build_database(db_path: Path | str | None = None, *, profile: str = "demo") 
         "pricing_samples": len(pricing),
         "contacts": contacts_written,
         "closeout_chunks": len(chunk_rows),
+        "reason_codes": reason_codes_written,
         "embed_method": method,
         "embed_dim": dim,
     }

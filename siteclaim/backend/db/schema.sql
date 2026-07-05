@@ -18,6 +18,13 @@ DROP TABLE IF EXISTS contacts;
 DROP TABLE IF EXISTS staged_firms;
 DROP TABLE IF EXISTS staged_flags;
 DROP TABLE IF EXISTS meta;
+-- Benchmark estimator (Phase B1) — dropped child-first so the FKs unwind cleanly.
+DROP TABLE IF EXISTS rubric_items;
+DROP TABLE IF EXISTS variance_records;
+DROP TABLE IF EXISTS actual_items;
+DROP TABLE IF EXISTS tender_items;
+DROP TABLE IF EXISTS reason_codes;
+DROP TABLE IF EXISTS projects;
 
 -- One row per firm — the fused identity (public record + private closeout archive).
 CREATE TABLE firms (
@@ -139,6 +146,119 @@ CREATE TABLE meta (
     value TEXT
 );
 
+-- ===========================================================================
+-- Benchmark estimator (Phase B1 — the variance spine).
+--
+-- For each completed project: the priced tender (tender_items) vs the actual
+-- outturn (actual_items), item-matched behind a human confirm gate into
+-- variance_records. reason_codes is a fixed ten-code vocabulary seeded in every
+-- profile; rubric_items (the B2 estimator's evidence-linked guidance) ships EMPTY
+-- because an entry cannot exist without real evidence.
+--
+-- projects.provenance ('demo' | 'live') separates the fictional pitch scenario
+-- from real data so demo rows never count in /benchmark/summary. Cost data is
+-- local SQLite only; see docs/PRODUCT_ARCHITECTURE_benchmark_estimator.md.
+-- ===========================================================================
+
+-- One row per completed (or in-progress) project we benchmark.
+CREATE TABLE projects (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    trade        TEXT,               -- canonical taxonomy key (e.g. ground_investigation)
+    client       TEXT,
+    contract_ref TEXT,               -- HK contract number, e.g. GE/2026/14
+    status       TEXT NOT NULL DEFAULT 'open',      -- open | closed
+    provenance   TEXT NOT NULL DEFAULT 'live',      -- 'demo' (fictional) | 'live' (real). The summary discriminator.
+    source       TEXT,               -- tender-upload | pipeline-link | manual | demo
+    notes        TEXT,
+    created_at   TEXT NOT NULL,
+    closed_at    TEXT
+);
+
+-- The priced tender snapshot. item_ref is the primary cross-project match key;
+-- rates are kept (a priced tender), quantities stay optional (rate-only SoRs).
+CREATE TABLE tender_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id),
+    item_ref    TEXT NOT NULL,
+    description TEXT,
+    unit        TEXT,
+    qty         REAL,               -- optional
+    rate        REAL,               -- the priced tender rate
+    amount      REAL,               -- optional (extended where computable)
+    section     TEXT,
+    source      TEXT,               -- tender-pdf | tender-xlsx | pipeline-link  (provenance)
+    source_doc  TEXT,               -- original filename                          (provenance)
+    created_at  TEXT NOT NULL
+);
+
+-- The actual outturn (final account). granularity records whether the sheet was
+-- item-by-item, section-totals-only, or a single project total.
+CREATE TABLE actual_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id),
+    item_ref    TEXT,               -- optional for section/project granularity
+    description TEXT,
+    unit        TEXT,
+    qty         REAL,
+    rate        REAL,
+    amount      REAL,
+    section     TEXT,
+    granularity TEXT NOT NULL DEFAULT 'item',    -- item | section | project
+    source      TEXT,               -- actuals-xlsx | actuals-pdf   (provenance)
+    source_doc  TEXT,               -- original filename            (provenance)
+    created_at  TEXT NOT NULL
+);
+
+-- The controlled ten-code reason vocabulary (seeded in every profile).
+CREATE TABLE reason_codes (
+    code        TEXT PRIMARY KEY,
+    label       TEXT NOT NULL,
+    description TEXT,
+    category    TEXT               -- ground | time | quantity | rate | scope | commercial
+);
+
+-- The confirmed variance. WRITTEN ONLY by the confirm gate (Layer 4). A NULL
+-- tender_item_id is an arrived-unpriced line; a NULL actual_item_id is an
+-- omission-at-tender line. reason_code stays NULL until a human tags it.
+CREATE TABLE variance_records (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id        INTEGER NOT NULL REFERENCES projects(id),
+    tender_item_id    INTEGER REFERENCES tender_items(id),
+    actual_item_id    INTEGER REFERENCES actual_items(id),
+    item_ref          TEXT,
+    granularity       TEXT NOT NULL DEFAULT 'item',   -- item | section | project
+    match_tier        INTEGER,          -- 1 exact | 2 embedding | 3 unmatched
+    tender_rate       REAL,
+    actual_rate       REAL,
+    tender_qty        REAL,
+    actual_qty        REAL,
+    tender_amount     REAL,
+    actual_amount     REAL,
+    rate_delta        REAL,             -- actual_rate - tender_rate (both present)
+    rate_delta_pct    REAL,
+    amount_delta      REAL,             -- only where both amounts computable
+    amount_delta_qty  REAL,             -- qty-driven component
+    amount_delta_rate REAL,             -- rate-driven component
+    reason_code       TEXT REFERENCES reason_codes(code),
+    reason_note       TEXT,
+    tagged_by         TEXT,             -- provenance: who set the reason
+    confirmed_at      TEXT,             -- provenance: when the match was confirmed
+    source            TEXT,             -- 'demo' | 'confirm-gate'
+    created_at        TEXT NOT NULL
+);
+
+-- The B2 estimator's evidence-linked guidance. Ships EMPTY (needs real evidence).
+CREATE TABLE rubric_items (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade                TEXT,
+    item_ref             TEXT,
+    guidance             TEXT,
+    evidence_variance_id INTEGER REFERENCES variance_records(id),
+    source               TEXT,
+    created_at           TEXT NOT NULL
+);
+
 CREATE INDEX idx_public_flags_firm  ON public_flags(firm_id);
 CREATE INDEX idx_closeouts_firm     ON project_closeouts(firm_id);
 CREATE INDEX idx_awards_firm        ON award_history(firm_id);
@@ -148,3 +268,11 @@ CREATE INDEX idx_contacts_firm      ON contacts(firm_id);
 CREATE INDEX idx_staged_firms_status ON staged_firms(status);
 CREATE INDEX idx_staged_flags_status ON staged_flags(status);
 CREATE INDEX idx_staged_flags_fp     ON staged_flags(fingerprint);
+-- Benchmark estimator indexes (Phase B1).
+CREATE INDEX idx_tender_items_project ON tender_items(project_id);
+CREATE INDEX idx_tender_items_ref     ON tender_items(item_ref);
+CREATE INDEX idx_actual_items_project ON actual_items(project_id);
+CREATE INDEX idx_actual_items_ref     ON actual_items(item_ref);
+CREATE INDEX idx_variance_project     ON variance_records(project_id);
+CREATE INDEX idx_variance_reason      ON variance_records(reason_code);
+CREATE INDEX idx_projects_provenance  ON projects(provenance);
