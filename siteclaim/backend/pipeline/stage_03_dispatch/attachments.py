@@ -52,30 +52,37 @@ def route_documents(
 
 
 def generate_sor_sheet(pkg: TradeWorkPackage, project_name: str, path: Path | str) -> Path:
-    """Write this trade's priceable-items sheet to ``path`` and return it."""
+    """Write this trade's priceable-items sheet to ``path`` and return it.
+
+    This document goes OUT to a subcontractor, so it carries the light branded
+    letterhead (shared style kit) — presentation only: the item rows are exactly the
+    package's ``sor_items`` and the returned sheet still parses deterministically
+    (``parse_sor_xlsx`` locates the header by its column names)."""
     from openpyxl import Workbook  # lazy — dispatch must not require openpyxl offline
-    from openpyxl.styles import Font
+
+    from pipeline._xlsx_style import autofit, style_body, style_header, title_block
 
     trade_label = pkg.trade.replace("_", " ").title()
     wb = Workbook()
     ws = wb.active
     ws.title = "SoR"
 
-    ws.append([f"{project_name} — {trade_label}"])
-    ws[ws.max_row][0].font = Font(bold=True, size=13)
-    ws.append([
-        "Excerpt of the priceable items for this trade. The full tender package is "
-        "available on request. Please price every line; state any exclusions."
+    title_block(ws, f"Schedule of Rates — {trade_label} — {project_name}", [
+        f"Reference: {project_name}",
+        "Priced return requested by the tender date.",
+        "Excerpt of the priceable items for this trade — the full tender package is "
+        "available on request. Please price every line; state any exclusions.",
     ])
-    ws.append([])
 
     header = ["Item", "Description", "Unit", "Qty", "Rate (HKD)", "Amount (HKD)"]
     ws.append(header)
-    for cell in ws[ws.max_row]:
-        cell.font = Font(bold=True)
+    header_row = ws.max_row
+    style_header(ws, header_row, len(header))
 
     for item in pkg.sor_items:
         ws.append([item.item_ref, item.description, item.unit, item.qty, "", ""])
+    style_body(ws, header_row + 1, ws.max_row, len(header))
+    autofit(ws, min_row=header_row)
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)

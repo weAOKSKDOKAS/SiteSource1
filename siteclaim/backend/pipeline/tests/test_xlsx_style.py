@@ -63,3 +63,32 @@ def test_money_cell_leaves_placeholder_text_alone(tmp_path):
     got = _roundtrip(wb, tmp_path).active
     assert got.cell(row=1, column=1).value == "—"
     assert got.cell(row=1, column=1).number_format != MONEY_FORMAT
+
+
+def test_styled_sor_sheet_keeps_the_deterministic_roundtrip(tmp_path):
+    # The outbound SoR sheet carries the letterhead but its data rows are exactly the
+    # package's items — and the returned sheet still parses with NO model.
+    from pipeline.stage_03_dispatch.attachments import generate_sor_sheet
+    from pipeline.stage_04_level.reply_xlsx import parse_sor_xlsx
+    from schemas.models import SorItem, TradeWorkPackage
+
+    pkg = TradeWorkPackage(
+        trade="electrical", scope_summary="LV works",
+        sor_items=[
+            SorItem(item_ref="E-01", description="Switchboard", unit="no", qty=1.0),
+            SorItem(item_ref="E-02", description="Sub-main cabling", unit="m", qty=420.0),
+        ],
+        source_refs=[],
+    )
+    out = generate_sor_sheet(pkg, "Demo Tower", tmp_path / "sor.xlsx")
+
+    got = load_workbook(out).active
+    assert got.cell(row=1, column=1).value == "Schedule of Rates — Electrical — Demo Tower"
+    flat = [c.value for row in got.iter_rows() for c in row if c.value is not None]
+    assert "Priced return requested by the tender date." in flat
+
+    reply = parse_sor_xlsx(out.read_bytes(), firm_id="F-X", trade="electrical")
+    assert [(li.item_ref, li.description, li.unit, li.qty) for li in reply.line_items] == [
+        ("E-01", "Switchboard", "no", 1.0),
+        ("E-02", "Sub-main cabling", "m", 420.0),
+    ]
