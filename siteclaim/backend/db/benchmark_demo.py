@@ -48,6 +48,29 @@ DEMO_PAIRS = [
     (None, "G5", 3, "omission_at_tender", "Obstruction removal not priced in the tender."),
 ]
 
+# The fictional End-of-Site (EOS) field report for the demo project (Phase 2) — the
+# narrative account of WHY the prices moved. Its sentences are the evidence the reason
+# extractor quotes: G1/G2 standing time, G3 remeasure, G5 an unpriced obstruction. It
+# supplies reasons, never numbers (the cost figures come from the tender/actuals above).
+# Fully fictional, provenance='demo' — it never reads as live.
+DEMO_EOS_SUMMARY = (
+    "Rig standing time (utility diversions, then awaiting the rock-coring instruction) drove the "
+    "drilling rate over-runs; five extra SPTs were remeasured; an unforeseen obstruction was "
+    "removed as an item not priced in the tender."
+)
+DEMO_EOS_NARRATIVE = (
+    "The rotary drilling rig stood idle for extended periods while utility diversions were "
+    "completed, which pushed the achieved rate for the soil drilling item above the tendered rate. "
+    "The rig also stood waiting for the Engineer's instruction to core into rock, raising the rock "
+    "drilling rate over the tendered rate. "
+    "Ground conditions were otherwise broadly as anticipated. "
+    "Five additional standard penetration tests were instructed and remeasured on site beyond the "
+    "tendered quantity. "
+    "During excavation an unforeseen obstruction was encountered that required removal; this work "
+    "was not priced in the tender and was carried out as an additional item. "
+    "Weather standing over the contract period was minimal."
+)
+
 
 def seed_demo_benchmark(conn: sqlite3.Connection, *, now: str) -> int:
     """Insert the fictional demo project, tender, actuals and tagged variance records.
@@ -99,4 +122,13 @@ def seed_demo_benchmark(conn: sqlite3.Connection, *, now: str) -> int:
              v["rate_delta"], v["rate_delta_pct"], v["amount_delta"], v["amount_delta_qty"], v["amount_delta_rate"],
              reason or None, note or None, ("DEMO" if reason else None), now, now),
         )
+
+    # The per-project EOS field report (Phase 2) — the narrative that explains WHY each line
+    # moved. provenance='demo'; has_images=1 (a real field report carries site photos, noted
+    # but never parsed for numbers).
+    conn.execute(
+        "INSERT INTO project_eos (project_id, narrative, summary, source_doc, has_images, provenance, created_at) "
+        "VALUES (?, ?, ?, ?, 1, 'demo', ?)",
+        (pid, DEMO_EOS_NARRATIVE, DEMO_EOS_SUMMARY, "DEMO EOS field report.pdf", now),
+    )
     return pid

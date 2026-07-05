@@ -53,6 +53,22 @@ def test_demo_variance_story_is_coherent_and_engine_computed(demo_conn):
     assert g5["reason_code"] == "omission_at_tender"
 
 
+def test_demo_project_carries_a_fictional_eos_narrative(demo_conn):
+    # Phase 2: the demo project has an attached EOS field report (provenance='demo') whose
+    # sentences are the evidence for the reason candidates.
+    pid = benchmark.list_projects(demo_conn)[0]["id"]
+    eos = benchmark.get_eos(demo_conn, pid)
+    assert eos is not None and eos["provenance"] == "demo" and eos["has_images"] is True
+    assert eos["narrative"].startswith("The rotary drilling rig stood idle")
+    assert "not priced in the tender" in eos["narrative"]  # the G5 omission evidence
+    assert eos["summary"]
+
+
+def test_live_profile_ships_no_eos(live_conn):
+    # The clean live profile carries no fabricated EOS narrative.
+    assert live_conn.execute("SELECT COUNT(*) AS n FROM project_eos").fetchone()["n"] == 0
+
+
 def test_summary_on_the_live_profile_is_zero(live_conn):
     # THE separation assertion: the live profile has no benchmark data.
     assert benchmark.list_projects(live_conn) == []

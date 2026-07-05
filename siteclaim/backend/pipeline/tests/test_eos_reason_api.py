@@ -83,3 +83,22 @@ def test_suggestions_are_read_only_and_the_human_still_writes(project_with_varia
 
 def test_suggestions_reject_unknown_project():
     assert client.get("/benchmark/999999/variance/reason-suggestions").status_code == 404
+
+
+def test_demo_project_reason_suggestions_resolve_from_the_eos(tmp_path, monkeypatch):
+    # Phase 2 acceptance, end to end offline: the seeded demo project's variances resolve to
+    # EOS-sourced reason candidates with their narrative snippets.
+    db = tmp_path / "demo.db"
+    seed.build_database(db, profile="demo")
+    monkeypatch.setenv("SITESOURCE_DB", str(db))
+    pid = client.get("/benchmark/projects").json()[0]["id"]  # the single seeded demo project
+    body = client.get(f"/benchmark/{pid}/variance/reason-suggestions").json()
+    assert body["eos_attached"] is True
+    by_ref = {c["item_ref"]: c for c in body["candidates"]}
+    assert by_ref["G1"]["reason_code"] == "standing_time"
+    assert by_ref["G2"]["reason_code"] == "standing_time"
+    assert by_ref["G3"]["reason_code"] == "quantity_remeasure"
+    assert by_ref["G5"]["reason_code"] == "omission_at_tender"
+    assert all(by_ref[k]["source"] == "reason-from-eos" and by_ref[k]["snippet"] for k in ("G1", "G2", "G3", "G5"))
+    assert "G4" not in by_ref  # the zero-variance line needs no reason
+
