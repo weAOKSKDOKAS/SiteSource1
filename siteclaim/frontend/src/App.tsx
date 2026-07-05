@@ -5,7 +5,6 @@ import { DatabasePage } from "./DatabasePage";
 import { EstimatorPage } from "./EstimatorPage";
 import { ProjectsPage } from "./ProjectsPage";
 import { RouteDecisionPanel } from "./RouteDecisionPanel";
-import { RoutingPage } from "./RoutingPage";
 import { Header, StepHeading, Stepper, type StepIndex, type TopView } from "./components";
 import { tradeLabel } from "./format";
 import type {
@@ -307,14 +306,12 @@ export default function App() {
     setError(null);
   }
 
-  if (view === "routing" || view === "estimator" || view === "benchmark" || view === "database" || view === "projects") {
+  if (view === "estimator" || view === "benchmark" || view === "database" || view === "projects") {
     return (
       <div className="min-h-screen">
         <Header demoMode={demoMode} view={view} onNavigate={setView} />
         <main className="mx-auto max-w-6xl px-5 py-8">
-          {view === "routing" ? (
-            <RoutingPage />
-          ) : view === "estimator" ? (
+          {view === "estimator" ? (
             <EstimatorPage />
           ) : view === "benchmark" ? (
             <BenchmarkPage />
