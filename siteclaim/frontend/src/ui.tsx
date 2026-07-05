@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import type { Severity } from "./types";
 
@@ -115,6 +116,141 @@ export function Modal({ open, onClose, title, children }: { open: boolean; onClo
         </div>
         <div onClick={(e) => e.stopPropagation()}>{children}</div>
       </Card>
+    </div>
+  );
+}
+
+// --- Drawer (detail-on-click) -----------------------------------------------
+// The V2 slide-in record panel: right-anchored, scrim with a light blur, eased
+// slide (it stays mounted so the transition runs both ways). Escape / scrim / ✕
+// close it. `eyebrow` is the record-type line ("Firm record", "Variance record");
+// `footer` is the closing microcopy line, centred and faint.
+const DRAWER_TONES = {
+  brand: { chip: "bg-brand", text: "text-brand" },
+  violet: { chip: "bg-violet", text: "text-violet" },
+  ok: { chip: "bg-ok", text: "text-ok" },
+  warn: { chip: "bg-warn", text: "text-warn" },
+  bad: { chip: "bg-bad", text: "text-bad" },
+  ink: { chip: "bg-ink", text: "text-ink-soft" },
+} as const;
+export type DrawerTone = keyof typeof DRAWER_TONES;
+
+export function Drawer({
+  open,
+  onClose,
+  title,
+  subtitle,
+  eyebrow = "Detail record",
+  tone = "brand",
+  children,
+  footer,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: ReactNode;
+  eyebrow?: string;
+  tone?: DrawerTone;
+  children: ReactNode;
+  footer?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  const t = DRAWER_TONES[tone];
+  return (
+    <div className={cx("fixed inset-0 z-[80]", open ? "pointer-events-auto" : "pointer-events-none")} aria-hidden={!open}>
+      <div
+        className={cx(
+          "absolute inset-0 bg-ink/45 backdrop-blur-[2px] transition-opacity duration-300",
+          open ? "opacity-100" : "opacity-0",
+        )}
+        onClick={onClose}
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={cx(
+          "absolute right-0 top-0 h-full w-[432px] max-w-[92vw] overflow-y-auto bg-card",
+          "shadow-[-30px_0_60px_-30px_rgba(15,27,45,0.5)]",
+          "transition-transform duration-300 ease-[cubic-bezier(.3,.8,.25,1)]",
+          open ? "translate-x-0" : "translate-x-[105%]",
+        )}
+      >
+        <div className="p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className={cx("flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.12em]", t.text)}>
+              <span className={cx("flex h-6 w-6 items-center justify-center rounded-md text-[11px] text-white", t.chip)}>§</span>
+              {eyebrow}
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-paper text-sm text-ink-soft hover:text-ink"
+            >
+              ✕
+            </button>
+          </div>
+          <h3 className="font-display text-xl font-bold tracking-tight text-ink">{title}</h3>
+          {subtitle && <div className="mt-1 text-xs text-ink-soft">{subtitle}</div>}
+          <div className="mt-4">{children}</div>
+          {footer && <p className="mb-1 mt-5 text-center text-[11.5px] leading-relaxed text-ink-faint">{footer}</p>}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+// The mono uppercase field label used inside detail records ("Reference / docket",
+// "Record summary", "Issuing register").
+export function MonoLabel({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cx("tabular text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-faint", className)}>
+      {children}
+    </div>
+  );
+}
+
+// The "Reference / docket" tile — a citable code set in mono on a soft panel.
+export function Docket({ label = "Reference / docket", code, className }: { label?: string; code: ReactNode; className?: string }) {
+  return (
+    <div className={cx("rounded-xl border border-line-soft bg-paper-soft px-4 py-3", className)}>
+      <MonoLabel className="mb-1">{label}</MonoLabel>
+      <div className="tabular text-base font-semibold text-ink">{code}</div>
+    </div>
+  );
+}
+
+// A collapsible section inside a detail view. Chevron rotates; closed by default
+// unless the section is load-bearing (pass defaultOpen).
+export function Collapse({
+  title,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t border-line-soft py-2.5 first:border-t-0 first:pt-0">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 text-left" aria-expanded={open}>
+        <span className={cx("text-[10px] text-ink-faint transition-transform duration-200", open && "rotate-90")} aria-hidden>
+          ▶
+        </span>
+        <MonoLabel>{title}</MonoLabel>
+        {count != null && <span className="tabular text-[10.5px] text-ink-faint">· {count}</span>}
+      </button>
+      {open && <div className="pt-2">{children}</div>}
     </div>
   );
 }
