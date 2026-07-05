@@ -43,6 +43,48 @@
   --font-mono: "Spline Sans Mono", ui-monospace, "SFMono-Regular", monospace;
   --font-display: "Bricolage Grotesque", "Spline Sans", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Spline Sans", ui-serif, Georgia, serif;
+
+  /* Depth scale (ported from the V2 prototype so cards/CTAs read layered, not flat).
+     rounded-card = 16px; shadow-card = the soft deep card shadow; shadow-glow = the brand
+     CTA glow. Signal colours stay reserved — these are neutral depth, not signal. */
+  --radius-card: 1rem;
+  --shadow-card: 0 10px 30px -24px rgba(15, 27, 45, 0.4);
+  --shadow-glow: 0 12px 26px -14px rgba(31, 111, 235, 0.7);
+
+  /* Uppercase eyebrow / label tracking (0.1em) and display heading tracking (-0.02em). */
+  --tracking-eyebrow: 0.1em;
+  --tracking-display: -0.02em;
+}
+
+/* ---------------------------------------------------------------------------
+   Gradients (the prototype layers where the app was flat). Plain utility classes
+   so they compose with the Tailwind background-colour utilities. Reserved:
+   navy depth = dark architecture surfaces; brand→violet = primary accent/emphasis;
+   the tint-* gradients are subtle signal washes for stat/signal cards.
+--------------------------------------------------------------------------- */
+.bg-navy-depth {
+  background-image: linear-gradient(135deg, #0f1b2d 0%, #14213b 55%, #182347 100%);
+}
+.bg-brand-violet {
+  background-image: linear-gradient(150deg, #1f6feb, #6e56cf);
+}
+.text-brand-violet {
+  background-image: linear-gradient(150deg, #1f6feb, #6e56cf);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.tint-brand {
+  background-image: linear-gradient(180deg, rgba(31, 111, 235, 0.08), transparent 72%);
+}
+.tint-ok {
+  background-image: linear-gradient(180deg, rgba(46, 165, 106, 0.1), transparent 72%);
+}
+.tint-violet {
+  background-image: linear-gradient(180deg, rgba(110, 86, 207, 0.1), transparent 72%);
+}
+.tint-bad {
+  background-image: linear-gradient(180deg, rgba(229, 72, 77, 0.1), transparent 72%);
 }
 
 html {
