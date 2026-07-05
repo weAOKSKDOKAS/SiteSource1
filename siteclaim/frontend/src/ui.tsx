@@ -66,9 +66,10 @@ export function Spinner() {
 }
 
 // Atlas card: set apart by a soft hairline + the ported deep card shadow + 16px radius,
-// never an edge stripe.
+// never an edge stripe. ssRise gives it a one-shot fade+rise on mount (settles instantly
+// under prefers-reduced-motion) so a step/page enters gently rather than snapping in.
 export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cx("rounded-card border border-line-soft bg-card shadow-card", className)}>{children}</div>;
+  return <div className={cx("ssRise rounded-card border border-line-soft bg-card shadow-card", className)}>{children}</div>;
 }
 
 // A single instrument reading — the "real visual element" every Atlas view carries. A faint
