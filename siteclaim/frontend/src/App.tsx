@@ -4,8 +4,10 @@ import { BenchmarkPage } from "./BenchmarkPage";
 import { DatabasePage } from "./DatabasePage";
 import { EstimatorPage } from "./EstimatorPage";
 import { ProjectsPage } from "./ProjectsPage";
+import { RouteDecisionPanel } from "./RouteDecisionPanel";
 import { RoutingPage } from "./RoutingPage";
-import { Header, Stepper, type StepIndex, type TopView } from "./components";
+import { Header, StepHeading, Stepper, type StepIndex, type TopView } from "./components";
+import { tradeLabel } from "./format";
 import type {
   BidReply,
   Coverage,
@@ -13,11 +15,13 @@ import type {
   DispatchSet,
   LevelledBid,
   Recommendation,
+  RouteDecisionResult,
+  RouteProposal,
   ScopePackages,
   ShortlistSet,
   TenderPackage,
 } from "./types";
-import { ErrorBanner } from "./ui";
+import { Button, Card, ErrorBanner, LayerBadge } from "./ui";
 import { StepIngest } from "./steps/StepIngest";
 import { StepShortlist } from "./steps/StepShortlist";
 import { StepDispatch } from "./steps/StepDispatch";
@@ -44,7 +48,11 @@ export default function App() {
   const [files, setFiles] = useState<File[]>([]);
 
   // Pipeline state
-  const [scope, setScope] = useState<ScopePackages | null>(null);
+  const [scope, setScope] = useState<ScopePackages | null>(null);          // full ingest split (feeds Route)
+  const [proposal, setProposal] = useState<RouteProposal | null>(null);    // routing gate
+  const [chosen, setChosen] = useState<Record<string, string>>({});        // per-package route decision
+  const [routeResult, setRouteResult] = useState<RouteDecisionResult | null>(null);
+  const [sourceScope, setSourceScope] = useState<ScopePackages | null>(null); // sublet-only scope (feeds Shortlist→Recommend)
   const [tenderSlug, setTenderSlug] = useState("");  // server-derived slug for the replies panel
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
@@ -80,18 +88,26 @@ export default function App() {
     setMaxReached((m) => (to > m ? to : m));
   }
 
-  // Editing a gate invalidates every later gate (the ICM review-gate rule).
+  // Editing a gate invalidates every later gate (the ICM review-gate rule). Steps:
+  // 1 Ingest · 2 Route · 3 Shortlist · 4 Dispatch · 5 Level · 6 Recommend.
   function invalidateAfter(keep: StepIndex) {
     if (keep < 2) {
+      // Re-ingesting resets the routing proposal + decision (and the sublet scope it feeds).
+      setProposal(null);
+      setChosen({});
+      setRouteResult(null);
+      setSourceScope(null);
+    }
+    if (keep < 3) {
       setShortlist(null);
       setApprovals({});
     }
-    if (keep < 3) setDispatch(null);
-    if (keep < 4) {
+    if (keep < 4) setDispatch(null);
+    if (keep < 5) {
       setLevelled(null);
       setLevelStale(false);
     }
-    if (keep < 5) setRecommendation(null);
+    if (keep < 6) setRecommendation(null);
     setMaxReached((m) => (m > keep ? keep : m));
   }
 
@@ -126,25 +142,60 @@ export default function App() {
       invalidateAfter(1);
     });
 
-  const goShortlist = () =>
+  // Step 2 — Route. Analyse the ingested scope; default each package to its recommendation.
+  const goRoute = () =>
     run(async () => {
       if (!scope) return;
-      // Live engine: open the screened public pool and cap each trade at 8 candidates
-      // (the flags / recommended_against markers render exactly as in demo). Demo mode
-      // sends neither, preserving the assessed-firm shortlist the scenarios rely on.
-      const result = await api.shortlist(scope, demoMode ? undefined : { includePublic: true, k: 8 });
-      setShortlist(result);
-      // Default the approval gate to the top clean firm per trade.
-      const defaults: Record<string, string[]> = {};
-      for (const [trade, cands] of Object.entries(result.per_trade)) {
-        const pick = cands.find((c) => !c.recommended_against) ?? cands[0];
-        if (pick) defaults[trade] = [pick.firm.firm_id];
-      }
-      setApprovals(defaults);
+      const p = await api.routeAnalyze(scope);
+      setProposal(p);
+      setChosen(Object.fromEntries(p.packages.map((pkg) => [pkg.package_key, pkg.recommended_route])));
+      setRouteResult(null);
       advance(2);
     });
 
-  const goDispatchStep = () => advance(3);
+  const acceptAllRoutes = () =>
+    proposal && setChosen(Object.fromEntries(proposal.packages.map((p) => [p.package_key, p.recommended_route])));
+
+  // Confirm the routing gate: record the decisions (the run seeds self-perform estimates on
+  // the backend), then shortlist ONLY the sublet packages.
+  const confirmRoute = () =>
+    run(async () => {
+      if (!proposal || !scope) return;
+      const decisions = proposal.packages.map((p) => ({
+        package_key: p.package_key,
+        chosen_route: chosen[p.package_key] ?? p.recommended_route,
+      }));
+      const res = await api.routeConfirm(proposal.run_ref, decisions, "operator", scope);
+      setRouteResult(res);
+      // Sublet packages feed sourcing; self-perform packages branch to the Estimator and do
+      // NOT enter the sourcing flow. Match scope packages to the routing package_key (= trade).
+      const filtered: ScopePackages = {
+        project_name: scope.project_name,
+        packages: scope.packages.filter((pkg) => res.sublet_packages.includes(pkg.trade)),
+      };
+      setSourceScope(filtered);
+      invalidateAfter(2); // the routing decision changed — every sourcing gate below is stale
+      if (filtered.packages.length === 0) return; // all self-performed — stay on Route (empty state)
+      await shortlistScope(filtered);
+    });
+
+  // Shortlist a (sublet-filtered) scope and default the approval gate. Called inside `run`.
+  async function shortlistScope(s: ScopePackages) {
+    // Live engine: open the screened public pool and cap each trade at 8 candidates
+    // (the flags / recommended_against markers render exactly as in demo). Demo mode
+    // sends neither, preserving the assessed-firm shortlist the scenarios rely on.
+    const result = await api.shortlist(s, demoMode ? undefined : { includePublic: true, k: 8 });
+    setShortlist(result);
+    const defaults: Record<string, string[]> = {};
+    for (const [trade, cands] of Object.entries(result.per_trade)) {
+      const pick = cands.find((c) => !c.recommended_against) ?? cands[0];
+      if (pick) defaults[trade] = [pick.firm.firm_id];
+    }
+    setApprovals(defaults);
+    advance(3);
+  }
+
+  const goDispatchStep = () => advance(4);
 
   function toggleApprove(trade: string, firmId: string) {
     setApprovals((cur) => {
@@ -157,12 +208,12 @@ export default function App() {
 
   const sendDispatch = () =>
     run(async () => {
-      if (!shortlist || !scope) return;
+      if (!shortlist || !sourceScope) return;
       const result = await api.dispatch({
         shortlist,
         approvals,
-        scope,
-        project_name: scope.project_name,
+        scope: sourceScope,
+        project_name: sourceScope.project_name,
         send: true,
       });
       setDispatch(result);
@@ -170,10 +221,10 @@ export default function App() {
 
   const goLevel = () =>
     run(async () => {
-      const result = await api.level(replies, scope);
+      const result = await api.level(replies, sourceScope);
       setLevelled(result);
       setLevelStale(false);
-      advance(4);
+      advance(5);
     });
 
   function editRate(firmId: string, itemRef: string, rate: number | null) {
@@ -191,12 +242,12 @@ export default function App() {
     );
     setLevelStale(true);
     setRecommendation(null);
-    setMaxReached((m) => (m > 4 ? 4 : m));
+    setMaxReached((m) => (m > 5 ? 5 : m));
   }
 
   const recompute = () =>
     run(async () => {
-      const result = await api.level(replies, scope);
+      const result = await api.level(replies, sourceScope);
       setLevelled(result);
       setLevelStale(false);
     });
@@ -207,7 +258,7 @@ export default function App() {
       const result = await api.recommend(levelled, heroTrade, rationaleFixture);
       setRecommendation(result);
       setAward(result.recommended_firm_id);
-      advance(5);
+      advance(6);
     });
 
   function reset() {
@@ -219,6 +270,10 @@ export default function App() {
     setRationaleFixture(null);
     setFiles([]);
     setScope(null);
+    setProposal(null);
+    setChosen({});
+    setRouteResult(null);
+    setSourceScope(null);
     setShortlist(null);
     setApprovals({});
     setDispatch(null);
@@ -270,23 +325,48 @@ export default function App() {
                 onAddFiles={(f) => setFiles((cur) => [...cur, ...f])}
                 onRemoveFile={(i) => setFiles((cur) => cur.filter((_, idx) => idx !== i))}
                 onRunIngest={runIngest}
-                onContinue={goShortlist}
+                onContinue={goRoute}
                 loading={loading}
               />
             )}
 
-            {step === 2 && shortlist && (
+            {step === 2 && proposal && (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <StepHeading
+                    title="Route the packages"
+                    lead="For each package the AI recommends self-perform vs sublet with the coverage signal behind it. You decide: sublet packages go to sourcing next; self-perform packages open in the Estimator (they leave the sourcing flow). The recommendation is advisory."
+                  />
+                  <LayerBadge layer="L4" />
+                </div>
+                <RouteDecisionPanel
+                  proposal={proposal}
+                  chosen={chosen}
+                  onChoose={(key, route) => setChosen((cur) => ({ ...cur, [key]: route }))}
+                  onAcceptAll={acceptAllRoutes}
+                  onConfirm={confirmRoute}
+                  busy={loading}
+                  confirmLabel="Confirm routing →"
+                />
+                {routeResult && <RouteBranch result={routeResult} onOpenEstimator={() => setView("estimator")} />}
+                <div className="pt-1">
+                  <Button variant="ghost" onClick={() => setStep(1)}>← Back</Button>
+                </div>
+              </div>
+            )}
+
+            {step === 3 && shortlist && (
               <StepShortlist
                 shortlist={shortlist}
                 heroTrade={heroTrade}
                 coverage={coverage}
-                onBack={() => setStep(1)}
+                onBack={() => setStep(2)}
                 onNext={goDispatchStep}
                 loading={loading}
               />
             )}
 
-            {step === 3 && shortlist && (
+            {step === 4 && shortlist && (
               <StepDispatch
                 shortlist={shortlist}
                 heroTrade={heroTrade}
@@ -296,13 +376,13 @@ export default function App() {
                 tenderSlug={tenderSlug}
                 onToggleApprove={toggleApprove}
                 onSend={sendDispatch}
-                onBack={() => setStep(2)}
+                onBack={() => setStep(3)}
                 onNext={goLevel}
                 loading={loading}
               />
             )}
 
-            {step === 4 && levelled && (
+            {step === 5 && levelled && (
               <StepLevel
                 levelled={levelled}
                 replies={replies}
@@ -310,18 +390,18 @@ export default function App() {
                 xlsxUrl={api.levelingXlsxUrl()}
                 onEditRate={editRate}
                 onRecompute={recompute}
-                onBack={() => setStep(3)}
+                onBack={() => setStep(4)}
                 onNext={goRecommend}
                 loading={loading}
               />
             )}
 
-            {step === 5 && recommendation && (
+            {step === 6 && recommendation && (
               <StepRecommend
                 recommendation={recommendation}
                 award={award}
                 onSetAward={setAward}
-                onBack={() => setStep(4)}
+                onBack={() => setStep(5)}
                 onReset={reset}
               />
             )}
@@ -329,5 +409,50 @@ export default function App() {
         </div>
       </main>
     </div>
+  );
+}
+
+// The self-perform / sublet split after the routing gate is confirmed: sublet packages
+// continue to sourcing; self-perform packages branch to the Estimator (left track) and leave
+// the sourcing flow. When nothing is left to source, the empty state says so plainly.
+function RouteBranch({ result, onOpenEstimator }: { result: RouteDecisionResult; onOpenEstimator: () => void }) {
+  const selfPerform = result.self_perform_packages;
+  const nothingToSource = result.sublet_packages.length === 0;
+  return (
+    <Card className="p-4">
+      {nothingToSource ? (
+        <div className="rounded-lg border border-warn/40 bg-warn-bg px-3 py-2 text-sm text-ink">
+          All packages are self-performed — nothing to source. Their estimates are in the Estimator.
+        </div>
+      ) : (
+        <p className="text-sm text-ink-soft">
+          <span className="font-semibold text-ink">{result.sublet_packages.length}</span> sublet package(s) continue to the
+          shortlist{selfPerform.length > 0 ? ", the rest branch to the Estimator" : ""}.
+        </p>
+      )}
+      {selfPerform.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
+            {selfPerform.length} package(s) sent to the Estimator — left track
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {selfPerform.map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={onOpenEstimator}
+                title="Open the Estimator"
+                className="inline-flex items-center gap-1 rounded-full bg-violet-bg px-2.5 py-1 text-xs font-medium text-violet transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+              >
+                {tradeLabel(k)}
+                {result.estimate_ids[k] != null && <span className="tabular opacity-70">#{result.estimate_ids[k]}</span>}
+                <span aria-hidden>→</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-ink-faint">These open in the Estimator; they do not enter the sourcing flow.</p>
+        </div>
+      )}
+    </Card>
   );
 }

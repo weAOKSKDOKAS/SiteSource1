@@ -2,15 +2,16 @@ import type { ReactNode } from "react";
 import type { Evidence, RiskFlag } from "./types";
 import { Button, SeverityTag, cx } from "./ui";
 
-export const STEPS = ["Ingest", "Shortlist", "Dispatch", "Level", "Recommend"] as const;
-export type StepIndex = 1 | 2 | 3 | 4 | 5;
+export const STEPS = ["Ingest", "Route", "Shortlist", "Dispatch", "Level", "Recommend"] as const;
+export type StepIndex = 1 | 2 | 3 | 4 | 5 | 6;
 
 const GATE_HINT: Record<number, string> = {
   1: "Split the tender by trade",
-  2: "Rank firms with evidence",
-  3: "Invite & send (mock)",
-  4: "Correct & compare bids",
-  5: "Risk-adjusted award",
+  2: "Self-perform vs sublet per package",
+  3: "Rank firms with evidence",
+  4: "Invite & send (mock)",
+  5: "Correct & compare bids",
+  6: "Risk-adjusted award",
 };
 
 // --- Chrome ----------------------------------------------------------------

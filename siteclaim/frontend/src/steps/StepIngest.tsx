@@ -132,7 +132,7 @@ export function StepIngest({
         </Card>
       )}
 
-      {scope && <StepNav onNext={onContinue} nextLabel="Shortlist subcontractors →" loading={loading} />}
+      {scope && <StepNav onNext={onContinue} nextLabel="Route the packages →" loading={loading} />}
     </div>
   );
 }
