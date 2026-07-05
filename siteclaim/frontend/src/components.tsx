@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import type { Evidence, RiskFlag } from "./types";
-import { Button, SeverityTag, cx } from "./ui";
+import { tradeLabel } from "./format";
+import type { Evidence, FirmProfile, RiskFlag } from "./types";
+import { Button, Collapse, Docket, MonoLabel, SeverityTag, cx } from "./ui";
 
 export const STEPS = ["Ingest", "Route", "Shortlist", "Dispatch", "Level", "Recommend"] as const;
 export type StepIndex = 1 | 2 | 3 | 4 | 5 | 6;
@@ -233,6 +234,67 @@ export function RiskFlagList({ flags }: { flags: RiskFlag[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+// A firm's fused record body, shared by the shortlist firm drawer and the Database browse
+// drawer so both render one implementation. `flags` defaults to the raw public_flags (the
+// browse view); the shortlist drawer passes the per-scope adjudicated risk_flags instead.
+// Extra candidate-specific sections (e.g. scope evidence) are passed as children and chain
+// into the same collapse group.
+export function FirmRecord({
+  firm,
+  flags = firm.public_flags,
+  flagsLabel = "Public flags",
+  children,
+}: {
+  firm: FirmProfile;
+  flags?: RiskFlag[];
+  flagsLabel?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="space-y-3">
+      <Docket label="Firm reference" code={firm.firm_id} />
+      <div>
+        <MonoLabel className="mb-1">Registration</MonoLabel>
+        <div className="text-xs text-ink-soft">
+          {firm.registered_grade || "—"} · {firm.value_band.replace(/_/g, " ") || "unbanded"}
+        </div>
+      </div>
+      {firm.trades.length > 0 && (
+        <div>
+          <MonoLabel className="mb-1.5">Registered trades</MonoLabel>
+          <div className="flex flex-wrap gap-1.5">
+            {firm.trades.map((t) => <Pill key={t} tone="violet">{tradeLabel(t)}</Pill>)}
+          </div>
+        </div>
+      )}
+      <div>
+        <Collapse title="Closeout record" defaultOpen>
+          <p className="text-xs leading-relaxed text-ink-soft">
+            {firm.closeout_summary || "No assessable closeout record."}
+          </p>
+        </Collapse>
+        <Collapse title={flagsLabel} count={flags.length} defaultOpen={flags.length > 0}>
+          {flags.length > 0 ? (
+            <RiskFlagList flags={flags} />
+          ) : (
+            <p className="text-xs text-ink-faint">No flags on record for this firm.</p>
+          )}
+        </Collapse>
+        <Collapse title="Award history" count={firm.award_history.length}>
+          {firm.award_history.length > 0 ? (
+            <ul className="space-y-1 text-xs text-ink-soft">
+              {firm.award_history.map((a, i) => <li key={i}>{a}</li>)}
+            </ul>
+          ) : (
+            <p className="text-xs text-ink-faint">No recorded public awards.</p>
+          )}
+        </Collapse>
+        {children}
+      </div>
+    </div>
   );
 }
 

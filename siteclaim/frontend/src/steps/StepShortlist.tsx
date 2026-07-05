@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Candidate, Coverage, ShortlistSet } from "../types";
-import { Pill, RiskFlagList, StepHeading, StepNav } from "../components";
-import { Card, Collapse, Docket, Drawer, MatchChip, MonoLabel, cx } from "../ui";
+import { FirmRecord, Pill, RiskFlagList, StepHeading, StepNav } from "../components";
+import { Card, Collapse, Drawer, MatchChip, cx } from "../ui";
 import { tradeLabel } from "../format";
 
 export function StepShortlist({
@@ -156,73 +156,31 @@ function FirmDrawer({ candidate, onClose }: { candidate: Candidate | null; onClo
           <span className="flex flex-wrap items-center gap-2">
             <MatchChip score={candidate.match_score} />
             {candidate.recommended_against && <Pill tone="bad">⛔ Recommend against</Pill>}
-            <span>
-              {firm.registered_grade} · {firm.value_band.replace(/_/g, " ")}
-            </span>
           </span>
         )
       }
       footer="SiteSource asserts nothing without a record — every flag above carries its issuing source and reference."
     >
       {candidate && firm && (
-        <div className="space-y-3">
-          <Docket label="Firm reference" code={firm.firm_id} />
-
-          {firm.trades.length > 0 && (
-            <div>
-              <MonoLabel className="mb-1.5">Registered trades</MonoLabel>
-              <div className="flex flex-wrap gap-1.5">
-                {firm.trades.map((t) => (
-                  <Pill key={t} tone="violet">{tradeLabel(t)}</Pill>
+        // The per-scope adjudicated risk_flags drive the "Risk flags" section here; the raw
+        // public_flags are the browse view. Scope evidence is candidate-specific.
+        <FirmRecord firm={firm} flags={candidate.risk_flags} flagsLabel="Risk flags">
+          <Collapse title="Scope evidence" count={candidate.evidence.length}>
+            {candidate.evidence.length > 0 ? (
+              <ul className="space-y-2">
+                {candidate.evidence.map((e, i) => (
+                  <li key={i} className="text-xs leading-relaxed text-ink-soft">
+                    <span className="font-semibold text-ink">{e.source}</span>
+                    <span className="tabular text-ink-faint"> · {e.reference}</span>
+                    <div>{e.snippet}</div>
+                  </li>
                 ))}
-              </div>
-            </div>
-          )}
-
-          <div>
-            <Collapse title="Closeout record" defaultOpen>
-              <p className="text-xs leading-relaxed text-ink-soft">
-                {firm.closeout_summary || "No assessable closeout record."}
-              </p>
-            </Collapse>
-
-            <Collapse title="Risk flags" count={candidate.risk_flags.length} defaultOpen={candidate.risk_flags.length > 0}>
-              {candidate.risk_flags.length > 0 ? (
-                <RiskFlagList flags={candidate.risk_flags} />
-              ) : (
-                <p className="text-xs text-ink-faint">No adjudicated flags for this scope.</p>
-              )}
-            </Collapse>
-
-            <Collapse title="Award history" count={firm.award_history.length}>
-              {firm.award_history.length > 0 ? (
-                <ul className="space-y-1 text-xs text-ink-soft">
-                  {firm.award_history.map((a, i) => (
-                    <li key={i}>{a}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-ink-faint">No recorded public awards.</p>
-              )}
-            </Collapse>
-
-            <Collapse title="Scope evidence" count={candidate.evidence.length}>
-              {candidate.evidence.length > 0 ? (
-                <ul className="space-y-2">
-                  {candidate.evidence.map((e, i) => (
-                    <li key={i} className="text-xs leading-relaxed text-ink-soft">
-                      <span className="font-semibold text-ink">{e.source}</span>
-                      <span className="tabular text-ink-faint"> · {e.reference}</span>
-                      <div>{e.snippet}</div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-ink-faint">No matched closeout evidence.</p>
-              )}
-            </Collapse>
-          </div>
-        </div>
+              </ul>
+            ) : (
+              <p className="text-xs text-ink-faint">No matched closeout evidence.</p>
+            )}
+          </Collapse>
+        </FirmRecord>
       )}
     </Drawer>
   );
