@@ -92,3 +92,32 @@ def test_styled_sor_sheet_keeps_the_deterministic_roundtrip(tmp_path):
         ("E-01", "Switchboard", "no", 1.0),
         ("E-02", "Sub-main cabling", "m", 420.0),
     ]
+
+
+def test_styled_actuals_template_keeps_the_deterministic_roundtrip(tmp_path):
+    # The Final Account template gains the letterhead; a filled copy still parses.
+    from pipeline.benchmark.actuals_xlsx import build_actuals_template, parse_actuals_xlsx
+
+    items = [
+        {"item_ref": "E-01", "description": "Switchboard", "unit": "no", "section": "electrical"},
+        {"item_ref": "E-02", "description": "Cabling", "unit": "m", "section": "electrical"},
+    ]
+    out = build_actuals_template("Demo Tower", items, tmp_path / "fa.xlsx")
+
+    got = load_workbook(out).active
+    assert got.cell(row=1, column=1).value == "Final Account (actual outturn) — Demo Tower"
+
+    # operator fills an actual rate, then the sheet parses with no model
+    got_wb = load_workbook(out)
+    ws = got_wb.active
+    header_row = next(r for r in range(1, 12) if ws.cell(row=r, column=1).value == "Item")
+    ws.cell(row=header_row + 1, column=5, value=1250.0)  # Rate (HKD)
+    filled = tmp_path / "fa_filled.xlsx"
+    got_wb.save(filled)
+
+    rows = parse_actuals_xlsx(filled.read_bytes())
+    assert [(r["item_ref"], r["section"], r["granularity"]) for r in rows] == [
+        ("E-01", "electrical", "item"),
+        ("E-02", "electrical", "item"),
+    ]
+    assert rows[0]["rate"] == 1250.0

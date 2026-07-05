@@ -128,26 +128,26 @@ def parse_actuals_xlsx(file_bytes: bytes) -> list[dict]:
 def build_actuals_template(project_name: str, tender_items: list[dict], path: Path | str) -> Path:
     """Write the Final Account template to ``path``. When ``tender_items`` are given, the
     item_ref / description / unit / section columns are pre-filled so the operator only
-    types the actual qty / rate / amount."""
+    types the actual qty / rate / amount. Styled with the shared kit (presentation only —
+    the filled template still parses deterministically via :func:`parse_actuals_xlsx`)."""
     from openpyxl import Workbook  # lazy
-    from openpyxl.styles import Font
+
+    from pipeline._xlsx_style import autofit, style_body, style_header, title_block
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Final Account"
 
-    ws.append([f"{project_name} — Final Account (actual outturn)"])
-    ws[ws.max_row][0].font = Font(bold=True, size=13)
-    ws.append([
+    title_block(ws, f"Final Account (actual outturn) — {project_name}", [
+        f"Reference: {project_name}",
         "Enter the ACTUAL quantity, rate and amount for each item. Rate-only lines are fine "
         "(leave qty blank). For a section-totals-only account, leave Item blank and fill "
-        "Section + Amount. Do not change the header row."
+        "Section + Amount. Do not change the header row.",
     ])
-    ws.append([])
 
     ws.append(TEMPLATE_HEADERS)
-    for cell in ws[ws.max_row]:
-        cell.font = Font(bold=True)
+    header_row = ws.max_row
+    style_header(ws, header_row, len(TEMPLATE_HEADERS))
 
     for it in tender_items:
         ws.append([
@@ -155,6 +155,8 @@ def build_actuals_template(project_name: str, tender_items: list[dict], path: Pa
             "", "", "",  # qty / rate / amount — the operator fills these
             it.get("section", ""),
         ])
+    style_body(ws, header_row + 1, ws.max_row, len(TEMPLATE_HEADERS))
+    autofit(ws, min_row=header_row)
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
