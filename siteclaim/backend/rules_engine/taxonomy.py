@@ -47,8 +47,10 @@ def _load_canonical() -> tuple[frozenset[str], dict[str, str]]:
 
 CANONICAL_TRADES, _LABELS = _load_canonical()
 
-# Near-synonyms the model is likely to emit -> canonical key. Matched as substrings
-# against a normalised (lowercased, separators stripped) form of the trade name.
+# Near-synonyms the model is likely to emit -> canonical key. Matched in two passes
+# (see ``normalize``): short abbreviations (``em``/``lv``/``rc``/``me``/``mep``) match a
+# WHOLE whitespace token only, so they cannot fire inside an unrelated word (``demolition``,
+# ``valve``, ``commercial``); longer needles keep the substring match, in insertion order.
 _SYNONYMS: dict[str, str] = {
     "electric": "electrical", "e&m": "electrical", "em": "electrical", "lv": "electrical",
     "mechanicalplumbing": "mechanical_plumbing", "mechanical": "mechanical_plumbing",
@@ -76,6 +78,24 @@ def _squash(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
+# Partition the synonyms once by squashed length. Short forms (<= 3 chars: em, lv, rc, me,
+# mep — and the "&" forms e&m/m&e that squash to em/me) are abbreviation-matched against whole
+# tokens; longer forms keep the substring match. Insertion order is preserved in both lists,
+# so foundation/piling/pile still resolve before the ground_investigation synonyms.
+def _partition_synonyms() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    abbrev: list[tuple[str, str]] = []
+    substring: list[tuple[str, str]] = []
+    for needle, key in _SYNONYMS.items():
+        squashed_needle = _squash(needle)
+        if not squashed_needle:
+            continue
+        (abbrev if len(squashed_needle) <= 3 else substring).append((squashed_needle, key))
+    return abbrev, substring
+
+
+_ABBREV_SYNONYMS, _SUBSTRING_SYNONYMS = _partition_synonyms()
+
+
 def normalize(trade: str) -> str | None:
     """Map a free-form trade name to a canonical key, or None if unmapped."""
     raw = trade.strip().lower()
@@ -90,7 +110,15 @@ def normalize(trade: str) -> str | None:
     for label, key in _LABELS.items():  # label match ignoring punctuation
         if _squash(label) == squashed:
             return key
-    for needle, key in _SYNONYMS.items():  # near-synonym substring
+    # Abbreviation pass — whole-token match only. "E&M"/"LV switchgear"/"RC works" map, but
+    # "em"/"lv"/"rc" never fire inside an unrelated word (demolition, valve, commercial).
+    tokens = {_squash(tok) for tok in raw.split()} - {""}
+    for needle, key in _ABBREV_SYNONYMS:
+        if needle in tokens:
+            return key
+    # Substring pass — long synonyms only, in insertion order (foundation/piling/pile before
+    # the ground_investigation synonyms).
+    for needle, key in _SUBSTRING_SYNONYMS:
         if needle in squashed:
             return key
     return None

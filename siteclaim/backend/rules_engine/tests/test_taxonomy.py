@@ -42,6 +42,42 @@ def test_unmapped_trade_returns_none():
     assert normalize("Astrophysics") is None
 
 
+def test_short_abbreviations_do_not_match_as_substrings():
+    # The Layer-1 false positive: short abbreviation synonyms (em/lv/rc/me) used to match
+    # inside unrelated words ("dEMolition" -> electrical, "vaLVe" -> electrical). They must
+    # now be unmapped (None) and surfaced, per the module's "never silently map" rule.
+    for word in ("demolition", "valve", "cement", "basement", "pavement", "temporary works", "commercial"):
+        assert normalize(word) is None, word
+
+
+def test_abbreviations_still_map_as_whole_tokens():
+    assert normalize("E&M") == "electrical"
+    assert normalize("e&m installation") == "electrical"
+    assert normalize("LV switchgear") == "electrical"
+    assert normalize("MEP") == "mechanical_plumbing"
+    assert normalize("M&E") == "mechanical_plumbing"
+    assert normalize("RC works") == "reinforced_concrete"
+    assert normalize("reinforced concrete") == "reinforced_concrete"
+
+
+def test_long_synonyms_and_ordering_still_resolve():
+    assert normalize("HVAC") == "mechanical_plumbing"
+    assert normalize("drainage") == "mechanical_plumbing"
+    assert normalize("bored piling") == "foundation_substructure"   # foundation/pile before GI
+    assert normalize("rotary drilling ground investigation") == "ground_investigation"
+    assert normalize("electrical") == "electrical"
+
+
+def test_validate_scope_keeps_a_formerly_mis_mapped_trade_unmapped():
+    scope = ScopePackages(
+        project_name="P",
+        packages=[TradeWorkPackage(trade="Demolition", scope_summary="soft strip")],
+    )
+    normalised, unmapped = validate_scope(scope)
+    assert unmapped == ["Demolition"]                          # surfaced, not silently mapped
+    assert normalised.packages[0].trade == "Demolition"        # kept unchanged in the output
+
+
 def test_validate_scope_normalises_and_surfaces_unmapped():
     scope = ScopePackages(
         project_name="P",
