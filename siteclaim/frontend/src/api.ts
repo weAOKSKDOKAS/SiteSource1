@@ -15,6 +15,7 @@ import type {
   Health,
   IngestUpload,
   LetterOfOffer,
+  LevelAllResponse,
   LevelledBid,
   MatchConfirm,
   MatchProposal,
@@ -23,6 +24,7 @@ import type {
   ProjectSummary,
   RateSuggestions,
   ReasonCode,
+  RecommendAllResponse,
   Recommendation,
   RouteDecision,
   RouteDecisionResult,
@@ -124,6 +126,13 @@ export const api = {
   level: (replies: BidReply[], scope: ScopePackages | null) => post<LevelledBid[]>("/level", { replies, scope }),
   recommend: (levelled: LevelledBid[], trade: string, rationaleFixture: string | null) =>
     post<Recommendation>("/recommend", { levelled, trade, demo_fixture: rationaleFixture }),
+
+  // Per-section path (Prompt 1): one leveling section and one recommendation per sublet
+  // trade. demoFixtures maps trade -> baked rationale (a missing trade narrates offline).
+  levelAll: (replies: BidReply[], scope: ScopePackages | null) =>
+    post<LevelAllResponse>("/level-all", { replies, scope }),
+  recommendAll: (levelled: LevelledBid[], demoFixtures: Record<string, string>) =>
+    post<RecommendAllResponse>("/recommend-all", { levelled, demo_fixtures: demoFixtures }),
 
   levelingXlsxUrl: () => BASE + "/leveling.xlsx",
 

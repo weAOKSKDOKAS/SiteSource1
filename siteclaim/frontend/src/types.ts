@@ -445,6 +445,25 @@ export interface LevelledBid {
   scope_gaps: string[];
 }
 
+// --- Per-section (per-trade) leveling + recommend (Prompt 1) ----------------
+export interface LevelSection {
+  trade: string;
+  levelled: LevelledBid[];
+}
+
+export interface LevelAllResponse {
+  sections: LevelSection[];
+}
+
+export interface RecommendSection {
+  trade: string;
+  recommendation: Recommendation;
+}
+
+export interface RecommendAllResponse {
+  sections: RecommendSection[];
+}
+
 export interface RankedFirm {
   firm_id: string;
   firm_name: string;
@@ -485,6 +504,9 @@ export interface DemoCase extends DemoCaseSummary {
   tender: TenderPackage;
   replies: BidReply[];
   rationale_fixture: string;
+  // Per-trade rationale fixtures for the per-section recommend path; single-trade
+  // scenarios carry {hero_trade: rationale_fixture}.
+  rationale_fixtures: Record<string, string>;
 }
 
 export interface Health {
