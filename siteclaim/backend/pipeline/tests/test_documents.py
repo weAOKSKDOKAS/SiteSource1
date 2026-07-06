@@ -19,6 +19,25 @@ from pipeline.documents import (  # noqa: E402
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
+def _tesseract_available() -> bool:
+    try:
+        import pytesseract
+
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+requires_tesseract = pytest.mark.skipif(not _tesseract_available(), reason="tesseract/pytesseract not installed")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ocr_cache(tmp_path, monkeypatch):
+    # extract_document now reads pipeline.ocr, which caches on disk — keep tests off the real root.
+    monkeypatch.setenv("SITESOURCE_OCR_CACHE", str(tmp_path / "ocr_cache"))
+
+
 def _make_pdf(pages: int = 1) -> bytes:
     doc = fitz.open()
     for _ in range(pages):
@@ -146,3 +165,24 @@ def test_text_cap_is_generous_well_past_the_old_five_page_limit():
     text, images = extract_document(data, "application/pdf")
     assert images == []
     assert text.count("[page ") == 20  # all 20 text pages extracted (old cap was 5)
+
+
+@requires_tesseract
+def test_scanned_text_pdf_past_the_image_cap_is_read_as_text_not_dropped():
+    # A scanned SoR longer than the 8-page vision cap: OCR reads every page to text, so pages
+    # past page 8 are NOT silently dropped, and vision is not used for text pages.
+    src = fitz.open()
+    for i in range(IMAGE_MAX_PAGES + 4):  # 12 pages, each rendered then flattened to an image
+        src.new_page().insert_text((72, 100), f"H{i} rotary drilling in rock, section item {i}", fontsize=16)
+    flat = fitz.open()
+    for i in range(src.page_count):
+        png = src[i].get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False).tobytes("png")
+        op = flat.new_page(width=src[i].rect.width, height=src[i].rect.height)
+        op.insert_image(op.rect, stream=png)
+    data = flat.tobytes()
+    src.close()
+    flat.close()
+
+    text, images = extract_document(data, "application/pdf")
+    assert f"[page {IMAGE_MAX_PAGES + 3}]" in text   # a page past the 8-page image cap is present as text
+    assert images == []                              # scanned text pages -> OCR text, not vision

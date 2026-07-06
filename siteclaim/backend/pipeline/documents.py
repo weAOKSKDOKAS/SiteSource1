@@ -12,7 +12,9 @@ module costs nothing and DEMO_MODE never needs the dependency installed:
 * ``to_images(file_bytes, content_type) -> list[base64-PNG]`` — the pure-image fallback,
   kept for genuinely scanned documents and callers that want vision only.
 
-There is no OCR step — a scanned page is handed to the vision model as an image.
+A scanned TEXT page is read cheaply by local OCR (``pipeline.ocr``) and joins the text stream
+for DeepSeek; only a page that is a genuine image after OCR (a drawing) is rendered to PNG for
+the vision model. ``to_images`` is unchanged (pure vision).
 """
 
 import base64
@@ -74,10 +76,26 @@ def to_images(
     )
 
 
+def _has_image_content(page) -> bool:
+    """True when a page carries a raster image (a scan or a drawing). Used to tell a genuine
+    image page (send to vision) from a blank one (skip) once OCR has yielded no usable text."""
+    try:
+        return bool(page.get_images(full=False))
+    except Exception:  # noqa: BLE001 — unknown -> be safe and let vision look
+        return True
+
+
 def _pdf_text_first(
     data: bytes, text_max_pages: int, image_max_pages: int, dpi: int, min_chars: int
 ) -> tuple[str, list[str]]:
     import fitz  # PyMuPDF — lazy
+
+    from pipeline import ocr  # lazy: pytesseract stays optional for import
+
+    # Per-page text: native where present, local OCR for scanned pages (cached on the bytes).
+    # A scanned SoR/PS/MM text page is now READ as text for DeepSeek instead of rendered for
+    # vision — so it is no longer dropped by the 8-page image cap and costs nothing to vision.
+    page_text = ocr.page_texts(data, min_native_chars=min_chars)
 
     zoom = dpi / 72.0
     matrix = fitz.Matrix(zoom, zoom)
@@ -86,13 +104,13 @@ def _pdf_text_first(
     with fitz.open(stream=data, filetype="pdf") as doc:
         for index in range(min(len(doc), text_max_pages)):
             page = doc[index]
-            text = page.get_text("text", sort=True).strip()  # reading order
+            text = (page_text[index] if index < len(page_text) else "").strip()
             if len(text) >= min_chars:
-                texts.append(f"[page {index + 1}]\n{text}")  # usable text layer (cheap)
-            elif len(images) < image_max_pages:
-                pix = page.get_pixmap(matrix=matrix, alpha=False)  # scanned -> image (capped)
+                texts.append(f"[page {index + 1}]\n{text}")  # native or OCR text (cheap, to DeepSeek)
+            elif len(images) < image_max_pages and _has_image_content(page):
+                pix = page.get_pixmap(matrix=matrix, alpha=False)  # genuine image page (a drawing) -> vision
                 images.append(_b64_png(pix.tobytes("png")))
-            # else: a scanned page beyond the image cap is skipped (vision is expensive)
+            # else: negligible text and no raster content (blank), or past the image cap -> skipped
     if not texts and not images:
         raise ValueError("PDF has no extractable content.")
     return "\n\n".join(texts), images
