@@ -32,6 +32,27 @@ class NotAPdf(ValueError):
     """The input bytes are not a readable PDF — callers decide how to degrade."""
 
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def ocr_enabled() -> bool:
+    """The OCR escape hatch (``OCR_ENABLED``, default ON). When off, ``page_texts`` is native-only
+    — scanned pages contribute no text, exactly the pre-OCR behaviour (whole-file / vision
+    downstream) — so the entire change is reversible with one env flag."""
+    return os.getenv("OCR_ENABLED", "true").strip().lower() in _TRUTHY
+
+
+def _env_dpi() -> int:
+    try:
+        return int(os.getenv("OCR_DPI", "300"))
+    except ValueError:
+        return 300
+
+
+def _env_lang() -> str:
+    return os.getenv("OCR_LANG", "eng").strip() or "eng"
+
+
 # -- content-addressed cache ------------------------------------------------
 def _cache_root() -> Path:
     """Where per-key OCR results live. ``SITESOURCE_OCR_CACHE`` wins; otherwise a subdir under
@@ -113,26 +134,36 @@ def _compute_page_texts(data: bytes, min_native_chars: int, dpi: int, lang: str,
         doc = fitz.open(stream=data, filetype="pdf")
     except Exception as exc:  # noqa: BLE001 — any open failure means "not a readable PDF"
         raise NotAPdf(str(exc)) from exc
+    enabled = ocr_enabled()
     try:
         pages: list[str] = []
         for page in doc:
             native = page.get_text("text", sort=True)
             if len(native.strip()) >= min_native_chars:
                 pages.append(native)  # cheap, exact — the text layer the pipeline already trusts
-            else:
+            elif enabled:
                 pages.append(_ocr_or_empty(_render_png(page, dpi), lang=lang, psm=psm))
+            else:
+                pages.append(native)  # OCR off -> native-only (scanned page contributes no text)
         return pages
     finally:
         doc.close()
 
 
 def page_texts(
-    data: bytes, *, min_native_chars: int = 20, dpi: int = 300, lang: str = "eng", psm: int = 6,
+    data: bytes, *, min_native_chars: int = 20, dpi: Optional[int] = None,
+    lang: Optional[str] = None, psm: int = 6,
 ) -> list[str]:
     """Per-page text for a PDF, one entry per page, in page order: the native text layer where a
     page has one (>= ``min_native_chars`` stripped), else local tesseract OCR of the rasterised
-    page. Content-addressed cache on the bytes + params, so the same document is never OCR'd
-    twice. Raises :class:`NotAPdf` when the input is not a readable PDF."""
+    page. ``dpi`` / ``lang`` default from ``OCR_DPI`` / ``OCR_LANG`` (300 / eng). Content-addressed
+    cache on the bytes + params, so the same document is never OCR'd twice. Raises
+    :class:`NotAPdf` when the input is not a readable PDF. With ``OCR_ENABLED`` off it is
+    native-only and uncached (the pre-OCR behaviour)."""
+    dpi = _env_dpi() if dpi is None else dpi
+    lang = _env_lang() if lang is None else lang
+    if not ocr_enabled():
+        return _compute_page_texts(data, min_native_chars, dpi, lang, psm)  # native-only, uncached
     key = _cache_key(data, dpi, lang, psm)
     cached = _cache_read(key)
     if cached is not None:

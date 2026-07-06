@@ -13,6 +13,9 @@ numpy     # cosine similarity over the baked closeout embeddings (no model at ru
 # DEMO_MODE stays zero-dependency and zero-network.
 openai    # OpenAI-compatible provider option (base_url=https://api.deepseek.com)
 pymupdf   # PyMuPDF / fitz — rasterise PDF pages to images (pure-pip, no system deps)
+pytesseract  # local OCR of scanned tender pages (pipeline/ocr.py) — imported LAZILY.
+             # Requires the system `tesseract-ocr` binary (apt-get install tesseract-ocr).
+             # Absent -> scanned pages degrade to no-text (whole-file / vision), suite stays green.
 # Seed-build / live-ingest ONLY — imported lazily inside backend/db/embeddings.py,
 # never at runtime, so DEMO_MODE never imports it.
 sentence-transformers

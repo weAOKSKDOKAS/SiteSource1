@@ -108,3 +108,19 @@ def test_scanned_page_is_read_by_ocr():
 
     pages = page_texts(data)
     assert len(pages) == 1 and "ROTARY" in pages[0].upper()  # OCR'd back to text
+
+
+def test_ocr_disabled_is_native_only_and_never_ocrs(monkeypatch):
+    monkeypatch.setenv("OCR_ENABLED", "false")
+    calls = {"n": 0}
+
+    def _count(*a, **k):
+        calls["n"] += 1
+        return "OCR-RAN"
+
+    monkeypatch.setattr(ocr, "_ocr_image_png", _count)
+    blank = fitz.open()
+    blank.new_page()  # a scanned/blank page with no text layer
+    data = blank.tobytes()
+    blank.close()
+    assert page_texts(data) == [""] and calls["n"] == 0  # OCR off -> native-only, never OCR'd

@@ -173,7 +173,9 @@ def extract_document(
         raise ValueError("Empty file — nothing to extract.")
     ct = (content_type or "").split(";")[0].strip().lower()
     if ct == "application/pdf" or ct.endswith("/pdf"):
-        if table_aware:
+        from pipeline import ocr  # lazy
+
+        if table_aware and ocr.ocr_enabled():
             return _pdf_table_aware(file_bytes, text_max_pages, image_max_pages, dpi, min_chars)
         return _pdf_text_first(file_bytes, text_max_pages, image_max_pages, dpi, min_chars)
     if ct.startswith("image/"):
