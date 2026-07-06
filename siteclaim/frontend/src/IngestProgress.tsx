@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { Button, Card, LoadingDots, ScanLine, cx } from "./ui";
 
 // The live-ingest progress modal (a centered overlay, never a drawer). A live
-// /ingest-upload runs for minutes on a big tender (chunked extraction) with no signal
-// beyond the request lifecycle — so the checklist ticks only from what the frontend
-// honestly observes: the upload completing (bytes sent) and the response arriving. The
-// server-side stages run as one indeterminate active group with the scan sweep and an
-// elapsed timer; we never fake a per-stage percentage the API does not expose.
+// /ingest-upload now runs as a BACKGROUND job the client polls, so the checklist ticks from the
+// real server stage (uploading → classifying → extracting → splitting) and, when the extractor
+// reports it, a chunk counter. The scan sweep sits on the active stage and the elapsed timer
+// keeps counting with no ceiling — a big tender can extract for minutes. We only show what the
+// job actually reports; before any poll lands it falls back to a single indeterminate stage.
 export type IngestPhase = "uploading" | "processing" | "done" | "error";
 
 const STAGES = [
@@ -17,13 +17,17 @@ const STAGES = [
   { key: "split", label: "Splitting into packages" },
 ] as const;
 
+// Backend stage label -> the checklist index it lights up.
+const STAGE_INDEX: Record<string, number> = { uploading: 0, classifying: 1, extracting: 2, splitting: 3 };
+
 type StageState = "done" | "active" | "upcoming";
 
-function stageState(phase: IngestPhase, i: number): StageState {
+function stageState(phase: IngestPhase, i: number, activeIndex: number): StageState {
   if (phase === "done") return "done";
-  if (phase === "uploading") return i === 0 ? "active" : "upcoming";
-  if (phase === "processing") return i === 0 ? "done" : "active"; // server work is one indeterminate group
-  return i === 0 ? "done" : "upcoming"; // error: upload finished, the rest is unknown
+  if (phase === "error") return i === 0 ? "done" : "upcoming"; // upload finished; the rest is unknown
+  if (i < activeIndex) return "done";
+  if (i === activeIndex) return "active";
+  return "upcoming";
 }
 
 function StageIcon({ state }: { state: StageState }) {
@@ -43,6 +47,8 @@ function elapsedLabel(seconds: number): string {
 export function IngestProgress({
   phase,
   startedAt,
+  stage,
+  progress,
   error,
   summary,
   onRetry,
@@ -50,6 +56,8 @@ export function IngestProgress({
 }: {
   phase: IngestPhase;
   startedAt: number;
+  stage?: string; // the background job's stage — uploading | classifying | extracting | splitting
+  progress?: { done: number; total: number };
   error?: string;
   summary?: { items: number; packages: number };
   onRetry: () => void;
@@ -65,6 +73,8 @@ export function IngestProgress({
 
   const working = phase === "uploading" || phase === "processing";
   const title = phase === "done" ? "Tender read" : phase === "error" ? "Couldn't read the tender" : "Reading the tender…";
+  // Which checklist row is active: the reported stage while processing, else the upload row.
+  const activeIndex = phase === "uploading" ? 0 : stage ? STAGE_INDEX[stage] ?? 1 : 1;
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-ink/45 px-4">
@@ -88,15 +98,20 @@ export function IngestProgress({
         ) : (
           <>
             <ul className="mt-4 space-y-3">
-              {STAGES.map((stage, i) => {
-                const state = stageState(phase, i);
+              {STAGES.map((item, i) => {
+                const state = stageState(phase, i, activeIndex);
+                const showCount = state === "active" && item.key === "extract" && progress && progress.total > 0;
                 return (
-                  <li key={stage.key} className="flex items-center gap-3">
+                  <li key={item.key} className="flex items-center gap-3">
                     <StageIcon state={state} />
                     <span className={cx("text-sm", state === "upcoming" ? "text-ink-faint" : state === "done" ? "text-ink-soft" : "font-semibold text-ink")}>
-                      {stage.label}
+                      {item.label}
                     </span>
-                    {state === "active" && <span className="ml-auto"><LoadingDots /></span>}
+                    {showCount ? (
+                      <span className="tabular ml-auto text-xs text-ink-faint">{progress!.done}/{progress!.total} chunks</span>
+                    ) : state === "active" ? (
+                      <span className="ml-auto"><LoadingDots /></span>
+                    ) : null}
                   </li>
                 );
               })}

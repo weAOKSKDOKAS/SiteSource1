@@ -97,6 +97,19 @@ export interface IngestUpload {
   tender_slug: string;
 }
 
+// Async ingest transport: the kick-off + poll envelope. Live: {job_id, status:"queued"} then
+// poll to done|error. DEMO: {status:"done", result} inline (no job). A big tender extracts in
+// the background for as long as it needs, so no single long request can time out.
+export type IngestJobStatus = "queued" | "running" | "done" | "error";
+export interface IngestJobState {
+  job_id: string | null;
+  status: IngestJobStatus;
+  stage: string; // uploading | classifying | extracting | splitting
+  progress?: { done: number; total: number } | null;
+  error?: string | null;
+  result?: IngestUpload | null;
+}
+
 export interface TenderReplyInfo {
   firm_id: string;
   trade: string;

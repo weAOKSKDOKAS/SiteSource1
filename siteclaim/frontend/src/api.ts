@@ -17,6 +17,7 @@ import type {
   FirmProfile,
   FirmsPage,
   Health,
+  IngestJobState,
   IngestUpload,
   LetterOfOffer,
   LevelAllResponse,
@@ -82,6 +83,37 @@ function del<T>(path: string): Promise<T> {
   return fetch(BASE + path, { method: "DELETE" }).then((r) => handle<T>(r));
 }
 
+// Poll a background ingest job until it finishes. Resolves the ScopePackages result on done,
+// rejects on error (or a gone job). No ceiling — a big tender extracts for as long as it needs;
+// each poll drives the progress modal via onProgress. A few transient poll failures are tolerated
+// so one dropped request never aborts a multi-minute extraction; a 404 (job gone) gives up.
+function pollIngestStatus(jobId: string, onProgress?: (s: IngestJobState) => void): Promise<IngestUpload> {
+  return new Promise<IngestUpload>((resolve, reject) => {
+    let consecutiveFailures = 0;
+    const tick = () => {
+      get<IngestJobState>(`/ingest-status/${jobId}`)
+        .then((state) => {
+          consecutiveFailures = 0;
+          onProgress?.(state);
+          if (state.status === "done") {
+            if (state.result) resolve(state.result);
+            else reject(new Error("Ingest finished without a result"));
+          } else if (state.status === "error") {
+            reject(new Error(state.error || "Extraction failed"));
+          } else {
+            setTimeout(tick, 1500);
+          }
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes("Unknown or expired") || ++consecutiveFailures >= 5) reject(new Error(msg));
+          else setTimeout(tick, 1500);
+        });
+    };
+    tick();
+  });
+}
+
 export interface DispatchRequest {
   shortlist: ShortlistSet;
   approvals: Record<string, string[]>;
@@ -114,23 +146,39 @@ export const api = {
   demoCase: (id: string) => get<DemoCase>(`/demo/${id}`),
 
   ingest: (tender: TenderPackage) => post<ScopePackages>("/ingest", { tender }),
-  // Live multimodal ingest: POST the raw tender files as multipart/form-data.
-  // Returns the scope split plus the trade-tagged tender (pass the tender to /dispatch).
-  // XHR (not fetch) so the progress modal gets a real "upload complete" tick — the only
-  // intermediate signal the lifecycle honestly exposes before the (minutes-long) response.
-  ingestUpload: (files: File[], onUploaded?: () => void) => {
+  ingestStatus: (jobId: string) => get<IngestJobState>(`/ingest-status/${jobId}`),
+  // Live multimodal ingest, async: POST the raw files (multipart/form-data), which kicks off a
+  // BACKGROUND job and returns immediately, then poll /ingest-status until done. A big tender
+  // extracts for minutes — no single long request, so no client/proxy timeout. Still XHR for the
+  // POST so the modal gets a real "upload complete" tick; onProgress drives the modal per stage.
+  // DEMO returns {status:"done", result} inline — resolved without polling.
+  ingestUpload: (
+    files: File[],
+    opts?: { onUploaded?: () => void; onProgress?: (s: IngestJobState) => void },
+  ) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
     return new Promise<IngestUpload>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", BASE + "/ingest-upload");
-      xhr.upload.onload = () => onUploaded?.(); // bytes fully sent -> server-side processing begins
+      xhr.upload.onload = () => opts?.onUploaded?.(); // bytes fully sent -> job kicked off
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
+          let env: IngestJobState;
           try {
-            resolve(JSON.parse(xhr.responseText) as IngestUpload);
+            env = JSON.parse(xhr.responseText) as IngestJobState;
           } catch {
             reject(new Error("Malformed response from /ingest-upload"));
+            return;
+          }
+          if (env.status === "done" && env.result) {
+            resolve(env.result); // DEMO (inline) — no job, no polling
+          } else if (env.status === "error") {
+            reject(new Error(env.error || "Ingest failed"));
+          } else if (env.job_id) {
+            pollIngestStatus(env.job_id, opts?.onProgress).then(resolve, reject); // live — poll
+          } else {
+            reject(new Error("No ingest job id returned"));
           }
         } else {
           let detail = `${xhr.status} ${xhr.statusText}`;

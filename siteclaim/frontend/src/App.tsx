@@ -79,9 +79,17 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Live-ingest progress modal (a big upload extracts for minutes). null = closed.
+  // Live-ingest progress modal (a big upload extracts for minutes). null = closed. `stage` /
+  // `progress` come from polling the background job, so the checklist ticks as extraction runs.
   const [ingestModal, setIngestModal] = useState<
-    { phase: IngestPhase; startedAt: number; error?: string; summary?: { items: number; packages: number } } | null
+    {
+      phase: IngestPhase;
+      startedAt: number;
+      error?: string;
+      summary?: { items: number; packages: number };
+      stage?: string;
+      progress?: { done: number; total: number };
+    } | null
   >(null);
 
   useEffect(() => {
@@ -157,9 +165,16 @@ export default function App() {
     setError(null);
     setIngestModal({ phase: "uploading", startedAt });
     try {
-      const uploaded = await api.ingestUpload(files, () =>
-        setIngestModal((m) => (m && m.phase === "uploading" ? { ...m, phase: "processing" } : m)),
-      );
+      const uploaded = await api.ingestUpload(files, {
+        onUploaded: () =>
+          setIngestModal((m) => (m && m.phase === "uploading" ? { ...m, phase: "processing" } : m)),
+        // Each poll advances the modal: the stage ticks the checklist, the chunk counter (when
+        // known) shows extraction progress. Elapsed time keeps counting with no ceiling.
+        onProgress: (s) =>
+          setIngestModal((m) =>
+            m ? { ...m, phase: "processing", stage: s.stage, progress: s.progress ?? undefined } : m,
+          ),
+      });
       setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
       setTenderSlug(uploaded.tender_slug); // for the live replies panel on the dispatch step
       setScope(uploaded.scope);
@@ -486,6 +501,8 @@ export default function App() {
         <IngestProgress
           phase={ingestModal.phase}
           startedAt={ingestModal.startedAt}
+          stage={ingestModal.stage}
+          progress={ingestModal.progress}
           error={ingestModal.error}
           summary={ingestModal.summary}
           onRetry={runLiveIngest}
