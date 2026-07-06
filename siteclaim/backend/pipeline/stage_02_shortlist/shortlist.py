@@ -25,6 +25,7 @@ from typing import Optional
 
 from db import store
 from db.cross_reference import cross_reference
+from rules_engine.taxonomy import base_trade
 from schemas.models import ScopePackages, ShortlistSet
 
 
@@ -48,9 +49,11 @@ def shortlist(
     own_conn = conn is None
     conn = conn or store.get_connection()
     try:
+        # Keyed by package_key (pkg.trade holds it for a section sub-package); the DB read
+        # runs against the parent trade so a sub-package shortlists its trade's real firms.
         per_trade = {
             pkg.trade: cross_reference(
-                conn, pkg.trade, pkg.scope_summary, k=k, include_public=include_public
+                conn, base_trade(pkg.trade), pkg.scope_summary, k=k, include_public=include_public
             )
             for pkg in scope.packages
         }

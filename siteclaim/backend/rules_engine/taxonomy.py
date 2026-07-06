@@ -96,6 +96,13 @@ def _partition_synonyms() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]
 _ABBREV_SYNONYMS, _SUBSTRING_SYNONYMS = _partition_synonyms()
 
 
+def base_trade(package_key: str) -> str:
+    """The canonical trade behind a routing package_key. A section sub-package is keyed
+    ``trade:SECTION`` (Prompt 2) — its DB reads (shortlist, historical band) run against the
+    parent trade. A bare trade (every demo package) is returned unchanged."""
+    return (package_key or "").split(":", 1)[0]
+
+
 def normalize(trade: str) -> str | None:
     """Map a free-form trade name to a canonical key, or None if unmapped."""
     raw = trade.strip().lower()

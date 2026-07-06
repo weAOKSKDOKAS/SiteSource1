@@ -15,7 +15,10 @@ export function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
 
-// "mechanical_plumbing" -> "Mechanical Plumbing"
+// "mechanical_plumbing" -> "Mechanical Plumbing"; a section sub-package key
+// "ground_investigation:H" -> "Ground Investigation · Section H".
 export function tradeLabel(trade: string): string {
-  return trade.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  const [base, section] = trade.split(":");
+  const label = base.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return section ? `${label} · Section ${section}` : label;
 }

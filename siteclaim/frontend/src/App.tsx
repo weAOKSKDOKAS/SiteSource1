@@ -221,12 +221,27 @@ export default function App() {
       }));
       const res = await api.routeConfirm(proposal.run_ref, decisions, "operator", scope);
       setRouteResult(res);
-      // Sublet packages feed sourcing; self-perform packages branch to the Estimator and do
-      // NOT enter the sourcing flow. Match scope packages to the routing package_key (= trade).
-      const filtered: ScopePackages = {
-        project_name: scope.project_name,
-        packages: scope.packages.filter((pkg) => res.sublet_packages.includes(pkg.trade)),
-      };
+      // Sublet packages feed sourcing; self-perform packages branch to the Estimator. Build the
+      // sourcing scope from the sublet ROUTED units: a section sub-package carries its
+      // package_key (the sourcing/group key) and only its section's items; a whole/demo package
+      // is unchanged (package_key == trade, all items). So a split tender sources each section
+      // as its own package (own shortlist -> dispatch -> leveling section -> award).
+      const subletKeys = new Set(res.sublet_packages);
+      const packages = proposal.packages
+        .filter((p) => subletKeys.has(p.package_key))
+        .map((p) => {
+          const parent = scope.packages.find((x) => x.trade === p.trade);
+          const items = p.section
+            ? (parent?.sor_items ?? []).filter((it) => (it.section ?? "") === p.section)
+            : (parent?.sor_items ?? []);
+          return {
+            trade: p.package_key, // the sourcing key: bare trade, or trade:SECTION for a sub-package
+            scope_summary: p.scope_summary,
+            sor_items: items,
+            source_refs: parent?.source_refs ?? [],
+          };
+        });
+      const filtered: ScopePackages = { project_name: scope.project_name, packages };
       setSourceScope(filtered);
       invalidateAfter(2); // the routing decision changed — every sourcing gate below is stale
       if (filtered.packages.length === 0) return; // all self-performed — stay on Route (empty state)

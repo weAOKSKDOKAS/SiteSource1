@@ -78,3 +78,30 @@ def test_analyze_splits_and_confirm_seeds_per_section_estimates(demo_db):
     assert res["estimate_ids"]["ground_investigation:E"] != res["estimate_ids"]["ground_investigation:H"]
     items = client.get(f"/estimate/{res['estimate_ids']['ground_investigation:E']}/items").json()
     assert {i["item_ref"] for i in items} == {"E1", "E2"}  # section E only, not the whole trade
+
+
+def _bid(firm_id, trade, total):
+    return {"firm_id": firm_id, "firm_name": firm_id, "trade": trade, "normalized_total": total,
+            "corrected_total": total, "arithmetic_findings": [], "exclusions": [], "scope_gaps": []}
+
+
+def test_sublet_sub_packages_source_and_recommend_distinctly_by_package_key(demo_db):
+    # two GI sections sublet as distinct sourcing units (package_key), each drawn from the
+    # parent trade's real firms — never merged into one ground_investigation package.
+    scope = {"project_name": "GE/2026/14", "packages": [
+        {"trade": "ground_investigation:H", "scope_summary": "field installations",
+         "sor_items": [{"item_ref": "H1", "description": "x", "unit": "no", "qty": 1.0, "section": "H"}], "source_refs": []},
+        {"trade": "ground_investigation:J", "scope_summary": "survey",
+         "sor_items": [{"item_ref": "J1", "description": "y", "unit": "no", "qty": 1.0, "section": "J"}], "source_refs": []},
+    ]}
+    sl = client.post("/shortlist", json={"scope": scope, "include_public": True, "k": 5}).json()
+    assert set(sl["per_trade"]) == {"ground_investigation:H", "ground_investigation:J"}  # distinct, not merged
+
+    # recommend groups by package_key too — one section, one award apiece
+    recs = client.post("/recommend-all", json={"levelled": [
+        _bid("X1", "ground_investigation:H", 100.0), _bid("Y1", "ground_investigation:J", 200.0),
+    ]}).json()["sections"]
+    by_key = {s["trade"]: s["recommendation"] for s in recs}
+    assert set(by_key) == {"ground_investigation:H", "ground_investigation:J"}
+    assert by_key["ground_investigation:H"]["recommended_firm_id"] == "X1"
+    assert by_key["ground_investigation:J"]["recommended_firm_id"] == "Y1"

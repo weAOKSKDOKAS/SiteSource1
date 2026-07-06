@@ -137,7 +137,7 @@ def build_attachments(
         sheet_source: Optional[str] = None
         if workspace is not None:
             sheet_source = str(generate_sor_sheet(pkg, project_name, workspace.sor_sheet_path(tender_id, trade)))
-        trade_slug = trade.replace(" ", "_")
+        trade_slug = trade.replace(" ", "_").replace(":", "-")  # ':' (section sub-package) is not filename-safe
         attachments.append(
             BundleAttachment(
                 filename=f"SoR_{trade_slug}.xlsx",

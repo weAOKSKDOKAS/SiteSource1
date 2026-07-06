@@ -23,6 +23,7 @@ from db import store
 from pipeline.llm_client import LLMClient, demo_mode
 from rules_engine.ranking import rank_by_total
 from rules_engine.risk_scoring import score_firm
+from rules_engine.taxonomy import base_trade
 from schemas.models import (
     BidDistributionPoint,
     HistoricalBand,
@@ -72,7 +73,8 @@ def recommend(
         ]
         ranked = rank_by_total(ranked_input)  # marks recommended_against + reason, sorts
         recommended_id = next((r.firm_id for r in ranked if not r.recommended_against), None)
-        band_values = store.historical_pricing(conn, trade)
+        # A section sub-package (trade:SECTION) reads its parent trade's historical band.
+        band_values = store.historical_pricing(conn, base_trade(trade))
     finally:
         if own_conn:
             conn.close()
