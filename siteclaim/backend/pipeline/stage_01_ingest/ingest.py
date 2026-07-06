@@ -17,9 +17,12 @@ never touches the network, exactly as the SiteClaim extract stage did.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from typing import Callable, Optional
+
+from pydantic import ValidationError
 
 from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient
@@ -31,6 +34,15 @@ from schemas.models import ScopePackages, SectionMeta, TenderPackage, TradeWorkP
 # chunked, extracted per chunk, and merged. Size a chunk so its expected JSON stays well
 # under max_tokens (chunking, not a giant max_tokens ceiling, is what prevents truncation).
 MAX_CHUNK_CHARS = 12000
+# Cap the SoR rows sent per extraction call. A dense section (e.g. H at 59 items) fits within
+# MAX_CHUNK_CHARS yet still produces more JSON than the model's output-token cap can hold in one
+# response — so it is extracted across several calls and the items concatenated. This item/row
+# cap, not a bigger max_tokens, is the primary guard against a truncated (EOF) JSON response.
+MAX_ITEMS_PER_CHUNK = 30
+# The output-token ceiling for an extraction call — headroom above the generic default so a
+# normal row-batch fits comfortably; the batch cap above is the real fix, so this need not be
+# large. Env-overridable if a provider's model caps lower.
+_DEFAULT_INGEST_MAX_TOKENS = 16000
 
 
 def _system_prompt() -> str:
@@ -175,10 +187,41 @@ def _cap_block(block: str, max_chars: int) -> list[str]:
     return pieces
 
 
-def _chunk_text(text: str, max_chars: Optional[int] = None) -> list[str]:
-    """Chunk ``text`` into a handful of pieces under ``max_chars`` on section/page/line
-    boundaries. Never splits mid-line, so an item row is never cut in half."""
+def _is_section_header(line: str) -> bool:
+    """True when a line is a Section/Part header (so it carries trade context, not an item row)."""
+    return bool(_SECTION_RE.match(line or ""))
+
+
+def _row_batches(chunk: str, max_rows: int) -> list[str]:
+    """Split one chunk into batches of at most ``max_rows`` non-blank rows so a dense section's
+    JSON output never exceeds the model's token cap. A leading Section header is repeated on each
+    batch, so every batch keeps its trade context. Returns ``[chunk]`` unchanged when it fits."""
+    lines = chunk.splitlines()
+    if sum(1 for ln in lines if ln.strip()) <= max_rows:
+        return [chunk]
+    header = lines[0] if lines and _is_section_header(lines[0]) else ""
+    body = lines[1:] if header else lines
+    batches: list[str] = []
+    current: list[str] = []
+    count = 0
+    for line in body:
+        current.append(line)
+        if line.strip():
+            count += 1
+        if count >= max_rows:
+            batches.append("\n".join(([header] if header else []) + current))
+            current, count = [], 0
+    if any(ln.strip() for ln in current):
+        batches.append("\n".join(([header] if header else []) + current))
+    return batches
+
+
+def _chunk_text(text: str, max_chars: Optional[int] = None, max_rows: Optional[int] = None) -> list[str]:
+    """Chunk ``text`` into pieces under ``max_chars`` AND ``max_rows`` on section/page/line
+    boundaries. Never splits mid-line, so an item row is never cut in half. The row cap splits a
+    dense section (many short rows) that fits the char budget but would overflow one JSON response."""
     max_chars = max_chars or MAX_CHUNK_CHARS
+    max_rows = max_rows or MAX_ITEMS_PER_CHUNK
     if not text.strip():
         return []
     chunks, current, size = [], [], 0
@@ -191,7 +234,11 @@ def _chunk_text(text: str, max_chars: Optional[int] = None) -> list[str]:
             size += len(piece)
     if current:
         chunks.append("\n".join(current))
-    return chunks
+    # Second pass: cap each char-bounded chunk to a safe number of item rows per call.
+    batched: list[str] = []
+    for chunk in chunks:
+        batched.extend(_row_batches(chunk, max_rows))
+    return batched
 
 
 def _merge_scopes(results: list[ScopePackages], tender: TenderPackage) -> ScopePackages:
@@ -233,64 +280,161 @@ def _merge_scopes(results: list[ScopePackages], tender: TenderPackage) -> ScopeP
 
 _CONTEXT_MAX_CHARS = 6000  # bounded background from non-SoR documents for the trade split
 
+# A response that was cut off at the output-token cap surfaces as a JSON syntax error: pydantic
+# v2 tags it ``json_invalid`` ("Invalid JSON: EOF while parsing…"); a raw ``json`` error is an
+# "Expecting…"/"Unterminated…" ValueError. Either way splitting the batch is the right escalation.
+_TRUNCATION_SIGNS = ("eof while parsing", "unterminated", "unexpected end", "expecting", "control character")
+
+
+def ingest_max_tokens() -> int:
+    """Output-token ceiling for an extraction call (env-overridable)."""
+    try:
+        return int(os.getenv("SITESOURCE_INGEST_MAX_TOKENS", str(_DEFAULT_INGEST_MAX_TOKENS)))
+    except ValueError:
+        return _DEFAULT_INGEST_MAX_TOKENS
+
+
+def _is_truncation_error(exc: Exception) -> bool:
+    """True when a parse failure looks like a cut-off / malformed JSON response (so the batch
+    should be split and retried), not a schema-shape mismatch."""
+    if isinstance(exc, ValidationError):
+        try:
+            if any(e.get("type") == "json_invalid" for e in exc.errors()):
+                return True
+        except Exception:  # noqa: BLE001 — never let error-classification raise
+            pass
+    msg = str(exc).lower()
+    return "invalid json" in msg or any(sign in msg for sign in _TRUNCATION_SIGNS)
+
+
+def _context_block(context: str) -> str:
+    return (
+        "\n\n=== Context documents (specifications, clarifications, method of "
+        "measurement) — for scope and trade understanding ONLY; do NOT extract any "
+        "priced item from this section ===\n" + context
+    )
+
+
+def _chunk_label(text: str) -> str:
+    """A human name for a batch, for a per-section error message — the Section header if present."""
+    m = _SECTION_HEADER_RE.search(text or "")
+    if m:
+        title = m.group(2).strip()
+        return f"section {m.group(1).upper()}" + (f" ({title})" if title else "")
+    m2 = re.search(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)", text or "")
+    if m2:
+        return f"section {m2.group(1).upper()}"
+    return "a Schedule-of-Rates batch"
+
+
+def _extract_batch(
+    client: LLMClient, system: str, base_user: str, *, rows_text: str,
+    images: Optional[list[str]], extra: str, demo_fixture: Optional[str], max_tokens: int, label: str,
+) -> tuple[list[ScopePackages], list[str]]:
+    """Extract one batch of SoR rows (or the single scanned-pages call). Returns
+    ``(scopes, errors)``. On a TRUNCATION parse failure the batch is split in half by rows and
+    retried recursively down to a floor of one row; a floor unit that still truncates is surfaced
+    as a per-section error (NOT raised), so one oversized batch never collapses the whole ingest.
+    A non-truncation failure keeps the existing behaviour (propagates after complete_json's own
+    corrective retry)."""
+    user = base_user
+    if rows_text:
+        user += "\n\n=== Extracted tender document text ===\n" + rows_text
+    elif images:
+        user += "\n\n=== Attached scanned tender pages ==="
+    if extra:
+        user += extra
+    try:
+        scope = client.complete_json(
+            system=system, user=user, target_model=ScopePackages,
+            demo_fixture=demo_fixture, images=images, max_tokens=max_tokens, purpose="ingest-chunk",
+        )
+        return [scope], []
+    except (ValidationError, ValueError) as exc:
+        if not _is_truncation_error(exc):
+            raise  # a genuine schema/other failure — unchanged behaviour
+        rows = [ln for ln in (rows_text or "").splitlines() if ln.strip()]
+        # Keep a leading Section header out of the row count and repeat it on each half, so the
+        # split strictly shrinks the DATA rows (never loops on a header-only remainder).
+        header = rows[0] if rows and _is_section_header(rows[0]) else ""
+        data = rows[1:] if header else rows
+        if images or len(data) <= 1:
+            # A scanned-pages call, or a single row, cannot be split further — flag and skip it.
+            return [], [f"{label}: the extractor's JSON was truncated and could not be split further, so this batch was skipped"]
+        mid = len(data) // 2
+        prefix = [header] if header else []
+        left = "\n".join(prefix + data[:mid])
+        right = "\n".join(prefix + data[mid:])
+        left_scopes, left_errs = _extract_batch(
+            client, system, base_user, rows_text=left, images=None, extra="",
+            demo_fixture=demo_fixture, max_tokens=max_tokens, label=label,
+        )
+        right_scopes, right_errs = _extract_batch(
+            client, system, base_user, rows_text=right, images=None, extra="",
+            demo_fixture=demo_fixture, max_tokens=max_tokens, label=label,
+        )
+        return left_scopes + right_scopes, left_errs + right_errs
+
 
 def _extract(
     client: LLMClient, tender: TenderPackage, doc_text: str, images: Optional[list[str]],
     demo_fixture: Optional[str], context_text: str = "",
     progress_cb: Optional[Callable[[int, int], None]] = None,
+    on_error: Optional[Callable[[str], None]] = None,
 ) -> ScopePackages:
     """Run the item-extraction prompt over the document and merge into one ScopePackages.
 
-    Large text is chunked (one small call per chunk); any scanned pages go in a single
-    vision call; a small or empty document (incl. the DEMO fixture) is a single call.
-    ``context_text`` (non-SoR documents — specs, clarifications, MoM) is passed once, as
-    clearly-labelled background for the trade split, and is never a source of priced items.
-    ``progress_cb(done, total)`` — when given — reports chunk completions for a live progress
-    read-out; it is a side effect only and never changes the extraction or the merge.
+    Large text is chunked and row-capped (several small calls); any scanned pages go in a single
+    vision call; a small or empty document (incl. the DEMO fixture) is a single call. Each batch
+    self-heals a truncated response by splitting (``_extract_batch``); a batch that stays
+    unparseable at the floor is reported via ``on_error(msg)`` — naming the section — and skipped,
+    never failing the whole ingest. ``context_text`` (non-SoR documents) rides the first call as
+    labelled background for the trade split and never yields a priced item. ``progress_cb(done,
+    total)`` reports batch completions; both callbacks are side effects only.
     """
     system = _system_prompt()
     base_user = _user_prompt(tender)
-    calls: list[tuple[str, Optional[list[str]]]] = [
-        (base_user + "\n\n=== Extracted tender document text ===\n" + chunk, None)
-        for chunk in _chunk_text(doc_text)
-    ]
+    max_tokens = ingest_max_tokens()
+
+    # The ordered units to extract: each text batch, then one vision call for scanned pages. An
+    # empty document (DEMO fixture / tiny tender) is still one call.
+    units: list[tuple[str, str, Optional[list[str]]]] = [("text", chunk, None) for chunk in _chunk_text(doc_text)]
     if images:
-        calls.append((base_user + "\n\n=== Attached scanned tender pages ===", images))
-    if not calls:  # no text and no images (DEMO fixture / small tender) -> one call
-        calls.append((base_user, None))
+        units.append(("image", "", images))
+    if not units:
+        units.append(("empty", "", None))
 
     context = context_text.strip()[:_CONTEXT_MAX_CHARS]
-    if context:  # background rides the first call only — informs the split, never priced
-        block = (
-            "\n\n=== Context documents (specifications, clarifications, method of "
-            "measurement) — for scope and trade understanding ONLY; do NOT extract any "
-            "priced item from this section ===\n" + context
-        )
-        user0, imgs0 = calls[0]
-        calls[0] = (user0 + block, imgs0)
-
-    total = len(calls)
+    total = len(units)
     done_count = 0
     counter_lock = threading.Lock()
     if progress_cb:
         progress_cb(0, total)
 
-    def _run_one(call: tuple[str, Optional[list[str]]]) -> ScopePackages:
-        result = client.complete_json(
-            system=system, user=call[0], target_model=ScopePackages,
-            demo_fixture=demo_fixture, images=call[1], purpose="ingest-chunk",
+    def _run_unit(indexed: tuple[int, tuple[str, str, Optional[list[str]]]]) -> list[ScopePackages]:
+        idx, (kind, rows_text, imgs) = indexed
+        extra = _context_block(context) if (idx == 0 and context) else ""  # background rides call 0
+        label = _chunk_label(rows_text) if kind == "text" else ("scanned pages" if kind == "image" else "the tender")
+        scopes, errors = _extract_batch(
+            client, system, base_user, rows_text=rows_text, images=imgs, extra=extra,
+            demo_fixture=demo_fixture, max_tokens=max_tokens, label=label,
         )
+        if on_error:
+            for err in errors:
+                on_error(err)
         if progress_cb:
             nonlocal done_count
             with counter_lock:
                 done_count += 1
                 progress_cb(done_count, total)
-        return result
+        return scopes
 
-    # Chunk calls are independent — run them bounded-concurrent (a 58-page SoR was ~7 min
-    # sequential). run_calls preserves input order, so the chunk-order dedupe is unchanged.
-    results = run_calls(_run_one, calls)
-    return _merge_scopes(results, tender)
+    # Units are independent — run them bounded-concurrent (a 58-page SoR was ~7 min sequential).
+    # run_calls preserves input order, so the chunk-order dedupe in _merge_scopes is unchanged; a
+    # unit's own split-retries run inline within its slot, so there is no unbounded fan-out.
+    result_lists = run_calls(_run_unit, list(enumerate(units)))
+    all_scopes = [scope for scopes in result_lists for scope in (scopes or [])]
+    return _merge_scopes(all_scopes, tender)
 
 
 def ingest_tender(
@@ -302,6 +446,7 @@ def ingest_tender(
     doc_text: str = "",
     context_text: str = "",
     progress_cb: Optional[Callable[[int, int], None]] = None,
+    on_error: Optional[Callable[[str], None]] = None,
 ) -> ScopePackages:
     """Split ``tender`` into one :class:`TradeWorkPackage` per trade.
 
@@ -318,7 +463,7 @@ def ingest_tender(
     client = client or LLMClient()
     scope = _extract(
         client, tender, doc_text, images, demo_fixture,
-        context_text=context_text, progress_cb=progress_cb,
+        context_text=context_text, progress_cb=progress_cb, on_error=on_error,
     )
     normalised, unmapped = validate_scope(scope)
     if unmapped:

@@ -218,6 +218,90 @@ def test_parallel_extraction_preserves_chunk_order_and_first_wins_dedupe(monkeyp
     assert next(i for i in items if i.item_ref == "DUP").description == "from-A"  # first-wins by chunk order
 
 
+# -- adaptive batch cap + truncation-resilient split-retry -----------------
+def test_dense_section_extracts_across_several_calls_with_every_item(monkeypatch):
+    # A section with more rows than the batch cap is extracted across multiple calls; all rows
+    # come back, in order, attributed to their section — the per-package split is unchanged.
+    monkeypatch.setattr(ingest_mod, "MAX_ITEMS_PER_CHUNK", 2)  # force multi-call batching
+    calls = []
+
+    class RowFakeClient:
+        def complete_json(self, *, user, target_model, **_):
+            refs = [ln.split()[0] for ln in user.splitlines() if ln.startswith("H")]
+            calls.append(len(refs))
+            return target_model(project_name="GE/2026/14", packages=[{
+                "trade": "ground_investigation", "scope_summary": "GI", "source_refs": ["SR-01"],
+                "sor_items": [{"item_ref": r, "description": "row", "unit": "no"} for r in refs],
+            }] if refs else [])
+
+    doc_text = "SECTION H\n" + "\n".join(f"H{i} pile {i}" for i in range(1, 6))  # 59-item H in miniature
+    scope = ingest_tender(_tender(), client=RowFakeClient(), doc_text=doc_text)
+    items = scope.packages[0].sor_items
+    assert [i.item_ref for i in items] == [f"H{i}" for i in range(1, 6)]  # all five, in order
+    assert all(i.section == "H" for i in items)                          # attributed to section H
+    assert len(calls) >= 3 and max(calls) <= 2                            # several calls, each capped
+
+
+def test_truncated_json_response_self_heals_by_splitting_the_batch(monkeypatch):
+    # A chunk whose JSON is cut off (EOF) must NOT fail the ingest: it splits in half and retries.
+    monkeypatch.setattr(ingest_mod, "MAX_ITEMS_PER_CHUNK", 100)  # keep it one batch so the split is the fix
+
+    class TruncatingClient:
+        def complete_json(self, *, user, target_model, **_):
+            rows = [ln for ln in user.splitlines() if ln.startswith("H")]
+            if len(rows) > 2:  # too many items -> the model's JSON output is cut off mid-string
+                return target_model.model_validate_json(
+                    '{"project_name": "GE", "packages": [{"trade": "ground_investigation", '
+                    '"scope_summary": "GI", "sor_items": [{"item_ref": "H1", "descr'
+                )
+            return target_model(project_name="GE", packages=[{
+                "trade": "ground_investigation", "scope_summary": "GI", "source_refs": ["SR-01"],
+                "sor_items": [{"item_ref": r.split()[0], "description": "row", "unit": "no"} for r in rows],
+            }])
+
+    doc_text = "SECTION H\n" + "\n".join(f"H{i} pile {i}" for i in range(1, 5))  # 4 rows -> truncates, then splits
+    scope = ingest_tender(_tender(), client=TruncatingClient(), doc_text=doc_text)  # must not raise
+    assert [i.item_ref for i in scope.packages[0].sor_items] == ["H1", "H2", "H3", "H4"]  # healed, all present
+
+
+def test_floor_truncation_surfaces_a_per_section_error_not_a_total_failure(monkeypatch):
+    # A batch that stays unparseable even at a single row is flagged (naming its section) and
+    # skipped — the rest of the tender still ingests, rather than the whole run collapsing.
+    monkeypatch.setattr(ingest_mod, "MAX_CHUNK_CHARS", 25)  # keep G and K in separate chunks
+    errors: list[str] = []
+
+    class GAlwaysTruncatesClient:
+        def complete_json(self, *, user, target_model, **_):
+            if any(ln.startswith("G") for ln in user.splitlines()):  # G cuts off even at one row
+                return target_model.model_validate_json('{"packages": [{"trade": "x", "sor_items": [{"item_ref": "G')
+            refs = [ln.split()[0] for ln in user.splitlines() if ln.startswith("K")]
+            return target_model(project_name="GE", packages=[{
+                "trade": "ground_investigation", "scope_summary": "GI", "source_refs": ["SR-01"],
+                "sor_items": [{"item_ref": r, "description": "row", "unit": "no"} for r in refs],
+            }] if refs else [])
+
+    doc_text = "SECTION G\nG1 x\nG2 y\nSECTION K\nK1 z"
+    scope = ingest_tender(_tender(), client=GAlwaysTruncatesClient(), doc_text=doc_text, on_error=errors.append)
+    assert [i.item_ref for i in scope.packages[0].sor_items] == ["K1"]  # K survived; G dropped, not fatal
+    assert errors and all("section G" in e for e in errors)             # G flagged by name, ingest did not raise
+
+
+def test_demo_path_returns_baked_packages_with_no_chunking():
+    # DEMO loads the fixture in a single call — no chunking, no per-batch extraction.
+    from pipeline.llm_client import LLMClient
+
+    calls: list[str] = []
+
+    class CountingDemoClient:
+        def complete_json(self, *, target_model, demo_fixture, **_):
+            calls.append(demo_fixture)
+            return LLMClient()._load_fixture(demo_fixture, target_model)
+
+    scope = ingest_tender(_tender(), client=CountingDemoClient(), demo_fixture=_FIXTURE)
+    assert calls == [_FIXTURE]                       # exactly one call — the baked fixture, never chunked
+    assert scope.project_name.startswith("Kwun Tong") and len(scope.packages) >= 4
+
+
 # -- item_ref exactness (mangled "BA BB BC…" refs seen live on SR-01) -------
 def test_system_prompt_demands_exact_printed_item_codes():
     # The live SR-01 extraction yielded refs like BA/BB/BC — the section letter fused
