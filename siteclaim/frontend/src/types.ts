@@ -2,7 +2,32 @@
 // SiteSource numeric fields (qty, rate, totals, match_score) serialise as JSON numbers.
 
 export type Severity = "fatal" | "warning" | "info";
-export type DispatchStatus = "drafted" | "approved" | "sent_mock";
+export type DispatchStatus = "drafted" | "approved" | "sent_mock" | "sent" | "send_failed" | "drafted_gmail";
+
+// Relevant-document assembler (per dispatched section): the attachment plan + any
+// referenced-but-unsupplied spec sections.
+export interface PlanAttachment {
+  source_doc: string;
+  mode: "sliced" | "whole" | "generated";
+  pages: number[];
+  reason: string;
+  flags: string[];
+}
+export interface MissingSpec {
+  spec: string;
+  referenced_by: string;
+}
+export interface SectionPlan {
+  package_key: string;
+  section: string;
+  attachments: PlanAttachment[];
+  missing_specs: MissingSpec[];
+}
+export interface DispatchDraftsResponse {
+  drafted: number;
+  webhook_configured: boolean;
+  bundles: DispatchBundle[];
+}
 // grade | award_history | safety_prosecution | winding_up | debarment | adjudication | distress_filing | closeout_performance | pricing
 export type SignalType = string;
 

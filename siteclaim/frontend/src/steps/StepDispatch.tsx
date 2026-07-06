@@ -1,15 +1,87 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
-import type { Candidate, DispatchSet, DispatchStatus, ShortlistSet, TenderReplies } from "../types";
+import type { Candidate, DispatchSet, DispatchStatus, ScopePackages, SectionPlan, ShortlistSet, TenderReplies } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, LoadingDots, Modal, cx } from "../ui";
 import { tradeLabel } from "../format";
+
+// "12,13,14,31" -> "12–14, 31" for a sliced page list.
+function formatPages(pages: number[]): string {
+  const sorted = [...pages].sort((a, b) => a - b);
+  const runs: string[] = [];
+  let start = sorted[0], prev = sorted[0];
+  for (const p of sorted.slice(1)) {
+    if (p === prev + 1) { prev = p; continue; }
+    runs.push(start === prev ? `${start}` : `${start}–${prev}`);
+    start = prev = p;
+  }
+  if (start !== undefined) runs.push(start === prev ? `${start}` : `${start}–${prev}`);
+  return runs.join(", ");
+}
+
+// The relevant-only attachment plan per dispatched section — the human-gate preview before a
+// draft is prepared. Read from /dispatch/plan; live only (in demo there are no real uploads).
+function AttachmentPlanPreview({
+  scope, approvals, projectName,
+}: {
+  scope: ScopePackages | null | undefined;
+  approvals: Record<string, string[]>;
+  projectName: string;
+}) {
+  const [plans, setPlans] = useState<SectionPlan[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let stale = false;
+    setPlans(null);
+    setError(null);
+    api
+      .dispatchPlan(scope ?? null, approvals, projectName)
+      .then((p) => !stale && setPlans(p))
+      .catch((e: unknown) => !stale && setError(e instanceof Error ? e.message : String(e)));
+    return () => { stale = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectName]);
+
+  if (error) return <p className="text-xs text-bad">{error}</p>;
+  if (!plans) return <LoadingDots label="Assembling the relevant documents" />;
+  if (plans.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      <h4 className="text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">Relevant documents per section (assembled)</h4>
+      {plans.map((plan) => (
+        <div key={plan.package_key} className="rounded-lg border border-line-soft bg-paper-soft/50 p-3">
+          <div className="mb-1.5 text-xs font-semibold text-ink">{tradeLabel(plan.package_key)}</div>
+          <ul className="space-y-1">
+            {plan.attachments.map((a, i) => (
+              <li key={i} className="flex flex-wrap items-baseline gap-1.5 text-xs">
+                <span className="font-medium text-ink">{a.source_doc}</span>
+                <Pill tone={a.mode === "sliced" ? "brand" : a.mode === "generated" ? "ok" : "neutral"}>
+                  {a.mode === "sliced" ? `pp. ${formatPages(a.pages)}` : a.mode === "generated" ? "SoR sheet" : "whole file"}
+                </Pill>
+                {a.flags.includes("scanned_whole") && <Pill tone="warn">scanned</Pill>}
+                <span className="text-ink-faint">{a.reason}</span>
+              </li>
+            ))}
+          </ul>
+          {plan.missing_specs.length > 0 && (
+            <div className="mt-2 rounded border border-warn/40 bg-warn-bg px-2 py-1 text-xs text-warn">
+              Referenced but not supplied: <span className="font-semibold">{plan.missing_specs.map((m) => m.spec).join(", ")}</span> — chase it or dispatch without.
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const STATUS_LABEL: Record<DispatchStatus, string> = {
   drafted: "Draft",
   approved: "Approved",
   sent_mock: "In outbox",
+  sent: "Sent",
+  send_failed: "Send failed",
+  drafted_gmail: "In Gmail drafts",
 };
 
 type Draft = { subject: string; body: string };
@@ -84,6 +156,8 @@ export function StepDispatch({
   dispatch,
   demoMode,
   tenderSlug,
+  scope,
+  projectName,
   drafts,
   onToggleApprove,
   onEditDraft,
@@ -99,6 +173,8 @@ export function StepDispatch({
   dispatch: DispatchSet | null;
   demoMode: boolean;
   tenderSlug: string;
+  scope?: ScopePackages | null;   // the sourcing scope — for the relevant-doc plan preview (live)
+  projectName?: string;
   drafts: Record<string, Draft>;
   onToggleApprove: (trade: string, firmId: string) => void;
   onEditDraft: (trade: string, firmId: string, value: Draft) => void;
@@ -217,6 +293,9 @@ export function StepDispatch({
           setReviewOpen(false);
         }}
         sending={loading}
+        live={!demoMode}
+        scope={scope}
+        projectName={projectName ?? ""}
       />
     </div>
   );
@@ -238,6 +317,9 @@ function DispatchReviewModal({
   onComposeDrafts,
   onConfirm,
   sending,
+  live = false,
+  scope,
+  projectName = "",
 }: {
   open: boolean;
   onClose: () => void;
@@ -250,6 +332,9 @@ function DispatchReviewModal({
   onComposeDrafts: () => Promise<DispatchSet>;
   onConfirm: () => void;
   sending: boolean;
+  live?: boolean;
+  scope?: ScopePackages | null;
+  projectName?: string;
 }) {
   const [composed, setComposed] = useState<Record<string, Draft>>({});
   const [composing, setComposing] = useState(false);
@@ -355,6 +440,12 @@ function DispatchReviewModal({
             </section>
           );
         })}
+
+        {live && approvedCount > 0 && (
+          <div className="border-t border-line-soft pt-3">
+            <AttachmentPlanPreview scope={scope} approvals={approvals} projectName={projectName} />
+          </div>
+        )}
 
         <div className="flex items-center justify-between gap-3 border-t border-line-soft pt-3">
           <span className="text-xs text-ink-faint">

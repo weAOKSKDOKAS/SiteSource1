@@ -5,8 +5,10 @@ import type {
   Coverage,
   DemoCase,
   DemoCaseSummary,
+  DispatchDraftsResponse,
   DispatchSet,
   DraftOverride,
+  SectionPlan,
   EstimateCheckResult,
   EstimateDraftResult,
   EstimateItem,
@@ -152,6 +154,11 @@ export const api = {
       ...(opts?.k != null ? { k: opts.k } : {}),
     }),
   dispatch: (req: DispatchRequest) => post<DispatchSet>("/dispatch", req),
+  // Relevant-document assembler: the per-section attachment plan (human-gate preview) and the
+  // n8n Gmail-draft hand-off (assembles relevant-only files + POSTs behind N8N_DRAFTS_WEBHOOK).
+  dispatchPlan: (scope: ScopePackages | null, approvals: Record<string, string[]>, project_name: string) =>
+    post<SectionPlan[]>("/dispatch/plan", { scope, approvals, project_name }),
+  dispatchDrafts: (req: DispatchRequest) => post<DispatchDraftsResponse>("/dispatch/drafts", req),
   level: (replies: BidReply[], scope: ScopePackages | null) => post<LevelledBid[]>("/level", { replies, scope }),
   recommend: (levelled: LevelledBid[], trade: string, rationaleFixture: string | null) =>
     post<Recommendation>("/recommend", { levelled, trade, demo_fixture: rationaleFixture }),

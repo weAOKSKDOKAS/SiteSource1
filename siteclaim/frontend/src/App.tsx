@@ -536,6 +536,8 @@ export default function App() {
                 dispatch={dispatch}
                 demoMode={demoMode}
                 tenderSlug={tenderSlug}
+                scope={sourceScope}
+                projectName={sourceScope?.project_name ?? ""}
                 drafts={drafts}
                 onToggleApprove={toggleApprove}
                 onEditDraft={editDraft}
