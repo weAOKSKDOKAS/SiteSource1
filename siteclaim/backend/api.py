@@ -603,7 +603,9 @@ class LevelRequest(BaseModel):
 
 @app.post("/level", response_model=list[LevelledBid])
 def post_level(req: LevelRequest) -> list[LevelledBid]:
-    replies = req.replies or load_demo_replies(req.demo_fixture)
+    # The empty-set fixture fallback is a DEMO convenience only — on a live run an empty
+    # replies set must never fabricate the scenario bids (no demo leak into a live run).
+    replies = req.replies or (load_demo_replies(req.demo_fixture) if demo_mode() else [])
     levelled = level_bids(replies, req.scope)
     export_leveling_xlsx(levelled, replies, path=OUT_PATH,
                          project_name=req.scope.project_name if req.scope else "")
@@ -627,7 +629,9 @@ def post_level_all(req: LevelRequest) -> LevelAllResponse:
     only against its own bids (the peer item reference never crosses trades). Returns one
     section per trade, in first-seen reply order, and refreshes the downloadable Excel as
     a multi-sheet workbook (one sheet per trade). Sync handler — pure Layer-1 math."""
-    replies = req.replies or load_demo_replies(req.demo_fixture)
+    # The empty-set fixture fallback is a DEMO convenience only — a live run with zero
+    # replies renders the awaiting state and must never receive the scenario bids.
+    replies = req.replies or (load_demo_replies(req.demo_fixture) if demo_mode() else [])
     trades: list[str] = []
     for reply in replies:
         if reply.trade not in trades:
