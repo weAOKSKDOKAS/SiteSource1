@@ -235,7 +235,7 @@ function EstimateDetail({ project, onBack, onChanged }: { project: EstimateProje
             </thead>
             <tbody>
               {items.length === 0 && (
-                <tr><td className="px-3 py-3 text-ink-faint" colSpan={6}>No lines yet — draft with AI or add a line below.</td></tr>
+                <tr><td className="px-3 py-3 text-ink-faint" colSpan={6}>No lines yet — draft the skeleton or add a line below.</td></tr>
               )}
               {items.map((it) => (
                 <tr key={it.id} className="border-b border-line-soft last:border-0 align-top">
@@ -437,7 +437,7 @@ export function EstimatorPage() {
     <div className="min-w-0 space-y-4">
       <SectionHeader
         title="Estimator"
-        lead="The left track — our own priced tender. The AI drafts, suggests precedent, and checks; the human prices every line and owns the offer."
+        lead="The left track — our own priced tender. Draft the scope and skeleton, price against rate precedent, and check for gaps; you price every line and own the offer."
         right={<LayerBadge layer="L4" />}
       />
       {error && <ErrorBanner message={error} />}

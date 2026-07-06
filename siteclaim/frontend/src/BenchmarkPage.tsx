@@ -255,7 +255,7 @@ function EosPanel({ eos, onAttach }: { eos: ProjectEOS | null; onAttach: (narrat
           <p className="mt-2 text-xs leading-relaxed text-ink-soft">{eos.narrative}</p>
           <p className="mt-2 text-xs text-ink-faint">
             Claude (Layer 2) reads the narrative and proposes a reason per variance line below; a person confirms
-            it. The recorded reason is never written by the model.
+            it. The recorded reason is always the human's — never written by Claude.
           </p>
         </>
       ) : (
@@ -469,7 +469,7 @@ function VarianceDrawer({ record, reasonCodes, onClose }: { record: VarianceReco
           </span>
         )
       }
-      footer="Variance math is Layer-1 and every record is written only by the human confirm gate — the model never writes a number or a reason."
+      footer="Variance math is Layer 1 and every record is written only by the human confirm gate — Claude (Layer 2) reads, never a number or a reason."
     >
       {r && (
         <div className="space-y-3">

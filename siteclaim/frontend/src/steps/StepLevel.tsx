@@ -272,7 +272,7 @@ function BidDrawer({ bid, claimed, onClose }: { bid: LevelledBid | null; claimed
       tone="ink"
       title={bid?.firm_name ?? ""}
       subtitle={bid && <span className="tabular">{bid.firm_id} · {bid.trade}</span>}
-      footer="Every corrected figure is recomputed by the deterministic rules engine as qty × rate — the model parses, it never prices."
+      footer="Every corrected figure is recomputed by the deterministic rules engine as qty × rate — Claude (Layer 2) parses the reply, it never prices."
     >
       {bid && (
         <div className="space-y-3">

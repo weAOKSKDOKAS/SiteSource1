@@ -21,7 +21,7 @@ export function SignalChips({ signals }: { signals: Record<string, number | bool
 }
 
 // The per-package route decision UI, shared by the standalone Routing tab and the wizard's
-// Route step: one card per package with the AI recommendation, its coverage signal, and a
+// Route step: one card per package with the routing recommendation, its coverage signal, and a
 // self-perform/sublet toggle the person sets. `chosen` + `onChoose` are owned by the parent
 // (so the parent can build the decisions on confirm); the detail drawer is self-contained.
 export function RouteDecisionPanel({
@@ -106,7 +106,7 @@ export function RouteDecisionPanel({
   );
 }
 
-// The routing record for one package: the tendered scope, the AI recommendation with its
+// The routing record for one package: the tendered scope, the routing recommendation with its
 // rationale and deterministic signal, and the human decision (with provenance) once made.
 function PackageDrawer({ pkg, onClose }: { pkg: RoutePackage | null; onClose: () => void }) {
   return (

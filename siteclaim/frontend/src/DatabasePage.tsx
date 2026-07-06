@@ -170,7 +170,7 @@ function DatabaseView() {
             <p className="mt-3.5 max-w-lg text-sm leading-relaxed text-[#b9c7de]">
               The full CIC Registered Subcontractors register — every firm with its registered trades and enquiry
               contact — cross-referenced against the public enforcement record. The moat is the data and the
-              cross-reference, not the model.
+              cross-reference, not a generic chatbot.
             </p>
           </div>
 
