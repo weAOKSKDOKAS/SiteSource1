@@ -8,6 +8,7 @@ import { RouteDecisionPanel } from "./RouteDecisionPanel";
 import { Header, StepHeading, Stepper, type StepIndex, type TopView } from "./components";
 import { tradeLabel } from "./format";
 import type {
+  AwaitingPackage,
   BidReply,
   Coverage,
   DemoCaseSummary,
@@ -47,6 +48,10 @@ export default function App() {
   // trade -> baked rationale fixture (DEMO); a trade with no entry narrates offline.
   const [rationaleFixtures, setRationaleFixtures] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<File[]>([]);
+  // true when this run is a live upload (real extraction, no demo replies) vs a demo
+  // scenario. In live mode the Level step never levels a scenario fixture — it shows the
+  // awaiting-replies state until real priced returns land (inbound loop or manual upload).
+  const [liveRun, setLiveRun] = useState(false);
 
   // Pipeline state
   const [scope, setScope] = useState<ScopePackages | null>(null);          // full ingest split (feeds Route)
@@ -131,6 +136,7 @@ export default function App() {
     await run(async () => {
       const source = await api.demoCase(id);
       setCaseId(id);
+      setLiveRun(false); // a demo scenario — its baked replies drive Level & compare
       setHeroTrade(source.hero_trade);
       setTender(source.tender);
       setReplies(source.replies);
@@ -156,6 +162,7 @@ export default function App() {
       setTenderSlug(uploaded.tender_slug); // for the live replies panel on the dispatch step
       setScope(uploaded.scope);
       setCaseId(null);
+      setLiveRun(true); // live run — Level shows awaiting states, never demo replies
       invalidateAfter(1);
       const items = uploaded.scope.packages.reduce((n, p) => n + p.sor_items.length, 0);
       setIngestModal({ phase: "done", startedAt, summary: { items, packages: uploaded.scope.packages.length } });
@@ -177,6 +184,7 @@ export default function App() {
       if (!tender) return;
       const result = await api.ingest(tender);
       setScope(result);
+      setLiveRun(false);
       invalidateAfter(1);
     });
   };
@@ -300,11 +308,49 @@ export default function App() {
 
   const goLevel = () =>
     run(async () => {
+      if (liveRun) {
+        // Live: never level a scenario fixture (an empty replies set would make /level-all
+        // fall back to the demo bids). Sections are built from real priced returns (manual
+        // upload / inbound loop); dispatched packages with none show the awaiting state.
+        setLevelledByTrade((cur) => cur ?? {});
+        setLevelStale(false);
+        advance(5);
+        return;
+      }
       const result = await api.levelAll(subletReplies(), sourceScope);
       setLevelledByTrade(Object.fromEntries(result.sections.map((s) => [s.trade, s.levelled])));
       setLevelStale(false);
       advance(5);
     });
+
+  // Manual priced-return intake (live): level one firm's returned SoR and merge it into its
+  // package's section so that section activates. Idempotent per firm (a re-upload replaces).
+  const uploadReturn = async (trade: string, firmId: string, upload: File[]) => {
+    const levelled = await api.levelUpload(upload, firmId, trade);
+    setLevelledByTrade((cur) => {
+      const kept = (cur?.[trade] ?? []).filter((b) => b.firm_id !== firmId);
+      return { ...(cur ?? {}), [trade]: [...kept, ...levelled] };
+    });
+    setRecommendationByTrade(null); // a new return invalidates any prior recommendation
+    setAwardByTrade({});
+    setMaxReached((m) => (m > 5 ? 5 : m));
+  };
+
+  // The dispatched sublet packages awaiting returns (live) — each firm with its status and
+  // the [SiteSource Ref] its enquiry carries. `received` flips once a return is levelled in.
+  function awaitingPackages(): AwaitingPackage[] {
+    if (!liveRun || !dispatch) return [];
+    const sublet = new Set(sourceScope?.packages.map((p) => p.trade) ?? []);
+    const byTrade = new Map<string, AwaitingPackage>();
+    for (const b of dispatch.bundles) {
+      if (!sublet.has(b.trade)) continue;
+      const ref = b.email_subject.match(/\[SiteSource Ref:\s*([^\]]+)\]/)?.[1]?.trim() ?? "";
+      const received = (levelledByTrade?.[b.trade] ?? []).some((x) => x.firm_id === b.firm_id);
+      if (!byTrade.has(b.trade)) byTrade.set(b.trade, { trade: b.trade, firms: [] });
+      byTrade.get(b.trade)!.firms.push({ firm_id: b.firm_id, firm_name: b.firm_name, ref, received, status: b.status });
+    }
+    return [...byTrade.values()];
+  }
 
   function editRate(firmId: string, itemRef: string, rate: number | null) {
     setReplies((cur) =>
@@ -327,6 +373,7 @@ export default function App() {
 
   const recompute = () =>
     run(async () => {
+      if (liveRun) return; // live sections come from uploaded returns; no fixture re-level
       const result = await api.levelAll(subletReplies(), sourceScope);
       setLevelledByTrade(Object.fromEntries(result.sections.map((s) => [s.trade, s.levelled])));
       setLevelStale(false);
@@ -352,6 +399,7 @@ export default function App() {
     setStep(1);
     setMaxReached(1);
     setCaseId(null);
+    setLiveRun(false);
     setTender(null);
     setReplies([]);
     setRationaleFixtures({});
@@ -494,6 +542,9 @@ export default function App() {
                 onBack={() => setStep(4)}
                 onNext={goRecommend}
                 loading={loading}
+                live={liveRun}
+                awaiting={awaitingPackages()}
+                onUploadReturn={uploadReturn}
               />
             )}
 
@@ -501,6 +552,13 @@ export default function App() {
               <StepRecommend
                 sections={recommendationByTrade}
                 awards={awardByTrade}
+                awaitingTrades={
+                  liveRun
+                    ? (sourceScope?.packages ?? [])
+                        .map((p) => p.trade)
+                        .filter((t) => !(t in recommendationByTrade))
+                    : []
+                }
                 onSetAward={(trade, firmId) => setAwardByTrade((cur) => ({ ...cur, [trade]: firmId }))}
                 onSkip={(trade) => setAwardByTrade((cur) => ({ ...cur, [trade]: "" }))}
                 onBack={() => setStep(5)}

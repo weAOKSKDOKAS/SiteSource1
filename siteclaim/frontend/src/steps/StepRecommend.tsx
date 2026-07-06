@@ -30,6 +30,7 @@ const BRAND = "#1f4e8c";
 export function StepRecommend({
   sections,
   awards,
+  awaitingTrades = [],
   onSetAward,
   onSkip,
   onBack,
@@ -37,6 +38,8 @@ export function StepRecommend({
 }: {
   sections: Record<string, Recommendation>;
   awards: Record<string, string>;
+  // Live run: sublet packages dispatched but with no priced returns yet — no award to offer.
+  awaitingTrades?: string[];
   onSetAward: (trade: string, firmId: string) => void;
   onSkip: (trade: string) => void;
   onBack: () => void;
@@ -65,6 +68,14 @@ export function StepRecommend({
           ) : (
             <><span className="tabular font-semibold">{decided.length}/{trades.length}</span> packages decided — award or skip each package to finish.</>
           )}
+        </div>
+      )}
+
+      {awaitingTrades.length > 0 && (
+        <div className="rounded-lg border border-line bg-card px-4 py-2.5 text-sm text-ink-soft">
+          Awaiting returns — no award yet for{" "}
+          <span className="font-medium text-ink">{awaitingTrades.map(tradeLabel).join(", ")}</span>. Upload a priced return
+          on Level &amp; compare to activate a package's recommendation.
         </div>
       )}
 

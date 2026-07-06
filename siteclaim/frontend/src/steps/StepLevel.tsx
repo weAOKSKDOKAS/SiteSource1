@@ -1,5 +1,6 @@
-import { useState } from "react";
-import type { BidReply, LevelledBid } from "../types";
+import { useRef, useState } from "react";
+import type { ChangeEvent } from "react";
+import type { AwaitingFirm, AwaitingPackage, BidReply, LevelledBid } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine, SeverityTag, cx } from "../ui";
 import { hkd, tradeLabel } from "../format";
@@ -18,6 +19,9 @@ export function StepLevel({
   onBack,
   onNext,
   loading,
+  live = false,
+  awaiting = [],
+  onUploadReturn,
 }: {
   sections: Record<string, LevelledBid[]>;
   replies: BidReply[];
@@ -28,10 +32,20 @@ export function StepLevel({
   onBack: () => void;
   onNext: () => void;
   loading: boolean;
+  // Live run: sections come from real priced returns, not a fixture. Packages still
+  // waiting show the awaiting state with a manual-intake affordance.
+  live?: boolean;
+  awaiting?: AwaitingPackage[];
+  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
 }) {
   const [detail, setDetail] = useState<LevelledBid | null>(null);
   const trades = Object.keys(sections);
   const claimedOf = new Map(replies.map((r) => [`${r.trade}:${r.firm_id}`, r.claimed_total ?? 0]));
+
+  if (live)
+    return (
+      <LiveLevel sections={sections} awaiting={awaiting} onUploadReturn={onUploadReturn} xlsxUrl={xlsxUrl} onBack={onBack} onNext={onNext} loading={loading} />
+    );
 
   return (
     <div className="space-y-6">
@@ -354,5 +368,181 @@ function CalloutCard({ title, tone, children }: { title: string; tone: "bad" | "
         <ul className="divide-y divide-line-soft px-3">{children}</ul>
       )}
     </Card>
+  );
+}
+
+// --- Live run: awaiting returns + per-firm manual intake ---------------------
+// One block per dispatched sublet package. A package with returns shows the read-only
+// levelled comparison (the raw reply and its editable rate matrix belong to the demo path);
+// every dispatched firm shows its status and the [SiteSource Ref] its enquiry carries, with
+// an "Upload a priced return" affordance that levels one firm's SoR into this section.
+function LiveLevel({
+  sections,
+  awaiting,
+  onUploadReturn,
+  xlsxUrl,
+  onBack,
+  onNext,
+  loading,
+}: {
+  sections: Record<string, LevelledBid[]>;
+  awaiting: AwaitingPackage[];
+  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
+  xlsxUrl: string;
+  onBack: () => void;
+  onNext: () => void;
+  loading: boolean;
+}) {
+  const [detail, setDetail] = useState<LevelledBid | null>(null);
+  const totalReceived = Object.values(sections).reduce((n, bids) => n + bids.length, 0);
+
+  return (
+    <div className="space-y-6">
+      <StepHeading
+        title="Level & compare"
+        lead="Live run — each dispatched package waits for its priced returns. As a return lands (via the inbound loop, or uploaded here) the rules engine levels it and that package's comparison activates. No demo bids are ever shown on a live run."
+      />
+
+      {awaiting.length === 0 && (
+        <Card className="p-6 text-sm text-ink-soft">
+          No dispatched sublet packages yet — route a package to sublet and dispatch its enquiries first.
+        </Card>
+      )}
+
+      {awaiting.map((pkg) => {
+        const bids = sections[pkg.trade] ?? [];
+        const received = pkg.firms.filter((f) => f.received).length;
+        return (
+          <section key={pkg.trade} className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="font-display text-base font-semibold tracking-display text-ink">{tradeLabel(pkg.trade)}</h2>
+              <Pill tone={received > 0 ? "ok" : "neutral"}>
+                {pkg.firms.length} enquir{pkg.firms.length === 1 ? "y" : "ies"} sent · {received} priced return{received === 1 ? "" : "s"} received
+              </Pill>
+            </div>
+
+            {bids.length > 0 && <LiveComparison bids={bids} onOpenDetail={setDetail} />}
+
+            <Card className="divide-y divide-line-soft">
+              {pkg.firms.map((f) => (
+                <ReturnRow key={f.firm_id} trade={pkg.trade} firm={f} onUploadReturn={onUploadReturn} />
+              ))}
+            </Card>
+            <p className="text-xs text-ink-faint">
+              Replies quoting the enquiry's <span className="tabular">[SiteSource Ref]</span> attach automatically once the inbound loop is wired; upload a return above in the meantime.
+            </p>
+          </section>
+        );
+      })}
+
+      {totalReceived > 0 && (
+        <a
+          href={xlsxUrl}
+          className="inline-flex items-center gap-2 rounded-lg border border-line bg-card px-4 py-2.5 text-sm font-semibold text-ink hover:bg-line-soft"
+        >
+          ⤓ Download Excel comparison
+        </a>
+      )}
+
+      <StepNav onBack={onBack} onNext={onNext} nextLabel="Recommend an award →" loading={loading} nextDisabled={totalReceived === 0} />
+      <BidDrawer bid={detail} claimed={0} onClose={() => setDetail(null)} />
+    </div>
+  );
+}
+
+// The read-only levelled comparison for a package's received returns (no editable matrix —
+// the returns are the source of truth; the engine's corrections are shown as findings).
+function LiveComparison({ bids, onOpenDetail }: { bids: LevelledBid[]; onOpenDetail: (b: LevelledBid) => void }) {
+  const cheapest = bids.length ? Math.min(...bids.map((b) => b.corrected_total)) : 0;
+  return (
+    <Card className="overflow-hidden">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-line-soft text-left text-xs uppercase tracking-eyebrow text-ink-faint">
+            <th className="px-4 py-2 font-semibold">Firm</th>
+            <th className="px-4 py-2 text-right font-semibold">Corrected</th>
+            <th className="px-4 py-2 text-right font-semibold">Normalised</th>
+            <th className="px-4 py-2 font-semibold">Notes</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line-soft">
+          {[...bids]
+            .sort((a, b) => a.corrected_total - b.corrected_total)
+            .map((b) => (
+              <tr
+                key={b.firm_id}
+                onClick={() => onOpenDetail(b)}
+                title="Open the levelled-bid record"
+                className={cx("cursor-pointer transition-colors", b.corrected_total === cheapest ? "bg-ok-bg/30" : "hover:bg-paper-soft/70")}
+              >
+                <td className="px-4 py-2.5 text-ink">
+                  <span className="font-medium hover:text-brand">{b.firm_name}</span> <span className="tabular text-xs text-ink-faint">{b.firm_id}</span>
+                </td>
+                <td className="tabular px-4 py-2.5 text-right font-semibold text-ink">{hkd(b.corrected_total)}</td>
+                <td className="tabular px-4 py-2.5 text-right text-ink-soft">{hkd(b.normalized_total)}</td>
+                <td className="px-4 py-2.5">
+                  <div className="flex flex-wrap gap-1">
+                    {b.arithmetic_findings.length > 0 && <Pill tone="bad">{b.arithmetic_findings.length} corrected</Pill>}
+                    {b.scope_gaps.length > 0 && <Pill tone="brand">{b.scope_gaps.length} scope gap</Pill>}
+                    {b.exclusions.length > 0 && <Pill>{b.exclusions.length} exclusion</Pill>}
+                  </div>
+                </td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+// One dispatched firm awaiting its return, with the manual-intake affordance.
+function ReturnRow({
+  trade,
+  firm,
+  onUploadReturn,
+}: {
+  trade: string;
+  firm: AwaitingFirm;
+  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!picked.length || !onUploadReturn) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onUploadReturn(trade, firm.firm_id, picked);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-ink">{firm.firm_name}</span>
+          <span className="tabular text-xs text-ink-faint">{firm.firm_id}</span>
+          {firm.received ? (
+            <Pill tone="ok">return received</Pill>
+          ) : (
+            <Pill tone="neutral">{firm.status === "sent_mock" ? "in outbox · awaiting" : "awaiting reply"}</Pill>
+          )}
+        </div>
+        {firm.ref && <div className="tabular mt-0.5 text-[11px] text-ink-faint">Ref {firm.ref}</div>}
+        {error && <div className="mt-1 text-xs text-bad">{error}</div>}
+      </div>
+      <input ref={inputRef} type="file" multiple accept=".xlsx,application/pdf,image/*" className="sr-only" onChange={onPick} />
+      <Button variant="ghost" loading={busy} onClick={() => inputRef.current?.click()}>
+        {firm.received ? "Replace return" : "Upload a priced return"}
+      </Button>
+    </div>
   );
 }

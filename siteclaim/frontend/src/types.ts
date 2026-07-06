@@ -419,6 +419,21 @@ export interface DispatchSet {
   bundles: DispatchBundle[];
 }
 
+// Live-run awaiting state (Prompt 1): a dispatched sublet package whose priced returns
+// have not all arrived. `ref` is the [SiteSource Ref] the enquiry carries; `received` is
+// true once a reply for that firm has been levelled into the package's section.
+export interface AwaitingFirm {
+  firm_id: string;
+  firm_name: string;
+  ref: string;
+  received: boolean;
+  status: DispatchStatus;
+}
+export interface AwaitingPackage {
+  trade: string;
+  firms: AwaitingFirm[];
+}
+
 export interface BidLineItem {
   item_ref: string;
   description: string;
