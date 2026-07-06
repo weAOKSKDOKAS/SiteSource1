@@ -26,6 +26,7 @@ import { StepShortlist } from "./steps/StepShortlist";
 import { StepDispatch } from "./steps/StepDispatch";
 import { StepLevel } from "./steps/StepLevel";
 import { StepRecommend } from "./steps/StepRecommend";
+import { IngestProgress, type IngestPhase } from "./IngestProgress";
 
 export default function App() {
   // Meta
@@ -70,6 +71,11 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Live-ingest progress modal (a big upload extracts for minutes). null = closed.
+  const [ingestModal, setIngestModal] = useState<
+    { phase: IngestPhase; startedAt: number; error?: string; summary?: { items: number; packages: number } } | null
+  >(null);
 
   useEffect(() => {
     api.health().then((h) => setDemoMode(h.demo_mode)).catch(() => {});
@@ -135,22 +141,45 @@ export default function App() {
     });
   }
 
-  const runIngest = () =>
-    run(async () => {
-      let result: ScopePackages;
-      if (!demoMode && files.length > 0) {
-        const uploaded = await api.ingestUpload(files);
-        setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
-        setTenderSlug(uploaded.tender_slug); // for the live replies panel on the dispatch step
-        result = uploaded.scope;
-      } else if (tender) {
-        result = await api.ingest(tender);
-      } else {
-        return;
-      }
+  // A live upload extracts for minutes — it runs the progress modal, then analyses routing
+  // on the fresh scope and auto-advances to Route. The demo/scenario path is instant and
+  // skips the modal.
+  const runLiveIngest = async () => {
+    const startedAt = Date.now();
+    setError(null);
+    setIngestModal({ phase: "uploading", startedAt });
+    try {
+      const uploaded = await api.ingestUpload(files, () =>
+        setIngestModal((m) => (m && m.phase === "uploading" ? { ...m, phase: "processing" } : m)),
+      );
+      setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
+      setTenderSlug(uploaded.tender_slug); // for the live replies panel on the dispatch step
+      setScope(uploaded.scope);
+      setCaseId(null);
+      invalidateAfter(1);
+      const items = uploaded.scope.packages.reduce((n, p) => n + p.sor_items.length, 0);
+      setIngestModal({ phase: "done", startedAt, summary: { items, packages: uploaded.scope.packages.length } });
+      // Analyse routing on the fresh scope (not the stale closure), then auto-advance to Route.
+      const p = await api.routeAnalyze(uploaded.scope);
+      setProposal(p);
+      setChosen(Object.fromEntries(p.packages.map((pkg) => [pkg.package_key, pkg.recommended_route])));
+      setRouteResult(null);
+      setIngestModal(null);
+      advance(2);
+    } catch (e) {
+      setIngestModal((m) => ({ phase: "error", startedAt: m?.startedAt ?? startedAt, error: e instanceof Error ? e.message : String(e) }));
+    }
+  };
+
+  const runIngest = () => {
+    if (!demoMode && files.length > 0) return runLiveIngest();
+    return run(async () => {
+      if (!tender) return;
+      const result = await api.ingest(tender);
       setScope(result);
       invalidateAfter(1);
     });
+  };
 
   // Step 2 — Route. Analyse the ingested scope; default each package to its recommendation.
   // The decision is durable: if a proposal already exists for this scope (only a re-ingest
@@ -365,6 +394,16 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <Header demoMode={demoMode} view={view} onNavigate={setView} />
+      {ingestModal && (
+        <IngestProgress
+          phase={ingestModal.phase}
+          startedAt={ingestModal.startedAt}
+          error={ingestModal.error}
+          summary={ingestModal.summary}
+          onRetry={runLiveIngest}
+          onCancel={() => setIngestModal(null)}
+        />
+      )}
       <main className="mx-auto max-w-6xl px-5 py-8">
         <div className="grid gap-8 lg:grid-cols-[16rem_1fr]">
           <Stepper current={step} maxReached={maxReached} onNavigate={setStep} />

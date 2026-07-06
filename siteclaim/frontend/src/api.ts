@@ -111,10 +111,36 @@ export const api = {
   ingest: (tender: TenderPackage) => post<ScopePackages>("/ingest", { tender }),
   // Live multimodal ingest: POST the raw tender files as multipart/form-data.
   // Returns the scope split plus the trade-tagged tender (pass the tender to /dispatch).
-  ingestUpload: (files: File[]) => {
+  // XHR (not fetch) so the progress modal gets a real "upload complete" tick — the only
+  // intermediate signal the lifecycle honestly exposes before the (minutes-long) response.
+  ingestUpload: (files: File[], onUploaded?: () => void) => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
-    return fetch(BASE + "/ingest-upload", { method: "POST", body: fd }).then((r) => handle<IngestUpload>(r));
+    return new Promise<IngestUpload>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", BASE + "/ingest-upload");
+      xhr.upload.onload = () => onUploaded?.(); // bytes fully sent -> server-side processing begins
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as IngestUpload);
+          } catch {
+            reject(new Error("Malformed response from /ingest-upload"));
+          }
+        } else {
+          let detail = `${xhr.status} ${xhr.statusText}`;
+          try {
+            const b = JSON.parse(xhr.responseText);
+            if (b?.detail) detail = typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail);
+          } catch {
+            /* keep the status line */
+          }
+          reject(new Error(detail));
+        }
+      };
+      xhr.onerror = () => reject(new Error("Network error during upload"));
+      xhr.send(fd);
+    });
   },
 
   // Live mode opens the shortlist to the screened public pool and caps each trade's
