@@ -1,8 +1,10 @@
 """Reference extraction from SoR item text (relevant-doc assembler, RD1)."""
 
 from pipeline.stage_03_dispatch.doc_refs import (
+    base_clause,
     clause_of,
     extract_refs,
+    parse_clause_refs,
     refs_for_items,
     section_refs,
     spec_section_of,
@@ -49,3 +51,32 @@ def test_section_rollup_groups_by_item_section():
 def test_spec_section_and_clause_helpers():
     assert spec_section_of("PS 28.2.07") == "28" and clause_of("PS 28.2.07") == "28.2.07"
     assert spec_section_of("Appendix 7.4.1") == "7" and clause_of("Appendix 7.4.1") == "7.4.1"
+
+
+# -- Assembler v2: clause-ref parsing (GS / PS with suffixes / MM PB) -------
+def test_parse_clause_ref_column_captures_gs_ps_and_pb():
+    refs = parse_clause_refs("GS 7.34 / PS 7.34A / PB 71 / PS 7.37A / PS 7.41.(4)S")
+    assert refs["gs"] == ["GS 7.34"]
+    assert refs["ps"] == ["PS 7.34A", "PS 7.37A", "PS 7.41.(4)S"]  # letter / bracket / S suffixes kept
+    assert refs["pb"] == ["PB 71"]                                  # MM preamble clause, number form
+
+
+def test_clause_of_keeps_suffix_and_base_clause_strips_it():
+    assert clause_of("PS 7.34A") == "7.34A" and base_clause("7.34A") == "7.34"
+    assert clause_of("PS 7.41.(4)S") == "7.41.(4)S" and base_clause("7.41.(4)S") == "7.41"
+    assert clause_of("PS 28.2.07") == "28.2.07" and base_clause("28.2.07") == "28.2.07"  # plain unchanged
+
+
+def test_pb_number_form_and_preamble_form_both_parse():
+    assert extract_refs("measured per PB 71")["pb"] == ["PB 71"]     # MM clause
+    assert extract_refs("preamble PB/B11 and PB / c2")["pb"] == ["PB/B11", "PB/C2"]  # doc preambles
+
+
+def test_refs_are_read_from_the_item_clause_ref_column():
+    # The Clause Ref column is the primary source; description is only a backstop.
+    item = SorItem(item_ref="I3", description="Rotary drilling in rock", section="I",
+                   clause_refs=["GS 7.34", "PS 7.34A", "PS 7.37A", "PB 71"])
+    refs = refs_for_items([item])
+    assert refs["ps"] == ["PS 7.34A", "PS 7.37A"] and refs["gs"] == ["GS 7.34"] and refs["pb"] == ["PB 71"]
+    by_sec = section_refs([item])
+    assert by_sec["I"]["ps"] == ["PS 7.34A", "PS 7.37A"]

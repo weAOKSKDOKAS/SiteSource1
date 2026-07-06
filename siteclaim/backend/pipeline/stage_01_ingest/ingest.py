@@ -64,7 +64,8 @@ def _system_prompt() -> str:
         '{"project_name": <string>, "packages": [\n'
         '  {"trade": <canonical trade>, "scope_summary": <string>, '
         '"sor_items": [{"item_ref": <string>, "description": <string>, "unit": <string>, '
-        '"qty": <number>}], "source_refs": [<string naming the tender document>]}\n'
+        '"qty": <number>, "clause_refs": [<string>]}], '
+        '"source_refs": [<string naming the tender document>]}\n'
         "]}\n\n"
         f"`trade` MUST be exactly one of these canonical trades: {trades}. Put the "
         "descriptive sub-section name (e.g. \"Geotechnical Works\", \"Section 7\") in "
@@ -81,7 +82,14 @@ def _system_prompt() -> str:
         '(e.g. "A1a(a)", "M2", "H14"), copied character-for-character — NEVER the section '
         "letter fused with neighbouring text or an adjacent column value, and NEVER an "
         "invented or renumbered code. If a row has no printed item code, SKIP that row "
-        "rather than fabricate a ref."
+        "rather than fabricate a ref.\n\n"
+        "`clause_refs` MUST be the specification references printed in that row's \"Clause "
+        "Ref\" (or \"Reference\") column, each copied VERBATIM as its own string and kept "
+        "with its kind prefix — General Specification clauses (\"GS 7.34\"), Particular "
+        "Specification clauses (\"PS 7.34A\", \"PS 7.37A\", including any letter / bracket / "
+        "\"S\" suffix such as \"7.41.(4)S\"), and Method-of-Measurement preamble clauses "
+        "(\"PB 71\"). Copy the references; do NOT judge, resolve, or invent one. Use an empty "
+        "list when the row cites none."
     )
 
 

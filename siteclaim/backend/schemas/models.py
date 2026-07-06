@@ -143,6 +143,11 @@ class SorItem(BaseModel):
     # first digit (``A1a(a)`` -> ``A``, ``E10(l)`` -> ``E``, ``BB7a`` -> ``BB``). Set at
     # ingest; the section is the routable unit (a package can split by section at Route).
     section: Optional[str] = None
+    # The reference tokens from this row's "Clause Ref" column, verbatim — GS/PS/PB clauses
+    # (e.g. ["GS 7.34", "PS 7.34A", "PB 71"]). Captured at ingest; the dispatch assembler
+    # parses these deterministically to slice each firm's spec bundle to exactly the clauses
+    # its section references. Empty when the SoR has no such column.
+    clause_refs: list[str] = Field(default_factory=list)
 
 
 class SectionMeta(BaseModel):

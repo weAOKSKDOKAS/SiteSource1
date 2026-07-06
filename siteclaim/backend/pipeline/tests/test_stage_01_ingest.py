@@ -106,6 +106,27 @@ def test_ingest_populates_sor_items_row_by_row_from_a_text_sor():
     assert "Landfill" in first.description
 
 
+def test_extraction_prompt_and_schema_capture_the_clause_ref_column():
+    from pipeline.stage_01_ingest.ingest import _system_prompt
+
+    prompt = _system_prompt()
+    assert "clause_refs" in prompt                       # the field is in the required shape
+    assert "Clause Ref" in prompt and "PB 71" in prompt  # the column is named, the MM form shown
+
+    # A model that returns clause_refs per row -> they survive chunking / merge / annotate.
+    class RefFakeClient:
+        def complete_json(self, *, user, target_model, **_):
+            return target_model(project_name="GE/2026/14", packages=[{
+                "trade": "ground_investigation", "scope_summary": "GI", "source_refs": ["SR-01"],
+                "sor_items": [{"item_ref": "I3", "description": "Rotary drilling", "unit": "m",
+                               "clause_refs": ["GS 7.34", "PS 7.34A", "PB 71"]}],
+            }])
+
+    scope = ingest_tender(_tender(), client=RefFakeClient(), doc_text="I3 rotary drilling")
+    item = scope.packages[0].sor_items[0]
+    assert item.clause_refs == ["GS 7.34", "PS 7.34A", "PB 71"]  # captured, not dropped
+
+
 def test_ingest_threads_extracted_document_text_into_the_prompt():
     # The extracted text layer reaches the model (text-first), not page images.
     captured = {}
