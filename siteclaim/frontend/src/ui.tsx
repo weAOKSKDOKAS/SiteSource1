@@ -65,6 +65,21 @@ export function Spinner() {
   return <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />;
 }
 
+// A calm inline "working" indicator — three ssDot dots (they settle instantly under
+// prefers-reduced-motion). Use in place of a bare "…" for loading/composing states.
+export function LoadingDots({ label }: { label?: string }) {
+  return (
+    <span className="inline-flex items-center gap-2 text-xs text-ink-faint" role="status" aria-live="polite">
+      <span className="flex gap-1" aria-hidden>
+        <span className="ssDot h-1.5 w-1.5 rounded-full bg-ink-faint" style={{ animationDelay: "0ms" }} />
+        <span className="ssDot h-1.5 w-1.5 rounded-full bg-ink-faint" style={{ animationDelay: "160ms" }} />
+        <span className="ssDot h-1.5 w-1.5 rounded-full bg-ink-faint" style={{ animationDelay: "320ms" }} />
+      </span>
+      {label}
+    </span>
+  );
+}
+
 // A thin "live cross-referencing" sweep — a brand gradient that scans across the top
 // edge of a working surface while a stage runs (ingest split, shortlist screening,
 // level compute, route analyze). Render inside a `relative` container; it shows only

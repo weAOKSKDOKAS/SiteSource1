@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Candidate, DispatchSet, DispatchStatus, ShortlistSet, TenderReplies } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
-import { Button, Card, Modal, cx } from "../ui";
+import { Button, Card, LoadingDots, Modal, cx } from "../ui";
 import { tradeLabel } from "../format";
 
 const STATUS_LABEL: Record<DispatchStatus, string> = {
@@ -332,7 +332,7 @@ function DispatchReviewModal({
                         <span className="text-xs font-semibold text-ink">{cand.firm.name}</span>
                         <span className="tabular text-[11px] text-ink-faint">{fid}</span>
                         {edited && <Pill tone="brand">edited</Pill>}
-                        {composing && !edited && <span className="text-[11px] italic text-ink-faint">composing…</span>}
+                        {composing && !edited && <LoadingDots label="composing" />}
                       </div>
                       <input
                         value={value.subject}

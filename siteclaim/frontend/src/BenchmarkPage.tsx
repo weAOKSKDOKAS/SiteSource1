@@ -13,7 +13,7 @@ import type {
   ReasonCode,
   VarianceRecord,
 } from "./types";
-import { Button, Card, Collapse, Docket, Drawer, ErrorBanner, LayerBadge, Modal, MonoLabel, cx } from "./ui";
+import { Button, Card, Collapse, Docket, Drawer, ErrorBanner, LayerBadge, LoadingDots, Modal, MonoLabel, cx } from "./ui";
 
 function fmt(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
@@ -555,9 +555,10 @@ export function BenchmarkPage() {
   const [reasonCodes, setReasonCodes] = useState<ReasonCode[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const loadList = () => {
-    api.benchmarkProjects().then(setProjects).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    api.benchmarkProjects().then(setProjects).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setLoaded(true));
     api.benchmarkSummary().then(setSummary).catch(() => {});
   };
   useEffect(() => {
@@ -578,6 +579,8 @@ export function BenchmarkPage() {
           onBack={() => { setSelected(null); loadList(); }}
           onChanged={loadList}
         />
+      ) : !loaded ? (
+        <Card className="p-6"><LoadingDots label="Loading projects" /></Card>
       ) : (
         <ProjectList
           projects={projects}

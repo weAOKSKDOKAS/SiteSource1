@@ -4,7 +4,7 @@ import { api } from "./api";
 import { Pill } from "./components";
 import { money, tradeLabel } from "./format";
 import type { ProjectDashboard, ProjectSummary } from "./types";
-import { Card, ErrorBanner, SectionHeader, StatCallout, cx } from "./ui";
+import { Card, ErrorBanner, LoadingDots, SectionHeader, StatCallout, cx } from "./ui";
 
 function TrackBadge({ track, chosen }: { track: string; chosen: string | null }) {
   if (track === "left") return <Pill tone="violet">Self-perform → Estimator</Pill>;
@@ -159,8 +159,9 @@ export function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [dash, setDash] = useState<ProjectDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
-  const load = () => api.projects().then(setProjects).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  const load = () => api.projects().then(setProjects).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setLoaded(true));
   useEffect(() => { load(); }, []);
 
   const open = (runRef: string) =>
@@ -173,7 +174,13 @@ export function ProjectsPage() {
         lead="One tender, carried across the tracks. Each analysed run shows its packages, the routing decision per package, the left-track estimates, and where it sits in the lifecycle."
       />
       {error && <ErrorBanner message={error} />}
-      {dash ? <DashboardView dash={dash} onBack={() => { setDash(null); load(); }} /> : <ProjectsList projects={projects} onOpen={open} />}
+      {!loaded ? (
+        <Card className="p-6"><LoadingDots label="Loading projects" /></Card>
+      ) : dash ? (
+        <DashboardView dash={dash} onBack={() => { setDash(null); load(); }} />
+      ) : (
+        <ProjectsList projects={projects} onOpen={open} />
+      )}
     </div>
   );
 }

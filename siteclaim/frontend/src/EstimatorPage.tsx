@@ -12,7 +12,7 @@ import type {
   RatePrecedent,
   RateSuggestions,
 } from "./types";
-import { Button, Card, Collapse, Docket, Drawer, ErrorBanner, LayerBadge, MonoLabel, SectionHeader, StatCallout } from "./ui";
+import { Button, Card, Collapse, Docket, Drawer, ErrorBanner, LayerBadge, LoadingDots, MonoLabel, SectionHeader, StatCallout } from "./ui";
 
 // ---------------------------------------------------------------------------
 // Rate precedent — from the benchmark corpus (Layer 3). Suggestion only; the person prices.
@@ -427,8 +427,9 @@ export function EstimatorPage() {
   const [projects, setProjects] = useState<EstimateProject[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
-  const load = () => api.estimateProjects().then(setProjects).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  const load = () => api.estimateProjects().then(setProjects).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setLoaded(true));
   useEffect(() => { load(); }, []);
 
   const selectedProject = projects.find((p) => p.id === selected) ?? null;
@@ -443,6 +444,8 @@ export function EstimatorPage() {
       {error && <ErrorBanner message={error} />}
       {selected != null && selectedProject ? (
         <EstimateDetail project={selectedProject} onBack={() => { setSelected(null); load(); }} onChanged={load} />
+      ) : !loaded ? (
+        <Card className="p-6"><LoadingDots label="Loading estimates" /></Card>
       ) : (
         <EstimateList
           projects={projects}
