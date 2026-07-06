@@ -73,15 +73,18 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
 
 
 def _pages_text(data: bytes) -> Optional[list[str]]:
-    """Per-page text via pymupdf, or None if it is not a readable PDF."""
+    """Per-page text via the OCR spine — the native text layer where a page has one, local
+    tesseract OCR for scanned pages — so ``text_layer`` and the clause index build on scanned
+    specs too, not just native-text ones. ``None`` when the input is not a readable PDF (or
+    pymupdf is absent); a scanned page with no OCR available degrades to ``""`` (no false
+    marker), exactly the pre-OCR behaviour."""
+    from pipeline import ocr  # lazy: pymupdf / pytesseract stay optional for module import
+
     try:
-        import fitz  # PyMuPDF — lazy
-    except Exception:  # noqa: BLE001 — no pymupdf -> no index (whole-file fallback downstream)
+        return ocr.page_texts(data)
+    except ocr.NotAPdf:
         return None
-    try:
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            return [page.get_text("text", sort=True) for page in doc]
-    except Exception:  # noqa: BLE001 — an image/corrupt upload: treated as no text layer
+    except Exception:  # noqa: BLE001 — no pymupdf / unreadable upload -> no index (whole-file fallback)
         return None
 
 

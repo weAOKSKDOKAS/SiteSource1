@@ -14,6 +14,36 @@ from schemas.models import DocType
 fitz = pytest.importorskip("fitz")  # PyMuPDF
 
 
+def _tesseract_available() -> bool:
+    try:
+        import pytesseract
+
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+requires_tesseract = pytest.mark.skipif(not _tesseract_available(), reason="tesseract/pytesseract not installed")
+
+
+def _scanned_pdf(pages: list[list[str]]) -> bytes:
+    """Like ``_pdf`` but each page is flattened to an image (no text layer) — a scanned doc."""
+    src = fitz.open()
+    for lines in pages:
+        p = src.new_page()
+        p.insert_text((72, 100), "\n".join(lines), fontsize=16)
+    out = fitz.open()
+    for i in range(src.page_count):
+        png = src[i].get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False).tobytes("png")
+        op = out.new_page(width=src[i].rect.width, height=src[i].rect.height)
+        op.insert_image(op.rect, stream=png)
+    data = out.tobytes()
+    src.close()
+    out.close()
+    return data
+
+
 def _pdf(pages: list[list[str]]) -> bytes:
     """A PDF from a list of pages, each a list of text lines (empty list = a scanned/blank page)."""
     doc = fitz.open()
@@ -58,6 +88,20 @@ def test_appendix_declared_on_page_one_is_kind_appendix():
 def test_non_pdf_bytes_degrade_to_no_text_layer():
     e = build_doc_entry("scan.png", DocType.PARTICULAR_SPECIFICATION, b"not a pdf")
     assert e.text_layer is False and e.page_count == 0 and e.clause_index == {}
+
+
+@requires_tesseract
+def test_scanned_ps_gets_text_layer_and_clause_index_via_ocr(tmp_path, monkeypatch):
+    # The point of the OCR spine: a SCANNED PS (no native text) now yields text_layer=True and a
+    # clause_index, so the assembler slices it instead of falling back to whole-file.
+    monkeypatch.setenv("SITESOURCE_OCR_CACHE", str(tmp_path / "ocr_cache"))
+    data = _scanned_pdf([
+        ["SECTION 7 - GEOTECHNICAL WORKS", "7.34A Rotary drilling in rock"],
+        ["7.37A Standard penetration test", "the clause explanation continues"],
+    ])
+    e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.text_layer is True and e.page_count == 2       # scanned, but OCR gave it text
+    assert "7.34A" in e.clause_index and "7.37A" in e.clause_index  # markers found in the OCR text
 
 
 def test_doc_index_round_trips_through_the_workspace(tmp_path):
