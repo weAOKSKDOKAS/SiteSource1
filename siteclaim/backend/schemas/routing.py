@@ -25,6 +25,10 @@ class RoutePackage(BaseModel):
     id: Optional[int] = None
     package_key: str
     trade: str = ""
+    # A section sub-package carries its section code (derived from package_key ``trade:SECTION``)
+    # and the header title; a whole-trade package leaves them empty.
+    section: Optional[str] = None
+    section_title: str = ""
     scope_summary: str = ""
     recommended_route: str = SUBLET
     rationale: str = ""

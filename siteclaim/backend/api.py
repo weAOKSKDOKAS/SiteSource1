@@ -41,6 +41,7 @@ from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E
 from pipeline.benchmark.eos_reason import EOS_REASON_FIXTURE, extract_reason_candidates  # noqa: E402
 from pipeline.routing.recommend import ROUTE_SUGGESTIONS_FIXTURE, recommend_routes  # noqa: E402
 from pipeline.routing.signal import package_signal  # noqa: E402
+from pipeline.routing.split import route_units  # noqa: E402
 from db import benchmark as bench, estimate as est, project as uproject, refresh, routing, store  # noqa: E402
 from schemas.routing import (  # noqa: E402
     ROUTES,
@@ -1319,14 +1320,18 @@ def post_route_analyze(req: AnalyzeRequest) -> RouteProposal:
     """Recommend a route per package (advisory) and persist the proposal."""
     run_ref = req.run_ref.strip() or tender_slug(req.scope.project_name)
 
+    # The routable unit is the SECTION: a many-section package (GI=343) auto-splits into
+    # per-section sub-packages (package_key trade:SECTION); a focused package stays whole.
+    units = route_units(req.scope)
+
     conn = store.get_connection()
     try:
         packages = [
             {
-                "package_key": pkg.trade, "trade": pkg.trade, "scope_summary": pkg.scope_summary,
-                "signals": package_signal(conn, pkg.trade, pkg.scope_summary),
+                "package_key": u["package_key"], "trade": u["trade"], "scope_summary": u["scope_summary"],
+                "signals": package_signal(conn, u["trade"], u["scope_summary"]),
             }
-            for pkg in req.scope.packages
+            for u in units
         ]
     finally:
         conn.close()
@@ -1344,7 +1349,13 @@ def post_route_analyze(req: AnalyzeRequest) -> RouteProposal:
                                provenance=("demo" if demo_mode() else "live"))
     finally:
         conn.close()
-    return RouteProposal(run_ref=run_ref, packages=[RoutePackage(**r) for r in saved])
+    # The section code/title ride back on the response (persisted identity is the package_key).
+    section = {u["package_key"]: u["section"] for u in units}
+    section_title = {u["package_key"]: u["section_title"] for u in units}
+    return RouteProposal(run_ref=run_ref, packages=[
+        RoutePackage(**r, section=section.get(r["package_key"]), section_title=section_title.get(r["package_key"], ""))
+        for r in saved
+    ])
 
 
 @app.post("/route/confirm", response_model=RouteDecisionResult)
@@ -1369,11 +1380,19 @@ def post_route_confirm(req: ConfirmRoutesRequest) -> RouteDecisionResult:
         if req.scope is not None:
             uproject.get_or_create(conn, req.run_ref, name=req.scope.project_name,
                                    provenance=("demo" if demo_mode() else "live"))
-            pkg_by_trade = {p.trade: p for p in req.scope.packages}
+            # Seed one estimate per self-perform unit — a section sub-package seeds its own
+            # estimate (name = tender — section title), keyed by package_key so two sections
+            # of one trade never collide. route_units is deterministic, so the keys match
+            # exactly what /route/analyze proposed.
+            units_by_key = {u["package_key"]: u for u in route_units(req.scope)}
             for key in self_perform:
-                pkg = pkg_by_trade.get(key)
-                if pkg is not None:
-                    estimate_ids[key] = _seed_estimate(conn, pkg, run_ref=req.run_ref, project_name=req.scope.project_name)["id"]
+                u = units_by_key.get(key)
+                if u is not None:
+                    label = f"{req.scope.project_name} — {u['section_title'] or u['section']}" if u.get("section") else ""
+                    estimate_ids[key] = _seed_estimate(
+                        conn, u["package"], run_ref=req.run_ref, project_name=req.scope.project_name,
+                        package_key=key, label=label,
+                    )["id"]
     finally:
         conn.close()
     return RouteDecisionResult(
@@ -1440,21 +1459,25 @@ def patch_estimate_project(estimate_id: int, req: EstimateProjectUpdate) -> Esti
         conn.close()
 
 
-def _seed_estimate(conn, pkg, *, run_ref: str = "", project_name: str = "", client: str = "", contract_ref: str = "") -> dict:
+def _seed_estimate(conn, pkg, *, run_ref: str = "", project_name: str = "", client: str = "",
+                   contract_ref: str = "", package_key: str | None = None, label: str = "") -> dict:
     """Seed (or return the existing) estimate for a self-perform package — its SoR items
     become the initial unpriced lines. Idempotent per (run_ref, package_key); the trade is
-    canonicalised against the taxonomy (Layer 1). Shared by /estimate/from-package and the
-    route-confirm auto-link (P4b)."""
+    canonicalised against the taxonomy (Layer 1). ``package_key`` (default = the trade)
+    distinguishes per-section sub-packages of one trade; ``label`` overrides the estimate
+    name (tender — section title). Shared by /estimate/from-package and the route-confirm
+    auto-link (P4b)."""
     from rules_engine.taxonomy import normalize as normalize_trade  # Layer 1; local import keeps the graph flat
 
     trade = normalize_trade(pkg.trade) or pkg.trade
-    existing = est.find_by_route(conn, run_ref, pkg.trade) if run_ref else None
+    pkey = package_key or pkg.trade
+    existing = est.find_by_route(conn, run_ref, pkey) if run_ref else None
     if existing is not None:
         return existing
-    name = (f"{project_name} — {trade}" if project_name else trade).strip(" —") or trade or "Estimate"
+    name = (label or (f"{project_name} — {trade}" if project_name else trade)).strip(" —") or trade or "Estimate"
     project = est.create_project(
         conn, name=name, trade=trade, client=client, contract_ref=contract_ref,
-        source=("routing" if run_ref else "from-package"), run_ref=run_ref, package_key=pkg.trade,
+        source=("routing" if run_ref else "from-package"), run_ref=run_ref, package_key=pkey,
         scope_of_works=pkg.scope_summary or "",
     )
     items = [{
