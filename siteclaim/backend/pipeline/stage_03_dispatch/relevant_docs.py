@@ -1,30 +1,30 @@
 """Per-section relevant-document resolver (Layer 1, deterministic; pymupdf lazy for slicing).
 
 For one dispatched SoR section, decide exactly which documents a firm needs and how much of
-each: slice a text-layer Particular Specification to the pages of the clauses its items
-reference (± 1 page so a clause across a page break is not cut), fall back to the WHOLE file
-where the document is scanned or nothing resolves, always include the generated SoR sheet, the
-Method of Measurement, and every clarification/general document, and flag any referenced spec
-section that was not supplied — never a silent omission. The plan is data (testable offline);
-the actual file slicing (``slice_pdf``) runs at assembly.
+each — driven by the clauses its SoR items reference (the "Clause Ref" column), NOT a
+trade→spec guess:
+
+* PS: slice the Particular Specification to the pages of the PS clauses the section references
+  (and the PS amendments of any referenced GS clause), ± 1 page so a clause across a break is
+  whole.
+* MM: slice the Method of Measurement to the pages of the referenced ``PB`` clauses — it is no
+  longer sent whole to every firm.
+* GS: the General Specification is not in the package. A GS clause amended by a present PS
+  clause rides in the PS extract; a GS clause with no present amendment is flagged
+  ``missing_spec: General Specification 7.xx`` — never silently omitted.
+* Fallbacks: a referenced clause that cannot be located → the whole doc for that firm, flagged;
+  a scanned doc → whole, flagged. Always include the generated SoR sheet and every
+  clarification / general document (whole, to everyone).
+
+The plan is data (testable offline); the actual file slicing (``slice_pdf``) runs at assembly.
 """
 
 from __future__ import annotations
 
-import re
-from collections import defaultdict
-
 from pydantic import BaseModel, Field
 
 from pipeline.stage_01_ingest.doc_index import DocIndexEntry
-from pipeline.stage_03_dispatch.doc_refs import clause_of, refs_for_items, spec_section_of
-
-# Topic fallback: a section whose scope reads geotechnical needs PS/Appendix 7; a tree /
-# landscape section needs PS/Appendix 26. Robustness for SoR items that don't spell out a ref.
-_TOPIC: list[tuple[re.Pattern, set[str]]] = [
-    (re.compile(r"geotech|ground\s*invest|\bGI\b|drilling|borehole|rotary|in-?situ", re.I), {"7"}),
-    (re.compile(r"\btree|landscap|preservation|planting|arbor|soft\s*works", re.I), {"26"}),
-]
+from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of, refs_for_items, spec_section_of
 
 
 class PlanAttachment(BaseModel):
@@ -33,8 +33,9 @@ class PlanAttachment(BaseModel):
     source_doc: str            # the original filename, or the generated SoR sheet name
     mode: str                  # "sliced" | "whole" | "generated"
     pages: list[int] = Field(default_factory=list)   # 1-based pages (sliced mode only)
+    clauses: list[str] = Field(default_factory=list)  # the clause ids this extract contains
     reason: str = ""
-    flags: list[str] = Field(default_factory=list)   # e.g. "scanned_whole"
+    flags: list[str] = Field(default_factory=list)   # e.g. "scanned_whole" | "whole_clause_not_located"
 
 
 class MissingSpec(BaseModel):
@@ -72,14 +73,6 @@ def apply_attachment_overrides(
     return plan.model_copy(update={"attachments": kept})
 
 
-def _topic_specs(text: str) -> set[str]:
-    specs: set[str] = set()
-    for pattern, s in _TOPIC:
-        if pattern.search(text or ""):
-            specs |= s
-    return specs
-
-
 def _slice_pages(entry: DocIndexEntry, clauses: list[str]) -> list[int]:
     """0-based pages spanned by a set of clause ids, each page expanded ±1 (clamped to the doc)
     so a clause straddling a page break is kept whole. ``clause_index`` maps a clause to the
@@ -98,69 +91,113 @@ def _slice_pages(entry: DocIndexEntry, clauses: list[str]) -> list[int]:
     return sorted(pages)
 
 
+def _dedup(seq: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _resolving_ps_clauses(entry: DocIndexEntry, ps_clauses: list[str], gs_clauses: list[str]) -> list[str]:
+    """The clause_index keys of this PS doc that the section references: the referenced PS clauses
+    present in the index, plus any key that AMENDS a referenced GS clause (a direct match, or a
+    suffixed clause / amendment lead-in whose base equals the GS clause)."""
+    keys = list(entry.clause_index)
+    resolved = [c for c in ps_clauses if c in entry.clause_index]
+    for g in gs_clauses:
+        resolved += [k for k in keys if k == g or base_clause(k) == g]
+    return _dedup(resolved)
+
+
 def resolve_section_plan(
     *, package_key: str, trade: str, section_title: str, items: list,
     doc_index: list[DocIndexEntry], sor_sheet_name: str, section: str = "",
 ) -> SectionPlan:
-    """The relevant-only attachment plan for one dispatched SoR section."""
+    """The relevant-only attachment plan for one dispatched SoR section, driven by the clause
+    references its items carry (Clause Ref column). See the module docstring for the slicing rules."""
     refs = refs_for_items(items)
-    ref_specs = {spec_section_of(r) for r in refs.get("ps", []) + refs.get("gs", []) if spec_section_of(r)}
-    topic_specs = _topic_specs(f"{trade} {section_title}")
-    relevant_specs = ref_specs | topic_specs
+    ps_clauses = _dedup([clause_of(r) for r in refs.get("ps", [])])
+    gs_clauses = _dedup([clause_of(r) for r in refs.get("gs", [])])
+    pb_clauses = [r for r in refs.get("pb", []) if r.startswith("PB ")]  # MM number form "PB 71"
+    appendix_clauses = _dedup([clause_of(a) for a in refs.get("appendix", [])])
 
-    clauses_by_spec: dict[str, list[str]] = defaultdict(list)
-    for r in refs.get("ps", []):
-        clauses_by_spec[spec_section_of(r)].append(clause_of(r))
-    # An appendix is matched by its NUMBER ("Appendix 7.4.1" -> appendix 7) against the doc's
-    # declared "Appendix 7"; the sub-clause drives the slice within it.
-    cited_appendices = {spec_section_of(a) for a in refs.get("appendix", []) if spec_section_of(a)} | topic_specs
+    ps_ref_specs = {spec_section_of(r) for r in refs.get("ps", []) if spec_section_of(r)}
+    gs_ref_specs = {spec_section_of(r) for r in refs.get("gs", []) if spec_section_of(r)}
+    relevant_ps_specs = ps_ref_specs | gs_ref_specs  # a PS section is relevant if a PS or GS clause in it is cited
+    cited_appendices = {spec_section_of(a) for a in refs.get("appendix", []) if spec_section_of(a)}
 
     plan: list[PlanAttachment] = [
         PlanAttachment(source_doc=sor_sheet_name, mode="generated", reason="Priced Schedule of Rates for this section"),
     ]
     present_ps: set[str] = set()
-    present_appendices: set[str] = set()
+    gs_covered: set[str] = set()  # GS clauses a present PS doc amends
+
     for e in doc_index:
-        if e.kind == "method_of_measurement":
-            plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="Method of Measurement — measurement rules apply broadly"))
-        elif e.kind == "clarification":
+        if e.kind == "clarification":
             plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="Clarification / addendum — issued to all firms"))
         elif e.kind == "general_specification":
-            if refs.get("gs") or (e.spec_section_number and e.spec_section_number in relevant_specs):
-                plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="General Specification — referenced by this section"))
+            plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="General Specification — issued to all firms"))
+        elif e.kind == "method_of_measurement":
+            if not pb_clauses:
+                continue  # this section references no measurement preamble — no MM extract
+            resolved = [c for c in pb_clauses if c in e.clause_index]
+            pages = _slice_pages(e, resolved) if e.text_layer else []
+            if pages:
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=resolved,
+                    reason=f"Method of Measurement — {', '.join(resolved)}"))
+            else:
+                scanned = not e.text_layer
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="whole", clauses=pb_clauses,
+                    reason=f"Method of Measurement — whole ({'scanned' if scanned else 'clause not located'})",
+                    flags=["scanned_whole"] if scanned else ["whole_clause_not_located"]))
         elif e.kind == "particular_specification":
-            if e.spec_section_number and e.spec_section_number in relevant_specs:
-                present_ps.add(e.spec_section_number)
-                pages = _slice_pages(e, clauses_by_spec.get(e.spec_section_number, [])) if e.text_layer else []
-                if pages:
-                    plan.append(PlanAttachment(
-                        source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages],
-                        reason=f"PS Section {e.spec_section_number} — referenced clauses"))
-                else:
-                    scanned = not e.text_layer
-                    plan.append(PlanAttachment(
-                        source_doc=e.filename, mode="whole",
-                        reason=f"PS Section {e.spec_section_number} — whole ({'scanned' if scanned else 'no clause resolved to a page'})",
-                        flags=["scanned_whole"] if scanned else []))
+            if not (e.spec_section_number and e.spec_section_number in relevant_ps_specs):
+                continue  # this PS section is not referenced by the dispatched section
+            present_ps.add(e.spec_section_number)
+            resolved = _resolving_ps_clauses(e, ps_clauses, gs_clauses) if e.text_layer else []
+            for g in gs_clauses:  # record which GS clauses this PS doc amends
+                if any(k == g or base_clause(k) == g for k in e.clause_index):
+                    gs_covered.add(g)
+            pages = _slice_pages(e, resolved) if e.text_layer else []
+            if pages:
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=resolved,
+                    reason=f"PS Section {e.spec_section_number} — clauses {', '.join(resolved)}"))
+            else:
+                scanned = not e.text_layer
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="whole",
+                    reason=f"PS Section {e.spec_section_number} — whole ({'scanned' if scanned else 'clause not located'})",
+                    flags=["scanned_whole"] if scanned else ["whole_clause_not_located"]))
         elif e.kind == "appendix":
-            if e.spec_section_number and (e.spec_section_number in cited_appendices or e.spec_section_number in relevant_specs):
-                present_appendices.add(e.spec_section_number)
-                pages = _slice_pages(e, [clause_of(a) for a in refs.get("appendix", [])]) if e.text_layer else []
-                if pages:
-                    plan.append(PlanAttachment(
-                        source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages],
-                        reason=f"Appendix {e.spec_section_number} — referenced pages"))
-                else:
-                    scanned = not e.text_layer
-                    plan.append(PlanAttachment(
-                        source_doc=e.filename, mode="whole",
-                        reason=f"Appendix {e.spec_section_number} — whole ({'scanned' if scanned else 'referenced'})",
-                        flags=["scanned_whole"] if scanned else []))
+            if not (e.spec_section_number and (e.spec_section_number in cited_appendices or e.spec_section_number in relevant_ps_specs)):
+                continue
+            pages = _slice_pages(e, appendix_clauses) if e.text_layer else []
+            if pages:
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=appendix_clauses,
+                    reason=f"Appendix {e.spec_section_number} — referenced pages"))
+            else:
+                scanned = not e.text_layer
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="whole",
+                    reason=f"Appendix {e.spec_section_number} — whole ({'scanned' if scanned else 'referenced'})",
+                    flags=["scanned_whole"] if scanned else []))
 
-    missing = [
-        MissingSpec(spec=f"PS Section {spec}", referenced_by=("SoR references" if spec in ref_specs else "topic map"))
-        for spec in sorted(relevant_specs) if spec not in present_ps
+    missing: list[MissingSpec] = [
+        MissingSpec(spec=f"PS Section {spec}", referenced_by="SoR references")
+        for spec in sorted(ps_ref_specs - present_ps)
     ]
+    # A GS clause with no present PS amendment: the base General Specification text is not
+    # enclosed — surface it so the human decides, never a silent omission.
+    for g in gs_clauses:
+        if g not in gs_covered:
+            missing.append(MissingSpec(spec=f"General Specification {g}", referenced_by="SoR references"))
     return SectionPlan(package_key=package_key, section=section, attachments=plan, missing_specs=missing)
 
 
