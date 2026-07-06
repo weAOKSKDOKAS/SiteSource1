@@ -90,6 +90,18 @@ def test_non_pdf_bytes_degrade_to_no_text_layer():
     assert e.text_layer is False and e.page_count == 0 and e.clause_index == {}
 
 
+def test_ps_clause_records_its_onward_appendix_reference():
+    # A PS clause that points to a separate appendix ("refer to Appendix 7.8.20") records the
+    # onward appendix id, so dispatch can pull that appendix from the persisted index alone.
+    data = _pdf([[
+        "SECTION 7 - GEOTECHNICAL WORKS",
+        "7.07A Bored piling in rock",
+        "Refer to Appendix 7.8.20 for the borehole logs.",
+    ]])
+    e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.clause_onward_appendices.get("7.07A") == ["7.8.20"]
+
+
 @requires_tesseract
 def test_scanned_ps_gets_text_layer_and_clause_index_via_ocr(tmp_path, monkeypatch):
     # The point of the OCR spine: a SCANNED PS (no native text) now yields text_layer=True and a

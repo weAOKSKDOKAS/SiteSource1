@@ -104,6 +104,36 @@ def test_plan_always_has_sor_sheet_and_clarifications_even_with_no_refs():
     assert modes["s.xlsx"] == "generated" and modes["Clar.pdf"] == "whole"
 
 
+def test_onward_appendix_from_a_ps_clause_is_pulled_and_sliced():
+    # Section references PS 7.07A; the PS clause 7.07A points onward to Appendix 7.8.20; the firm's
+    # bundle gets the PS sliced to 7.07A AND the separate appendix document sliced to 7.8.20.
+    doc_index = [
+        DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                      text_layer=True, page_count=40, clause_index={"7.07A": [3]},
+                      clause_onward_appendices={"7.07A": ["7.8.20"]}),
+        DocIndexEntry(filename="APP-7.pdf", kind="appendix", spec_section_number="7",
+                      text_layer=True, page_count=30, clause_index={"7.8.20": [12]}),
+    ]
+    plan = resolve_section_plan(
+        package_key="ground_investigation:G", trade="ground_investigation", section_title="PILING",
+        items=[_item(["PS 7.07A"], section="G")], doc_index=doc_index, sor_sheet_name="s.xlsx")
+    by = {a.source_doc: a for a in plan.attachments}
+    assert by["PS-S07.pdf"].mode == "sliced" and by["PS-S07.pdf"].clauses == ["7.07A"]
+    app = by["APP-7.pdf"]
+    assert app.mode == "sliced" and app.clauses == ["7.8.20"] and set(app.pages) == {12, 13, 14}
+    assert plan.missing_specs == []
+
+
+def test_onward_appendix_with_no_appendix_document_is_flagged_missing():
+    doc_index = [DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                               text_layer=True, page_count=40, clause_index={"7.07A": [3]},
+                               clause_onward_appendices={"7.07A": ["7.8.20"]})]
+    plan = resolve_section_plan(
+        package_key="x", trade="ground_investigation", section_title="PILING",
+        items=[_item(["PS 7.07A"], section="G")], doc_index=doc_index, sor_sheet_name="s.xlsx")
+    assert "Appendix 7" in [m.spec for m in plan.missing_specs]  # onward appendix, no doc -> flagged
+
+
 def test_slice_pdf_extracts_requested_pages():
     fitz = pytest.importorskip("fitz")
     doc = fitz.open()

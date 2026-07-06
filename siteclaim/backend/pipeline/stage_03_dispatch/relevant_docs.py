@@ -129,10 +129,24 @@ def resolve_section_plan(
     relevant_ps_specs = ps_ref_specs | gs_ref_specs  # a PS section is relevant if a PS or GS clause in it is cited
     cited_appendices = {spec_section_of(a) for a in refs.get("appendix", []) if spec_section_of(a)}
 
+    # Onward hop: a resolved PS clause may point to a SEPARATE appendix document ("refer to
+    # Appendix 7.8.20"). Gather those appendix clause ids from the persisted clause_onward index
+    # (a pre-pass so order in doc_index doesn't matter), and merge them into what the appendix
+    # branch pulls — so the firm gets the appendix even though its SoR item only cited the PS clause.
+    onward: list[str] = []
+    for e in doc_index:
+        if e.kind in ("particular_specification", "general_specification") and e.spec_section_number in relevant_ps_specs:
+            for c in (_resolving_ps_clauses(e, ps_clauses, gs_clauses) if e.text_layer else []):
+                onward += e.clause_onward_appendices.get(c, [])
+    onward = _dedup(onward)
+    appendix_clauses = _dedup(appendix_clauses + onward)
+    cited_appendices = cited_appendices | {spec_section_of(a) for a in onward if spec_section_of(a)}
+
     plan: list[PlanAttachment] = [
         PlanAttachment(source_doc=sor_sheet_name, mode="generated", reason="Priced Schedule of Rates for this section"),
     ]
     present_ps: set[str] = set()
+    present_appendices: set[str] = set()
     gs_covered: set[str] = set()  # GS clauses a present PS doc amends
 
     for e in doc_index:
@@ -177,6 +191,7 @@ def resolve_section_plan(
         elif e.kind == "appendix":
             if not (e.spec_section_number and (e.spec_section_number in cited_appendices or e.spec_section_number in relevant_ps_specs)):
                 continue
+            present_appendices.add(e.spec_section_number)
             pages = _slice_pages(e, appendix_clauses) if e.text_layer else []
             if pages:
                 plan.append(PlanAttachment(
@@ -198,6 +213,10 @@ def resolve_section_plan(
     for g in gs_clauses:
         if g not in gs_covered:
             missing.append(MissingSpec(spec=f"General Specification {g}", referenced_by="SoR references"))
+    # An appendix referenced (by an item directly, or onward from a PS clause) but with no matching
+    # appendix document present — flagged, not silently dropped.
+    for app_sec in sorted(cited_appendices - present_appendices):
+        missing.append(MissingSpec(spec=f"Appendix {app_sec}", referenced_by="SoR references"))
     return SectionPlan(package_key=package_key, section=section, attachments=plan, missing_specs=missing)
 
 

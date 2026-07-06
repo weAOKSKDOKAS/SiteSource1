@@ -52,6 +52,10 @@ class DocIndexEntry(BaseModel):
     # clause id -> the 0-based pages it spans (its marker page to the page before the next
     # marker; ±1 is applied at slice time). Text-layer PS / appendix / GS / MM only.
     clause_index: dict[str, list[int]] = Field(default_factory=dict)
+    # PS clause id -> appendix clause ids referenced WITHIN that clause's page span (e.g.
+    # "7.07A" -> ["7.8.20"] from "refer to Appendix 7.8.20"). Lets dispatch pull the SEPARATE
+    # appendix document a PS clause points to — the onward hop SoR item -> PS clause -> appendix.
+    clause_onward_appendices: dict[str, list[str]] = Field(default_factory=dict)
 
 
 def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
@@ -118,6 +122,26 @@ def _mm_markers(pages: list[str]) -> list[tuple[str, int]]:
     return markers
 
 
+def _onward_appendices(pages: list[str], clause_index: dict[str, list[int]]) -> dict[str, list[str]]:
+    """For each PS clause, the appendix clause ids referenced within its page span — parsed from
+    the page text with the SAME appendix regex the SoR resolver uses. Empty entries are dropped."""
+    from pipeline.stage_03_dispatch.doc_refs import clause_of, extract_refs  # lazy: pure util, avoids a cycle
+
+    out: dict[str, list[str]] = {}
+    for clause_id, span in clause_index.items():
+        text = "\n".join(pages[p] for p in span if 0 <= p < len(pages))
+        apps = extract_refs(text).get("appendix", [])
+        if apps:
+            ids: list[str] = []
+            for a in apps:
+                cid = clause_of(a)  # "Appendix 7.8.20" -> "7.8.20"
+                if cid and cid not in ids:
+                    ids.append(cid)
+            if ids:
+                out[clause_id] = ids
+    return out
+
+
 def _spans(markers: list[tuple[str, int]], page_count: int) -> dict[str, list[int]]:
     """Turn ordered clause markers into ``clause_id -> [pages]``: each clause spans from its
     marker's page to the page BEFORE the next marker (at least its own page). A repeated id
@@ -150,15 +174,20 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
 
     kind = _kind_for(doc_type, page1, filename)
     clause_index: dict[str, list[int]] = {}
+    clause_onward: dict[str, list[str]] = {}
     if text_layer and kind == "method_of_measurement":
         clause_index = _spans(_mm_markers(pages), len(pages))
     elif text_layer and kind in ("particular_specification", "appendix", "general_specification"):
         clause_index = _spans(_spec_markers(pages, section_number), len(pages))
+        if kind in ("particular_specification", "general_specification"):
+            # A PS clause may point onward to an appendix ("refer to Appendix 7.8.20"); record it
+            # now, while the page text is in hand, so dispatch reads only the persisted index.
+            clause_onward = _onward_appendices(pages, clause_index)
 
     return DocIndexEntry(
         filename=filename, kind=kind, spec_section_number=section_number,
         spec_section_title=section_title, text_layer=text_layer, page_count=len(pages),
-        clause_index=clause_index,
+        clause_index=clause_index, clause_onward_appendices=clause_onward,
     )
 
 
