@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
-import type { Candidate, DispatchSet, DispatchStatus, ScopePackages, SectionPlan, ShortlistSet, TenderReplies } from "../types";
+import type { Candidate, DispatchDraftsResponse, DispatchSet, DispatchStatus, ScopePackages, SectionPlan, ShortlistSet, TenderReplies } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, LoadingDots, Modal, cx } from "../ui";
 import { tradeLabel } from "../format";
@@ -162,6 +162,7 @@ export function StepDispatch({
   onToggleApprove,
   onEditDraft,
   onComposeDrafts,
+  onPrepareDrafts,
   onSend,
   onBack,
   onNext,
@@ -179,6 +180,7 @@ export function StepDispatch({
   onToggleApprove: (trade: string, firmId: string) => void;
   onEditDraft: (trade: string, firmId: string, value: Draft) => void;
   onComposeDrafts: () => Promise<DispatchSet>;
+  onPrepareDrafts?: () => Promise<DispatchDraftsResponse>;  // live: hand the bundles to n8n Gmail drafts
   onSend: () => void;
   onBack: () => void;
   onNext: () => void;
@@ -296,6 +298,7 @@ export function StepDispatch({
         live={!demoMode}
         scope={scope}
         projectName={projectName ?? ""}
+        onPrepareDrafts={onPrepareDrafts}
       />
     </div>
   );
@@ -320,6 +323,7 @@ function DispatchReviewModal({
   live = false,
   scope,
   projectName = "",
+  onPrepareDrafts,
 }: {
   open: boolean;
   onClose: () => void;
@@ -335,11 +339,35 @@ function DispatchReviewModal({
   live?: boolean;
   scope?: ScopePackages | null;
   projectName?: string;
+  onPrepareDrafts?: () => Promise<DispatchDraftsResponse>;
 }) {
   const [composed, setComposed] = useState<Record<string, Draft>>({});
   const [composing, setComposing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftResult, setDraftResult] = useState<DispatchDraftsResponse | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
   const approvedCount = Object.values(approvals).reduce((n, ids) => n + ids.length, 0);
+
+  // Hand the approved bundles to the n8n Gmail-draft workflow. Result is surfaced honestly:
+  // when N8N_DRAFTS_WEBHOOK is unset the backend no-ops and webhook_configured is false.
+  const prepareGmailDrafts = () => {
+    if (!onPrepareDrafts) return;
+    setDraftBusy(true);
+    setDraftError(null);
+    setDraftResult(null);
+    onPrepareDrafts()
+      .then(setDraftResult)
+      .catch((e: unknown) => setDraftError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setDraftBusy(false));
+  };
+
+  // Editing the selection or drafts invalidates a prior draft result — clear it so the summary
+  // never claims Gmail drafts that no longer match what is on screen.
+  useEffect(() => {
+    setDraftResult(null);
+    setDraftError(null);
+  }, [approvals, drafts]);
 
   // (Re)compose whenever the pop-up opens or the selection changes — the composed text is
   // the default; a person's edit (drafts) always wins and survives reopening.
@@ -447,13 +475,56 @@ function DispatchReviewModal({
           </div>
         )}
 
+        {/* Gmail-draft hand-off result — surfaced honestly (aggregate + per-firm), incl. the
+            "drafting is off" state the backend returns when N8N_DRAFTS_WEBHOOK is unset. */}
+        {draftError && <p className="rounded-lg bg-bad-bg px-3 py-2 text-xs text-bad">{draftError}</p>}
+        {draftResult && !draftResult.webhook_configured && (
+          <div className="rounded-lg border border-warn/40 bg-warn-bg px-3 py-2 text-xs text-warn">
+            Drafting is off — set <span className="tabular font-semibold">N8N_DRAFTS_WEBHOOK</span> (and activate the n8n
+            workflow) to create Gmail drafts. Nothing was sent; the outbox confirm below still works.
+          </div>
+        )}
+        {draftResult && draftResult.webhook_configured && (
+          <div className="rounded-lg border border-ok/40 bg-ok-bg px-3 py-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-ink">
+                {draftResult.drafted} Gmail draft{draftResult.drafted === 1 ? "" : "s"} prepared
+              </span>
+              <a
+                className="ml-auto font-semibold text-brand underline"
+                href="https://mail.google.com/mail/u/0/#drafts"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Gmail drafts ↗
+              </a>
+            </div>
+            <ul className="mt-1.5 divide-y divide-line-soft">
+              {draftResult.bundles.map((b) => (
+                <li key={`${b.trade}-${b.firm_id}`} className="flex flex-wrap items-center gap-2 py-1">
+                  <span className="text-ink">{b.firm_name}</span>
+                  <Pill tone="brand">{tradeLabel(b.trade)}</Pill>
+                  <Pill tone="ok">Draft created</Pill>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-3 border-t border-line-soft pt-3">
           <span className="text-xs text-ink-faint">
             Confirming prepares each enquiry in the outbox with exactly the text above — the human gate before anything leaves.
           </span>
-          <Button onClick={onConfirm} loading={sending} disabled={approvedCount === 0 || composing}>
-            Confirm — write {approvedCount} enquir{approvedCount === 1 ? "y" : "ies"} →
-          </Button>
+          <div className="flex items-center gap-2">
+            {live && onPrepareDrafts && (
+              <Button variant="ghost" onClick={prepareGmailDrafts} loading={draftBusy} disabled={approvedCount === 0 || composing}>
+                Prepare Gmail drafts
+              </Button>
+            )}
+            <Button onClick={onConfirm} loading={sending} disabled={approvedCount === 0 || composing}>
+              Confirm — write {approvedCount} enquir{approvedCount === 1 ? "y" : "ies"} →
+            </Button>
+          </div>
         </div>
       </div>
     </Modal>

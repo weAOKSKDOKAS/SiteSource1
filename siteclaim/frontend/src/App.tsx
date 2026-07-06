@@ -12,6 +12,7 @@ import type {
   BidReply,
   Coverage,
   DemoCaseSummary,
+  DispatchDraftsResponse,
   DispatchSet,
   LevelledBid,
   Recommendation,
@@ -313,6 +314,28 @@ export default function App() {
       setDispatch(result);
     });
 
+  // Prepare Gmail drafts (live): assemble each approved firm's relevant-only bundle and hand it
+  // to the n8n Gmail-draft workflow behind N8N_DRAFTS_WEBHOOK. Same request the outbox confirm
+  // builds — the edited draft text rides along in draft_overrides — but this writes Gmail drafts,
+  // not the outbox. If the webhook is unset the backend no-ops and reports webhook_configured=false.
+  const prepareDrafts = (): Promise<DispatchDraftsResponse> => {
+    if (!shortlist || !sourceScope) return Promise.reject(new Error("nothing to draft"));
+    const draft_overrides = Object.entries(drafts)
+      .map(([key, value]) => {
+        const [trade, firm_id] = key.split(":");
+        return { trade, firm_id, subject: value.subject, body: value.body };
+      })
+      .filter((o) => (approvals[o.trade] ?? []).includes(o.firm_id));
+    return api.dispatchDrafts({
+      shortlist,
+      approvals,
+      scope: sourceScope,
+      project_name: sourceScope.project_name,
+      send: false, // ignored by /dispatch/drafts; the field is required by the shared request type
+      draft_overrides,
+    });
+  };
+
   // Only replies for trades the routing gate sent to sourcing are levelled — a trade
   // routed to self-perform never enters the comparison.
   function subletReplies(): BidReply[] {
@@ -538,6 +561,7 @@ export default function App() {
                 tenderSlug={tenderSlug}
                 scope={sourceScope}
                 projectName={sourceScope?.project_name ?? ""}
+                onPrepareDrafts={prepareDrafts}
                 drafts={drafts}
                 onToggleApprove={toggleApprove}
                 onEditDraft={editDraft}
