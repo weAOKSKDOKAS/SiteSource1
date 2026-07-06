@@ -99,3 +99,14 @@ class Workspace:
     def sor_sheet_path(self, tender_id: str, trade: str) -> Path:
         """Where this trade's generated Schedule-of-Rates sheet lives."""
         return self.artifacts_dir(tender_id, create=True) / f"SoR_{tender_slug(trade)}.xlsx"
+
+    def doc_index_path(self, tender_id: str, *, create: bool = False) -> Path:
+        """Where this run's per-document structural index (doc_index.json) lives."""
+        return self.artifacts_dir(tender_id, create=create) / "doc_index.json"
+
+    def firm_attachment_path(self, tender_id: str, firm_id: str, filename: str) -> Path:
+        """Where an assembled per-firm attachment (a sliced/whole PDF) is materialised."""
+        safe_firm = _SLUG_STRIP.sub("-", (firm_id or "firm").lower()).strip("-") or "firm"
+        out = self.artifacts_dir(tender_id, create=True) / "attachments" / safe_firm
+        out.mkdir(parents=True, exist_ok=True)
+        return out / _safe_name(filename)

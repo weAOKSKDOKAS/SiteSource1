@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 from pipeline.documents import extract_document, to_images  # noqa: E402
 from pipeline.llm_client import demo_mode  # noqa: E402
 from pipeline.stage_01_ingest.classify import classify_documents  # noqa: E402
+from pipeline.stage_01_ingest.doc_index import build_doc_index, save_doc_index  # noqa: E402
 from pipeline.stage_01_ingest.ingest import ingest_tender  # noqa: E402
 from pipeline.stage_02_shortlist.shortlist import shortlist  # noqa: E402
 from pipeline.stage_03_dispatch.dispatch import build_dispatch  # noqa: E402
@@ -516,6 +517,12 @@ def post_ingest_upload(
         final_name = extracted
     for filename, data in originals:
         workspace.save_upload(final_name, filename, data)
+    # Structural per-document index (kind, spec section, text layer, clause -> page) for the
+    # relevant-document assembler at dispatch. Deterministic (pymupdf); persisted with the run.
+    save_doc_index(workspace, final_name, build_doc_index(
+        [(doc.filename or "upload", doc.doc_type, data)
+         for doc, (_fn, data) in zip(tagged.documents, originals)]
+    ))
 
     scope = scope.model_copy(update={"project_name": final_name})
     tagged = tagged.model_copy(update={"project_name": final_name})
