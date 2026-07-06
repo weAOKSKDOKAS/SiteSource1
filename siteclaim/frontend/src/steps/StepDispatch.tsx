@@ -81,7 +81,11 @@ function AttachmentPlanPreview({
                     <Pill tone={expanded ? "neutral" : a.mode === "sliced" ? "brand" : a.mode === "generated" ? "ok" : "neutral"}>
                       {a.mode === "sliced" ? (expanded ? "whole file" : `pp. ${formatPages(a.pages)}`) : a.mode === "generated" ? "SoR sheet" : "whole file"}
                     </Pill>
+                    {a.clauses.length > 0 && !expanded && (
+                      <span className="tabular font-medium text-ink-soft">{a.clauses.join(", ")}</span>
+                    )}
                     {a.flags.includes("scanned_whole") && <Pill tone="warn">scanned</Pill>}
+                    {a.flags.includes("whole_clause_not_located") && <Pill tone="warn">clause not located</Pill>}
                     <span className="text-ink-faint">{a.reason}</span>
                     <span className="ml-auto flex items-center gap-2">
                       {a.mode === "sliced" && !removed && (

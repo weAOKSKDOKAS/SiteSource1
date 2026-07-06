@@ -10,6 +10,7 @@ export interface PlanAttachment {
   source_doc: string;
   mode: "sliced" | "whole" | "generated";
   pages: number[];
+  clauses: string[]; // the clause ids a sliced spec extract contains (7.34A, PB 71)
   reason: string;
   flags: string[];
 }

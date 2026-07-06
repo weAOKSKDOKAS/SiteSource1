@@ -148,7 +148,7 @@ def resolve_section_plan(
             if pages:
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=resolved,
-                    reason=f"Method of Measurement — {', '.join(resolved)}"))
+                    reason="Method of Measurement — referenced preamble clauses"))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
@@ -167,7 +167,7 @@ def resolve_section_plan(
             if pages:
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=resolved,
-                    reason=f"PS Section {e.spec_section_number} — clauses {', '.join(resolved)}"))
+                    reason=f"PS Section {e.spec_section_number} — referenced clauses"))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
