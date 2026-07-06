@@ -138,6 +138,20 @@ class SorItem(BaseModel):
     description: Optional[str] = None  # a scanned / rate-only SoR line may omit these
     unit: Optional[str] = None
     qty: Optional[float] = None  # a real SoR line often has no quantity column
+    # The SoR SECTION this line belongs to — the leading letters of ``item_ref`` before the
+    # first digit (``A1a(a)`` -> ``A``, ``E10(l)`` -> ``E``, ``BB7a`` -> ``BB``). Set at
+    # ingest; the section is the routable unit (a package can split by section at Route).
+    section: Optional[str] = None
+
+
+class SectionMeta(BaseModel):
+    """One Schedule-of-Rates section within a trade package: its code, the header title the
+    chunker saw (``E`` -> ``DRILLING``; empty when no header was captured), and how many
+    items fall under it. Makes a multi-section package (the GI=343 case) visible at Route."""
+
+    code: str
+    title: str = ""
+    item_count: int = 0
 
 
 class TradeWorkPackage(BaseModel):
@@ -147,6 +161,10 @@ class TradeWorkPackage(BaseModel):
     scope_summary: str
     sor_items: list[SorItem] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)  # which tender doc each came from
+    # The sections this package spans (derived from the items' refs at ingest). A single-
+    # section package (every demo package) is unaffected; a many-section package is a
+    # candidate to split by section at the routing gate.
+    sections: list[SectionMeta] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

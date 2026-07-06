@@ -23,7 +23,7 @@ from typing import Optional
 from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient
 from rules_engine.taxonomy import CANONICAL_TRADES, validate_scope
-from schemas.models import ScopePackages, TenderPackage, TradeWorkPackage
+from schemas.models import ScopePackages, SectionMeta, TenderPackage, TradeWorkPackage
 
 # A large Schedule of Rates (SR-01 is 58 pages, Sections A-T, hundreds of items) cannot be
 # extracted in one call — the JSON output exceeds max_tokens and truncates. So the text is
@@ -88,6 +88,51 @@ def _user_prompt(tender: TenderPackage) -> str:
 # ---------------------------------------------------------------------------
 _SECTION_RE = re.compile(r"(?im)^\s*(?:section|part)\s+[A-Za-z0-9]")
 _PAGE_RE = re.compile(r"(?m)^\[page \d+\]")
+
+# The section code is the leading letters of an item_ref before the first digit/punctuation
+# (`A1a(a)` -> `A`, `E10(l)` -> `E`, `BB7a` -> `BB`, `M-01` -> `M`).
+_SECTION_CODE_RE = re.compile(r"^\s*([A-Za-z]+)")
+# A section header the chunker sees — `SECTION A : PRELIMINARIES ITEMS`, two-letter
+# `SECTION BA : GENERAL`, `SECTION K : (Not used)`. Captures the code and its title.
+_SECTION_HEADER_RE = re.compile(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)\s*[:.\-]\s*(.+?)\s*$")
+
+
+def section_of(item_ref: str) -> str:
+    """The SoR section code for an item_ref — its leading letters, upper-cased ('' if none)."""
+    m = _SECTION_CODE_RE.match(item_ref or "")
+    return m.group(1).upper() if m else ""
+
+
+def _section_titles(text: str) -> dict[str, str]:
+    """Map each section code to the title from its header (first occurrence wins)."""
+    titles: dict[str, str] = {}
+    for m in _SECTION_HEADER_RE.finditer(text or ""):
+        code, title = m.group(1).upper(), m.group(2).strip()
+        if code and title and code not in titles:
+            titles[code] = title
+    return titles
+
+
+def annotate_sections(scope: ScopePackages, doc_text: str = "") -> ScopePackages:
+    """Set each item's ``section`` (from its ref) and each package's ``sections`` metadata
+    (code, header title if seen, item_count) — the routable unit made visible. Deterministic;
+    a single-section package (every demo package) simply carries one section."""
+    titles = _section_titles(doc_text)
+    packages: list[TradeWorkPackage] = []
+    for pkg in scope.packages:
+        counts: dict[str, int] = {}
+        order: list[str] = []
+        items = []
+        for it in pkg.sor_items:
+            code = section_of(it.item_ref)
+            items.append(it if it.section == code else it.model_copy(update={"section": code}))
+            if code:
+                if code not in counts:
+                    order.append(code)
+                counts[code] = counts.get(code, 0) + 1
+        sections = [SectionMeta(code=c, title=titles.get(c, ""), item_count=counts[c]) for c in order]
+        packages.append(pkg.model_copy(update={"sor_items": items, "sections": sections}))
+    return scope.model_copy(update={"packages": packages})
 
 
 def _split_on(text: str, pattern: re.Pattern) -> list[str]:
@@ -259,4 +304,6 @@ def ingest_tender(
     if unmapped:
         # Surfaced, not dropped — a human reconciles these against the taxonomy.
         print(f"[ingest] unmapped trades (kept for review): {unmapped}")
-    return normalised
+    # Tag each item with its SoR section and roll up the per-package section metadata (the
+    # routable unit). doc_text supplies the header titles on the live path; demo has none.
+    return annotate_sections(normalised, doc_text)
