@@ -34,7 +34,7 @@ function PrecedentCell({ p, corpusEmpty }: { p: RatePrecedent | undefined; corpu
       {p.rate_warnings.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {p.rate_warnings.map((w, i) => (
-            <Pill key={i} tone="warn">{`over-ran on rate: ${w.reason_code}`}</Pill>
+            <Pill key={i} tone="warn">{`over-ran on rate: ${w.reason_code.replace(/_/g, " ")}`}</Pill>
           ))}
         </div>
       )}
@@ -345,16 +345,21 @@ function ItemDrawer({
                     </Pill>
                     <span className="tabular text-ink-faint">n={p.sample_count}</span>
                   </div>
-                  {/* the precedent band as instrument tiles — retrieved values, never a price */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <StatCallout label="Low" value={money(p.rate_low)} tone="violet" />
-                    <StatCallout label="Median" value={money(p.rate_median)} tone="violet" />
-                    <StatCallout label="High" value={money(p.rate_high)} tone="violet" />
-                  </div>
+                  {/* the precedent band as instrument tiles — retrieved values, never a price.
+                      A single-rate history (low = high) shows one tile, not three identical ones. */}
+                  {p.rate_low === p.rate_high ? (
+                    <StatCallout label="Rate precedent" value={money(p.rate_median)} tone="violet" />
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2">
+                      <StatCallout label="Low" value={money(p.rate_low)} tone="violet" />
+                      <StatCallout label="Median" value={money(p.rate_median)} tone="violet" />
+                      <StatCallout label="High" value={money(p.rate_high)} tone="violet" />
+                    </div>
+                  )}
                   {p.rate_warnings.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {p.rate_warnings.map((w, i) => (
-                        <Pill key={i} tone="warn">{`over-ran on rate: ${w.reason_code} ×${w.count}`}</Pill>
+                        <Pill key={i} tone="warn">{`over-ran on rate: ${w.reason_code.replace(/_/g, " ")}${w.count > 1 ? ` ×${w.count}` : ""}`}</Pill>
                       ))}
                     </div>
                   )}
