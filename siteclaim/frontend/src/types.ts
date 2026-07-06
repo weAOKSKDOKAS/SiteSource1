@@ -23,6 +23,13 @@ export interface SectionPlan {
   attachments: PlanAttachment[];
   missing_specs: MissingSpec[];
 }
+// The human gate's per-section decisions carried back to /dispatch/drafts so the assembled
+// bundle matches exactly what was confirmed: drop `removed` docs, send `whole` (sliced) docs whole.
+export interface AttachmentOverride {
+  package_key: string;
+  removed: string[];
+  whole: string[];
+}
 export interface DispatchDraftsResponse {
   drafted: number;
   webhook_configured: boolean;

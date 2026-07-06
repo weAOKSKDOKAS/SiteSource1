@@ -8,6 +8,7 @@ import { RouteDecisionPanel } from "./RouteDecisionPanel";
 import { Header, StepHeading, Stepper, type StepIndex, type TopView } from "./components";
 import { tradeLabel } from "./format";
 import type {
+  AttachmentOverride,
   AwaitingPackage,
   BidReply,
   Coverage,
@@ -318,7 +319,7 @@ export default function App() {
   // to the n8n Gmail-draft workflow behind N8N_DRAFTS_WEBHOOK. Same request the outbox confirm
   // builds — the edited draft text rides along in draft_overrides — but this writes Gmail drafts,
   // not the outbox. If the webhook is unset the backend no-ops and reports webhook_configured=false.
-  const prepareDrafts = (): Promise<DispatchDraftsResponse> => {
+  const prepareDrafts = (attachment_overrides: AttachmentOverride[] = []): Promise<DispatchDraftsResponse> => {
     if (!shortlist || !sourceScope) return Promise.reject(new Error("nothing to draft"));
     const draft_overrides = Object.entries(drafts)
       .map(([key, value]) => {
@@ -333,6 +334,7 @@ export default function App() {
       project_name: sourceScope.project_name,
       send: false, // ignored by /dispatch/drafts; the field is required by the shared request type
       draft_overrides,
+      attachment_overrides, // the gate's remove/expand decisions, so the bundle matches the preview
     });
   };
 

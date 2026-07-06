@@ -49,6 +49,29 @@ class SectionPlan(BaseModel):
     missing_specs: list[MissingSpec] = Field(default_factory=list)
 
 
+def apply_attachment_overrides(
+    plan: SectionPlan, *, removed: list[str] | None = None, whole: list[str] | None = None,
+) -> SectionPlan:
+    """Apply the human gate's per-document decisions to a section plan and return a NEW plan:
+    drop any document the person removed, and expand any *sliced* document they chose to send
+    whole (mode -> "whole", pages cleared). The generated SoR sheet is never removable — it is
+    the priced-return sheet the enquiry is asking for. ``missing_specs`` are left intact so a
+    referenced-but-unsupplied spec stays visible even after edits. Deterministic; no I/O."""
+    removed_set = set(removed or [])
+    whole_set = set(whole or [])
+    kept: list[PlanAttachment] = []
+    for att in plan.attachments:
+        if att.source_doc in removed_set and att.mode != "generated":
+            continue
+        if att.source_doc in whole_set and att.mode == "sliced":
+            att = att.model_copy(update={
+                "mode": "whole", "pages": [],
+                "reason": (att.reason + " · expanded to whole file at the gate").lstrip(" ·"),
+            })
+        kept.append(att)
+    return plan.model_copy(update={"attachments": kept})
+
+
 def _topic_specs(text: str) -> set[str]:
     specs: set[str] = set()
     for pattern, s in _TOPIC:

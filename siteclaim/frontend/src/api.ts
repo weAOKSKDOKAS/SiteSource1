@@ -1,4 +1,5 @@
 import type {
+  AttachmentOverride,
   BenchmarkProject,
   BenchmarkSummary,
   BidReply,
@@ -89,6 +90,8 @@ export interface DispatchRequest {
   send: boolean;
   // Human-edited drafts per (trade, firm); the outbox stores exactly the edited text.
   draft_overrides?: DraftOverride[];
+  // Per-section remove/expand decisions from the attachment gate; honoured on the drafts path.
+  attachment_overrides?: AttachmentOverride[];
 }
 
 export const api = {

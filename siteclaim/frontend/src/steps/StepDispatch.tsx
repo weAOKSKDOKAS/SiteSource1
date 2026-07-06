@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
-import type { Candidate, DispatchDraftsResponse, DispatchSet, DispatchStatus, ScopePackages, SectionPlan, ShortlistSet, TenderReplies } from "../types";
+import type { AttachmentOverride, Candidate, DispatchDraftsResponse, DispatchSet, DispatchStatus, ScopePackages, SectionPlan, ShortlistSet, TenderReplies } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, LoadingDots, Modal, cx } from "../ui";
 import { tradeLabel } from "../format";
@@ -20,14 +20,21 @@ function formatPages(pages: number[]): string {
   return runs.join(", ");
 }
 
-// The relevant-only attachment plan per dispatched section — the human-gate preview before a
-// draft is prepared. Read from /dispatch/plan; live only (in demo there are no real uploads).
+// One section's remove/expand decisions, keyed by source_doc.
+type SectionOverride = { removed: string[]; whole: string[] };
+
+// The relevant-only attachment plan per dispatched section — the human gate before a draft is
+// prepared. Read from /dispatch/plan; live only (in demo there are no real uploads). Interactive:
+// each document can be removed, and any sliced document can be expanded to the whole file. The
+// decisions are lifted to the modal (controlled) so "Prepare Gmail drafts" assembles exactly this.
 function AttachmentPlanPreview({
-  scope, approvals, projectName,
+  scope, approvals, projectName, overrides, onOverridesChange,
 }: {
   scope: ScopePackages | null | undefined;
   approvals: Record<string, string[]>;
   projectName: string;
+  overrides: Record<string, SectionOverride>;
+  onOverridesChange: (next: Record<string, SectionOverride>) => void;
 }) {
   const [plans, setPlans] = useState<SectionPlan[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,34 +50,67 @@ function AttachmentPlanPreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectName]);
 
+  const ovFor = (key: string): SectionOverride => overrides[key] ?? { removed: [], whole: [] };
+  const toggle = (key: string, field: keyof SectionOverride, doc: string) => {
+    const cur = ovFor(key);
+    const list = cur[field];
+    const next = list.includes(doc) ? list.filter((d) => d !== doc) : [...list, doc];
+    onOverridesChange({ ...overrides, [key]: { ...cur, [field]: next } });
+  };
+
   if (error) return <p className="text-xs text-bad">{error}</p>;
   if (!plans) return <LoadingDots label="Assembling the relevant documents" />;
   if (plans.length === 0) return null;
   return (
     <div className="space-y-3">
       <h4 className="text-xs font-semibold uppercase tracking-eyebrow text-ink-soft">Relevant documents per section (assembled)</h4>
-      {plans.map((plan) => (
-        <div key={plan.package_key} className="rounded-lg border border-line-soft bg-paper-soft/50 p-3">
-          <div className="mb-1.5 text-xs font-semibold text-ink">{tradeLabel(plan.package_key)}</div>
-          <ul className="space-y-1">
-            {plan.attachments.map((a, i) => (
-              <li key={i} className="flex flex-wrap items-baseline gap-1.5 text-xs">
-                <span className="font-medium text-ink">{a.source_doc}</span>
-                <Pill tone={a.mode === "sliced" ? "brand" : a.mode === "generated" ? "ok" : "neutral"}>
-                  {a.mode === "sliced" ? `pp. ${formatPages(a.pages)}` : a.mode === "generated" ? "SoR sheet" : "whole file"}
-                </Pill>
-                {a.flags.includes("scanned_whole") && <Pill tone="warn">scanned</Pill>}
-                <span className="text-ink-faint">{a.reason}</span>
-              </li>
-            ))}
-          </ul>
-          {plan.missing_specs.length > 0 && (
-            <div className="mt-2 rounded border border-warn/40 bg-warn-bg px-2 py-1 text-xs text-warn">
-              Referenced but not supplied: <span className="font-semibold">{plan.missing_specs.map((m) => m.spec).join(", ")}</span> — chase it or dispatch without.
-            </div>
-          )}
-        </div>
-      ))}
+      <p className="text-[11px] text-ink-faint">Remove anything a firm doesn’t need, or expand a slice to the whole file — the Gmail drafts carry exactly this set.</p>
+      {plans.map((plan) => {
+        const ov = ovFor(plan.package_key);
+        return (
+          <div key={plan.package_key} className="rounded-lg border border-line-soft bg-paper-soft/50 p-3">
+            <div className="mb-1.5 text-xs font-semibold text-ink">{tradeLabel(plan.package_key)}</div>
+            <ul className="space-y-1">
+              {plan.attachments.map((a, i) => {
+                const removed = ov.removed.includes(a.source_doc);
+                const expanded = a.mode === "sliced" && ov.whole.includes(a.source_doc);
+                const removable = a.mode !== "generated"; // the SoR sheet is the priced return — never removable
+                return (
+                  <li key={i} className={cx("flex flex-wrap items-baseline gap-1.5 text-xs", removed && "opacity-45")}>
+                    <span className={cx("font-medium text-ink", removed && "line-through")}>{a.source_doc}</span>
+                    <Pill tone={expanded ? "neutral" : a.mode === "sliced" ? "brand" : a.mode === "generated" ? "ok" : "neutral"}>
+                      {a.mode === "sliced" ? (expanded ? "whole file" : `pp. ${formatPages(a.pages)}`) : a.mode === "generated" ? "SoR sheet" : "whole file"}
+                    </Pill>
+                    {a.flags.includes("scanned_whole") && <Pill tone="warn">scanned</Pill>}
+                    <span className="text-ink-faint">{a.reason}</span>
+                    <span className="ml-auto flex items-center gap-2">
+                      {a.mode === "sliced" && !removed && (
+                        <button type="button" className="font-medium text-brand underline" onClick={() => toggle(plan.package_key, "whole", a.source_doc)}>
+                          {expanded ? "use slice" : "expand to whole file"}
+                        </button>
+                      )}
+                      {removable && (
+                        <button
+                          type="button"
+                          className={cx("font-medium underline", removed ? "text-brand" : "text-ink-faint hover:text-bad")}
+                          onClick={() => toggle(plan.package_key, "removed", a.source_doc)}
+                        >
+                          {removed ? "undo" : "remove"}
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            {plan.missing_specs.length > 0 && (
+              <div className="mt-2 rounded border border-warn/40 bg-warn-bg px-2 py-1 text-xs text-warn">
+                Referenced but not supplied: <span className="font-semibold">{plan.missing_specs.map((m) => m.spec).join(", ")}</span> — chase it or dispatch without.
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -180,7 +220,7 @@ export function StepDispatch({
   onToggleApprove: (trade: string, firmId: string) => void;
   onEditDraft: (trade: string, firmId: string, value: Draft) => void;
   onComposeDrafts: () => Promise<DispatchSet>;
-  onPrepareDrafts?: () => Promise<DispatchDraftsResponse>;  // live: hand the bundles to n8n Gmail drafts
+  onPrepareDrafts?: (overrides: AttachmentOverride[]) => Promise<DispatchDraftsResponse>;  // live: hand bundles to n8n Gmail drafts
   onSend: () => void;
   onBack: () => void;
   onNext: () => void;
@@ -339,7 +379,7 @@ function DispatchReviewModal({
   live?: boolean;
   scope?: ScopePackages | null;
   projectName?: string;
-  onPrepareDrafts?: () => Promise<DispatchDraftsResponse>;
+  onPrepareDrafts?: (overrides: AttachmentOverride[]) => Promise<DispatchDraftsResponse>;
 }) {
   const [composed, setComposed] = useState<Record<string, Draft>>({});
   const [composing, setComposing] = useState(false);
@@ -347,16 +387,22 @@ function DispatchReviewModal({
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftResult, setDraftResult] = useState<DispatchDraftsResponse | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
+  // The attachment gate's per-section remove/expand decisions, keyed by package_key.
+  const [attachmentOverrides, setAttachmentOverrides] = useState<Record<string, SectionOverride>>({});
   const approvedCount = Object.values(approvals).reduce((n, ids) => n + ids.length, 0);
 
-  // Hand the approved bundles to the n8n Gmail-draft workflow. Result is surfaced honestly:
-  // when N8N_DRAFTS_WEBHOOK is unset the backend no-ops and webhook_configured is false.
+  // Hand the approved bundles to the n8n Gmail-draft workflow, carrying the gate's decisions so
+  // the assembled set matches the preview exactly. Result is surfaced honestly: when
+  // N8N_DRAFTS_WEBHOOK is unset the backend no-ops and webhook_configured is false.
   const prepareGmailDrafts = () => {
     if (!onPrepareDrafts) return;
+    const overrides: AttachmentOverride[] = Object.entries(attachmentOverrides)
+      .filter(([, o]) => o.removed.length > 0 || o.whole.length > 0)
+      .map(([package_key, o]) => ({ package_key, removed: o.removed, whole: o.whole }));
     setDraftBusy(true);
     setDraftError(null);
     setDraftResult(null);
-    onPrepareDrafts()
+    onPrepareDrafts(overrides)
       .then(setDraftResult)
       .catch((e: unknown) => setDraftError(e instanceof Error ? e.message : String(e)))
       .finally(() => setDraftBusy(false));
@@ -367,7 +413,7 @@ function DispatchReviewModal({
   useEffect(() => {
     setDraftResult(null);
     setDraftError(null);
-  }, [approvals, drafts]);
+  }, [approvals, drafts, attachmentOverrides]);
 
   // (Re)compose whenever the pop-up opens or the selection changes — the composed text is
   // the default; a person's edit (drafts) always wins and survives reopening.
@@ -471,7 +517,13 @@ function DispatchReviewModal({
 
         {live && approvedCount > 0 && (
           <div className="border-t border-line-soft pt-3">
-            <AttachmentPlanPreview scope={scope} approvals={approvals} projectName={projectName} />
+            <AttachmentPlanPreview
+              scope={scope}
+              approvals={approvals}
+              projectName={projectName}
+              overrides={attachmentOverrides}
+              onOverridesChange={setAttachmentOverrides}
+            />
           </div>
         )}
 

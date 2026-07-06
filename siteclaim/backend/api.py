@@ -559,6 +559,17 @@ class DraftOverride(BaseModel):
     body: str = ""
 
 
+class AttachmentOverride(BaseModel):
+    """The human gate's per-document decisions for one section's relevant-only bundle (keyed by
+    package_key). ``removed`` drops documents the person excluded; ``whole`` expands a sliced
+    document to the whole file. Applied only on the Gmail-draft assembly path so the bundle that
+    is base64'd matches exactly what the person confirmed in the preview."""
+
+    package_key: str
+    removed: list[str] = Field(default_factory=list)  # source_doc names to exclude
+    whole: list[str] = Field(default_factory=list)    # sliced source_docs to send whole instead
+
+
 class DispatchRequest(BaseModel):
     shortlist: ShortlistSet
     approvals: dict[str, list[str]] = Field(default_factory=dict)
@@ -569,6 +580,7 @@ class DispatchRequest(BaseModel):
     dry_run: bool = False  # force the mock outbox even when SMTP is configured
     demo_fixture: str | None = DISPATCH_FIXTURE
     draft_overrides: list[DraftOverride] = Field(default_factory=list)
+    attachment_overrides: list[AttachmentOverride] = Field(default_factory=list)
 
 
 def _apply_draft_overrides(dispatch: DispatchSet, overrides: list[DraftOverride]) -> DispatchSet:
@@ -635,6 +647,7 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     import re as _re
 
     from pipeline.stage_03_dispatch.drafts import assemble_firm_attachments, plan_for_firms, post_drafts
+    from pipeline.stage_03_dispatch.relevant_docs import apply_attachment_overrides
     from rules_engine.taxonomy import base_trade
 
     workspace = None if demo_mode() else Workspace()
@@ -646,11 +659,17 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
 
     ws = workspace or Workspace()
     plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name, workspace=ws)
+    # The human gate's per-section remove/expand decisions — the assembled set matches exactly
+    # what the person confirmed in the preview (keyed by package_key == the bundle's trade).
+    overrides_by_key = {o.package_key: o for o in req.attachment_overrides}
     conn = store.get_connection()
     try:
         drafts: list[dict] = []
         for b in dispatch.bundles:
             plan = plans.get(b.trade)
+            if plan is not None and b.trade in overrides_by_key:
+                ov = overrides_by_key[b.trade]
+                plan = apply_attachment_overrides(plan, removed=ov.removed, whole=ov.whole)
             attachments = assemble_firm_attachments(plan, ws, req.project_name, b.trade) if plan else []
             ref_m = _re.search(r"\[SiteSource Ref:\s*([^\]]+)\]", b.email_subject)
             contact = store.contact_for(conn, b.firm_id, base_trade(b.trade))
