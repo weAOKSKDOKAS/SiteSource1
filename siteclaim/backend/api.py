@@ -98,7 +98,9 @@ from schemas.project import DashboardPackage, ProjectDashboard, ProjectSummary  
 from schemas.models import (  # noqa: E402
     BidReply,
     Contact,
+    DispatchBundle,
     DispatchSet,
+    DispatchStatus,
     DocType,
     FirmProfile,
     FirmsPage,
@@ -598,6 +600,71 @@ def post_dispatch(req: DispatchRequest) -> DispatchSet:
     )
     dispatch = _apply_draft_overrides(dispatch, req.draft_overrides)
     return send_bundles(dispatch, dry_run=req.dry_run) if req.send else dispatch
+
+
+# --- Relevant-document assembler + n8n Gmail-draft hand-off -----------------
+class DispatchPlanRequest(BaseModel):
+    scope: ScopePackages | None = None
+    approvals: dict[str, list[str]] = Field(default_factory=dict)
+    project_name: str = ""
+
+
+@app.post("/dispatch/plan")
+def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
+    """The relevant-only attachment plan per dispatched section (the human-gate preview): each
+    document with its mode (sliced / whole / generated), page range, reason, flags, plus any
+    referenced-but-unsupplied spec sections. Reads the run's persisted doc_index; empty in DEMO
+    (no upload) so the plan is just the SoR sheet. Sync handler."""
+    from pipeline.stage_03_dispatch.drafts import plan_for_firms
+
+    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name)
+    return [p.model_dump() for p in plans.values()]
+
+
+class DispatchDraftsResponse(BaseModel):
+    drafted: int
+    webhook_configured: bool
+    bundles: list[DispatchBundle] = Field(default_factory=list)
+
+
+@app.post("/dispatch/drafts", response_model=DispatchDraftsResponse)
+def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
+    """Assemble each approved firm's relevant-only attachment set (sliced/whole PDFs + the SoR
+    sheet) and hand it to the n8n Gmail-draft workflow behind ``N8N_DRAFTS_WEBHOOK`` (empty =
+    no-op). The human gate approves the plan first. Sync handler (blocking assemble + one POST)."""
+    import re as _re
+
+    from pipeline.stage_03_dispatch.drafts import assemble_firm_attachments, plan_for_firms, post_drafts
+    from rules_engine.taxonomy import base_trade
+
+    workspace = None if demo_mode() else Workspace()
+    dispatch = build_dispatch(
+        req.shortlist, req.approvals, demo_fixture=req.demo_fixture, scope=req.scope,
+        project_name=req.project_name, tender=req.tender, tender_id=req.project_name, workspace=workspace,
+    )
+    dispatch = _apply_draft_overrides(dispatch, req.draft_overrides)
+
+    ws = workspace or Workspace()
+    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name, workspace=ws)
+    conn = store.get_connection()
+    try:
+        drafts: list[dict] = []
+        for b in dispatch.bundles:
+            plan = plans.get(b.trade)
+            attachments = assemble_firm_attachments(plan, ws, req.project_name, b.trade) if plan else []
+            ref_m = _re.search(r"\[SiteSource Ref:\s*([^\]]+)\]", b.email_subject)
+            contact = store.contact_for(conn, b.firm_id, base_trade(b.trade))
+            to = (contact.get("email", "") if isinstance(contact, dict) else getattr(contact, "email", "")) or ""
+            drafts.append({
+                "firm_id": b.firm_id, "to": to, "subject": b.email_subject, "body": b.email_body,
+                "ref": ref_m.group(1).strip() if ref_m else "", "attachments": attachments,
+            })
+    finally:
+        conn.close()
+
+    webhook = post_drafts(req.project_name, drafts)
+    bundles = [b.model_copy(update={"status": DispatchStatus.DRAFTED_GMAIL}) for b in dispatch.bundles]
+    return DispatchDraftsResponse(drafted=len(drafts), webhook_configured=webhook, bundles=bundles)
 
 
 # ---------------------------------------------------------------------------

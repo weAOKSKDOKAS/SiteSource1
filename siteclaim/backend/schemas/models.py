@@ -78,6 +78,7 @@ class DispatchStatus(str, Enum):
     SENT_MOCK = "sent_mock"
     SENT = "sent"
     SEND_FAILED = "send_failed"
+    DRAFTED_GMAIL = "drafted_gmail"  # handed to the n8n Gmail-draft workflow (relevant-only attachments)
 
 
 class AttachmentKind(str, Enum):
