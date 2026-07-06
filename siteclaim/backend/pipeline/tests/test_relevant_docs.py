@@ -14,13 +14,13 @@ def _items(descs, section="E"):
 def test_plan_slices_ps_and_attaches_scanned_appendix_whole():
     doc_index = [
         DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
-                      text_layer=True, page_count=40, clause_index={"7.13.1": 11, "7.14": 30}),
+                      text_layer=True, page_count=40, clause_index={"7.13.1": [11], "7.14": [30]}),
         DocIndexEntry(filename="APPENDIX 7.pdf", kind="appendix", spec_section_number="7",
                       text_layer=False, page_count=58),
         DocIndexEntry(filename="MoM.pdf", kind="method_of_measurement", text_layer=True, page_count=10),
         DocIndexEntry(filename="AECOM Clarification.pdf", kind="clarification", text_layer=True, page_count=2),
         DocIndexEntry(filename="PS-S99.pdf", kind="particular_specification", spec_section_number="99",
-                      text_layer=True, page_count=5, clause_index={"99.1": 0}),
+                      text_layer=True, page_count=5, clause_index={"99.1": [0]}),
     ]
     items = _items(["Rotary drilling per PS 7.13.1 and PS 7.14, see Appendix 7.4.1"])
     plan = resolve_section_plan(
@@ -46,7 +46,7 @@ def test_referenced_but_unsupplied_spec_is_flagged_not_dropped():
 
 def test_text_layer_ps_with_no_resolving_clause_falls_back_to_whole():
     doc_index = [DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
-                               text_layer=True, page_count=40, clause_index={"7.99": 5})]
+                               text_layer=True, page_count=40, clause_index={"7.99": [5]})]
     plan = resolve_section_plan(
         package_key="x", trade="ground_investigation", section_title="DRILLING",
         items=_items(["Drilling per PS 7.13.1"]), doc_index=doc_index, sor_sheet_name="s.xlsx")

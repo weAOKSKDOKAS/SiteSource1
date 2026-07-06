@@ -27,6 +27,17 @@ _SECTION_DECL = re.compile(r"SECTION\s+(\d+)\s*[–—:.\-]?\s*([A-Za-z][^\n]{1,
 _APPENDIX_DECL = re.compile(r"\bAppendix\s+(\d+(?:\.\d+)*)", re.I)
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
 
+# A PS/GS clause id: a dotted number with optional letter / bracket / trailing-letter suffixes
+# (7.34, 7.34A, 7.39S, 7.41.(4)S). Kept verbatim so a reference resolves to the exact amendment.
+_CLAUSE_ID = r"\d+(?:\.\d+)*[A-Za-z]?(?:\.\(\d+\))?[A-Za-z]?"
+# PS amendment lead-ins carry the GS clause they amend: "Replace GS Clause 7.28 with the
+# following:", "Add the following Clauses after GS Clause 7.30:". Indexed so a GS reference
+# resolves to the page where its amendment begins.
+_PS_LEADIN = re.compile(r"(?:Replace|Add)\b[^\n]*?GS\s+Clause\s+(\d+(?:\.\d+)*[A-Za-z]?)", re.I)
+# MM preamble clause markers: "PB 71". A running-header noise line ("- PB/2 -") never matches —
+# the marker must start the line and have digits immediately after PB.
+_MM_MARKER = re.compile(r"^\s*PB\s*(\d+)\b", re.I)
+
 
 class DocIndexEntry(BaseModel):
     """The structural index for one uploaded original."""
@@ -38,8 +49,9 @@ class DocIndexEntry(BaseModel):
     spec_section_title: str = ""
     text_layer: bool = False        # >= 1 page with a real text layer
     page_count: int = 0
-    # clause heading -> 0-based page it starts on (text-layer PS/appendix only)
-    clause_index: dict[str, int] = Field(default_factory=dict)
+    # clause id -> the 0-based pages it spans (its marker page to the page before the next
+    # marker; ±1 is applied at slice time). Text-layer PS / appendix / GS / MM only.
+    clause_index: dict[str, list[int]] = Field(default_factory=dict)
 
 
 def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
@@ -73,17 +85,46 @@ def _pages_text(data: bytes) -> Optional[list[str]]:
         return None
 
 
-def _clause_index(pages: list[str], section_number: str) -> dict[str, int]:
-    """Map each clause heading to the 0-based page it first starts on. Scoped to the doc's own
-    section numbering when known (``^7\\.\\d+ …``), else any dotted heading at line start."""
-    prefix = rf"{re.escape(section_number)}\.\d+(?:\.\d+)*" if section_number else r"\d+\.\d+(?:\.\d+)*"
-    heading = re.compile(rf"^\s*({prefix})(?:\b|\s)")
-    index: dict[str, int] = {}
+def _spec_markers(pages: list[str], section_number: str) -> list[tuple[str, int]]:
+    """``(clause_id, page)`` for a PS / appendix / GS doc: clause headings at line start (scoped to
+    the doc's own section numbering when known, e.g. ``7.34A``), plus the GS clauses named in
+    amendment lead-ins. In document order."""
+    # Scope headings to the doc's own section number when known (7.34A under Section 7), so a
+    # stray dotted number elsewhere is not mistaken for a clause; else accept any clause id.
+    scoped = rf"{re.escape(section_number)}\.\d+(?:\.\d+)*[A-Za-z]?(?:\.\(\d+\))?[A-Za-z]?" if section_number else _CLAUSE_ID
+    heading = re.compile(rf"^\s*({scoped})(?=[\s.:)]|$)")
+    markers: list[tuple[str, int]] = []
     for page_no, text in enumerate(pages):
         for line in text.splitlines():
             m = heading.match(line)
-            if m and m.group(1) not in index:
-                index[m.group(1)] = page_no
+            if m:
+                markers.append((m.group(1), page_no))
+            for lm in _PS_LEADIN.finditer(line):
+                markers.append((lm.group(1), page_no))
+    return markers
+
+
+def _mm_markers(pages: list[str]) -> list[tuple[str, int]]:
+    """``("PB N", page)`` for each Method-of-Measurement preamble clause, in document order."""
+    markers: list[tuple[str, int]] = []
+    for page_no, text in enumerate(pages):
+        for line in text.splitlines():
+            m = _MM_MARKER.match(line)
+            if m:
+                markers.append((f"PB {m.group(1)}", page_no))
+    return markers
+
+
+def _spans(markers: list[tuple[str, int]], page_count: int) -> dict[str, list[int]]:
+    """Turn ordered clause markers into ``clause_id -> [pages]``: each clause spans from its
+    marker's page to the page BEFORE the next marker (at least its own page). A repeated id
+    unions its spans. ±1 is applied later, at slice time, to catch a clause across a page break."""
+    index: dict[str, list[int]] = {}
+    for i, (clause_id, page) in enumerate(markers):
+        next_page = markers[i + 1][1] if i + 1 < len(markers) else page_count
+        end = next_page - 1 if next_page > page else page
+        span = set(range(page, max(end, page) + 1))
+        index[clause_id] = sorted(set(index.get(clause_id, [])) | span)
     return index
 
 
@@ -105,9 +146,11 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
             section_number, section_title = app.group(1), f"Appendix {app.group(1)}"
 
     kind = _kind_for(doc_type, page1, filename)
-    clause_index: dict[str, int] = {}
-    if text_layer and kind in ("particular_specification", "appendix", "general_specification"):
-        clause_index = _clause_index(pages, section_number)
+    clause_index: dict[str, list[int]] = {}
+    if text_layer and kind == "method_of_measurement":
+        clause_index = _spans(_mm_markers(pages), len(pages))
+    elif text_layer and kind in ("particular_specification", "appendix", "general_specification"):
+        clause_index = _spans(_spec_markers(pages, section_number), len(pages))
 
     return DocIndexEntry(
         filename=filename, kind=kind, spec_section_number=section_number,

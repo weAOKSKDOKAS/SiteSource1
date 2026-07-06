@@ -81,8 +81,12 @@ def _topic_specs(text: str) -> set[str]:
 
 
 def _slice_pages(entry: DocIndexEntry, clauses: list[str]) -> list[int]:
-    """0-based pages for a set of clause numbers, each expanded ±1 (clamped to the doc)."""
-    hits = {entry.clause_index[c] for c in clauses if c in entry.clause_index}
+    """0-based pages spanned by a set of clause ids, each page expanded ±1 (clamped to the doc)
+    so a clause straddling a page break is kept whole. ``clause_index`` maps a clause to the
+    list of pages it spans."""
+    hits: set[int] = set()
+    for c in clauses:
+        hits.update(entry.clause_index.get(c, []))
     if not hits:
         return []
     pages: set[int] = set()
