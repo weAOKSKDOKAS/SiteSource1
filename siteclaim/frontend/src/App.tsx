@@ -486,6 +486,7 @@ export default function App() {
                 <RouteDecisionPanel
                   proposal={proposal}
                   chosen={chosen}
+                  scope={scope}
                   onChoose={(key, route) => setChosen((cur) => ({ ...cur, [key]: route }))}
                   onAcceptAll={acceptAllRoutes}
                   onConfirm={confirmRoute}

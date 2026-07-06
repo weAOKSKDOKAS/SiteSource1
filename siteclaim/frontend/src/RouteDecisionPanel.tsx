@@ -2,10 +2,24 @@ import { useState } from "react";
 
 import { Pill } from "./components";
 import { tradeLabel } from "./format";
-import type { RoutePackage, RouteProposal } from "./types";
+import type { RoutePackage, RouteProposal, ScopePackages, SorItem } from "./types";
 import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine } from "./ui";
 
 export const ROUTE_LABEL: Record<string, string> = { self_perform: "Self-perform", sublet: "Sublet" };
+
+// The SoR lines behind a routing card — for a section sub-package (package_key trade:SECTION)
+// just that section's items; for a whole package all of them. Drawn from the ingest scope the
+// panel already holds, so the operator can expand a section and see its items (J1, J2, J3 …).
+function itemsFor(p: RoutePackage, scope: ScopePackages | null | undefined): SorItem[] {
+  const pkg = scope?.packages.find((x) => x.trade === p.trade);
+  if (!pkg) return [];
+  return p.section ? pkg.sor_items.filter((it) => (it.section ?? "") === p.section) : pkg.sor_items;
+}
+
+// A section header title is stored upper-case (DRILLING); show it in title case.
+function titleCase(s: string): string {
+  return s.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
 
 export function SignalChips({ signals }: { signals: Record<string, number | boolean | string> }) {
   const chip = (label: string, key: string) =>
@@ -32,6 +46,7 @@ export function RouteDecisionPanel({
   onConfirm,
   busy,
   confirmLabel = "Confirm routing",
+  scope,
 }: {
   proposal: RouteProposal;
   chosen: Record<string, string>;
@@ -40,6 +55,7 @@ export function RouteDecisionPanel({
   onConfirm: () => void;
   busy: boolean;
   confirmLabel?: string;
+  scope?: ScopePackages | null; // the ingest scope — used to expand a section's SoR items
 }) {
   const [detail, setDetail] = useState<RoutePackage | null>(null);
 
@@ -59,6 +75,10 @@ export function RouteDecisionPanel({
       <div className="space-y-2">
         {proposal.packages.map((p, i) => {
           const pick = chosen[p.package_key] ?? p.recommended_route;
+          const items = itemsFor(p, scope);
+          const heading = p.section
+            ? `${tradeLabel(p.trade)} · ${p.section_title ? titleCase(p.section_title) : `Section ${p.section}`}`
+            : tradeLabel(p.trade);
           return (
             // ssStep (declared after ssRise in index.css) wins the cascade so the package
             // rows step in sequentially; the stagger comes from the per-row delay.
@@ -72,14 +92,29 @@ export function RouteDecisionPanel({
                       title="Open the routing record"
                       className="font-semibold text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
                     >
-                      {tradeLabel(p.trade)}
+                      {heading}
                     </button>
+                    {p.section && <span className="tabular text-[11px] text-ink-faint">{p.package_key}</span>}
                     <Pill tone="ok">{`Recommended: ${ROUTE_LABEL[p.recommended_route] ?? p.recommended_route}`}</Pill>
                     {p.source === "fallback" && <Pill tone="neutral">rule-based</Pill>}
                   </div>
                   <p className="mt-1 text-sm text-ink-soft">{p.rationale}</p>
                   {p.scope_summary && <p className="mt-1 text-xs text-ink-faint">{p.scope_summary}</p>}
                   <div className="mt-2"><SignalChips signals={p.signals} /></div>
+                  {items.length > 0 && (
+                    <div className="mt-2">
+                      <Collapse title={p.section ? `Section ${p.section} items` : "SoR items"} count={items.length}>
+                        <ul className="space-y-1">
+                          {items.map((it) => (
+                            <li key={it.item_ref} className="flex gap-2 text-xs leading-relaxed">
+                              <span className="tabular shrink-0 font-semibold text-ink">{it.item_ref}</span>
+                              <span className="text-ink-soft">{it.description}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </Collapse>
+                    </div>
+                  )}
                 </div>
                 <div className="flex overflow-hidden rounded-lg border border-line">
                   {["self_perform", "sublet"].map((r) => (

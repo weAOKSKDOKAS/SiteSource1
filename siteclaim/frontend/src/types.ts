@@ -25,6 +25,13 @@ export interface SorItem {
   description: string;
   unit: string;
   qty: number;
+  section?: string | null; // the SoR section this line belongs to (leading letters of item_ref)
+}
+
+export interface SectionMeta {
+  code: string;
+  title: string;
+  item_count: number;
 }
 
 export interface TradeWorkPackage {
@@ -32,6 +39,7 @@ export interface TradeWorkPackage {
   scope_summary: string;
   sor_items: SorItem[];
   source_refs: string[];
+  sections?: SectionMeta[];
 }
 
 export interface TenderDocument {
@@ -200,6 +208,8 @@ export interface RoutePackage {
   id?: number;
   package_key: string;
   trade: string;
+  section?: string | null; // a section sub-package: its code (trade:SECTION) and header title
+  section_title?: string;
   scope_summary: string;
   recommended_route: string; // self_perform | sublet
   rationale: string;
