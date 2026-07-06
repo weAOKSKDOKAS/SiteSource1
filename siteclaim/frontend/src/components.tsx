@@ -83,7 +83,7 @@ export function Header({
         </div>
         {onNavigate && <nav className="flex flex-wrap items-center gap-1">{NAV.map(tab)}</nav>}
         <p className="w-full text-xs text-ink-faint sm:ml-auto sm:w-auto sm:max-w-sm sm:text-right">
-          Subcontractor sourcing &amp; bid-leveling — the proprietary data, brought to the award decision.
+          From tender to a defensible award — sourcing, bid-leveling, and self-perform pricing on your own data.
         </p>
       </div>
     </header>
