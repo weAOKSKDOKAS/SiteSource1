@@ -562,12 +562,23 @@ def _ingest_live(
     sor_text_parts: list[str] = []
     context_parts: list[str] = []
     scope_images: list[str] = []
-    for doc, text, page_images in zip(tagged.documents, doc_texts, doc_page_images):
+    for doc, text, page_images, (_fn, content_type, data) in zip(tagged.documents, doc_texts, doc_page_images, files_data):
         label = doc.filename or "document"
         if doc.doc_type == DocType.SCHEDULE_OF_RATES:
-            if text.strip():
-                sor_text_parts.append(f"=== {label} ===\n{text}")
-            scope_images += page_images  # scanned SoR pages carry priced rows -> vision
+            sor_text, sor_images = text, page_images
+            # A scanned / mixed SoR is a ruled 5-column table: re-read it TABLE-AWARE so the
+            # Clause Ref / Unit / Rate columns survive (plain OCR linearises and drops columns).
+            # Defensive — any failure (incl. tesseract absent) keeps the plain extraction above.
+            if not text.strip() or page_images:
+                try:
+                    structured, structured_images = extract_document(data, content_type, table_aware=True)
+                except Exception:  # noqa: BLE001 — table-aware OCR must never break ingest
+                    structured, structured_images = "", []
+                if structured.strip():
+                    sor_text, sor_images = structured, structured_images
+            if sor_text.strip():
+                sor_text_parts.append(f"=== {label} ===\n{sor_text}")
+            scope_images += sor_images  # only genuinely non-text SoR pages reach vision
         elif text.strip():
             context_parts.append(f"=== {label} ===\n{text}")
 
