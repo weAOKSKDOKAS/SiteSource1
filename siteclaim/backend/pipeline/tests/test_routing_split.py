@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from api import app
 from db import seed
 from pipeline.routing.split import route_units
+from pipeline.stage_04_level.export_xlsx import sheet_title
 from schemas.models import ScopePackages, SectionMeta, SorItem, TradeWorkPackage
 
 client = TestClient(app)
@@ -78,6 +79,12 @@ def test_analyze_splits_and_confirm_seeds_per_section_estimates(demo_db):
     assert res["estimate_ids"]["ground_investigation:E"] != res["estimate_ids"]["ground_investigation:H"]
     items = client.get(f"/estimate/{res['estimate_ids']['ground_investigation:E']}/items").json()
     assert {i["item_ref"] for i in items} == {"E1", "E2"}  # section E only, not the whole trade
+
+
+def test_workbook_sheet_title_is_excel_safe_for_a_section_sub_package():
+    t = sheet_title("ground_investigation:H")
+    assert ":" not in t and len(t) <= 31 and t.endswith(" H")  # ':' stripped, section kept
+    assert sheet_title("electrical") == "Electrical"  # a bare trade is unchanged
 
 
 def _bid(firm_id, trade, total):

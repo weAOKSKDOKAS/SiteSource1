@@ -1,0 +1,15 @@
+SECTION A : PRELIMINARIES ITEMS
+A1a(a)  Provide bonds and insurances
+A1b     Site establishment and maintenance
+SECTION E : DRILLING
+E10(l)  Rotary drilling in soil
+E11     Rotary drilling in rock
+SECTION I : LANDSCAPE SOFT WORKS
+I1      Topsoil, cultivation and planting
+SECTION R : LANDSCAPE HARD WORKS
+R1      Precast concrete paving
+R2      Feature walls and steps
+SECTION BB : LABORATORY TESTING
+BB7a    Consolidated undrained triaxial test
+BB8     Atterberg limits determination
+SECTION K : (Not used)

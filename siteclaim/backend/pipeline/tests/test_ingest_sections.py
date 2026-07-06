@@ -2,6 +2,8 @@
 rolls up its sections (code, header title, item_count) — the routable unit made visible.
 The demo scenarios stay single-section (they never auto-split)."""
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from api import app
@@ -9,6 +11,7 @@ from pipeline.stage_01_ingest.ingest import annotate_sections, section_of
 from schemas.models import ScopePackages, SorItem, TradeWorkPackage
 
 client = TestClient(app)
+_FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 
 
 def test_section_of_reads_leading_letters_including_two_letter_codes():
@@ -56,6 +59,20 @@ def test_missing_header_leaves_the_title_empty_but_still_counts():
     pkg = annotate_sections(scope, "").packages[0]  # no doc text -> no titles
     assert len(pkg.sections) == 1 and pkg.sections[0].code == "E"
     assert pkg.sections[0].title == "" and pkg.sections[0].item_count == 2
+
+
+def test_real_sr_header_fixture_captures_two_letter_and_bracketed_titles():
+    # a sanitized slice of the real GE/2026/14 Schedule of Rates header structure
+    text = (_FIXTURES / "cases/routing/sr_headers_sample.txt").read_text(encoding="utf-8")
+    scope = ScopePackages(packages=[TradeWorkPackage(trade="ground_investigation", scope_summary="GI",
+        sor_items=[SorItem(item_ref=r) for r in ["A1a(a)", "E10(l)", "I1", "R1", "BB7a"]])])
+    pkg = annotate_sections(scope, text).packages[0]
+    by = {s.code: s for s in pkg.sections}
+    assert set(by) == {"A", "E", "I", "R", "BB"}  # K (Not used, no items) absent
+    assert by["A"].title == "PRELIMINARIES ITEMS"
+    assert by["E"].title == "DRILLING"
+    assert by["BB"].title == "LABORATORY TESTING"  # two-letter section header captured
+    assert [i.section for i in pkg.sor_items] == ["A", "E", "I", "R", "BB"]
 
 
 def test_demo_ingest_packages_are_single_section():

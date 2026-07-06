@@ -22,9 +22,15 @@ OUT_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "out" / "leveling.
 
 
 def sheet_title(trade: str) -> str:
-    """A valid worksheet name for a trade key ("mechanical_plumbing" -> "Mechanical
-    Plumbing"), capped at Excel's 31-character sheet-name limit."""
-    label = (trade or "").replace("_", " ").strip().title() or "Leveling"
+    """A valid worksheet name for a package key ("mechanical_plumbing" -> "Mechanical
+    Plumbing"; a section sub-package "ground_investigation:H" -> "Ground Investigation H"),
+    capped at Excel's 31-char limit with its forbidden characters stripped."""
+    base, _, section = (trade or "").partition(":")
+    label = base.replace("_", " ").strip().title() or "Leveling"
+    if section:
+        label = f"{label} {section}"  # section code appended (upper-case preserved)
+    for ch in ':\\/?*[]':  # Excel forbids these in a sheet name
+        label = label.replace(ch, " ")
     return label[:31]
 
 
