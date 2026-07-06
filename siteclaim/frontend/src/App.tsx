@@ -89,6 +89,7 @@ export default function App() {
       summary?: { items: number; packages: number };
       stage?: string;
       progress?: { done: number; total: number };
+      warnings?: string[];
     } | null
   >(null);
 
@@ -172,7 +173,9 @@ export default function App() {
         // known) shows extraction progress. Elapsed time keeps counting with no ceiling.
         onProgress: (s) =>
           setIngestModal((m) =>
-            m ? { ...m, phase: "processing", stage: s.stage, progress: s.progress ?? undefined } : m,
+            m
+              ? { ...m, phase: "processing", stage: s.stage, progress: s.progress ?? undefined, warnings: s.warnings ?? m.warnings }
+              : m,
           ),
       });
       setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
@@ -182,7 +185,12 @@ export default function App() {
       setLiveRun(true); // live run — Level shows awaiting states, never demo replies
       invalidateAfter(1);
       const items = uploaded.scope.packages.reduce((n, p) => n + p.sor_items.length, 0);
-      setIngestModal({ phase: "done", startedAt, summary: { items, packages: uploaded.scope.packages.length } });
+      setIngestModal((m) => ({
+        phase: "done",
+        startedAt,
+        summary: { items, packages: uploaded.scope.packages.length },
+        warnings: m?.warnings, // sections the extractor couldn't read — surfaced, not hidden
+      }));
       // Analyse routing on the fresh scope (not the stale closure), then auto-advance to Route.
       const p = await api.routeAnalyze(uploaded.scope);
       setProposal(p);
@@ -503,6 +511,7 @@ export default function App() {
           startedAt={ingestModal.startedAt}
           stage={ingestModal.stage}
           progress={ingestModal.progress}
+          warnings={ingestModal.warnings}
           error={ingestModal.error}
           summary={ingestModal.summary}
           onRetry={runLiveIngest}

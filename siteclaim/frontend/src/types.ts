@@ -108,6 +108,7 @@ export interface IngestJobState {
   progress?: { done: number; total: number } | null;
   error?: string | null;
   result?: IngestUpload | null;
+  warnings?: string[]; // per-section batches the extractor couldn't read (non-fatal)
 }
 
 export interface TenderReplyInfo {

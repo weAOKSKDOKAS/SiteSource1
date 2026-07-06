@@ -49,6 +49,7 @@ export function IngestProgress({
   startedAt,
   stage,
   progress,
+  warnings,
   error,
   summary,
   onRetry,
@@ -58,6 +59,7 @@ export function IngestProgress({
   startedAt: number;
   stage?: string; // the background job's stage — uploading | classifying | extracting | splitting
   progress?: { done: number; total: number };
+  warnings?: string[]; // per-section batches the extractor couldn't read (non-fatal)
   error?: string;
   summary?: { items: number; packages: number };
   onRetry: () => void;
@@ -118,11 +120,21 @@ export function IngestProgress({
             </ul>
 
             {phase === "done" ? (
-              <p className="mt-5 rounded-lg border border-ok/30 bg-ok-bg px-4 py-3 text-sm text-ink">
-                <span className="font-semibold text-ok">Done.</span>{" "}
-                {summary ? `${summary.items} items across ${summary.packages} package${summary.packages === 1 ? "" : "s"}.` : "Tender split into packages."}{" "}
-                Opening Route…
-              </p>
+              <>
+                <p className="mt-5 rounded-lg border border-ok/30 bg-ok-bg px-4 py-3 text-sm text-ink">
+                  <span className="font-semibold text-ok">Done.</span>{" "}
+                  {summary ? `${summary.items} items across ${summary.packages} package${summary.packages === 1 ? "" : "s"}.` : "Tender split into packages."}{" "}
+                  Opening Route…
+                </p>
+                {warnings && warnings.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-warn/40 bg-warn-bg px-4 py-3 text-xs text-warn">
+                    <span className="font-semibold">
+                      {warnings.length} batch{warnings.length === 1 ? "" : "es"} couldn’t be read
+                    </span>{" "}
+                    and {warnings.length === 1 ? "was" : "were"} skipped — everything else was extracted. Re-run to retry, or review those rows by hand.
+                  </div>
+                )}
+              </>
             ) : (
               <p className="mt-5 text-xs leading-relaxed text-ink-faint">
                 {phase === "uploading"

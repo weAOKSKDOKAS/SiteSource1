@@ -367,7 +367,7 @@ def _stub_live_ingest(monkeypatch, extracted_name: str):
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: ["page-png"])
     monkeypatch.setattr(
         "api.ingest_tender",
-        lambda tender, images=None, doc_text="", context_text="", progress_cb=None: ScopePackages(project_name=extracted_name, packages=[]),
+        lambda tender, images=None, doc_text="", context_text="", progress_cb=None, on_error=None: ScopePackages(project_name=extracted_name, packages=[]),
     )
     monkeypatch.setattr("api.classify_documents", lambda tender, imgs, per_doc_text=None: tender)
 
@@ -441,7 +441,7 @@ def test_ingest_upload_extracts_items_only_from_schedule_of_rates_text(monkeypat
 
     captured = {}
 
-    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None):
+    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None, on_error=None):
         captured["doc_text"] = doc_text
         captured["context_text"] = context_text
         return ScopePackages(project_name="GE/2026/14", packages=[TradeWorkPackage(
@@ -478,7 +478,7 @@ def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
 
     seen = {}
 
-    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None):
+    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None, on_error=None):
         seen["doc_text"] = doc_text
         # The real extractor produces no items from empty SoR text; model the split it returns.
         return ScopePackages(project_name="GE/2026/14", packages=[

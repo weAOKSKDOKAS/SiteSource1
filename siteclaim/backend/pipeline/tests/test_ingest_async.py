@@ -36,7 +36,7 @@ def test_kickoff_returns_a_job_id_without_awaiting_extraction(monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "false")
     gate = threading.Event()
 
-    def blocking(files_data, project_name, *, progress_cb=None):
+    def blocking(files_data, project_name, *, progress_cb=None, on_error=None):
         gate.wait(timeout=5)  # hold the "extraction" open so the kick-off can't be awaiting it
         return IngestUploadResponse(
             scope=ScopePackages(project_name="X", packages=[]),
@@ -57,7 +57,7 @@ def test_kickoff_returns_a_job_id_without_awaiting_extraction(monkeypatch):
 def test_status_transitions_to_done_and_returns_the_scope(monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "false")
 
-    def fake(files_data, project_name, *, progress_cb=None):
+    def fake(files_data, project_name, *, progress_cb=None, on_error=None):
         return IngestUploadResponse(
             scope=ScopePackages(project_name="GE/2026/14", packages=[
                 TradeWorkPackage(trade="ground_investigation", scope_summary="GI", sor_items=[])]),
@@ -75,7 +75,7 @@ def test_status_transitions_to_done_and_returns_the_scope(monkeypatch):
 def test_extraction_error_surfaces_as_job_error_not_a_crash(monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "false")
 
-    def boom(files_data, project_name, *, progress_cb=None):
+    def boom(files_data, project_name, *, progress_cb=None, on_error=None):
         raise RuntimeError("chunk 3 failed: provider rate limit")
     monkeypatch.setattr("api._ingest_live", boom)
 
@@ -83,6 +83,28 @@ def test_extraction_error_surfaces_as_job_error_not_a_crash(monkeypatch):
     final = _wait_status(start["job_id"])
     assert final["status"] == "error"                        # not a 500, not a hung job
     assert "rate limit" in final["error"] and final["result"] is None
+
+
+def test_a_per_section_extraction_error_attaches_to_the_job_as_a_warning(monkeypatch):
+    # A section the extractor can't read (truncated even at the floor) surfaces as a non-fatal
+    # warning on the job — the run still completes with the sections that did extract.
+    monkeypatch.setenv("DEMO_MODE", "false")
+
+    def fake_live(files_data, project_name, *, progress_cb=None, on_error=None):
+        if on_error:
+            on_error("section H (PILING): the extractor's JSON was truncated and could not be split further, so this batch was skipped")
+        return IngestUploadResponse(
+            scope=ScopePackages(project_name="GE/2026/14", packages=[
+                TradeWorkPackage(trade="ground_investigation", scope_summary="GI", sor_items=[])]),
+            tender=TenderPackage(project_name="GE/2026/14"), tender_slug="ge-2026-14",
+        )
+    monkeypatch.setattr("api._ingest_live", fake_live)
+
+    start = client.post("/ingest-upload", files=_PDF).json()
+    final = _wait_status(start["job_id"])
+    assert final["status"] == "done"                          # a per-section miss is not a total failure
+    assert final["result"]["scope"]["project_name"] == "GE/2026/14"
+    assert any("section H" in w for w in final["warnings"])   # the section is named on the job
 
 
 def test_demo_path_returns_packages_without_creating_a_job():

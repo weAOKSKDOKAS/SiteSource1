@@ -15,7 +15,7 @@ import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -452,6 +452,7 @@ class _IngestJob:
     total: int = 0              # total chunks (0 until known)
     result: Optional[IngestUploadResponse] = None
     error: str = ""
+    warnings: list[str] = field(default_factory=list)  # non-fatal per-section extraction notes
 
 
 class _IngestJobStore:
@@ -479,6 +480,12 @@ class _IngestJobStore:
             for key, value in changes.items():
                 setattr(job, key, value)
 
+    def add_warning(self, job_id: str, message: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.warnings.append(message)
+
 
 _INGEST_JOBS = _IngestJobStore()
 # A tiny dedicated pool so the extraction (sync `def`) runs off the event loop and off
@@ -503,11 +510,13 @@ class IngestJobState(BaseModel):
     progress: Optional[IngestChunkProgress] = None
     error: Optional[str] = None
     result: Optional[IngestUploadResponse] = None
+    warnings: list[str] = Field(default_factory=list)  # per-section batches that couldn't be read
 
 
 def _ingest_live(
     files_data: list[tuple[str, Optional[str], bytes]], project_name: str,
     *, progress_cb: Optional[Callable[[str, int, int], None]] = None,
+    on_error: Optional[Callable[[str], None]] = None,
 ) -> IngestUploadResponse:
     """The live ingest pipeline over already-read file bytes (the long part). Extracts each
     document's text/scanned pages, classifies (kind + trade routing), runs the chunked
@@ -569,7 +578,7 @@ def _ingest_live(
     scope = ingest_tender(
         tender, images=scope_images,
         doc_text="\n\n".join(sor_text_parts), context_text="\n\n".join(context_parts),
-        progress_cb=_on_chunk,
+        progress_cb=_on_chunk, on_error=on_error,
     )
 
     # Adopt the extracted contract name when the form was left at its default (the split
@@ -606,8 +615,13 @@ def _run_ingest_job(job_id: str, files_data: list[tuple[str, Optional[str], byte
     def cb(stage: str, done: int, total: int) -> None:
         _INGEST_JOBS.update(job_id, stage=stage, done=done, total=total)
 
+    def on_err(message: str) -> None:
+        # A per-section batch the extractor couldn't read even at the floor — recorded as a
+        # non-fatal warning so the run still completes with the sections that did extract.
+        _INGEST_JOBS.add_warning(job_id, message)
+
     try:
-        result = _ingest_live(files_data, project_name, progress_cb=cb)
+        result = _ingest_live(files_data, project_name, progress_cb=cb, on_error=on_err)
         _INGEST_JOBS.update(job_id, status="done", stage="splitting", result=result)
     except HTTPException as exc:
         _INGEST_JOBS.update(job_id, status="error", error=str(exc.detail))
@@ -658,6 +672,7 @@ def get_ingest_status(job_id: str) -> IngestJobState:
     return IngestJobState(
         job_id=job_id, status=job.status, stage=job.stage, progress=progress,
         error=job.error or None, result=job.result if job.status == "done" else None,
+        warnings=list(job.warnings),
     )
 
 
