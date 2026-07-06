@@ -5,11 +5,31 @@ The routes exist and behave, but DEMO_MODE keeps every one of them off the netwo
 outbox, and ``/contacts`` reads the seeded address book.
 """
 
+import time
+
 from fastapi.testclient import TestClient
 
 from api import app
 
 client = TestClient(app)
+
+
+def _ingest_and_wait(*, files, data=None, timeout_s: float = 10.0) -> dict:
+    """POST /ingest-upload, then for a live job poll /ingest-status until terminal. Returns the
+    terminal IngestJobState dict. DEMO returns ``done`` inline (no job), so no polling happens."""
+    start = client.post("/ingest-upload", files=files, data=data or {})
+    assert start.status_code == 200, start.text
+    body = start.json()
+    if body["status"] in ("done", "error"):
+        return body
+    job_id = body["job_id"]
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        state = client.get(f"/ingest-status/{job_id}").json()
+        if state["status"] in ("done", "error"):
+            return state
+        time.sleep(0.02)
+    raise AssertionError(f"ingest job {job_id} did not finish within {timeout_s}s")
 
 
 def test_live_routes_are_registered():
@@ -47,14 +67,14 @@ def test_level_upload_in_demo_returns_the_baked_levelling():
 
 def test_ingest_upload_in_demo_returns_scope_and_untagged_tender():
     files = {"files": ("tender.pdf", b"%PDF-1.4 fake", "application/pdf")}
-    resp = client.post("/ingest-upload", files=files, data={"project_name": "Live Tender A"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["scope"]["packages"]     # the scope split
-    assert body["tender"]["documents"]   # the tagged tender (for /dispatch routing)
+    body = _ingest_and_wait(files=files, data={"project_name": "Live Tender A"})
+    assert body["status"] == "done" and body["job_id"] is None  # DEMO is inline, no job created
+    result = body["result"]
+    assert result["scope"]["packages"]     # the scope split
+    assert result["tender"]["documents"]   # the tagged tender (for /dispatch routing)
     # DEMO_MODE leaves the tender untagged — classification runs only on the live path,
     # so the demo scenarios and the hero catch are untouched.
-    assert all(doc["trades"] == [] for doc in body["tender"]["documents"])
+    assert all(doc["trades"] == [] for doc in result["tender"]["documents"])
 
 
 def test_dispatch_send_in_demo_is_mock_and_carries_attachments():
@@ -203,8 +223,8 @@ def test_tender_replies_routes_are_registered():
 
 def test_ingest_upload_returns_the_tender_slug():
     # The client needs the server-derived slug to poll /tender/{slug}/replies.
-    resp = client.post("/ingest-upload", files={"files": ("t.pdf", b"%PDF-1.4 fake", "application/pdf")})
-    assert resp.json()["tender_slug"] == "uploaded-tender"  # slug of the DEMO placeholder name
+    body = _ingest_and_wait(files={"files": ("t.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert body["result"]["tender_slug"] == "uploaded-tender"  # slug of the DEMO placeholder name
 
 
 def test_shortlist_k_caps_the_ranked_list_through_the_api():
@@ -347,7 +367,7 @@ def _stub_live_ingest(monkeypatch, extracted_name: str):
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: ["page-png"])
     monkeypatch.setattr(
         "api.ingest_tender",
-        lambda tender, images=None, doc_text="", context_text="": ScopePackages(project_name=extracted_name, packages=[]),
+        lambda tender, images=None, doc_text="", context_text="", progress_cb=None: ScopePackages(project_name=extracted_name, packages=[]),
     )
     monkeypatch.setattr("api.classify_documents", lambda tender, imgs, per_doc_text=None: tender)
 
@@ -358,14 +378,13 @@ def test_ingest_upload_adopts_the_extracted_contract_name(monkeypatch, tmp_path)
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
     _stub_live_ingest(monkeypatch, _GE_NAME)
 
-    resp = client.post(  # form project_name left at its default
-        "/ingest-upload", files={"files": ("sr01.pdf", b"%PDF-1.4", "application/pdf")}
-    )
+    # form project_name left at its default -> the split's extracted name is adopted
+    body = _ingest_and_wait(files={"files": ("sr01.pdf", b"%PDF-1.4", "application/pdf")})
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["tender"]["project_name"] == _GE_NAME  # adopted into the returned tender
-    assert body["scope"]["project_name"] == _GE_NAME
+    assert body["status"] == "done", body
+    result = body["result"]
+    assert result["tender"]["project_name"] == _GE_NAME  # adopted into the returned tender
+    assert result["scope"]["project_name"] == _GE_NAME
     ws = Workspace()
     assert (ws.docs_dir(_GE_NAME) / "sr01.pdf").is_file()  # originals under the final slug
     assert not ws.tender_dir("Uploaded tender").exists()   # nothing under the placeholder
@@ -377,23 +396,21 @@ def test_ingest_upload_keeps_an_explicit_project_name(monkeypatch, tmp_path):
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
     _stub_live_ingest(monkeypatch, _GE_NAME)
 
-    resp = client.post(
-        "/ingest-upload",
+    body = _ingest_and_wait(
         files={"files": ("sr01.pdf", b"%PDF-1.4", "application/pdf")},
         data={"project_name": "My Tender 7"},
     )
 
-    body = resp.json()
-    assert body["tender"]["project_name"] == "My Tender 7"  # explicit operator value wins
-    assert body["scope"]["project_name"] == "My Tender 7"   # aligned — one name end-to-end
+    result = body["result"]
+    assert result["tender"]["project_name"] == "My Tender 7"  # explicit operator value wins
+    assert result["scope"]["project_name"] == "My Tender 7"   # aligned — one name end-to-end
     assert (Workspace().docs_dir("My Tender 7") / "sr01.pdf").is_file()
 
 
 def test_ingest_upload_demo_keeps_the_placeholder_name():
     # DEMO path: baked fixture scope, no adoption, no workspace writes — unchanged.
-    resp = client.post("/ingest-upload", files={"files": ("tender.pdf", b"%PDF-1.4 fake", "application/pdf")})
-    assert resp.status_code == 200
-    assert resp.json()["tender"]["project_name"] == "Uploaded tender"
+    body = _ingest_and_wait(files={"files": ("tender.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert body["result"]["tender"]["project_name"] == "Uploaded tender"
 
 
 # -- /ingest-upload gates item extraction to the Schedule(s) of Rates ------------------
@@ -424,7 +441,7 @@ def test_ingest_upload_extracts_items_only_from_schedule_of_rates_text(monkeypat
 
     captured = {}
 
-    def fake_ingest(tender, images=None, doc_text="", context_text=""):
+    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None):
         captured["doc_text"] = doc_text
         captured["context_text"] = context_text
         return ScopePackages(project_name="GE/2026/14", packages=[TradeWorkPackage(
@@ -433,16 +450,16 @@ def test_ingest_upload_extracts_items_only_from_schedule_of_rates_text(monkeypat
         )])
     monkeypatch.setattr("api.ingest_tender", fake_ingest)
 
-    resp = client.post("/ingest-upload", files=[
+    body = _ingest_and_wait(files=[
         ("files", ("sr01.pdf", b"sr01.pdf", "application/pdf")),
         ("files", ("mm01.pdf", b"mm01.pdf", "application/pdf")),
     ])
 
-    assert resp.status_code == 200
+    assert body["status"] == "done", body
     # Only the SoR text reaches the priced-item extractor; the MoM is context, not items.
     assert "rotary drilling" in captured["doc_text"] and "Method: measure" not in captured["doc_text"]
     assert "Method: measure" in captured["context_text"]
-    assert [i["item_ref"] for i in resp.json()["scope"]["packages"][0]["sor_items"]] == ["A1"]
+    assert [i["item_ref"] for i in body["result"]["scope"]["packages"][0]["sor_items"]] == ["A1"]
 
 
 def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
@@ -461,7 +478,7 @@ def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
 
     seen = {}
 
-    def fake_ingest(tender, images=None, doc_text="", context_text=""):
+    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None):
         seen["doc_text"] = doc_text
         # The real extractor produces no items from empty SoR text; model the split it returns.
         return ScopePackages(project_name="GE/2026/14", packages=[
@@ -469,8 +486,8 @@ def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
         ])
     monkeypatch.setattr("api.ingest_tender", fake_ingest)
 
-    resp = client.post("/ingest-upload", files={"files": ("mm01.pdf", b"x", "application/pdf")})
+    body = _ingest_and_wait(files={"files": ("mm01.pdf", b"x", "application/pdf")})
 
-    assert resp.status_code == 200
+    assert body["status"] == "done", body
     assert seen["doc_text"] == ""  # no schedule_of_rates text fed to the extractor
-    assert resp.json()["scope"]["packages"][0]["sor_items"] == []
+    assert body["result"]["scope"]["packages"][0]["sor_items"] == []

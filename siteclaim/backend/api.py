@@ -12,8 +12,12 @@ returned Schedule of Rates; ``/contacts`` exposes the address book.
 """
 
 import os
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
@@ -434,49 +438,101 @@ def post_ingest(req: IngestRequest) -> ScopePackages:
 DEFAULT_UPLOAD_PROJECT_NAME = "Uploaded tender"  # the /ingest-upload form default
 
 
-@app.post("/ingest-upload", response_model=IngestUploadResponse)
-def post_ingest_upload(
-    files: list[UploadFile] = File(...),
-    project_name: str = Form(DEFAULT_UPLOAD_PROJECT_NAME),
+# --- Async ingest: background job store + polling ----------------------------
+# A live tender ingest runs for minutes (chunked per-section LLM calls) — well past a
+# client/proxy timeout, which killed the one-long-request `/ingest-upload` at ~2m45s. So the
+# route now returns immediately with a job id and the heavy work runs on a worker thread; the
+# client polls `/ingest-status`. The store is in-process and ephemeral (a restart drops all
+# jobs — acceptable for a single-operator tool). DEMO stays instant and creates NO job.
+@dataclass
+class _IngestJob:
+    status: str = "queued"      # queued | running | done | error
+    stage: str = "uploading"    # uploading | classifying | extracting | splitting
+    done: int = 0               # chunks extracted so far (0 until extraction starts)
+    total: int = 0              # total chunks (0 until known)
+    result: Optional[IngestUploadResponse] = None
+    error: str = ""
+
+
+class _IngestJobStore:
+    """Thread-safe per-process registry for background ingest jobs."""
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, _IngestJob] = {}
+        self._lock = threading.Lock()
+
+    def create(self) -> str:
+        job_id = uuid.uuid4().hex
+        with self._lock:
+            self._jobs[job_id] = _IngestJob()
+        return job_id
+
+    def get(self, job_id: str) -> Optional[_IngestJob]:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def update(self, job_id: str, **changes) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            for key, value in changes.items():
+                setattr(job, key, value)
+
+
+_INGEST_JOBS = _IngestJobStore()
+# A tiny dedicated pool so the extraction (sync `def`) runs off the event loop and off
+# Starlette's request threadpool — /health and /ingest-status keep answering during a long run.
+_INGEST_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ingest")
+
+
+class IngestChunkProgress(BaseModel):
+    done: int
+    total: int
+
+
+class IngestJobState(BaseModel):
+    """The kick-off + status envelope. Live: the kick-off returns ``{job_id, status:queued}``
+    and the client polls this shape until ``done``. DEMO: the kick-off returns
+    ``{status:done, result}`` inline with no job (offline, instant). ``result`` carries the
+    scope split + trade-tagged tender only when ``status == "done"``."""
+
+    job_id: Optional[str] = None
+    status: str                    # queued | running | done | error
+    stage: str = ""                # uploading | classifying | extracting | splitting
+    progress: Optional[IngestChunkProgress] = None
+    error: Optional[str] = None
+    result: Optional[IngestUploadResponse] = None
+
+
+def _ingest_live(
+    files_data: list[tuple[str, Optional[str], bytes]], project_name: str,
+    *, progress_cb: Optional[Callable[[str, int, int], None]] = None,
 ) -> IngestUploadResponse:
-    """Ingest live tender documents (PDF/image) and return the scope split plus the
-    trade-tagged tender. In DEMO_MODE the upload is accepted but the baked scope fixture
-    is returned and the tender is left untagged (no model, no network). Live, each
-    original is persisted to the tender workspace so dispatch can attach the real files;
-    the pages are rasterised for the vision model; and each document is classified by
-    trade (Layer 2) so its ``trades`` route the right whole originals at dispatch.
+    """The live ingest pipeline over already-read file bytes (the long part). Extracts each
+    document's text/scanned pages, classifies (kind + trade routing), runs the chunked
+    priced-item extraction gated to the Schedule(s) of Rates, then late-saves the originals and
+    the structural doc index under ONE final name and returns the scope split + tagged tender.
 
-    The tender's final name is decided once, after the split: an explicit form
-    ``project_name`` always wins, but when the operator left the default the real
-    contract name the split extracts (``scope.project_name``) is adopted — and the
-    originals are saved only then, so the workspace slug, the ref registry (keyed off
-    this name at dispatch), and the returned scope/tender all agree on one name.
-
-    Sync handler: FastAPI runs it in a threadpool, so the blocking pymupdf render and the
-    sequential LLM calls below never stall the event loop (``/health`` keeps answering
-    during a long ingest)."""
+    ``progress_cb(stage, done, total)`` reports the stage and per-chunk progress for the live
+    read-out; it never changes the result. Provider routing (text→DeepSeek, images→Claude) and
+    the per-section split are unchanged — this is the same body that ran inline before, moved
+    onto a worker so it can take as long as it needs."""
     tender = TenderPackage(
         project_name=project_name,
-        documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=f.filename or "upload") for f in files],
+        documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=fn or "upload") for fn, _ct, _data in files_data],
     )
-    if demo_mode():
-        return IngestUploadResponse(
-            scope=ingest_tender(tender, demo_fixture=SCOPE_FIXTURE), tender=tender,
-            tender_slug=tender_slug(project_name),
-        )
-
     workspace = Workspace()
     originals: list[tuple[str, bytes]] = []  # saved late — under the final name (below)
     per_doc_images: list[list[str]] = []    # first pages for classification — scanned docs only
     doc_texts: list[str] = []               # extracted text layer, per document (index-aligned)
     doc_page_images: list[list[str]] = []   # scanned-page renders, per document
-    for upload in files:
-        data = upload.file.read()
-        originals.append((upload.filename or "upload", data))
+    for filename, content_type, data in files_data:
+        originals.append((filename or "upload", data))
         try:
             # Text-first: extract each page's text layer, rendering a page to an image only
             # when it is scanned.
-            text, page_images = extract_document(data, upload.content_type)
+            text, page_images = extract_document(data, content_type)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         doc_texts.append(text)
@@ -491,6 +547,8 @@ def post_ingest_upload(
     # NOT priceable, and extracting over every document's text yielded phantom sor_items
     # live. Only schedule_of_rates text/images feed the priced-item split; every other
     # document informs the trade split as bounded context but never produces a line item.
+    if progress_cb:
+        progress_cb("classifying", 0, 0)
     tagged = classify_documents(tender, per_doc_images, per_doc_text=doc_texts)
     sor_text_parts: list[str] = []
     context_parts: list[str] = []
@@ -503,9 +561,15 @@ def post_ingest_upload(
             scope_images += page_images  # scanned SoR pages carry priced rows -> vision
         elif text.strip():
             context_parts.append(f"=== {label} ===\n{text}")
+
+    def _on_chunk(done: int, total: int) -> None:
+        if progress_cb:
+            progress_cb("extracting", done, total)
+
     scope = ingest_tender(
         tender, images=scope_images,
         doc_text="\n\n".join(sor_text_parts), context_text="\n\n".join(context_parts),
+        progress_cb=_on_chunk,
     )
 
     # Adopt the extracted contract name when the form was left at its default (the split
@@ -513,6 +577,8 @@ def post_ingest_upload(
     # explicit operator value is kept. Either way scope, tender, and the saved originals
     # carry the SAME final name, so dispatch attaches from — and the ref registry keys
     # off — the same workspace slug.
+    if progress_cb:
+        progress_cb("splitting", 0, 0)
     extracted = scope.project_name.strip()
     final_name = project_name
     if project_name == DEFAULT_UPLOAD_PROJECT_NAME and extracted and extracted != DEFAULT_UPLOAD_PROJECT_NAME:
@@ -529,6 +595,70 @@ def post_ingest_upload(
     scope = scope.model_copy(update={"project_name": final_name})
     tagged = tagged.model_copy(update={"project_name": final_name})
     return IngestUploadResponse(scope=scope, tender=tagged, tender_slug=tender_slug(final_name))
+
+
+def _run_ingest_job(job_id: str, files_data: list[tuple[str, Optional[str], bytes]], project_name: str) -> None:
+    """Background worker: run the live ingest and record its progress/result/error on the job.
+    An extraction failure (a bad chunk / provider error) surfaces as ``status:error`` with the
+    message — never an unhandled crash on the worker thread."""
+    _INGEST_JOBS.update(job_id, status="running", stage="classifying")
+
+    def cb(stage: str, done: int, total: int) -> None:
+        _INGEST_JOBS.update(job_id, stage=stage, done=done, total=total)
+
+    try:
+        result = _ingest_live(files_data, project_name, progress_cb=cb)
+        _INGEST_JOBS.update(job_id, status="done", stage="splitting", result=result)
+    except HTTPException as exc:
+        _INGEST_JOBS.update(job_id, status="error", error=str(exc.detail))
+    except Exception as exc:  # noqa: BLE001 — any extraction failure becomes a job error, not a crash
+        _INGEST_JOBS.update(job_id, status="error", error=str(exc))
+
+
+@app.post("/ingest-upload", response_model=IngestJobState)
+def post_ingest_upload(
+    files: list[UploadFile] = File(...),
+    project_name: str = Form(DEFAULT_UPLOAD_PROJECT_NAME),
+) -> IngestJobState:
+    """Kick off a live tender ingest as a BACKGROUND job and return immediately — the extraction
+    on a big tender runs for minutes (chunked per-section LLM calls), far past a client/proxy
+    timeout, so it must not ride one long request. The uploaded bytes are read here (the
+    UploadFile is bound to this request), a job is created, and the heavy classify + chunked
+    extraction runs on a worker thread that updates the job's stage/progress; the client polls
+    ``GET /ingest-status/{job_id}``.
+
+    DEMO_MODE stays instant and creates NO job: the baked scope fixture is returned inline as a
+    ``done`` state, the tender left untagged (no model, no network) — the demo scenarios and the
+    hero catch are untouched."""
+    files_data = [(f.filename or "upload", f.content_type, f.file.read()) for f in files]
+    if demo_mode():
+        tender = TenderPackage(
+            project_name=project_name,
+            documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=fn) for fn, _ct, _data in files_data],
+        )
+        result = IngestUploadResponse(
+            scope=ingest_tender(tender, demo_fixture=SCOPE_FIXTURE), tender=tender,
+            tender_slug=tender_slug(project_name),
+        )
+        return IngestJobState(job_id=None, status="done", stage="splitting", result=result)
+
+    job_id = _INGEST_JOBS.create()
+    _INGEST_POOL.submit(_run_ingest_job, job_id, files_data, project_name)
+    return IngestJobState(job_id=job_id, status="queued", stage="uploading")
+
+
+@app.get("/ingest-status/{job_id}", response_model=IngestJobState)
+def get_ingest_status(job_id: str) -> IngestJobState:
+    """Poll a background ingest job. Returns the ScopePackages result only when ``status==done``;
+    an unknown or expired job id is a 404. Sync handler."""
+    job = _INGEST_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired ingest job")
+    progress = IngestChunkProgress(done=job.done, total=job.total) if job.total else None
+    return IngestJobState(
+        job_id=job_id, status=job.status, stage=job.stage, progress=progress,
+        error=job.error or None, result=job.result if job.status == "done" else None,
+    )
 
 
 # ---------------------------------------------------------------------------

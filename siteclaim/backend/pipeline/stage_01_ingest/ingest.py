@@ -18,7 +18,8 @@ never touches the network, exactly as the SiteClaim extract stage did.
 from __future__ import annotations
 
 import re
-from typing import Optional
+import threading
+from typing import Callable, Optional
 
 from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient
@@ -236,6 +237,7 @@ _CONTEXT_MAX_CHARS = 6000  # bounded background from non-SoR documents for the t
 def _extract(
     client: LLMClient, tender: TenderPackage, doc_text: str, images: Optional[list[str]],
     demo_fixture: Optional[str], context_text: str = "",
+    progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> ScopePackages:
     """Run the item-extraction prompt over the document and merge into one ScopePackages.
 
@@ -243,6 +245,8 @@ def _extract(
     vision call; a small or empty document (incl. the DEMO fixture) is a single call.
     ``context_text`` (non-SoR documents — specs, clarifications, MoM) is passed once, as
     clearly-labelled background for the trade split, and is never a source of priced items.
+    ``progress_cb(done, total)`` — when given — reports chunk completions for a live progress
+    read-out; it is a side effect only and never changes the extraction or the merge.
     """
     system = _system_prompt()
     base_user = _user_prompt(tender)
@@ -265,15 +269,27 @@ def _extract(
         user0, imgs0 = calls[0]
         calls[0] = (user0 + block, imgs0)
 
-    # Chunk calls are independent — run them bounded-concurrent (a 58-page SoR was ~7 min
-    # sequential). run_calls preserves input order, so the chunk-order dedupe is unchanged.
-    results = run_calls(
-        lambda call: client.complete_json(
+    total = len(calls)
+    done_count = 0
+    counter_lock = threading.Lock()
+    if progress_cb:
+        progress_cb(0, total)
+
+    def _run_one(call: tuple[str, Optional[list[str]]]) -> ScopePackages:
+        result = client.complete_json(
             system=system, user=call[0], target_model=ScopePackages,
             demo_fixture=demo_fixture, images=call[1], purpose="ingest-chunk",
-        ),
-        calls,
-    )
+        )
+        if progress_cb:
+            nonlocal done_count
+            with counter_lock:
+                done_count += 1
+                progress_cb(done_count, total)
+        return result
+
+    # Chunk calls are independent — run them bounded-concurrent (a 58-page SoR was ~7 min
+    # sequential). run_calls preserves input order, so the chunk-order dedupe is unchanged.
+    results = run_calls(_run_one, calls)
     return _merge_scopes(results, tender)
 
 
@@ -285,6 +301,7 @@ def ingest_tender(
     images: Optional[list[str]] = None,
     doc_text: str = "",
     context_text: str = "",
+    progress_cb: Optional[Callable[[int, int], None]] = None,
 ) -> ScopePackages:
     """Split ``tender`` into one :class:`TradeWorkPackage` per trade.
 
@@ -299,7 +316,10 @@ def ingest_tender(
     trades against the taxonomy before returning.
     """
     client = client or LLMClient()
-    scope = _extract(client, tender, doc_text, images, demo_fixture, context_text=context_text)
+    scope = _extract(
+        client, tender, doc_text, images, demo_fixture,
+        context_text=context_text, progress_cb=progress_cb,
+    )
     normalised, unmapped = validate_scope(scope)
     if unmapped:
         # Surfaced, not dropped — a human reconciles these against the taxonomy.
