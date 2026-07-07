@@ -113,16 +113,28 @@ def tender_replies(ws: Workspace, tender_id: str) -> list[BidReply]:
     return [BidReply.model_validate(r) for r in _read_json(_replies_path(ws, tender_id), [])]
 
 
-def accumulate_reply(ws: Workspace, tender_id: str, reply: BidReply) -> list[BidReply]:
-    """Store ``reply`` for ``tender_id`` and return all replies received so far.
+def accumulate_replies(ws: Workspace, tender_id: str, new_replies: list[BidReply]) -> list[BidReply]:
+    """Store one firm's inbound (now possibly SEVERAL per-section bids) for ``tender_id`` and return
+    all replies received so far.
 
-    Deduped by firm: a firm that replies again replaces its earlier reply, so re-leveling
-    over the returned list never double-counts a firm.
+    A firm can hold bids in more than one section — one returned document routes to several
+    sections — so replies are keyed by (firm, section=``trade``). A firm that replies again replaces
+    ALL of its earlier bids (every section) with this fresh batch, so re-leveling never
+    double-counts. ``new_replies`` is normally one firm's per-section bids; the dedup is by the
+    firms present in the batch.
     """
-    replies = [r for r in tender_replies(ws, tender_id) if r.firm_id != reply.firm_id]
-    replies.append(reply)
+    firms = {r.firm_id for r in new_replies}
+    replies = [r for r in tender_replies(ws, tender_id) if r.firm_id not in firms]
+    replies.extend(new_replies)
     _write_json(_replies_path(ws, tender_id), [r.model_dump() for r in replies])
     return replies
+
+
+def accumulate_reply(ws: Workspace, tender_id: str, reply: BidReply) -> list[BidReply]:
+    """Store a single ``reply`` for ``tender_id`` (dedup by firm) and return all replies so far —
+    the one-bid-per-firm path, kept for callers that route no section (the legacy / ref-trade
+    fallback). Delegates to :func:`accumulate_replies`."""
+    return accumulate_replies(ws, tender_id, [reply])
 
 
 def comparison_path(ws: Workspace, tender_id: str) -> Path:

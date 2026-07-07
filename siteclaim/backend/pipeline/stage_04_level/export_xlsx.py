@@ -41,9 +41,12 @@ def export_leveling_xlsx(
     path: Path | str = OUT_PATH,
     *,
     project_name: str = "",
+    extras: Optional[list[str]] = None,
 ) -> Path:
     """Write the levelled comparison to ``path`` and return it — one styled sheet per
-    trade, plus a Summary cover tab when the comparison spans more than one trade."""
+    trade, plus a Summary cover tab when the comparison spans more than one trade. When
+    ``extras`` is given (returned lines priced outside the tender's SoR — surfaced, never
+    added to any section's totals), an "Extras" tab lists them for the operator."""
     from openpyxl import Workbook  # lazy — leveling math must not require openpyxl
 
     # Group by trade, preserving first-seen order. Each trade is written as its own
@@ -75,10 +78,33 @@ def export_leveling_xlsx(
             project_name,
         )
 
+    if extras:  # out-of-scope returned lines — surfaced, never folded into a section
+        ws = wb.create_sheet() if first_used else wb.active
+        first_used = True
+        ws.title = "Extras (out of scope)"
+        _write_extras_sheet(ws, extras)
+
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
     return out
+
+
+def _write_extras_sheet(ws, extras: list[str]) -> None:
+    """A plain list of returned lines that matched no canonical SoR item — the operator sees the
+    subcontractor priced something outside this tender; nothing here enters a comparison total."""
+    from pipeline._xlsx_style import autofit, style_header, title_block
+
+    title_block(ws, "Priced lines outside this tender's scope", [
+        "These returned lines matched no Schedule-of-Rates item and are NOT included in any",
+        "section's comparison or totals — review and assign or query with the subcontractor.",
+    ])
+    ws.append(["Out-of-scope returned line"])
+    header_row = ws.max_row
+    style_header(ws, header_row, 1)
+    for note in extras:
+        ws.append([note])
+    autofit(ws, min_row=header_row)
 
 
 def _write_summary_sheet(ws, trades: list[str], levelled: list[LevelledBid], project_name: str) -> None:

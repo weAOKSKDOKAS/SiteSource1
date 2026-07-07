@@ -11,6 +11,7 @@ send real email (gated — see ``mailer``); ``/level-upload`` catches a subcontr
 returned Schedule of Rates; ``/contacts`` exposes the address book.
 """
 
+import logging
 import os
 import threading
 import uuid
@@ -39,9 +40,10 @@ from pipeline.stage_03_dispatch.mailer import send_bundles  # noqa: E402
 from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  # noqa: E402
 from pipeline.stage_04_level.level import level_bids, load_demo_replies, merge_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  # noqa: E402
+from pipeline.stage_04_level.route_items import route_reply_lines  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
-from pipeline.scope_store import save_scope  # noqa: E402
+from pipeline.scope_store import load_scope, save_scope  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
 from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E402
 from pipeline.benchmark.eos_reason import EOS_REASON_FIXTURE, extract_reason_candidates  # noqa: E402
@@ -101,6 +103,7 @@ from pipeline.estimate.letter import LETTER_FIXTURE, draft_letter  # noqa: E402
 from pipeline.estimate.rates import suggest_rates  # noqa: E402
 from schemas.project import DashboardPackage, ProjectDashboard, ProjectSummary  # noqa: E402
 from schemas.models import (  # noqa: E402
+    BidLineItem,
     BidReply,
     Contact,
     DispatchBundle,
@@ -124,6 +127,8 @@ REPLIES_FIXTURE = "cases/messy/bid_replies.json"
 RATIONALE_FIXTURE = "cases/clean/recommendation_rationale.json"
 INBOUND_REPLY_FIXTURE = "cases/inbound/reply.json"          # DEMO parse of an inbound reply
 INBOUND_FALLBACK_FIXTURE = "cases/inbound/fallback_match.json"  # DEMO AI fallback verdict
+
+_log = logging.getLogger("sitesource.api")
 
 app = FastAPI(
     title="SiteSource API",
@@ -973,6 +978,9 @@ class InboundReplyResponse(BaseModel):
     trade: str = ""
     reply_count: int = 0
     comparison: list[LevelledBid] = Field(default_factory=list)
+    # Returned lines that matched no canonical SoR item — surfaced, never folded into a section's
+    # totals (the subcontractor priced something outside this tender). Display notes, one per line.
+    extras: list[str] = Field(default_factory=list)
 
 
 @app.post("/inbound-reply", response_model=InboundReplyResponse)
@@ -1010,17 +1018,57 @@ def post_inbound_reply(
         sheets, images, firm_id=firm_id, trade=trade,
         demo_fixture=INBOUND_REPLY_FIXTURE if demo_mode() else None,
     )
-    # The ref is authoritative for identity; the parse supplies the priced content.
-    reply = parsed.model_copy(update={"firm_id": firm_id, "trade": trade})
 
-    replies = reply_loop.accumulate_reply(workspace, tender_id, reply)
-    levelled = level_bids(replies)
-    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id), project_name=tender_id)
-    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=tender_id)  # refresh the /leveling.xlsx download
+    # The ref fixes tender + firm, NOT the section: a firm often returns items from a wider set of
+    # sections than the enquiry named. Route each priced line to its true SoR section by matching
+    # item identity against the tender's canonical scope, and produce one bid per section it priced.
+    scope = load_scope(workspace, tender_id)
+    new_replies, extras_notes = _route_reply(parsed, scope, firm_id=firm_id, trade=trade, tender_id=tender_id)
+
+    replies = reply_loop.accumulate_replies(workspace, tender_id, new_replies)
+    levelled = level_bids(replies, scope)  # scope-aware leveling (reserved param now populated)
+    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id),
+                         project_name=tender_id, extras=extras_notes or None)
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=tender_id,
+                         extras=extras_notes or None)  # refresh the /leveling.xlsx download
     return InboundReplyResponse(
         status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
-        reply_count=len(replies), comparison=levelled,
+        reply_count=len(replies), comparison=levelled, extras=extras_notes,
     )
+
+
+def _extra_note(firm_id: str, line: BidLineItem) -> str:
+    """A one-line note for a returned line that matched no canonical SoR item — the operator sees
+    the subcontractor priced something outside this tender."""
+    rate = f" (rate {line.rate:,.2f})" if line.rate is not None else ""
+    desc = f" — {line.description}" if line.description else ""
+    return f"{firm_id} · {line.item_ref}{desc}{rate}"
+
+
+def _route_reply(
+    parsed: BidReply, scope: Optional[ScopePackages], *, firm_id: str, trade: str, tender_id: str,
+) -> tuple[list[BidReply], list[str]]:
+    """Split a parsed reply into one :class:`BidReply` per SoR section the firm priced, plus the
+    out-of-scope extras as display notes. With no canonical scope (an older tender / the demo path)
+    it degrades to today's behaviour — one bid stamped with the ref trade — and logs the skip. The
+    LLM already parsed the lines; routing is deterministic Layer 1 (:mod:`route_items`)."""
+    if scope is None:
+        _log.info("inbound routing skipped for %s — no persisted scope; stamping ref trade %r", tender_id, trade)
+        return [parsed.model_copy(update={"firm_id": firm_id, "trade": trade})], []
+
+    result = route_reply_lines(parsed.line_items, scope)
+    # One bid per section; trade = the canonical package key (e.g. "ground_investigation:H"). The
+    # firm's exclusions apply across its return, so they ride on each section; the document total
+    # is not a section total, so claimed_total is left unset per section.
+    new_replies = [
+        BidReply(firm_id=firm_id, trade=key, line_items=lines, exclusions=parsed.exclusions)
+        for key, lines in result.by_key.items()
+    ]
+    if not new_replies:
+        # Nothing matched a canonical item (all extras / empty) — keep the firm on the enquiry's
+        # trade with no priced lines rather than dropping it silently; the extras are still surfaced.
+        new_replies = [BidReply(firm_id=firm_id, trade=trade, exclusions=parsed.exclusions)]
+    return new_replies, [_extra_note(firm_id, li) for li in result.extras]
 
 
 @app.get("/leveling.xlsx")
