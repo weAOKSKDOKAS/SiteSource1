@@ -186,3 +186,20 @@ def test_scanned_text_pdf_past_the_image_cap_is_read_as_text_not_dropped():
     text, images = extract_document(data, "application/pdf")
     assert f"[page {IMAGE_MAX_PAGES + 3}]" in text   # a page past the 8-page image cap is present as text
     assert images == []                              # scanned text pages -> OCR text, not vision
+
+
+def test_extract_document_propagates_engine_unavailable_not_no_content(monkeypatch):
+    # A configured-but-missing OCR engine surfaces as its own error, NOT "PDF has no extractable
+    # content" — so the operator is pointed at configuration, not at the document.
+    import pipeline.ocr as ocr
+
+    def _raise(*a, **k):
+        raise ocr.OcrEngineUnavailable("OCR engine (tesseract) not found — set TESSERACT_CMD")
+
+    monkeypatch.setattr(ocr, "_ocr_image_png", _raise)
+    doc = fitz.open()
+    doc.new_page()  # a scanned page with no text layer -> OCR attempted
+    data = doc.tobytes()
+    doc.close()
+    with pytest.raises(ocr.OcrEngineUnavailable):
+        extract_document(data, "application/pdf")

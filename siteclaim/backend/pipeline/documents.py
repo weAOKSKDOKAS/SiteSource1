@@ -112,6 +112,8 @@ def _pdf_text_first(
                 images.append(_b64_png(pix.tobytes("png")))
             # else: negligible text and no raster content (blank), or past the image cap -> skipped
     if not texts and not images:
+        # OcrEngineUnavailable (a config fault) propagates from ocr.page_texts above and never
+        # reaches here — so this message means a healthy OCR run found a genuinely empty document.
         raise ValueError("PDF has no extractable content.")
     return "\n\n".join(texts), images
 
@@ -146,6 +148,8 @@ def _pdf_table_aware(
                 pix = page.get_pixmap(matrix=vis_matrix, alpha=False)
                 images.append(_b64_png(pix.tobytes("png")))  # low-confidence page -> vision fallback
     if not texts and not images:
+        # OcrEngineUnavailable (a config fault) propagates from ocr.page_texts above and never
+        # reaches here — so this message means a healthy OCR run found a genuinely empty document.
         raise ValueError("PDF has no extractable content.")
     return "\n\n".join(texts), images
 

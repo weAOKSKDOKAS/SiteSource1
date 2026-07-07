@@ -36,10 +36,13 @@ def _words(png_bytes: bytes, lang: str, psm: int) -> list[dict]:
     from pipeline import ocr  # reuse the config-over-PATH resolution + engine-error handling
 
     ocr._resolve_tesseract_cmd(pytesseract)
-    with Image.open(io.BytesIO(png_bytes)) as image:
-        data = pytesseract.image_to_data(
-            image, lang=lang, config=f"--psm {psm}", output_type=pytesseract.Output.DICT
-        )
+    try:
+        with Image.open(io.BytesIO(png_bytes)) as image:
+            data = pytesseract.image_to_data(
+                image, lang=lang, config=f"--psm {psm}", output_type=pytesseract.Output.DICT
+            )
+    except pytesseract.TesseractNotFoundError as exc:  # engine binary missing -> loud (not vision)
+        raise ocr._engine_unavailable(pytesseract) from exc
     words: list[dict] = []
     for i in range(len(data["text"])):
         text = (data["text"][i] or "").strip()

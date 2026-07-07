@@ -145,6 +145,30 @@ def test_resolve_sets_tesseract_cmd_from_config(monkeypatch):
     assert fake.pytesseract.tesseract_cmd == "/opt/tess/tesseract"  # config over PATH
 
 
+# -- fail loud when the engine is missing (vs an empty document) -----------
+def test_engine_unavailable_error_names_the_fix():
+    import types
+
+    fake = types.SimpleNamespace(pytesseract=types.SimpleNamespace(tesseract_cmd="/bad/tesseract"))
+    exc = ocr._engine_unavailable(fake)
+    assert isinstance(exc, ocr.OcrEngineUnavailable)
+    assert "TESSERACT_CMD" in str(exc) and "tesseract" in str(exc).lower()
+
+
+def test_engine_unavailable_is_raised_never_swallowed_to_empty(monkeypatch):
+    def _raise(*a, **k):
+        raise ocr.OcrEngineUnavailable("no engine")
+
+    monkeypatch.setattr(ocr, "_ocr_image_png", _raise)
+    with pytest.raises(ocr.OcrEngineUnavailable):
+        page_texts(_blank_pdf())  # a scanned page -> OCR attempted -> loud, not ""
+
+
+def test_healthy_but_blank_page_degrades_to_empty_without_raising(monkeypatch):
+    monkeypatch.setattr(ocr, "_ocr_image_png", lambda *a, **k: "")  # engine ran, page blank
+    assert page_texts(_blank_pdf()) == [""]  # graceful "", no raise
+
+
 @requires_tesseract
 def test_scanned_page_is_read_by_ocr():
     # A page whose text is flattened into an image (no text layer) is recovered by OCR.

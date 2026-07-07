@@ -35,6 +35,23 @@ class NotAPdf(ValueError):
     """The input bytes are not a readable PDF — callers decide how to degrade."""
 
 
+class OcrEngineUnavailable(RuntimeError):
+    """The OCR engine (tesseract) is installed-as-a-library but its binary was not found /
+    could not run. A CONFIGURATION fault, distinct from a page that genuinely has no text — so it
+    is raised loudly (never swallowed to ``""``) and surfaced to the operator as its own message,
+    not as 'PDF has no extractable content'."""
+
+
+def _engine_unavailable(pytesseract) -> OcrEngineUnavailable:
+    cmd = getattr(getattr(pytesseract, "pytesseract", None), "tesseract_cmd", "tesseract")
+    _log.error(
+        "OCR engine (tesseract) not found at %r — set TESSERACT_CMD or install tesseract-ocr", cmd
+    )
+    return OcrEngineUnavailable(
+        "OCR engine (tesseract) not found — set TESSERACT_CMD or install tesseract-ocr"
+    )
+
+
 # -- tesseract binary resolution (never depend on PATH) ---------------------
 # On a real deployment tesseract is installed but often NOT on the process PATH (a service, an
 # IDE terminal, a child process). Resolve the binary from config and point pytesseract at it, so
@@ -150,18 +167,24 @@ def _ocr_image_png(png_bytes: bytes, *, lang: str, psm: int) -> str:
     from PIL import Image
 
     _resolve_tesseract_cmd(pytesseract)  # config over PATH — resolved once, lazily
-    with Image.open(io.BytesIO(png_bytes)) as image:
-        return pytesseract.image_to_string(image, lang=lang, config=f"--psm {psm}")
+    try:
+        with Image.open(io.BytesIO(png_bytes)) as image:
+            return pytesseract.image_to_string(image, lang=lang, config=f"--psm {psm}")
+    except pytesseract.TesseractNotFoundError as exc:  # engine binary missing -> loud
+        raise _engine_unavailable(pytesseract) from exc
 
 
 def _ocr_or_empty(png_bytes: bytes, *, lang: str, psm: int) -> str:
-    """OCR a page, degrading to ``""`` when OCR is unavailable or fails (no pytesseract / no
-    tesseract binary / a bad page). An unreadable scanned page then simply contributes no text —
-    exactly the pre-OCR behaviour — so a machine without tesseract runs DEMO and the whole suite
-    unchanged, and a scanned doc falls back to whole-file rather than crashing ingest."""
+    """OCR a page. A configured-but-missing ENGINE (``OcrEngineUnavailable``) is raised loudly —
+    never swallowed — so a misconfiguration is not mistaken for an empty document. Everything else
+    (pytesseract not installed at all -> ImportError, or a per-page glitch) degrades to ``""``, so
+    a machine without OCR runs DEMO and the whole suite unchanged and a scanned doc still falls
+    back to whole-file. A page the engine read as blank returns ``""`` naturally (no exception)."""
     try:
         return _ocr_image_png(png_bytes, lang=lang, psm=psm)
-    except Exception:  # noqa: BLE001 — OCR unavailable/failed for this page -> no text
+    except OcrEngineUnavailable:
+        raise  # a configuration fault — surface it, do not hide it behind ""
+    except Exception:  # noqa: BLE001 — no pytesseract installed / a per-page failure -> no text
         return ""
 
 
