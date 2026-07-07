@@ -90,7 +90,11 @@ export function RouteDecisionPanel({
                       type="button"
                       onClick={() => setDetail(p)}
                       title="Open the routing record"
-                      className="font-semibold text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+                      // A <button> defaults to text-align:center, so a title that wraps to two lines
+                      // (e.g. "Ground Investigation · Slope Surface Protection Stripping") renders
+                      // centered and misaligned against single-line cards — pin it left and balance
+                      // the wrap so every card title reads the same regardless of length.
+                      className="text-balance text-left font-semibold text-ink hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
                     >
                       {heading}
                     </button>
