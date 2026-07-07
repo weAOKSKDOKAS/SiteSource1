@@ -124,6 +124,49 @@ def section_of(item_ref: str) -> str:
     return m.group(1).upper() if m else ""
 
 
+# Valid SoR section codes: single letters A–Z, the two-letter BA–BF range the real schedules use,
+# plus any code that actually appears as a ``SECTION X :`` header in the document (so a genuine
+# ``SECTION HS`` header, should one ever exist, legitimises HS). Scanned-OCR corruptions — a digit
+# read as a letter (``H5`` -> ``HS``) or a dropped leading letter (``H1(a)`` -> ``1(a)`` -> "") —
+# are snapped back onto this set so one real section stops fragmenting into several.
+_LETTERS = frozenset(chr(c) for c in range(ord("A"), ord("Z") + 1))
+_TWO_LETTER_SECTIONS = frozenset({"BA", "BB", "BC", "BD", "BE", "BF"})
+
+
+def _valid_section_codes(titles: dict[str, str]) -> frozenset[str]:
+    return _LETTERS | _TWO_LETTER_SECTIONS | frozenset(titles)
+
+
+def _snap_section(raw: str, valid: frozenset[str]) -> Optional[str]:
+    """The valid section code for a raw code: itself if valid, else its LONGEST valid prefix
+    (``HS`` -> ``H``, ``BAX`` -> ``BA``), else ``None`` (unresolvable — the caller fills forward)."""
+    if not raw:
+        return None
+    if raw in valid:
+        return raw
+    for end in range(len(raw) - 1, 0, -1):  # longest valid prefix wins (BA before B)
+        if raw[:end] in valid:
+            return raw[:end]
+    return None
+
+
+def _normalise_sections(items: list, valid: frozenset[str]) -> list[str]:
+    """The corrected section code for each item, walking the package IN ORDER: a valid or
+    prefix-snapped code sets the running section; an unresolvable one (empty, or corrupt with no
+    valid prefix) inherits the running section (fill-forward). A leading run before any section
+    resolves is back-filled from the first section that does. Deterministic — no LLM, and never an
+    invented section: an all-unresolvable package keeps ''."""
+    running = ""
+    codes: list[str] = []
+    for it in items:
+        snapped = _snap_section(section_of(getattr(it, "item_ref", "")), valid)
+        if snapped:
+            running = snapped
+        codes.append(snapped or running)
+    first = next((c for c in codes if c), "")
+    return [c or first for c in codes] if first else codes
+
+
 def _section_titles(text: str) -> dict[str, str]:
     """Map each section code to the title from its header (first occurrence wins)."""
     titles: dict[str, str] = {}
@@ -139,14 +182,20 @@ def annotate_sections(scope: ScopePackages, doc_text: str = "") -> ScopePackages
     (code, header title if seen, item_count) — the routable unit made visible. Deterministic;
     a single-section package (every demo package) simply carries one section."""
     titles = _section_titles(doc_text)
+    valid = _valid_section_codes(titles)
     packages: list[TradeWorkPackage] = []
     for pkg in scope.packages:
+        # Repair each item's section code deterministically (snap OCR corruptions onto the valid
+        # set, fill-forward a lost code) so one real section stops fragmenting into H / HS / '';
+        # then roll up the section metadata from the CORRECTED codes.
+        codes = _normalise_sections(pkg.sor_items, valid)
+        items = [
+            it if it.section == code else it.model_copy(update={"section": code})
+            for it, code in zip(pkg.sor_items, codes)
+        ]
         counts: dict[str, int] = {}
         order: list[str] = []
-        items = []
-        for it in pkg.sor_items:
-            code = section_of(it.item_ref)
-            items.append(it if it.section == code else it.model_copy(update={"section": code}))
+        for code in codes:
             if code:
                 if code not in counts:
                     order.append(code)

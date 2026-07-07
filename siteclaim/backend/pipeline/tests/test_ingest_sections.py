@@ -117,6 +117,49 @@ def test_non_gi_package_sections_keep_the_parent_trade():
     assert pkg.sections[0].section_trade == "electrical"  # no title, no GI keyword -> parent trade
 
 
+# -- section-code repair (kill phantom sections): snap OCR corruptions onto valid codes ------
+def test_corrupted_h5_snaps_to_section_h_not_a_phantom_hs():
+    # The live bug: H5 read as "HS" (digit 5 -> letter S) and H1(a)/(b) lost their leading H.
+    scope = ScopePackages(packages=[TradeWorkPackage(trade="field_installations", scope_summary="FI",
+        sor_items=[SorItem(item_ref=r) for r in ["1(a)", "1(b)", "H4", "HS", "H6", "H17"]])])
+    pkg = annotate_sections(scope, "SECTION H : FIELD INSTALLATIONS").packages[0]
+    assert [i.section for i in pkg.sor_items] == ["H", "H", "H", "H", "H", "H"]  # one section
+    assert [s.code for s in pkg.sections] == ["H"] and pkg.sections[0].item_count == 6
+    assert pkg.sections[0].section_trade == "field_installations"  # specialty routing preserved
+
+
+def test_dropped_leading_letter_inherits_the_running_section():
+    # A ref that lost its letter mid-section fills forward from the previous valid item.
+    scope = ScopePackages(packages=[TradeWorkPackage(trade="ground_investigation", scope_summary="GI",
+        sor_items=[SorItem(item_ref=r) for r in ["G1", "2", "G3", "H1", "2(a)", "H3"]])])
+    pkg = annotate_sections(scope, "").packages[0]
+    assert [i.section for i in pkg.sor_items] == ["G", "G", "G", "H", "H", "H"]  # G2 and H2 inherited
+
+
+def test_genuine_two_letter_section_is_kept():
+    scope = ScopePackages(packages=[TradeWorkPackage(trade="ground_investigation", scope_summary="GI",
+        sor_items=[SorItem(item_ref="BA1"), SorItem(item_ref="BB7a"), SorItem(item_ref="BAX2")])])
+    pkg = annotate_sections(scope, "").packages[0]
+    # BA and BB are valid two-letter sections; BAX snaps to its longest valid prefix BA.
+    assert [i.section for i in pkg.sor_items] == ["BA", "BB", "BA"]
+
+
+def test_a_real_two_letter_header_legitimises_that_code():
+    # A genuine SECTION HS header makes HS a valid section — it is NOT snapped to H.
+    scope = ScopePackages(packages=[TradeWorkPackage(trade="ground_investigation", scope_summary="GI",
+        sor_items=[SorItem(item_ref="HS1"), SorItem(item_ref="HS2")])])
+    pkg = annotate_sections(scope, "SECTION HS : SPECIAL BOREHOLES").packages[0]
+    assert [i.section for i in pkg.sor_items] == ["HS", "HS"]
+    assert [s.code for s in pkg.sections] == ["HS"]
+
+
+def test_a_single_section_g_stays_one_section():
+    scope = ScopePackages(packages=[TradeWorkPackage(trade="ground_investigation", scope_summary="GI",
+        sor_items=[SorItem(item_ref=f"G{n}") for n in range(1, 11)])])
+    pkg = annotate_sections(scope, "").packages[0]
+    assert {i.section for i in pkg.sor_items} == {"G"} and [s.code for s in pkg.sections] == ["G"]
+
+
 def test_demo_ingest_packages_are_single_section():
     case = client.get("/demo/golden").json()
     scope = client.post("/ingest", json={"tender": case["tender"]}).json()
