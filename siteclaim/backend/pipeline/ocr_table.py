@@ -33,6 +33,9 @@ def _words(png_bytes: bytes, lang: str, psm: int) -> list[dict]:
     import pytesseract
     from PIL import Image
 
+    from pipeline import ocr  # reuse the config-over-PATH resolution + engine-error handling
+
+    ocr._resolve_tesseract_cmd(pytesseract)
     with Image.open(io.BytesIO(png_bytes)) as image:
         data = pytesseract.image_to_data(
             image, lang=lang, config=f"--psm {psm}", output_type=pytesseract.Output.DICT

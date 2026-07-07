@@ -23,13 +23,60 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 
+_log = logging.getLogger(__name__)
+
 
 class NotAPdf(ValueError):
     """The input bytes are not a readable PDF — callers decide how to degrade."""
+
+
+# -- tesseract binary resolution (never depend on PATH) ---------------------
+# On a real deployment tesseract is installed but often NOT on the process PATH (a service, an
+# IDE terminal, a child process). Resolve the binary from config and point pytesseract at it, so
+# OCR works regardless of PATH. Lazy + once — only when OCR is actually attempted, never at import.
+_TESSERACT_RESOLVED = False
+
+
+def _platform_candidates() -> list[str]:
+    """Common install locations for the tesseract binary, per platform."""
+    if os.name == "nt":
+        local = os.getenv("LOCALAPPDATA", "")
+        return [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            os.path.join(local, "Programs", "Tesseract-OCR", "tesseract.exe") if local else "",
+        ]
+    return ["/usr/bin/tesseract", "/usr/local/bin/tesseract", "/opt/homebrew/bin/tesseract"]
+
+
+def _find_tesseract() -> Optional[str]:
+    """The tesseract binary path from config: ``TESSERACT_CMD`` if it names an existing file, else
+    the first existing platform default, else ``None`` (leave pytesseract's ``tesseract`` / PATH
+    default). Pure function of the environment + filesystem — no PATH lookup."""
+    env = os.getenv("TESSERACT_CMD", "").strip()
+    if env and os.path.isfile(env):
+        return env
+    for candidate in _platform_candidates():
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _resolve_tesseract_cmd(pytesseract) -> None:
+    """Point ``pytesseract`` at the configured tesseract binary so OCR never depends on the process
+    PATH. Runs once. ``TESSDATA_PREFIX`` is inherited from the environment and is not overridden."""
+    global _TESSERACT_RESOLVED
+    if _TESSERACT_RESOLVED:
+        return
+    cmd = _find_tesseract()
+    if cmd:
+        pytesseract.pytesseract.tesseract_cmd = cmd
+    _TESSERACT_RESOLVED = True
 
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -102,6 +149,7 @@ def _ocr_image_png(png_bytes: bytes, *, lang: str, psm: int) -> str:
     import pytesseract
     from PIL import Image
 
+    _resolve_tesseract_cmd(pytesseract)  # config over PATH — resolved once, lazily
     with Image.open(io.BytesIO(png_bytes)) as image:
         return pytesseract.image_to_string(image, lang=lang, config=f"--psm {psm}")
 

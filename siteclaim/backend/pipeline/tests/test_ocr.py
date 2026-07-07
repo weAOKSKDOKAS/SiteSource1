@@ -92,6 +92,38 @@ def test_not_a_pdf_raises():
         page_texts(b"this is not a pdf")
 
 
+# -- tesseract binary resolution (config over PATH) ------------------------
+def test_find_tesseract_prefers_the_configured_path_when_it_exists(tmp_path, monkeypatch):
+    exe = tmp_path / "tesseract"
+    exe.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("TESSERACT_CMD", str(exe))
+    assert ocr._find_tesseract() == str(exe)
+
+
+def test_find_tesseract_falls_through_a_missing_configured_path(monkeypatch):
+    monkeypatch.setenv("TESSERACT_CMD", "/no/such/tesseract")
+    monkeypatch.setattr(ocr, "_platform_candidates", lambda: ["/no/such/a", "/no/such/b"])
+    assert ocr._find_tesseract() is None  # nothing exists -> leave pytesseract's PATH default
+
+
+def test_find_tesseract_uses_the_first_existing_platform_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    good = tmp_path / "tess"
+    good.write_text("x")
+    monkeypatch.setattr(ocr, "_platform_candidates", lambda: ["/no/such/one", str(good)])
+    assert ocr._find_tesseract() == str(good)
+
+
+def test_resolve_sets_tesseract_cmd_from_config(monkeypatch):
+    import types
+
+    monkeypatch.setattr(ocr, "_TESSERACT_RESOLVED", False)
+    monkeypatch.setattr(ocr, "_find_tesseract", lambda: "/opt/tess/tesseract")
+    fake = types.SimpleNamespace(pytesseract=types.SimpleNamespace(tesseract_cmd="tesseract"))
+    ocr._resolve_tesseract_cmd(fake)
+    assert fake.pytesseract.tesseract_cmd == "/opt/tess/tesseract"  # config over PATH
+
+
 @requires_tesseract
 def test_scanned_page_is_read_by_ocr():
     # A page whose text is flattened into an image (no text layer) is recovered by OCR.
