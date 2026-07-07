@@ -93,22 +93,181 @@ def _pages_text(data: bytes) -> Optional[list[str]]:
         return None
 
 
+def _heading_re(section_number: str) -> re.Pattern:
+    """A line-start clause-heading matcher, scoped to the doc's own section number when known
+    (``7.34A`` under Section 7) so a stray dotted number elsewhere is not mistaken for a clause;
+    else any clause id."""
+    scoped = rf"{re.escape(section_number)}\.\d+(?:\.\d+)*[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?" if section_number else _CLAUSE_ID
+    return re.compile(rf"^\s*({scoped})(?=[\s.:)]|$)")
+
+
+def _page_line_markers(text: str, heading: re.Pattern, page_no: int) -> list[tuple[str, int]]:
+    """Line-start clause headings + amendment lead-ins on one page's text — the native-text path
+    (a real text layer, or a single-column page whose OCR keeps clause ids at line start)."""
+    markers: list[tuple[str, int]] = []
+    for line in text.splitlines():
+        m = heading.match(line)
+        if m:
+            markers.append((m.group(1), page_no))
+        for lm in _PS_LEADIN.finditer(line):
+            markers.append((lm.group(1), page_no))
+    return markers
+
+
 def _spec_markers(pages: list[str], section_number: str) -> list[tuple[str, int]]:
     """``(clause_id, page)`` for a PS / appendix / GS doc: clause headings at line start (scoped to
     the doc's own section numbering when known, e.g. ``7.34A``), plus the GS clauses named in
-    amendment lead-ins. In document order."""
-    # Scope headings to the doc's own section number when known (7.34A under Section 7), so a
-    # stray dotted number elsewhere is not mistaken for a clause; else accept any clause id.
-    scoped = rf"{re.escape(section_number)}\.\d+(?:\.\d+)*[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?" if section_number else _CLAUSE_ID
-    heading = re.compile(rf"^\s*({scoped})(?=[\s.:)]|$)")
+    amendment lead-ins. In document order. Line-start only — the layout-aware scanned-spec path is
+    :func:`_spec_markers_layout` (used for PS/GS, which are multi-column when scanned)."""
+    heading = _heading_re(section_number)
+    return [m for page_no, text in enumerate(pages) for m in _page_line_markers(text, heading, page_no)]
+
+
+# -- layout-aware spec markers (multi-column scanned PS / GS) ----------------
+# HK GI Particular Specification pages are MULTI-COLUMN (a narrow label column, a clause-number
+# column ~30% across, then the clause body). Under OCR the columns collapse onto one line, so the
+# clause id lands MID-LINE fused with the body ("Standpipes in trial pits  7.278.2A  (1) When …")
+# and the line-start scan above matches nothing. For a SCANNED PS/GS page we instead read the OCR
+# word boxes and take the clause id that sits in the clause-number column, mirroring the SoR
+# column recovery in ``ocr_table``. A native-text page keeps the line-start path unchanged.
+
+_NATIVE_MIN = 20  # a page with fewer native chars than this is treated as scanned (as page_texts)
+# A token that begins like a clause number ("7.278.2A", "7.279.", "=7.286A") — anchors the Pass-1
+# clause-number column and is tolerant of the leading OCR punctuation seen in the documents.
+_LOOSE_CLAUSE = re.compile(r"^[=.]*\d+\.\d")
+# Words that, immediately before a clause id, mark it an INLINE cross-reference, not a heading
+# ("… in Clause 7.278.1A", "General Specification Clause 7.73"). Compared in a stripped, lower form.
+_CUE_WORDS = {
+    "clause", "clauses", "subclause", "specification", "specifications", "general", "particular",
+    "gs", "ps", "in", "under", "see", "refer", "reference", "ref", "per",
+}
+
+
+def _clean_word(text: str) -> str:
+    """A word reduced to its lowercase letters for cue matching (``"Clause"``/``"Clause,"`` ->
+    ``"clause"``, ``"sub-clause"`` -> ``"subclause"``)."""
+    return re.sub(r"[^a-z]", "", (text or "").lower())
+
+
+def _canonical_heading(raw: str, section_number: str) -> Optional[str]:
+    """Normalise a clause-number cell to the SAME canonical clause id the resolver's ``clause_of``
+    produces (so index keys match referenced refs), dropping internal OCR spaces. ``None`` unless
+    it is a dotted clause id and — when the doc declares a section — in that section."""
+    from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of  # lazy: pure util
+
+    cid = clause_of((raw or "").replace(" ", ""))
+    if not cid or "." not in cid:
+        return None
+    if section_number and base_clause(cid).split(".")[0] != str(section_number):
+        return None
+    return cid
+
+
+def _clause_number_column(words: list[dict]) -> Optional[tuple[float, float]]:
+    """The ``(left, right)`` x-band of the clause-number column, derived (never hardcoded) from the
+    LEFTMOST cluster of clause-id-shaped token boxes on the page — an inline body reference clusters
+    further right and is excluded. ``None`` when the page carries no clause-id token."""
+    lrs = [(float(w["left"]), 2.0 * float(w["cx"]) - float(w["left"]))  # (left, right=left+width)
+           for w in words if _LOOSE_CLAUSE.match(w.get("text") or "")]
+    if not lrs:
+        return None
+    lefts = sorted(left for left, _ in lrs)
+    gap = max(20.0, (lefts[-1] - lefts[0]) * 0.15)  # tolerant to page size; splits the columns
+    cluster_max_left = lefts[0]
+    for prev, cur in zip(lefts, lefts[1:]):
+        if cur - prev > gap:
+            break  # first big gap = the jump to the body column's inline refs
+        cluster_max_left = cur
+    col_left = lefts[0]
+    col_right = max((r for left, r in lrs if col_left <= left <= cluster_max_left), default=cluster_max_left)
+    pad = max(12.0, gap * 0.4)
+    return (col_left - pad, col_right + pad)
+
+
+def _row_heading(row: list[dict], band: tuple[float, float], section_number: str) -> Optional[str]:
+    """The clause id for one row of word boxes: the contiguous run of tokens sitting in the
+    clause-number ``band`` (so an OCR-split id ``7.279.`` + ``1A`` rejoins, while the body ``(1)`` a
+    column over is excluded). ``None`` when no token is in the band, or the first band token is an
+    inline reference (immediately preceded by a cue word like ``Clause`` / ``in``)."""
+    lo, hi = band
+    in_band = [i for i, w in enumerate(row) if lo <= float(w["cx"]) <= hi]
+    if not in_band:
+        return None
+    first = in_band[0]
+    if first > 0 and _clean_word(row[first - 1].get("text") or "") in _CUE_WORDS:
+        return None  # "… in Clause 7.278.1A …" — an inline cross-reference, not a heading
+    run = [first]
+    for i in in_band[1:]:
+        if i != run[-1] + 1:
+            break  # only join tokens adjacent within the column (an OCR-split clause id)
+        run.append(i)
+    raw = "".join(row[i].get("text") or "" for i in run)
+    return _canonical_heading(raw, section_number)
+
+
+def _headings_from_words(words: list[dict], section_number: str) -> list[str]:
+    """The clause-heading ids on one scanned page, from its OCR word boxes: find the clause-number
+    column, then take the in-column clause id per row. Pure (no tesseract) — tests stub the word
+    reader as ``test_ocr_table`` does."""
+    from pipeline import ocr_table  # reuse the SoR row grouping; pure, no tesseract at import
+
+    band = _clause_number_column(words)
+    if band is None:
+        return []
+    ids: list[str] = []
+    for row in ocr_table._group_rows(words):
+        cid = _row_heading(row, band, section_number)
+        if cid and cid not in ids:
+            ids.append(cid)
+    return ids
+
+
+def _open_pdf(data: bytes):
+    import fitz  # PyMuPDF — lazy
+
+    try:
+        return fitz.open(stream=data, filetype="pdf")
+    except Exception:  # noqa: BLE001 — unreadable -> caller degrades to the line-start path
+        return None
+
+
+def _column_headings(page, section_number: str) -> list[str]:
+    """Clause-heading ids for one SCANNED spec page via word-box OCR. Any OCR failure degrades to
+    no markers for this page (whole-file fallback) — the loud engine-missing signal is owned by the
+    OCR spine, and this path only runs after ``page_texts`` already OCR'd the doc successfully."""
+    from pipeline import ocr, ocr_table
+
+    try:
+        words = ocr_table._words(ocr._render_png(page, ocr._env_dpi()), ocr._env_lang(), 6)
+    except Exception:  # noqa: BLE001 — engine glitch / not installed -> no column markers here
+        return []
+    return _headings_from_words(words, section_number)
+
+
+def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> list[tuple[str, int]]:
+    """``(clause_id, page)`` for a PS / GS doc, LAYOUT-AWARE: a native-text page keeps the line-start
+    scan; a scanned page (multi-column PS/GS whose OCR fuses the clause id mid-line) is read from its
+    word boxes so the clause-number column is recovered. Amendment lead-ins are read from the page
+    text either way. With OCR disabled it is exactly ``_spec_markers`` (native-only)."""
+    from pipeline import ocr
+
+    heading = _heading_re(section_number)
+    doc = _open_pdf(data) if ocr.ocr_enabled() else None
+    if doc is None:
+        return _spec_markers(pages, section_number)  # OCR off / unreadable -> native line-start only
     markers: list[tuple[str, int]] = []
-    for page_no, text in enumerate(pages):
-        for line in text.splitlines():
-            m = heading.match(line)
-            if m:
-                markers.append((m.group(1), page_no))
-            for lm in _PS_LEADIN.finditer(line):
-                markers.append((lm.group(1), page_no))
+    try:
+        for page_no, text in enumerate(pages):
+            page = doc[page_no] if page_no < doc.page_count else None
+            native = page.get_text("text", sort=True) if page is not None else text
+            if page is None or len(native.strip()) >= _NATIVE_MIN:
+                markers.extend(_page_line_markers(text, heading, page_no))  # native page, unchanged
+            else:
+                markers.extend((cid, page_no) for cid in _column_headings(page, section_number))
+                for lm in _PS_LEADIN.finditer(text):  # lead-ins from the OCR text on a scanned page
+                    markers.append((lm.group(1), page_no))
+    finally:
+        doc.close()
     return markers
 
 
@@ -178,12 +337,15 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
     clause_onward: dict[str, list[str]] = {}
     if text_layer and kind == "method_of_measurement":
         clause_index = _spans(_mm_markers(pages), len(pages))
-    elif text_layer and kind in ("particular_specification", "appendix", "general_specification"):
+    elif text_layer and kind in ("particular_specification", "general_specification"):
+        # PS/GS pages are multi-column when scanned, so the clause id lands mid-line under OCR;
+        # scan the word boxes column-aware (native pages keep the line-start path). Do NOT touch MM.
+        clause_index = _spans(_spec_markers_layout(data, pages, section_number), len(pages))
+        # A PS clause may point onward to an appendix ("refer to Appendix 7.8.20"); record it now,
+        # while the page text is in hand, so dispatch reads only the persisted index.
+        clause_onward = _onward_appendices(pages, clause_index)
+    elif text_layer and kind == "appendix":
         clause_index = _spans(_spec_markers(pages, section_number), len(pages))
-        if kind in ("particular_specification", "general_specification"):
-            # A PS clause may point onward to an appendix ("refer to Appendix 7.8.20"); record it
-            # now, while the page text is in hand, so dispatch reads only the persisted index.
-            clause_onward = _onward_appendices(pages, clause_index)
 
     return DocIndexEntry(
         filename=filename, kind=kind, spec_section_number=section_number,

@@ -27,6 +27,12 @@ def _tesseract_available() -> bool:
 requires_tesseract = pytest.mark.skipif(not _tesseract_available(), reason="tesseract/pytesseract not installed")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ocr_cache(tmp_path, monkeypatch):
+    # build_doc_entry reads the OCR spine, which caches on disk — keep tests off the real root.
+    monkeypatch.setenv("SITESOURCE_OCR_CACHE", str(tmp_path / "ocr_cache"))
+
+
 def _scanned_pdf(pages: list[list[str]]) -> bytes:
     """Like ``_pdf`` but each page is flattened to an image (no text layer) — a scanned doc."""
     src = fitz.open()
@@ -150,3 +156,107 @@ def test_mm_index_locates_pb_markers_and_ignores_running_headers():
     assert e.kind == "method_of_measurement" and e.text_layer is True
     assert e.clause_index["PB 1"] == [0] and e.clause_index["PB 71"] == [1]
     assert "PB 2" not in e.clause_index and "PB/2" not in e.clause_index  # noise line not a clause
+
+
+# -- multi-column scanned PS: layout-aware clause markers from word boxes ----
+from pipeline.stage_01_ingest.doc_index import _headings_from_words  # noqa: E402
+
+
+def _wb(text, left, width, *, row, top):
+    """A tesseract-style word box (as ``ocr_table._words`` returns): text + geometry only."""
+    return {"text": text, "conf": 90.0, "left": float(left), "cx": left + width / 2.0,
+            "top": float(top), "row_key": (1, 1, row)}
+
+
+def test_headings_from_word_boxes_recovers_the_clause_number_column():
+    # A multi-column PS row under OCR: a label column (left), the clause id in a clause-number
+    # column (~30% across), then the body — the id lands mid-line, fused with the body text.
+    label = [_wb("Standpipes", 40, 60, row=1, top=100), _wb("in", 110, 15, row=1, top=100),
+             _wb("trial", 135, 30, row=1, top=100), _wb("pits", 170, 20, row=1, top=100)]
+    rowA = label + [_wb("7.278.2A", 220, 70, row=1, top=100),
+                    _wb("(1)", 360, 25, row=1, top=100), _wb("When", 400, 40, row=1, top=100)]
+    # An OCR-split clause id ("7.279." + "1A") in the SAME column must rejoin to "7.279.1A", while
+    # the body sub-item "(1)" a column over must NOT be swallowed.
+    rowB = [_wb("Drainage", 40, 60, row=2, top=130), _wb("test", 110, 30, row=2, top=130),
+            _wb("7.279.", 220, 48, row=2, top=130), _wb("1A", 272, 22, row=2, top=130),
+            _wb("(1)", 360, 25, row=2, top=130), _wb("The", 400, 30, row=2, top=130)]
+    ids = _headings_from_words(rowA + rowB, "7")
+    assert ids == ["7.278.2A", "7.279.1A"]  # column recovered; split id rejoined; "(1)" not fused
+
+
+def test_headings_from_word_boxes_rejects_inline_cross_references():
+    # An inline reference is in the body column (far right) or is preceded by a cue word; neither
+    # is a heading. A real heading on the same page keeps the id anchored so the band is derived.
+    heading = [_wb("Rotary", 40, 60, row=1, top=100), _wb("7.286A", 220, 70, row=1, top=100)]
+    body_ref = [_wb("As", 360, 20, row=2, top=130), _wb("in", 390, 15, row=2, top=130),
+                _wb("Clause", 415, 45, row=2, top=130), _wb("7.278.1A", 470, 70, row=2, top=130)]
+    cue_ref = [_wb("of", 110, 15, row=3, top=160), _wb("Clause", 150, 45, row=3, top=160),
+               _wb("7.300A", 225, 60, row=3, top=160), _wb("applies", 300, 50, row=3, top=160)]
+    ids = _headings_from_words(heading + body_ref + cue_ref, "7")
+    assert ids == ["7.286A"]  # only the true heading; the body ref and the cue-preceded ref rejected
+
+
+def test_headings_from_word_boxes_normalise_ocr_noise_forms():
+    # Leading OCR punctuation ("=7.286A") and an internal OCR space ("7.279." + "1A") normalise to
+    # the same canonical clause id the resolver's clause_of produces.
+    rowA = [_wb("=7.286A", 220, 70, row=1, top=100), _wb("Rotary", 360, 50, row=1, top=100)]
+    rowB = [_wb("7.279.", 220, 48, row=2, top=130), _wb("1A", 272, 22, row=2, top=130)]
+    assert _headings_from_words(rowA + rowB, "7") == ["7.286A", "7.279.1A"]
+
+
+def test_headings_from_word_boxes_scope_to_the_declared_section():
+    # A dotted number from another section (2.1) on a Section-7 page is not taken as a clause.
+    rows = [_wb("2.1", 220, 40, row=1, top=100), _wb("stray", 360, 40, row=1, top=100),
+            _wb("7.34A", 220, 60, row=2, top=130), _wb("Rotary", 360, 50, row=2, top=130)]
+    assert _headings_from_words(rows, "7") == ["7.34A"]          # scoped to section 7
+    assert set(_headings_from_words(rows, "")) == {"2.1", "7.34A"}  # unscoped: both are clauses
+
+
+def test_layout_marker_maps_a_column_scanned_clause_to_its_page(monkeypatch):
+    # Orchestration without tesseract: a mixed doc (native page 0 + scanned page 1). The native
+    # page keeps the line-start path; the scanned page is read from stubbed word boxes and the
+    # clause is mapped to page 1. Proves _spec_markers_layout routes native vs scanned by page.
+    import pipeline.ocr_table as ocr_table
+
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "SECTION 7 - GEOTECHNICAL WORKS\n7.1 General requirements")
+    scan = doc.new_page()
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 400, 400))
+    pix.clear_with(255)  # image-only page => no native text => the scanned/column path
+    scan.insert_image(scan.rect, pixmap=pix)
+    data = doc.tobytes()
+    doc.close()
+
+    boxes = [_wb("Rotary", 40, 60, row=1, top=100), _wb("7.286A", 220, 70, row=1, top=100),
+             _wb("(1)", 360, 25, row=1, top=100)]
+    monkeypatch.setattr(ocr_table, "_words", lambda *a, **k: boxes)  # scanned page 1 -> these boxes
+
+    e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.clause_index.get("7.1") == [0]      # native page 0, line-start path unchanged
+    assert e.clause_index.get("7.286A") == [1]   # scanned page 1, recovered from the word boxes
+
+
+@requires_tesseract
+def test_real_multi_column_scanned_ps_is_sliced_not_whole(tmp_path, monkeypatch):
+    # The whole point, end to end on a real render: a MULTI-COLUMN scanned PS (label column, a
+    # clause-number column, body on the same rows) yields a clause_index with the clause id — so
+    # the assembler slices it instead of "whole (clause not located)".
+    monkeypatch.setenv("SITESOURCE_OCR_CACHE", str(tmp_path / "ocr_cache"))
+    src = fitz.open()
+    page = src.new_page(width=612, height=200)
+    page.insert_text((36, 60), "SECTION 7 - GEOTECHNICAL WORKS", fontsize=12)
+    # a multi-column row: label (left), clause id (~30% across), body (right) — all on one line
+    page.insert_text((36, 110), "Standpipes in trial pits", fontsize=12)
+    page.insert_text((200, 110), "7.286A", fontsize=12)
+    page.insert_text((300, 110), "(1) When instructed by the Service Manager", fontsize=12)
+    png = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False).tobytes("png")
+    src.close()
+    flat = fitz.open()
+    op = flat.new_page(width=612, height=200)
+    op.insert_image(op.rect, stream=png)  # flatten => scanned (no text layer)
+    data = flat.tobytes()
+    flat.close()
+
+    e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.text_layer is True                 # OCR gave the scanned page text
+    assert "7.286A" in e.clause_index           # the mid-line clause id was located (not whole+flag)
