@@ -20,13 +20,28 @@ import sqlite3
 
 from schemas.models import Candidate, Evidence, FirmProfile, Severity, SignalType
 from db import store
+from db.register_loader import direct_trades
 from rules_engine.ranking import rank_candidates
 from rules_engine.risk_scoring import score_firm
+from rules_engine.taxonomy import parent_trade
+
+# A specialty pool thinner than this widens to the parent trade so there are enough bidders to
+# compete (a lone specialist plus the parent pool, specialist ranked first) — not a pool of one.
+MIN_POOL = 5
 
 
 def _warning_count(flags: list) -> int:
     """How many WARNING-severity flags a firm carries (used to order the public pool)."""
     return sum(1 for f in flags if f.severity is Severity.WARNING)
+
+
+def _direct_specialties(firm: FirmProfile) -> set[str]:
+    """The trades a firm's registered specialties map to DIRECTLY (before the GI discovery
+    expansion) — an exact specialty match, from :func:`db.register_loader.direct_trades`. A firm
+    with no ``registered_trades`` (the illustrative demo firms) yields the empty set and is treated
+    as non-direct — never a crash."""
+    rts = [{"code": rt.code, "group": rt.group, "specialty": rt.specialty} for rt in (firm.registered_trades or [])]
+    return direct_trades(rts)
 
 
 def _grounding_evidence(firm: FirmProfile) -> list[Evidence]:
@@ -56,6 +71,7 @@ def cross_reference(
     k: int | None = None,
     *,
     include_public: bool = False,
+    specialty: str | None = None,
 ) -> list[Candidate]:
     """Return ranked candidates for ``trade`` against ``scope_query``.
 
@@ -80,11 +96,21 @@ def cross_reference(
     deterministic adjudication of the firm's signals, and the list is ordered
     clean-first by ranking. ``k`` optionally caps the result.
     """
-    firms = (
-        store.firms_for_trade(conn, trade)
-        if include_public
-        else store.shortlistable_firms_for_trade(conn, trade)
-    )
+    pool_for = store.firms_for_trade if include_public else store.shortlistable_firms_for_trade
+
+    # ``specialty`` (a GI sub-trade like ``field_testing``) shortlists the section against its own
+    # specialist pool instead of the coarse parent. A too-thin specialty pool widens to the parent
+    # (``parent_trade``) so there are enough bidders — the specialist(s) are KEPT and parent-only
+    # firms appended (union), then ranked below them by the specialist-first term. Without a
+    # specialty this is exactly the prior behaviour (pool = ``trade``).
+    section_trade = specialty or trade
+    firms = pool_for(conn, section_trade)
+    if specialty:
+        parent = parent_trade(section_trade)
+        if parent != section_trade and len(firms) < MIN_POOL:
+            seen = {f.firm_id for f in firms}
+            firms = firms + [f for f in pool_for(conn, parent) if f.firm_id not in seen]
+
     scores = dict(store.semantic_closeout_matches(conn, scope_query, trade, k=len(firms) or 1))
 
     candidates = [
@@ -103,7 +129,14 @@ def cross_reference(
     # then by name for stability. rank_candidates then applies the hard clean-first /
     # fatal-last rule as a stable sort, so this ordering survives among match ties and
     # is harmlessly superseded by a real closeout match when one exists.
-    candidates.sort(key=lambda c: (_warning_count(c.risk_flags), -c.match_score, c.firm.name))
+    if specialty:
+        # Specialist-first: a firm whose registered specialties DIRECTLY include this section's
+        # specialty ranks above one surfaced only through the parent fallback. Folded in AFTER the
+        # warning demotion, so the hard clean-first rule (rank_candidates) still wins.
+        is_direct = {c.firm.firm_id: section_trade in _direct_specialties(c.firm) for c in candidates}
+        candidates.sort(key=lambda c: (_warning_count(c.risk_flags), not is_direct[c.firm.firm_id], -c.match_score, c.firm.name))
+    else:
+        candidates.sort(key=lambda c: (_warning_count(c.risk_flags), -c.match_score, c.firm.name))
 
     ranked = rank_candidates(candidates)
     return ranked[:k] if k is not None else ranked

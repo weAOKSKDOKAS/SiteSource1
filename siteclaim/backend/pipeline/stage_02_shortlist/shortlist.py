@@ -25,8 +25,20 @@ from typing import Optional
 
 from db import store
 from db.cross_reference import cross_reference
-from rules_engine.taxonomy import base_trade
-from schemas.models import ScopePackages, ShortlistSet
+from rules_engine.taxonomy import base_trade, parent_trade, section_specialty
+from schemas.models import ScopePackages, ShortlistSet, TradeWorkPackage
+
+
+def _section_specialty_for(pkg: TradeWorkPackage) -> Optional[str]:
+    """The GI specialty pool this package's section shortlists against, or ``None`` to keep the
+    parent trade. Prefers the specialty annotated at ingest (a single-section package's
+    ``section_trade``); else derives it from the routed sub-package's summary (which carries the
+    section header title). Only a real specialty whose parent is this package's trade is used — so
+    a non-GI package (electrical, mechanical) never leaves its own pool."""
+    parent = base_trade(pkg.trade)
+    stored = pkg.sections[0].section_trade if len(pkg.sections) == 1 else ""
+    cand = stored or section_specialty(pkg.scope_summary or "") or ""
+    return cand if (cand and cand != parent and parent_trade(cand) == parent) else None
 
 
 def shortlist(
@@ -49,11 +61,14 @@ def shortlist(
     own_conn = conn is None
     conn = conn or store.get_connection()
     try:
-        # Keyed by package_key (pkg.trade holds it for a section sub-package); the DB read
-        # runs against the parent trade so a sub-package shortlists its trade's real firms.
+        # Keyed by package_key (pkg.trade holds it for a section sub-package). The DB read runs
+        # against the parent trade, but a GI section shortlists against its own specialty pool
+        # (field_testing / field_installations / geophysical_survey) with the parent as the
+        # thin-pool fallback — so G, H and J no longer draw the identical coarse GI list.
         per_trade = {
             pkg.trade: cross_reference(
-                conn, base_trade(pkg.trade), pkg.scope_summary, k=k, include_public=include_public
+                conn, base_trade(pkg.trade), pkg.scope_summary, k=k,
+                include_public=include_public, specialty=_section_specialty_for(pkg),
             )
             for pkg in scope.packages
         }
