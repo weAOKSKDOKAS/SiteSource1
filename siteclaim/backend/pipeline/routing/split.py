@@ -46,6 +46,8 @@ def route_units(scope: ScopePackages, *, split_keys: set[str] | None = None) -> 
         forced = split_keys is not None and pkg.trade in split_keys
         if (auto or forced) and pkg.sections:
             for sec in pkg.sections:
+                if not (sec.code or "").strip():
+                    continue  # never route an empty-section unit (the section code is the unit)
                 items = [it for it in pkg.sor_items if (it.section or "") == sec.code]
                 if not items:
                     continue

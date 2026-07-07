@@ -81,3 +81,18 @@ def test_token_set_ratio_is_deterministic_and_bounded():
     assert token_set_ratio("Rotary drilling in rock", "Rotary drilling, rock") >= 0.8
     assert token_set_ratio("", "anything") == 0.0
     assert token_set_ratio("site office", "rotary drilling") == 0.0
+
+
+def test_reply_groups_into_corrected_sections_with_no_phantom_hs():
+    # After the section repair, the canonical items all carry section H, so a reply spanning the
+    # corrupted refs collapses into the single field_installations:H bucket — no :HS, no empty key.
+    from pipeline.stage_01_ingest.ingest import annotate_sections
+
+    raw = ScopePackages(packages=[TradeWorkPackage(
+        trade="field_installations", scope_summary="Field Installations",
+        sor_items=[SorItem(item_ref=r) for r in ["1(a)", "H4", "HS", "H6"]])])
+    scope = annotate_sections(raw, "SECTION H : FIELD INSTALLATIONS")
+    result = route_reply_lines([_line(r) for r in ["1(a)", "H4", "HS", "H6"]], scope)
+    assert set(result.by_key) == {"field_installations:H"}  # one section bucket, no :HS / empty
+    assert [li.item_ref for li in result.by_key["field_installations:H"]] == ["1(a)", "H4", "HS", "H6"]
+    assert result.extras == []  # every line matched a canonical item; none dropped

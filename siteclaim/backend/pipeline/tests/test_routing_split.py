@@ -36,6 +36,22 @@ def test_route_units_splits_a_many_section_package_by_section():
     assert drilling["auto_split"] is True
 
 
+def test_corrupted_section_refs_yield_one_unit_not_h_plus_hs_plus_empty():
+    # The live fragmentation: H1(a) lost its letter -> "1(a)", H5 read as "HS". After the section
+    # repair (Commit 1) the package is one section H, so route_units yields ONE :H unit carrying
+    # every H item — no :HS, no empty-section unit, nothing dropped.
+    from pipeline.stage_01_ingest.ingest import annotate_sections
+
+    raw = ScopePackages(packages=[TradeWorkPackage(
+        trade="field_installations", scope_summary="Field Installations",
+        sor_items=[SorItem(item_ref=r) for r in ["1(a)", "H4", "HS", "H6", "H17"]])])
+    scope = annotate_sections(raw, "SECTION H : FIELD INSTALLATIONS")
+    units = route_units(scope, split_keys={"field_installations"})  # force the per-section split
+    assert [u["package_key"] for u in units] == ["field_installations:H"]  # not :H + :HS + bare
+    assert all(u["section"] for u in units)  # no empty-section unit
+    assert [i.item_ref for i in units[0]["package"].sor_items] == ["1(a)", "H4", "HS", "H6", "H17"]
+
+
 def test_single_section_package_stays_whole():
     scope = ScopePackages(packages=[TradeWorkPackage(
         trade="electrical", scope_summary="LV",
