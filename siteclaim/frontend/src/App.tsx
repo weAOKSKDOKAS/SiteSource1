@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { BenchmarkPage } from "./BenchmarkPage";
 import { DatabasePage } from "./DatabasePage";
@@ -15,6 +15,7 @@ import type {
   DemoCaseSummary,
   DispatchDraftsResponse,
   DispatchSet,
+  IngestUpload,
   LevelledBid,
   Recommendation,
   RouteDecisionResult,
@@ -29,7 +30,8 @@ import { StepShortlist } from "./steps/StepShortlist";
 import { StepDispatch } from "./steps/StepDispatch";
 import { StepLevel } from "./steps/StepLevel";
 import { StepRecommend } from "./steps/StepRecommend";
-import { IngestProgress, type IngestPhase } from "./IngestProgress";
+import { IngestProgress } from "./IngestProgress";
+import { useIngestJob } from "./useIngestJob";
 
 export default function App() {
   // Meta
@@ -79,19 +81,15 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Live-ingest progress modal (a big upload extracts for minutes). null = closed. `stage` /
-  // `progress` come from polling the background job, so the checklist ticks as extraction runs.
-  const [ingestModal, setIngestModal] = useState<
-    {
-      phase: IngestPhase;
-      startedAt: number;
-      error?: string;
-      summary?: { items: number; packages: number };
-      stage?: string;
-      progress?: { done: number; total: number };
-      warnings?: string[];
-    } | null
-  >(null);
+  // The live-ingest background job, lifted to app level so its progress indicator renders on any
+  // page and survives navigation (the poll itself lives in api.ingestUpload, independent of what
+  // is on screen). `viewRef` gives the completion handler the LIVE view, so a job that finishes
+  // while the operator is elsewhere never yanks them off that page.
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+  const ingest = useIngestJob((uploaded) => handleIngestDone(uploaded));
 
   useEffect(() => {
     api.health().then((h) => setDemoMode(h.demo_mode)).catch(() => {});
@@ -158,53 +156,33 @@ export default function App() {
     });
   }
 
-  // A live upload extracts for minutes — it runs the progress modal, then analyses routing
-  // on the fresh scope and auto-advances to Route. The demo/scenario path is instant and
-  // skips the modal.
-  const runLiveIngest = async () => {
-    const startedAt = Date.now();
-    setError(null);
-    setIngestModal({ phase: "uploading", startedAt });
+  // Called by the ingest store when a live upload finishes: adopt the fresh scope + tender and
+  // analyse routing on it (not a stale closure). Only auto-advance to Route when the operator is
+  // STILL on the sourcing flow — if they navigated away, the proposal is prepared quietly and the
+  // completion toast lets them open Route when they choose, so a long extraction never yanks them.
+  async function handleIngestDone(uploaded: IngestUpload) {
+    setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
+    setTenderSlug(uploaded.tender_slug); // for the live replies panel on the dispatch step
+    setScope(uploaded.scope);
+    setCaseId(null);
+    setLiveRun(true); // live run — Level shows awaiting states, never demo replies
+    invalidateAfter(1);
     try {
-      const uploaded = await api.ingestUpload(files, {
-        onUploaded: () =>
-          setIngestModal((m) => (m && m.phase === "uploading" ? { ...m, phase: "processing" } : m)),
-        // Each poll advances the modal: the stage ticks the checklist, the chunk counter (when
-        // known) shows extraction progress. Elapsed time keeps counting with no ceiling.
-        onProgress: (s) =>
-          setIngestModal((m) =>
-            m
-              ? { ...m, phase: "processing", stage: s.stage, progress: s.progress ?? undefined, warnings: s.warnings ?? m.warnings }
-              : m,
-          ),
-      });
-      setTender(uploaded.tender); // trade-tagged tender -> per-trade routing at dispatch
-      setTenderSlug(uploaded.tender_slug); // for the live replies panel on the dispatch step
-      setScope(uploaded.scope);
-      setCaseId(null);
-      setLiveRun(true); // live run — Level shows awaiting states, never demo replies
-      invalidateAfter(1);
-      const items = uploaded.scope.packages.reduce((n, p) => n + p.sor_items.length, 0);
-      setIngestModal((m) => ({
-        phase: "done",
-        startedAt,
-        summary: { items, packages: uploaded.scope.packages.length },
-        warnings: m?.warnings, // sections the extractor couldn't read — surfaced, not hidden
-      }));
-      // Analyse routing on the fresh scope (not the stale closure), then auto-advance to Route.
       const p = await api.routeAnalyze(uploaded.scope);
       setProposal(p);
       setChosen(Object.fromEntries(p.packages.map((pkg) => [pkg.package_key, pkg.recommended_route])));
       setRouteResult(null);
-      setIngestModal(null);
-      advance(2);
+      if (viewRef.current === "wizard") advance(2); // on the flow — go to Route as today
     } catch (e) {
-      setIngestModal((m) => ({ phase: "error", startedAt: m?.startedAt ?? startedAt, error: e instanceof Error ? e.message : String(e) }));
+      setError(e instanceof Error ? e.message : String(e));
     }
-  };
+  }
 
   const runIngest = () => {
-    if (!demoMode && files.length > 0) return runLiveIngest();
+    if (!demoMode && files.length > 0) {
+      ingest.start(files); // live upload — the app-level job drives the progress indicator
+      return;
+    }
     return run(async () => {
       if (!tender) return;
       const result = await api.ingest(tender);
@@ -505,17 +483,17 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <Header demoMode={demoMode} view={view} onNavigate={setView} />
-      {ingestModal && (
+      {ingest.job && (
         <IngestProgress
-          phase={ingestModal.phase}
-          startedAt={ingestModal.startedAt}
-          stage={ingestModal.stage}
-          progress={ingestModal.progress}
-          warnings={ingestModal.warnings}
-          error={ingestModal.error}
-          summary={ingestModal.summary}
-          onRetry={runLiveIngest}
-          onCancel={() => setIngestModal(null)}
+          phase={ingest.job.phase}
+          startedAt={ingest.job.startedAt}
+          stage={ingest.job.stage}
+          progress={ingest.job.progress}
+          warnings={ingest.job.warnings}
+          error={ingest.job.error}
+          summary={ingest.job.summary}
+          onRetry={ingest.retry}
+          onCancel={ingest.cancel}
         />
       )}
       <main className="mx-auto max-w-6xl px-5 py-8">
