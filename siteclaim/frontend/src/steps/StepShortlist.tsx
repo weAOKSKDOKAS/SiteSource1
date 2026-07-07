@@ -91,19 +91,27 @@ export function StepShortlist({
               </div>
             </div>
             {open ? (
-              <ol className="divide-y divide-line-soft">
-                {candidates.map((c, i) => (
-                  <CandidateRow
-                    key={c.firm.firm_id}
-                    candidate={c}
-                    rank={i + 1}
-                    top={i === 0}
-                    selected={(approvals[trade] ?? []).includes(c.firm.firm_id)}
-                    onToggleSelect={() => onToggleApprove(trade, c.firm.firm_id)}
-                    onOpen={() => setDetail(c)}
-                  />
-                ))}
-              </ol>
+              <>
+                {candidates.every((c) => !c.firm.closeout_summary && c.match_score <= 0) && (
+                  <p className="border-b border-line-soft bg-paper/40 px-4 py-2 text-xs text-ink-faint">
+                    No closeout evidence for these firms yet — ordered by trade specialty and the public risk screen
+                    (alphabetical among equals). Match ranking activates once closeout (EOS) records are loaded.
+                  </p>
+                )}
+                <ol className="divide-y divide-line-soft">
+                  {candidates.map((c, i) => (
+                    <CandidateRow
+                      key={c.firm.firm_id}
+                      candidate={c}
+                      rank={i + 1}
+                      top={i === 0}
+                      selected={(approvals[trade] ?? []).includes(c.firm.firm_id)}
+                      onToggleSelect={() => onToggleApprove(trade, c.firm.firm_id)}
+                      onOpen={() => setDetail(c)}
+                    />
+                  ))}
+                </ol>
+              </>
             ) : (
               <div className="px-4 py-2.5 text-xs text-ink-soft">
                 Top pick: <span className="font-semibold text-ink">{candidates[0]?.firm.name}</span>
@@ -158,7 +166,7 @@ function CandidateRow({
           {firm.name}
         </button>
         <span className="tabular text-xs text-ink-faint">{firm.firm_id}</span>
-        <MatchChip score={candidate.match_score} />
+        <MatchChip score={candidate.match_score} assessed={!!firm.closeout_summary} />
         {top && !against && <Pill tone="ok">Top pick</Pill>}
         {against && <Pill tone="bad">⛔ Recommend against</Pill>}
         <span className="ml-auto flex items-center gap-2">
@@ -218,7 +226,7 @@ function FirmDrawer({ candidate, onClose }: { candidate: Candidate | null; onClo
       subtitle={
         firm && (
           <span className="flex flex-wrap items-center gap-2">
-            <MatchChip score={candidate.match_score} />
+            <MatchChip score={candidate.match_score} assessed={!!firm.closeout_summary} />
             {candidate.recommended_against && <Pill tone="bad">⛔ Recommend against</Pill>}
           </span>
         )

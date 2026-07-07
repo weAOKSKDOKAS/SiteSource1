@@ -24,7 +24,20 @@ export function SeverityTag({ severity }: { severity: Severity }) {
 }
 
 // --- Match score (semantic relevance of closeout history to the scope) -----
-export function MatchChip({ score }: { score: number }) {
+// ``assessed`` is whether the firm has a closeout record to score at all. A firm with none has
+// nothing to match against, so a 0 is NOT an assessed 0 — show "unassessed" rather than a
+// misleading "0% match" (ranking activates once closeout/EOS evidence exists).
+export function MatchChip({ score, assessed = true }: { score: number; assessed?: boolean }) {
+  if (!assessed && score <= 0) {
+    return (
+      <span
+        className="inline-flex items-center rounded-full bg-line-soft px-2 py-0.5 text-xs font-medium text-ink-faint"
+        title="No closeout record yet — there is nothing to score against. Firms are ordered by trade/specialty and the public risk screen; match ranking activates once closeout (EOS) evidence exists."
+      >
+        unassessed — no closeout yet
+      </span>
+    );
+  }
   const value = Math.round(score * 100);
   const tier = score >= 0.7 ? "bg-ok-bg text-ok" : score >= 0.5 ? "bg-brand-bg text-brand" : "bg-line-soft text-ink-soft";
   return (
