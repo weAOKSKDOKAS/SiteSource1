@@ -28,8 +28,9 @@ _APPENDIX_DECL = re.compile(r"\bAppendix\s+(\d+(?:\.\d+)*)", re.I)
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
 
 # A PS/GS clause id: a dotted number with optional letter / bracket / trailing-letter suffixes
-# (7.34, 7.34A, 7.39S, 7.41.(4)S). Kept verbatim so a reference resolves to the exact amendment.
-_CLAUSE_ID = r"\d+(?:\.\d+)*[A-Za-z]?(?:\.\(\d+\))?[A-Za-z]?"
+# (7.34, 7.34A, 7.39S, 7.41.(4)S, 7.72(6)S — the dot before the bracket is optional). Kept verbatim
+# so a reference resolves to the exact amendment, and matches the same id ``doc_refs`` produces.
+_CLAUSE_ID = r"\d+(?:\.\d+)*[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?"
 # PS amendment lead-ins carry the GS clause they amend: "Replace GS Clause 7.28 with the
 # following:", "Add the following Clauses after GS Clause 7.30:". Indexed so a GS reference
 # resolves to the page where its amendment begins.
@@ -98,7 +99,7 @@ def _spec_markers(pages: list[str], section_number: str) -> list[tuple[str, int]
     amendment lead-ins. In document order."""
     # Scope headings to the doc's own section number when known (7.34A under Section 7), so a
     # stray dotted number elsewhere is not mistaken for a clause; else accept any clause id.
-    scoped = rf"{re.escape(section_number)}\.\d+(?:\.\d+)*[A-Za-z]?(?:\.\(\d+\))?[A-Za-z]?" if section_number else _CLAUSE_ID
+    scoped = rf"{re.escape(section_number)}\.\d+(?:\.\d+)*[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?" if section_number else _CLAUSE_ID
     heading = re.compile(rf"^\s*({scoped})(?=[\s.:)]|$)")
     markers: list[tuple[str, int]] = []
     for page_no, text in enumerate(pages):

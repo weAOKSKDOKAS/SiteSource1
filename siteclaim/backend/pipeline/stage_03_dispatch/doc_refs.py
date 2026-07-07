@@ -16,8 +16,9 @@ import re
 from typing import Callable, Iterable
 
 # A PS/GS clause id: a dotted number with an optional letter suffix, an optional bracketed
-# sub-index, and an optional trailing letter — 7.34, 7.34A, 7.39S, 7.41.(4)S, 28.2.07.
-_CLAUSE_ID = r"\d+(?:\.\d+)*[A-Za-z]?(?:\.\(\d+\))?[A-Za-z]?"
+# sub-index (the separating dot is optional — real docs write both ``7.41.(4)S`` and ``7.72(6)S``),
+# and an optional trailing letter — 7.34, 7.34A, 7.39S, 7.41.(4)S, 7.72(6)S, 28.2.07.
+_CLAUSE_ID = r"\d+(?:\.\d+)*[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?"
 
 
 def _norm_pb(m: re.Match) -> str:

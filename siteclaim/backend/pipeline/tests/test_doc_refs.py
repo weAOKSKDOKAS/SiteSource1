@@ -67,6 +67,13 @@ def test_clause_of_keeps_suffix_and_base_clause_strips_it():
     assert clause_of("PS 28.2.07") == "28.2.07" and base_clause("28.2.07") == "28.2.07"  # plain unchanged
 
 
+def test_clause_of_keeps_a_dotless_bracket_suffix():
+    # Real specs write the bracketed sub-index with OR without the separating dot; both must be
+    # kept whole so an index key built from ``7.72(6)S`` matches the reference ``PS 7.72(6)S``.
+    assert clause_of("PS 7.72(6)S") == "7.72(6)S" and base_clause("7.72(6)S") == "7.72"
+    assert extract_refs("priced to PS 7.72(6)S")["ps"] == ["PS 7.72(6)S"]  # suffix not truncated to 7.72
+
+
 def test_pb_number_form_and_preamble_form_both_parse():
     assert extract_refs("measured per PB 71")["pb"] == ["PB 71"]     # MM clause
     assert extract_refs("preamble PB/B11 and PB / c2")["pb"] == ["PB/B11", "PB/C2"]  # doc preambles
