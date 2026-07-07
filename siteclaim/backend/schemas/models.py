@@ -158,6 +158,10 @@ class SectionMeta(BaseModel):
     code: str
     title: str = ""
     item_count: int = 0
+    # The specialty trade this section shortlists against, derived DETERMINISTICALLY from the
+    # header title (``… GEOPHYSICAL SURVEY`` -> ``geophysical_survey``); the parent package trade
+    # when the title names no specialty. Set at ingest; the LLM writes no part of it.
+    section_trade: str = ""
 
 
 class TradeWorkPackage(BaseModel):

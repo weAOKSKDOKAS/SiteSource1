@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient
-from rules_engine.taxonomy import CANONICAL_TRADES, validate_scope
+from rules_engine.taxonomy import CANONICAL_TRADES, section_specialty, validate_scope
 from schemas.models import ScopePackages, SectionMeta, TenderPackage, TradeWorkPackage
 
 # A large Schedule of Rates (SR-01 is 58 pages, Sections A-T, hundreds of items) cannot be
@@ -151,7 +151,16 @@ def annotate_sections(scope: ScopePackages, doc_text: str = "") -> ScopePackages
                 if code not in counts:
                     order.append(code)
                 counts[code] = counts.get(code, 0) + 1
-        sections = [SectionMeta(code=c, title=titles.get(c, ""), item_count=counts[c]) for c in order]
+        # Each section's specialty pool for the shortlist: derived deterministically from the
+        # header title (geophysical / field installations / field testing), else the package's own
+        # trade — never an LLM call, never dropped.
+        sections = [
+            SectionMeta(
+                code=c, title=titles.get(c, ""), item_count=counts[c],
+                section_trade=section_specialty(titles.get(c, "")) or pkg.trade,
+            )
+            for c in order
+        ]
         packages.append(pkg.model_copy(update={"sor_items": items, "sections": sections}))
     return scope.model_copy(update={"packages": packages})
 

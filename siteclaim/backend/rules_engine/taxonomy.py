@@ -120,6 +120,28 @@ def parent_trade(trade: str) -> str:
     return _SPECIALTY_PARENTS.get(trade, trade)
 
 
+# Section-header keyword -> GI specialty sub-trade. Mirrors the specialty vocabulary in
+# ``db.register_loader._canonical_for`` so a section and the firms tagged for it land in the SAME
+# pool. Checked in order (most specific first) — a title is classified by the first group it hits.
+_SECTION_SPECIALTY: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("geophys", "televiewer", "ground penetrating radar", "gpr", "resistivity", "seismic"), "geophysical_survey"),
+    (("field installation", "piezometer", "standpipe", "inclinometer"), "field_installations"),
+    (("field testing", "in-situ", "in situ", "materials testing", "loading test"), "field_testing"),
+)
+
+
+def section_specialty(title: str) -> str | None:
+    """The GI specialty sub-trade a SoR section header names (``geophysical_survey`` /
+    ``field_installations`` / ``field_testing``), or ``None`` when it names none. A deterministic
+    keyword match on the header title — never an LLM call — so a Ground Investigation section can be
+    routed to its specialist pool without the model writing a decision value."""
+    t = (title or "").lower()
+    for needles, key in _SECTION_SPECIALTY:
+        if any(n in t for n in needles):
+            return key
+    return None
+
+
 def normalize(trade: str) -> str | None:
     """Map a free-form trade name to a canonical key, or None if unmapped."""
     raw = trade.strip().lower()

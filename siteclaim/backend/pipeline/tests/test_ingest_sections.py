@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from api import app
 from pipeline.stage_01_ingest.ingest import annotate_sections, section_of
+from rules_engine.taxonomy import section_specialty
 from schemas.models import ScopePackages, SorItem, TradeWorkPackage
 
 client = TestClient(app)
@@ -73,6 +74,47 @@ def test_real_sr_header_fixture_captures_two_letter_and_bracketed_titles():
     assert by["E"].title == "DRILLING"
     assert by["BB"].title == "LABORATORY TESTING"  # two-letter section header captured
     assert [i.section for i in pkg.sor_items] == ["A", "E", "I", "R", "BB"]
+
+
+# -- per-section specialty (roadmap #5): title -> specialty pool, deterministically ----------
+def test_section_specialty_reads_the_header_title():
+    assert section_specialty("SECTION J : GEOPHYSICAL SURVEY (BOREHOLE TELEVIEWER)") == "geophysical_survey"
+    assert section_specialty("FIELD INSTALLATIONS — PIEZOMETERS & STANDPIPES") == "field_installations"
+    assert section_specialty("FIELD TESTING / IN-SITU TESTS") == "field_testing"
+    assert section_specialty("DRILLING") is None  # names no specialty -> caller keeps the parent
+
+
+_GI_DOC = """
+SECTION G : FIELD TESTING
+G1  In-situ vane shear
+SECTION H : FIELD INSTALLATIONS
+H1  Install standpipe piezometer
+SECTION J : GEOPHYSICAL SURVEY
+J1  Borehole televiewer logging
+SECTION K : DRILLING
+K1  Rotary drilling
+"""
+
+
+def test_annotate_tags_each_gi_section_with_its_specialty_else_the_parent():
+    scope = ScopePackages(project_name="GE/2026/14", packages=[
+        TradeWorkPackage(trade="ground_investigation", scope_summary="GI", sor_items=[
+            SorItem(item_ref="G1"), SorItem(item_ref="H1"), SorItem(item_ref="J1"), SorItem(item_ref="K1"),
+        ]),
+    ])
+    by = {s.code: s for s in annotate_sections(scope, _GI_DOC).packages[0].sections}
+    assert by["G"].section_trade == "field_testing"
+    assert by["H"].section_trade == "field_installations"
+    assert by["J"].section_trade == "geophysical_survey"
+    assert by["K"].section_trade == "ground_investigation"  # unmatched title -> the parent trade
+
+
+def test_non_gi_package_sections_keep_the_parent_trade():
+    scope = ScopePackages(packages=[TradeWorkPackage(trade="electrical", scope_summary="LV", sor_items=[
+        SorItem(item_ref="E-01"), SorItem(item_ref="E-02"),
+    ])])
+    pkg = annotate_sections(scope, "").packages[0]
+    assert pkg.sections[0].section_trade == "electrical"  # no title, no GI keyword -> parent trade
 
 
 def test_demo_ingest_packages_are_single_section():
