@@ -41,6 +41,7 @@ from pipeline.stage_04_level.level import level_bids, load_demo_replies, merge_r
 from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
+from pipeline.scope_store import save_scope  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
 from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E402
 from pipeline.benchmark.eos_reason import EOS_REASON_FIXTURE, extract_reason_candidates  # noqa: E402
@@ -614,6 +615,9 @@ def _ingest_live(
 
     scope = scope.model_copy(update={"project_name": final_name})
     tagged = tagged.model_copy(update={"project_name": final_name})
+    # Persist the canonical scope split so the inbound-reply loop can route each returned line to
+    # its true SoR section by item identity, instead of stamping it with the enquiry's trade.
+    save_scope(workspace, final_name, scope)
     return IngestUploadResponse(scope=scope, tender=tagged, tender_slug=tender_slug(final_name))
 
 

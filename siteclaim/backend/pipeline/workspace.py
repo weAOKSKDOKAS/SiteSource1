@@ -104,6 +104,12 @@ class Workspace:
         """Where this run's per-document structural index (doc_index.json) lives."""
         return self.artifacts_dir(tender_id, create=create) / "doc_index.json"
 
+    def scope_path(self, tender_id: str, *, create: bool = False) -> Path:
+        """Where this run's canonical scope split (scope.json — the ``ScopePackages`` the ingest
+        produced) lives, so the inbound-reply loop can route returned lines to their true SoR
+        section by matching item identity instead of trusting the enquiry's trade."""
+        return self.artifacts_dir(tender_id, create=create) / "scope.json"
+
     def firm_attachment_path(self, tender_id: str, firm_id: str, filename: str) -> Path:
         """Where an assembled per-firm attachment (a sliced/whole PDF) is materialised."""
         safe_firm = _SLUG_STRIP.sub("-", (firm_id or "firm").lower()).strip("-") or "firm"
