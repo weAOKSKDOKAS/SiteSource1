@@ -30,7 +30,7 @@ import { StepShortlist } from "./steps/StepShortlist";
 import { StepDispatch } from "./steps/StepDispatch";
 import { StepLevel } from "./steps/StepLevel";
 import { StepRecommend } from "./steps/StepRecommend";
-import { IngestProgress } from "./IngestProgress";
+import { IngestIndicator } from "./IngestProgress";
 import { useIngestJob } from "./useIngestJob";
 
 export default function App() {
@@ -461,12 +461,16 @@ export default function App() {
     setError(null);
   }
 
-  if (view === "estimator" || view === "benchmark" || view === "database" || view === "projects") {
-    return (
-      <div className="min-h-screen">
-        <Header demoMode={demoMode} view={view} onNavigate={setView} />
-        <main className="mx-auto max-w-6xl px-5 py-8">
-          {view === "estimator" ? (
+  // Every top view shares one shell so the non-blocking ingest indicator (rendered once, below)
+  // shows on all of them and never remounts as the operator navigates while a tender extracts.
+  const sideView = view === "estimator" || view === "benchmark" || view === "database" || view === "projects";
+
+  return (
+    <div className="min-h-screen">
+      <Header demoMode={demoMode} view={view} onNavigate={setView} />
+      <main className="mx-auto max-w-6xl px-5 py-8">
+        {sideView ? (
+          view === "estimator" ? (
             <EstimatorPage />
           ) : view === "benchmark" ? (
             <BenchmarkPage />
@@ -474,29 +478,8 @@ export default function App() {
             <ProjectsPage />
           ) : (
             <DatabasePage />
-          )}
-        </main>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen">
-      <Header demoMode={demoMode} view={view} onNavigate={setView} />
-      {ingest.job && (
-        <IngestProgress
-          phase={ingest.job.phase}
-          startedAt={ingest.job.startedAt}
-          stage={ingest.job.stage}
-          progress={ingest.job.progress}
-          warnings={ingest.job.warnings}
-          error={ingest.job.error}
-          summary={ingest.job.summary}
-          onRetry={ingest.retry}
-          onCancel={ingest.cancel}
-        />
-      )}
-      <main className="mx-auto max-w-6xl px-5 py-8">
+          )
+        ) : (
         <div className="grid gap-8 lg:grid-cols-[16rem_1fr]">
           <Stepper current={step} maxReached={maxReached} onNavigate={setStep} />
           <div className="min-w-0 space-y-4">
@@ -615,7 +598,15 @@ export default function App() {
             )}
           </div>
         </div>
+        )}
       </main>
+      {/* App-shell chrome: the live-ingest indicator is non-blocking, bottom-right, on every page. */}
+      <IngestIndicator
+        job={ingest.job}
+        onCancel={ingest.cancel}
+        onDismiss={ingest.dismiss}
+        onRetry={ingest.retry}
+      />
     </div>
   );
 }
