@@ -606,6 +606,13 @@ export default function App() {
         onCancel={ingest.cancel}
         onDismiss={ingest.dismiss}
         onRetry={ingest.retry}
+        onOpenRoute={() => {
+          // Completion toast → Route, only when the operator chooses. Back to the wizard and into
+          // Route (the proposal is already prepared; goRoute re-analyses if it isn't), toast closed.
+          ingest.dismiss();
+          setView("wizard");
+          goRoute();
+        }}
       />
     </div>
   );
