@@ -40,7 +40,7 @@ from pipeline.stage_03_dispatch.mailer import send_bundles  # noqa: E402
 from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  # noqa: E402
 from pipeline.stage_04_level.level import level_bids, load_demo_replies, merge_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  # noqa: E402
-from pipeline.stage_04_level.route_items import route_reply_lines  # noqa: E402
+from pipeline.stage_04_level.route_items import route_reply_lines, section_totals  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
 from pipeline.workspace import Workspace, tender_slug  # noqa: E402
 from pipeline.scope_store import load_scope, save_scope  # noqa: E402
@@ -966,6 +966,16 @@ def post_level_upload(
     return levelled
 
 
+class SectionCoverage(BaseModel):
+    """How much of one SoR section this reply priced: the canonical package key it routed to, and
+    the count of that section's items the reply covered vs the section's total."""
+
+    package_key: str
+    section: str = ""
+    priced_items: int = 0
+    section_total: int = 0
+
+
 class InboundReplyResponse(BaseModel):
     """The outcome of an inbound reply: matched onto a tender's growing comparison, or
     unmatched (needs manual assignment). ``comparison`` is the re-leveled set of every
@@ -978,6 +988,9 @@ class InboundReplyResponse(BaseModel):
     trade: str = ""
     reply_count: int = 0
     comparison: list[LevelledBid] = Field(default_factory=list)
+    # Per section THIS reply priced: canonical items covered vs the section total (the minimal
+    # coverage signal — the full reconciliation UI is a later layer).
+    sections: list[SectionCoverage] = Field(default_factory=list)
     # Returned lines that matched no canonical SoR item — surfaced, never folded into a section's
     # totals (the subcontractor priced something outside this tender). Display notes, one per line.
     extras: list[str] = Field(default_factory=list)
@@ -1023,7 +1036,9 @@ def post_inbound_reply(
     # sections than the enquiry named. Route each priced line to its true SoR section by matching
     # item identity against the tender's canonical scope, and produce one bid per section it priced.
     scope = load_scope(workspace, tender_id)
-    new_replies, extras_notes = _route_reply(parsed, scope, firm_id=firm_id, trade=trade, tender_id=tender_id)
+    new_replies, extras_notes, coverage = _route_reply(
+        parsed, scope, firm_id=firm_id, trade=trade, tender_id=tender_id
+    )
 
     replies = reply_loop.accumulate_replies(workspace, tender_id, new_replies)
     levelled = level_bids(replies, scope)  # scope-aware leveling (reserved param now populated)
@@ -1033,7 +1048,7 @@ def post_inbound_reply(
                          extras=extras_notes or None)  # refresh the /leveling.xlsx download
     return InboundReplyResponse(
         status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
-        reply_count=len(replies), comparison=levelled, extras=extras_notes,
+        reply_count=len(replies), comparison=levelled, sections=coverage, extras=extras_notes,
     )
 
 
@@ -1047,14 +1062,15 @@ def _extra_note(firm_id: str, line: BidLineItem) -> str:
 
 def _route_reply(
     parsed: BidReply, scope: Optional[ScopePackages], *, firm_id: str, trade: str, tender_id: str,
-) -> tuple[list[BidReply], list[str]]:
+) -> tuple[list[BidReply], list[str], list[SectionCoverage]]:
     """Split a parsed reply into one :class:`BidReply` per SoR section the firm priced, plus the
-    out-of-scope extras as display notes. With no canonical scope (an older tender / the demo path)
-    it degrades to today's behaviour — one bid stamped with the ref trade — and logs the skip. The
-    LLM already parsed the lines; routing is deterministic Layer 1 (:mod:`route_items`)."""
+    out-of-scope extras (display notes) and the per-section coverage signal. With no canonical scope
+    (an older tender / the demo path) it degrades to today's behaviour — one bid stamped with the
+    ref trade, no coverage — and logs the skip. The LLM already parsed the lines; routing is
+    deterministic Layer 1 (:mod:`route_items`)."""
     if scope is None:
         _log.info("inbound routing skipped for %s — no persisted scope; stamping ref trade %r", tender_id, trade)
-        return [parsed.model_copy(update={"firm_id": firm_id, "trade": trade})], []
+        return [parsed.model_copy(update={"firm_id": firm_id, "trade": trade})], [], []
 
     result = route_reply_lines(parsed.line_items, scope)
     # One bid per section; trade = the canonical package key (e.g. "ground_investigation:H"). The
@@ -1068,7 +1084,21 @@ def _route_reply(
         # Nothing matched a canonical item (all extras / empty) — keep the firm on the enquiry's
         # trade with no priced lines rather than dropping it silently; the extras are still surfaced.
         new_replies = [BidReply(firm_id=firm_id, trade=trade, exclusions=parsed.exclusions)]
-    return new_replies, [_extra_note(firm_id, li) for li in result.extras]
+
+    # Coverage: distinct canonical items this reply priced per section, against the section total.
+    totals = section_totals(scope)
+    priced: dict[str, set[str]] = {}
+    for r in result.routed:
+        if r.package_key:
+            priced.setdefault(r.package_key, set()).add(r.canonical_ref or "")
+    coverage = [
+        SectionCoverage(
+            package_key=key, section=key.split(":", 1)[1] if ":" in key else "",
+            priced_items=len(priced.get(key, set())), section_total=totals.get(key, 0),
+        )
+        for key in result.by_key
+    ]
+    return new_replies, [_extra_note(firm_id, li) for li in result.extras], coverage
 
 
 @app.get("/leveling.xlsx")
