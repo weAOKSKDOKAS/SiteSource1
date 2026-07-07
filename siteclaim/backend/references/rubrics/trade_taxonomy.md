@@ -9,6 +9,9 @@ phrasing, but every `TradeWorkPackage.trade` is normalised to a canonical key he
 | --- | --- | --- |
 | `foundation_substructure` | Foundation & substructure | Piling, pile caps, ground beams, basement |
 | `ground_investigation` | Ground investigation | Boreholes, rotary drilling, sampling, in-situ & field testing (GI field works) |
+| `field_testing` | Field & in-situ testing | In-situ and materials testing — soil/rock testing, loading tests, field testing (GI sub-trade) |
+| `field_installations` | Field installations | GI field instrumentation — piezometers, standpipes, inclinometer installation (GI sub-trade) |
+| `geophysical_survey` | Geophysical survey | Geophysical methods — borehole televiewer, GPR, resistivity, seismic survey (GI sub-trade) |
 | `structural` | Structural steel | Steelwork, connections, metal decking |
 | `reinforced_concrete` | Reinforced concrete | Formwork, rebar fixing, concreting |
 | `electrical` | Electrical | LV distribution, containment, power & lighting |
@@ -28,3 +31,9 @@ phrasing, but every `TradeWorkPackage.trade` is normalised to a canonical key he
   investigation). It is only justified because real GI specialist firms carry it (the
   normalizer is shared with the shortlist), so `geotechnical` / `site investigation` /
   `drilling` now resolve to it instead of falling unmapped.
+- v3 promotes the three GI **specialty** sub-trades — `field_testing`,
+  `field_installations`, `geophysical_survey` — to first-class canonical keys. The
+  register loader already tags real firms with them, so a Ground Investigation section
+  can shortlist against its own specialist pool (with `ground_investigation` as the
+  parent fallback, see `rules_engine.taxonomy.parent_trade`) instead of the coarse
+  parent pool. They stop falling unmapped.

@@ -103,6 +103,23 @@ def base_trade(package_key: str) -> str:
     return (package_key or "").split(":", 1)[0]
 
 
+# The GI specialty sub-trades and their parent. A Ground Investigation section shortlists against
+# its own specialty pool (field_testing / field_installations / geophysical_survey), widening to
+# the parent ``ground_investigation`` when the specialist pool is too thin to compete. Kept explicit
+# and small — a canonical key not listed here is its own parent.
+_SPECIALTY_PARENTS: dict[str, str] = {
+    "field_testing": "ground_investigation",
+    "field_installations": "ground_investigation",
+    "geophysical_survey": "ground_investigation",
+}
+
+
+def parent_trade(trade: str) -> str:
+    """The parent canonical trade of a specialty sub-trade (``field_testing`` ->
+    ``ground_investigation``), or the trade itself when it has no parent. Deterministic."""
+    return _SPECIALTY_PARENTS.get(trade, trade)
+
+
 def normalize(trade: str) -> str | None:
     """Map a free-form trade name to a canonical key, or None if unmapped."""
     raw = trade.strip().lower()

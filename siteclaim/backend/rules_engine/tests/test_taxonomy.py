@@ -1,7 +1,22 @@
 """Deterministic trade-taxonomy normalisation (Layer 1)."""
 
-from rules_engine.taxonomy import CANONICAL_TRADES, normalize, validate_scope
+from rules_engine.taxonomy import CANONICAL_TRADES, normalize, parent_trade, validate_scope
 from schemas.models import ScopePackages, TradeWorkPackage
+
+
+def test_gi_specialties_are_canonical_and_normalise_to_themselves():
+    # v3: the three GI specialty sub-trades are first-class canonical keys (register-tagged firms
+    # carry them), so they no longer fall unmapped.
+    for key in ("field_testing", "field_installations", "geophysical_survey"):
+        assert key in CANONICAL_TRADES
+        assert normalize(key) == key
+
+
+def test_parent_trade_returns_ground_investigation_for_specialties_else_identity():
+    for key in ("field_testing", "field_installations", "geophysical_survey"):
+        assert parent_trade(key) == "ground_investigation"
+    assert parent_trade("ground_investigation") == "ground_investigation"
+    assert parent_trade("electrical") == "electrical"  # identity for a non-specialty
 
 
 def test_canonical_keys_loaded_from_the_rubric():
