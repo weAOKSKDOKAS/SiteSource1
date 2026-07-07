@@ -80,6 +80,27 @@ def test_cache_computes_once_then_reads(monkeypatch):
     assert calls["n"] == 1                          # computed once, cached thereafter
 
 
+def _blank_pdf() -> bytes:
+    doc = fitz.open()
+    doc.new_page()  # a page with no text layer -> OCR is attempted
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def test_an_empty_ocr_result_is_not_cached_but_a_real_one_is(tmp_path, monkeypatch):
+    # A transient engine/config failure returns empty text; that must NOT be cached, or every
+    # retry would fail instantly. Once the engine works, the real result caches.
+    data = _blank_pdf()
+    monkeypatch.setattr(ocr, "_ocr_or_empty", lambda *a, **k: "")   # engine "missing" -> empty
+    assert page_texts(data) == [""]
+    assert not list(tmp_path.rglob("*.json"))                       # nothing persisted
+
+    monkeypatch.setattr(ocr, "_ocr_or_empty", lambda *a, **k: "7.34A Rotary drilling in rock")
+    assert page_texts(data) == ["7.34A Rotary drilling in rock"]    # recomputed, not the poisoned empty
+    assert list(tmp_path.rglob("*.json"))                          # now it caches
+
+
 def test_line_structure_is_preserved_for_clause_markers():
     # doc_index matches clause / PB markers at line start, so line breaks must survive.
     pages = page_texts(_text_pdf(["7.34A Rotary drilling in rock", "7.37A Standard penetration test"]))

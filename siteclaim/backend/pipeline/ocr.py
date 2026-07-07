@@ -126,9 +126,9 @@ def _cache_read(key: str) -> Optional[list[str]]:
     except (json.JSONDecodeError, OSError, ValueError):
         return None  # corrupt / unreadable cache -> recompute
     pages = obj.get("pages") if isinstance(obj, dict) else None
-    if isinstance(pages, list) and all(isinstance(p, str) for p in pages):
+    if isinstance(pages, list) and all(isinstance(p, str) for p in pages) and any(p.strip() for p in pages):
         return pages
-    return None
+    return None  # missing / corrupt, or an all-empty (poisoned) payload -> treat as a miss
 
 
 def _cache_write(key: str, pages: list[str]) -> None:
@@ -217,5 +217,6 @@ def page_texts(
     if cached is not None:
         return cached
     pages = _compute_page_texts(data, min_native_chars, dpi, lang, psm)
-    _cache_write(key, pages)
+    if any(p.strip() for p in pages):
+        _cache_write(key, pages)  # only persist a real result — a transient failure never sticks
     return pages
