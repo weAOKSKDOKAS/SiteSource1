@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from rules_engine.leveling import computable_amount
-from schemas.models import BidReply, LevelledBid
+from schemas.models import BidReply, LevelledBid, SorItem
 
 OUT_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "out" / "leveling.xlsx"
 
@@ -43,25 +43,32 @@ def export_leveling_xlsx(
     project_name: str = "",
     extras: Optional[list[str]] = None,
     awaiting: Optional[dict[str, list[str]]] = None,
+    units: Optional[list[str]] = None,
+    unit_items: Optional[dict[str, list[SorItem]]] = None,
 ) -> Path:
     """Write the levelled comparison to ``path`` and return it — one styled sheet per ROUTED UNIT
     (the dispatched enquiry), one rate column per firm whose active reply covers that unit, plus a
-    Summary cover tab when more than one unit is compared. ``awaiting`` (unit key -> firm labels
-    enquired but not yet replied) is noted on each sheet so the operator sees coverage at a glance.
-    When ``extras`` is given (returned lines priced outside the tender's SoR — surfaced, never added
-    to any unit's totals), an "Extras" tab lists them."""
+    Summary cover tab when more than one unit is compared.
+
+    The sheet UNIVERSE is ``units`` when given (the tender's DISPATCHED units, so an enquiry whose
+    return is empty or absent STILL gets its sheet), unioned with any levelled/reply unit; without
+    ``units`` it is the levelled units (the reply-anchored behaviour). ``unit_items`` (unit key ->
+    the unit's canonical SoR items in scope order) anchors each sheet on ITS canonical items — every
+    one shown, a firm's rate where its return matched, a scope gap where not. ``awaiting`` (unit key
+    -> firm labels enquired but not yet replied) is noted per sheet; ``extras`` (returned lines
+    priced outside the tender's SoR — surfaced, never in a unit's totals) get an "Extras" tab."""
     from openpyxl import Workbook  # lazy — leveling math must not require openpyxl
 
-    # Group by trade, preserving first-seen order. Each trade is written as its own
-    # sheet so a multi-trade comparison never mixes two trades' items in one table.
-    trades: list[str] = []
+    # The sheet universe: the dispatched units (so an unreplied enquiry still gets a sheet), then any
+    # levelled/reply unit not already listed. Each unit is its own sheet — two units never merge.
+    trades: list[str] = list(units or [])
     for b in levelled:
         if b.trade not in trades:
             trades.append(b.trade)
 
     wb = Workbook()
     first_used = False
-    if not trades:  # nothing levelled — keep a single empty comparison sheet
+    if not trades:  # nothing levelled and nothing dispatched — keep a single empty comparison sheet
         wb.active.title = "Leveling"
         first_used = True
     if len(trades) > 1:  # the cover tab: each trade's corrected totals at a glance
@@ -80,6 +87,7 @@ def export_leveling_xlsx(
             item_order,
             project_name,
             awaiting_firms=(awaiting or {}).get(trade),
+            canonical_items=(unit_items or {}).get(trade),
         )
 
     if extras:  # out-of-scope returned lines — surfaced, never folded into a section
@@ -130,6 +138,9 @@ def _write_summary_sheet(ws, trades: list[str], levelled: list[LevelledBid], pro
     style_header(ws, header_row, 4)
     for trade in trades:
         bids = [b for b in levelled if b.trade == trade]
+        if not bids:  # a dispatched unit with no return yet — listed, never crashed on min([])
+            ws.append([sheet_title(trade), 0, "—", "awaiting return"])
+            continue
         low = min(bids, key=lambda b: b.corrected_total)
         ws.append([sheet_title(trade), len(bids), low.corrected_total, low.firm_name])
         money_cell(ws.cell(row=ws.max_row, column=3))
@@ -145,10 +156,18 @@ def _write_trade_sheet(
     project_name: str = "",
     *,
     awaiting_firms: Optional[list[str]] = None,
+    canonical_items: Optional[list[SorItem]] = None,
 ) -> None:
     """One routed unit's comparison table onto ``ws`` (this unit's firms/items only), one rate
     column per firm whose reply covers it — styled with the shared kit; the values are exactly the
-    leveling output. ``awaiting_firms`` (enquired, not yet replied) is noted below the table."""
+    leveling output.
+
+    When ``canonical_items`` is given (the unit's canonical SoR items) the sheet is ENQUIRY-anchored:
+    every canonical item is a row, a firm's rate where its return matched (by NORMALISED ref — a
+    routed line keeps its original ref form), a "scope gap (unpriced)" note where not — so a return
+    that priced nothing still shows the full item set, and the sheet exists even with no return.
+    Without it the sheet is reply-anchored (unchanged). ``awaiting_firms`` (enquired, not yet
+    replied) is noted below the table."""
     import datetime as _dt
 
     from pipeline._xlsx_style import (
@@ -160,23 +179,39 @@ def _write_trade_sheet(
         style_totals,
         title_block,
     )
+    from pipeline.stage_04_level.route_items import normalize_ref
 
     levelled_by_firm = {b.firm_id: b for b in levelled}
     firm_ids = [b.firm_id for b in levelled]
 
-    # Item rows in scope order (only refs this trade's bids actually price), then any
-    # extra item the bids introduced.
-    priced_refs = {line.item_ref for r in replies for line in r.line_items}
-    items: list[str] = [ref for ref in (item_order or []) if ref in priced_refs]
-    for reply in replies:
-        for line in reply.line_items:
-            if line.item_ref not in items:
-                items.append(line.item_ref)
+    if canonical_items is not None:
+        # Enquiry-anchored: ALL of the unit's canonical items, in scope order, matched to a firm's
+        # returned line by NORMALISED ref (routed lines keep their original ref). A returned line
+        # matching no canonical item is appended (defensive — real out-of-scope lines go to Extras).
+        canon_norms = {normalize_ref(it.item_ref) for it in canonical_items}
+        desc_by_ref = {it.item_ref: (it.description or "") for it in canonical_items}
+        items = [it.item_ref for it in canonical_items]
+        for reply in replies:
+            for line in reply.line_items:
+                if normalize_ref(line.item_ref) not in canon_norms and line.item_ref not in items:
+                    items.append(line.item_ref)
+        norm_by_ref = {ref: normalize_ref(ref) for ref in items}
+        line_index = {
+            (r.firm_id, normalize_ref(line.item_ref)): line for r in replies for line in r.line_items
+        }
+    else:
+        # Reply-anchored (unchanged): the priced refs in scope order, then any extra the bids introduced.
+        priced_refs = {line.item_ref for r in replies for line in r.line_items}
+        items = [ref for ref in (item_order or []) if ref in priced_refs]
+        for reply in replies:
+            for line in reply.line_items:
+                if line.item_ref not in items:
+                    items.append(line.item_ref)
+        canon_norms = set()
+        desc_by_ref = {}
+        norm_by_ref = {ref: ref for ref in items}  # identity keying
+        line_index = {(r.firm_id, line.item_ref): line for r in replies for line in r.line_items}
 
-    # Per (firm, item): (rate, corrected_amount, has_finding/gap note)
-    line_index = {
-        (r.firm_id, line.item_ref): line for r in replies for line in r.line_items
-    }
     finding_items = {
         firm_id: {f.location.replace("line ", "") for f in b.arithmetic_findings}
         for firm_id, b in levelled_by_firm.items()
@@ -205,13 +240,16 @@ def _write_trade_sheet(
     style_header(ws, header_row, len(header))
 
     for item_ref in items:
-        description = ""
+        description = desc_by_ref.get(item_ref, "")
+        is_canonical = normalize_ref(item_ref) in canon_norms if canon_norms else False
         row = [item_ref, ""]
         notes: list[str] = []
         for firm_id in firm_ids:
-            line = line_index.get((firm_id, item_ref))
+            line = line_index.get((firm_id, norm_by_ref.get(item_ref, item_ref)))
             if line is None:
                 row += ["", ""]
+                if is_canonical:  # a canonical item this firm did not return -> a scope gap on its sheet
+                    notes.append(f"{levelled_by_firm[firm_id].firm_name}: scope gap (unpriced)")
                 continue
             description = description or line.description or ""
             # Rate is the primary comparison and is always shown; the amount cell is filled
@@ -221,9 +259,9 @@ def _write_trade_sheet(
                 line.rate if line.rate is not None else "—",
                 amount if amount is not None else "—",
             ]
-            if item_ref in finding_items.get(firm_id, set()):
+            if line.item_ref in finding_items.get(firm_id, set()):
                 notes.append(f"{levelled_by_firm[firm_id].firm_name}: arithmetic corrected")
-            if item_ref in gap_items.get(firm_id, set()):
+            if line.item_ref in gap_items.get(firm_id, set()):
                 notes.append(f"{levelled_by_firm[firm_id].firm_name}: scope gap (unpriced)")
         row[1] = description
         row.append("; ".join(notes))

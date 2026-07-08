@@ -1047,10 +1047,13 @@ def post_inbound_reply(
     replies = reply_loop.accumulate_replies(workspace, tender_id, new_replies)
     levelled = level_bids(replies, scope)  # scope-aware leveling (reserved param now populated)
     awaiting = _awaiting_by_unit(workspace, tender_id, replies)  # enquired-but-not-replied per unit
+    units, unit_items = _sheet_layout(workspace, tender_id, scope, levelled, replies)
     export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id),
-                         project_name=tender_id, extras=extras_notes or None, awaiting=awaiting)
+                         project_name=tender_id, extras=extras_notes or None, awaiting=awaiting,
+                         units=units, unit_items=unit_items)
     export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=tender_id,
-                         extras=extras_notes or None, awaiting=awaiting)  # refresh /leveling.xlsx
+                         extras=extras_notes or None, awaiting=awaiting,
+                         units=units, unit_items=unit_items)  # refresh /leveling.xlsx
     return InboundReplyResponse(
         status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
         reply_count=len(replies), comparison=levelled, sections=coverage, extras=extras_notes,
@@ -1068,6 +1071,34 @@ def _awaiting_by_unit(workspace: Workspace, tender_id: str, active_replies: list
             continue
         awaiting.setdefault(d["trade"], []).append(d["firm_id"])
     return awaiting
+
+
+def _sheet_layout(
+    workspace: Workspace, tender_id: str, scope: Optional[ScopePackages],
+    levelled: list[LevelledBid], replies: list[BidReply],
+) -> tuple[list[str], dict[str, list]]:
+    """``(ordered sheet universe, {unit key -> canonical SoR items})`` for the comparison export: the
+    universe is this tender's DISPATCHED units (from the registry) unioned with any levelled/reply
+    unit, so every dispatched enquiry gets a canonical-anchored sheet even when its return is empty or
+    absent. ``unit_items`` (from the persisted scope's routed units) anchors each sheet on ITS
+    canonical items. Empty when no scope is persisted (an older tender) -> reply-anchored fallback."""
+    unit_items: dict[str, list] = {}
+    if scope is not None:
+        from pipeline.routing.split import route_units  # lazy: the routed-unit vocabulary
+        unit_items = {u["package_key"]: u["package"].sor_items for u in route_units(scope)}
+    canonical = tender_slug(tender_id)
+    dispatched = {
+        d["trade"] for d in reply_loop.outstanding_dispatches(workspace)
+        if tender_slug(d["tender_id"]) == canonical
+    }
+    order: list[str] = [key for key in unit_items if key in dispatched]  # dispatched units, scope order
+    for b in levelled:
+        if b.trade not in order:
+            order.append(b.trade)
+    for r in replies:
+        if r.trade not in order:
+            order.append(r.trade)
+    return order, unit_items
 
 
 def _extra_note(firm_id: str, line: BidLineItem) -> str:
@@ -1215,9 +1246,11 @@ def post_withdraw_reply(slug: str, req: WithdrawReplyRequest) -> dict:
     replies = reply_loop.tender_replies(workspace, canonical)  # active only
     levelled = level_bids(replies, scope)
     awaiting = _awaiting_by_unit(workspace, canonical, replies)
+    units, unit_items = _sheet_layout(workspace, canonical, scope, levelled, replies)
     export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, canonical),
-                         project_name=canonical, awaiting=awaiting)
-    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=canonical, awaiting=awaiting)
+                         project_name=canonical, awaiting=awaiting, units=units, unit_items=unit_items)
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=canonical,
+                         awaiting=awaiting, units=units, unit_items=unit_items)
     return {"withdrawn": True, "firm_id": req.firm_id, "package_key": req.package_key, "reply_count": len(replies)}
 
 

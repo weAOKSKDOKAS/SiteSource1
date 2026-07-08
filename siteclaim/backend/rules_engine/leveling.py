@@ -73,9 +73,20 @@ def peer_item_reference(replies: list[BidReply]) -> dict[str, float]:
 
 
 def level_reply(
-    reply: BidReply, firm_name: str, peer_reference: dict[str, float] | None = None
+    reply: BidReply,
+    firm_name: str,
+    peer_reference: dict[str, float] | None = None,
+    *,
+    unpriced_scope: list[tuple[str, str, float]] | None = None,
 ) -> LevelledBid:
-    """Level one :class:`BidReply` into a :class:`LevelledBid` (pure, deterministic)."""
+    """Level one :class:`BidReply` into a :class:`LevelledBid` (pure, deterministic).
+
+    ``unpriced_scope`` puts the bid on the tender's COMMON SCOPE BASIS: the canonical items of this
+    reply's routed unit the firm did NOT return, each as ``(item_ref, description, peer_value)``.
+    They are recorded as scope gaps (so a return that priced only part of its enquiry is honest) and
+    valued at ``peer_value`` in ``normalized_total`` — a bid that left scope out is compared
+    like-for-like. Supplied by the scope-aware caller (:func:`level_bids` with a scope); ``None``
+    keeps the reply-anchored behaviour. Pure Layer 1 — no model, no pipeline import here."""
     peer_reference = peer_reference or {}
     item_rates: list[ItemRate] = []
     findings: list[ArithmeticFinding] = []
@@ -117,10 +128,15 @@ def level_reply(
         if amount is not None:
             corrected_total += amount
 
+    # Common-scope basis: canonical items of this unit the firm never returned are gaps too — listed
+    # so partial coverage is visible, and valued at the peer price so bids compare like-for-like.
+    normalized_extra = sum(peer_reference.get(ref, 0.0) for ref in gap_item_refs)
+    for ref, desc, peer_value in unpriced_scope or []:
+        scope_gaps.append(f"{ref} — {desc} (not returned)".rstrip())
+        normalized_extra += peer_value
+
     corrected_total = round(corrected_total, 2)
-    normalized_total = round(
-        corrected_total + sum(peer_reference.get(ref, 0.0) for ref in gap_item_refs), 2
-    )
+    normalized_total = round(corrected_total + normalized_extra, 2)
 
     return LevelledBid(
         firm_id=reply.firm_id,

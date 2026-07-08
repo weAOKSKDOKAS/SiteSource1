@@ -119,20 +119,52 @@ def parse_bid_reply(
     return merge_replies(replies, firm_id, trade)
 
 
+def _scope_basis(
+    replies: list[BidReply], scope: ScopePackages,
+) -> tuple[dict[str, list], dict[str, float]]:
+    """The common-scope basis for scope-aware leveling: ``({unit key -> canonical items},
+    {normalized ref -> peer median amount})``. The peer map is keyed on the NORMALISED ref so a
+    canonical item a firm omitted is valued by what its peers charged for the same item even when the
+    ref forms drift (``J5(a)`` / ``J5A``). Pure Layer-1 routing; no model."""
+    from rules_engine.leveling import computable_amount
+    from pipeline.stage_04_level.route_items import build_canonical_items, normalize_ref
+
+    canon_by_unit: dict[str, list] = {}
+    for c in build_canonical_items(scope):
+        if c.package_key is not None:
+            canon_by_unit.setdefault(c.package_key, []).append(c)
+
+    peer_amounts: dict[str, list[float]] = {}
+    for reply in replies:
+        for line in reply.line_items:
+            amount = computable_amount(line)
+            if amount is not None:
+                peer_amounts.setdefault(normalize_ref(line.item_ref), []).append(amount)
+    from statistics import median
+    peer_by_norm = {nr: float(median(vals)) for nr, vals in peer_amounts.items() if vals}
+    return canon_by_unit, peer_by_norm
+
+
 def level_bids(
     replies: list[BidReply],
-    scope: Optional[ScopePackages] = None,  # noqa: ARG001 — reserved for scope-aware checks
+    scope: Optional[ScopePackages] = None,
     demo_fixture: Optional[str] = None,
     *,
     conn: Optional[sqlite3.Connection] = None,
 ) -> list[LevelledBid]:
     """Level every reply onto a common scope basis.
 
-    If ``replies`` is empty and ``demo_fixture`` is given, the baked ``BidReply``
-    fixture is loaded (the DEMO_MODE path). Firm names come from the database.
-    """
+    If ``replies`` is empty and ``demo_fixture`` is given, the baked ``BidReply`` fixture is loaded
+    (the DEMO_MODE path). Firm names come from the database. When ``scope`` is given, each bid is
+    levelled against its routed unit's FULL canonical item set: a canonical item the firm did not
+    return is a scope gap valued at the peer price, so partial-coverage returns are honest and
+    compared like-for-like. Without a scope it is the reply-anchored behaviour (unchanged)."""
     if not replies and demo_fixture:
         replies = load_demo_replies(demo_fixture)
+
+    from pipeline.stage_04_level.route_items import normalize_ref
+
+    canon_by_unit, peer_by_norm = _scope_basis(replies, scope) if scope is not None else ({}, {})
 
     own_conn = conn is None
     conn = conn or store.get_connection()
@@ -142,7 +174,13 @@ def level_bids(
         for reply in replies:
             profile = store.firm_profile(conn, reply.firm_id)
             firm_name = profile.name if profile is not None else reply.firm_id
-            levelled.append(level_reply(reply, firm_name, peer))
+            returned = {normalize_ref(line.item_ref) for line in reply.line_items}
+            unpriced = [
+                (c.item_ref, c.description, peer_by_norm.get(c.norm_ref, 0.0))
+                for c in canon_by_unit.get(reply.trade, [])
+                if c.norm_ref and c.norm_ref not in returned
+            ]
+            levelled.append(level_reply(reply, firm_name, peer, unpriced_scope=unpriced))
         return levelled
     finally:
         if own_conn:
