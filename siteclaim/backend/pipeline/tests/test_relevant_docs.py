@@ -212,6 +212,26 @@ def test_directed_search_joins_the_sor_ref_and_the_located_heading_on_the_canoni
     assert ps.directed_clauses == ["7.286A"] and "7.286A" in ps.clauses
 
 
+def test_directed_search_is_ocr_tolerant_of_spaced_dots_and_a_leading_equals():
+    # OCR emits whitespace around the dots ("7.77. 2A", "7. 77.2A") and a stray leading "="; all must
+    # normalise to the canonical id and locate. A cue-preceded inline stays rejected.
+    entry = DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                          text_layer=True, page_count=10, clause_index={})
+    texts = {"PS-S07.pdf": [
+        "SECTION 7",
+        "General requirements 7.77. 2A (1) Within three weeks the contractor shall",   # spaced inner dot
+        "Rotary coring =7.286A (1) Boreholes shall be sunk to rockhead",               # leading '='
+        "as set out in accordance with Clause 7.301A of this specification",           # inline -> rejected
+    ]}
+    plan = resolve_section_plan(
+        package_key="x", trade="ground_investigation", section_title="DRILLING",
+        items=[_item(["PS 7.77.2A", "PS 7.286A", "PS 7.301A"], section="G")], doc_index=[entry],
+        sor_sheet_name="s.xlsx", page_texts_of=_texts(texts))
+    ps = next(a for a in plan.attachments if a.source_doc == "PS-S07.pdf")
+    assert set(ps.directed_clauses) == {"7.77.2A", "7.286A"}   # OCR-spaced + '='-prefixed forms located
+    assert ps.clauses_not_located == ["7.301A"]                # only cited inline -> not located, surfaced
+
+
 def test_directed_search_does_not_touch_the_mm_or_native_index_paths():
     # A text reader is supplied, but the MM is still sliced by its own index (PB 71) — the directed
     # search is PS-only; the MM and native line-start paths are unchanged.

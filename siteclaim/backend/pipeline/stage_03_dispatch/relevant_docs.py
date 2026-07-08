@@ -103,33 +103,31 @@ def _slice_pages(entry: DocIndexEntry, clauses: list[str]) -> list[int]:
 
 # -- directed clause location over cached OCR text (engine-independent) -------
 # We KNOW which PS/GS clauses a section references (its SoR clause_refs). When the blind clause_index
-# missed one (the live symptom: a scanned multi-column page whose word-box column path could not run),
-# locate that specific clause by searching the doc's CACHED OCR text — no live engine, works on single-
-# and multi-column layouts alike. A clause id as it appears in the text (>= 1 dot, optional letter /
-# bracket suffix), tolerant of leading OCR punctuation, anchored so it is not matched inside a longer
-# number.
-_TEXT_CLAUSE = re.compile(r"(?<![\w.])[=.]*\d+(?:\.\d+)+[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?")
+# STILL missed one after mid-line detection, locate that specific clause by searching the doc's CACHED
+# page text — no live engine, single- and multi-column alike. OCR-TOLERANT: the clause id may carry a
+# leading "=" and whitespace around its dots (verified in the wild: "=7.286A", "7.77. 2A", "7. 77.2A");
+# the match is normalised (whitespace stripped, leading "=" dropped) before canonicalisation. Anchored
+# so it is not matched inside a longer number.
+# Whitespace is tolerated ONLY around the DOTS ("7.77. 2A", "7. 77.2A"); the suffix bracket must
+# follow immediately (no space), so a space-separated body "(1)" after the id is NOT absorbed as part
+# of it ("7.286A (1)" -> "7.286A", not "7.286A(1)").
+_OCR_CLAUSE = re.compile(r"(?<![\w.])=?\d+(?:\s*\.\s*\d+)+[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?")
 
 
 def _located_headings(page_texts: list[str], section_number: str) -> dict[str, list[int]]:
     """``{canonical clause id -> sorted 0-based pages}`` for every clause id that appears as a HEADING
-    in the cached OCR text — at a line start, or mid-line NOT immediately preceded by a cue word (a
-    multi-column page where the id sits after a label). A cue-preceded occurrence ("in accordance with
-    Clause 7.286A") is an inline cross-reference and is skipped. Reuses ``doc_index``'s
-    inline-vs-heading discrimination; reads text only, so it is engine-independent and layout-agnostic."""
-    from pipeline.stage_01_ingest.doc_index import _CUE_WORDS, _accept_clause_id, _clean_word
+    in the cached page text — the SAME line-start / mid-line heading test as the blind index
+    (``doc_index._is_heading_occurrence``), so an inline cross-reference ("… in Clauses 7.301A (4)")
+    or a measurement ("… 7.5 metres") is not taken as a heading. OCR-tolerant matching; reads text
+    only, so it is engine-independent and layout-agnostic."""
+    from pipeline.stage_01_ingest.doc_index import _accept_clause_id, _is_heading_occurrence
 
     out: dict[str, set[int]] = {}
     for page_no, text in enumerate(page_texts):
         for line in text.splitlines():
-            for m in _TEXT_CLAUSE.finditer(line):
-                before = line[: m.start()]
-                if before.strip(" \t=.:)|("):  # not a line start -> the immediately-preceding word decides
-                    words = re.findall(r"[A-Za-z]+", before)
-                    if words and _clean_word(words[-1]) in _CUE_WORDS:
-                        continue  # inline cross-reference, not a heading
-                cid = clause_of(m.group(0))
-                if cid and _accept_clause_id(cid, section_number):
+            for m in _OCR_CLAUSE.finditer(line):
+                cid = clause_of(re.sub(r"\s+", "", m.group(0)).lstrip("="))  # normalise OCR spacing / '='
+                if cid and _accept_clause_id(cid, section_number) and _is_heading_occurrence(line, m, section_number):
                     out.setdefault(cid, set()).add(page_no)
     return {k: sorted(v) for k, v in out.items()}
 
