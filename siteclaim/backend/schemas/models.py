@@ -194,6 +194,7 @@ class TenderDocument(BaseModel):
     doc_type: DocType
     filename: str
     trades: list[str] = Field(default_factory=list)  # empty = general (every trade); else routed only to these
+    doc_type_source: str = ""  # how doc_type was decided: "" (unclassified seed) | filename | title | llm | fallback
 
 
 class TenderPackage(BaseModel):

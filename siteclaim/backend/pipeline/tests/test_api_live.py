@@ -491,3 +491,32 @@ def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
     assert body["status"] == "done", body
     assert seen["doc_text"] == ""  # no schedule_of_rates text fed to the extractor
     assert body["result"]["scope"]["packages"][0]["sor_items"] == []
+
+
+def test_a_classification_fallback_extracts_no_items_and_warns(monkeypatch, tmp_path):
+    # Fail-safe: when classification cannot place a document it becomes the neutral GENERAL kind, so
+    # its MoM-like text (toolbox talks / payment of wages) never reaches the priced-item extractor —
+    # and the operator is warned on the job summary, not left to discover phantom packages at Route.
+    from schemas.models import DocType, ScopePackages, TenderPackage, TradeWorkPackage
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    monkeypatch.setattr("api.extract_document", lambda data, ct: ("toolbox talks; payment of wages; sprayed concrete", []))
+    monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
+    monkeypatch.setattr("api.classify_documents", lambda tender, imgs, per_doc_text=None: TenderPackage(
+        project_name=tender.project_name,
+        documents=[d.model_copy(update={"doc_type": DocType.GENERAL, "doc_type_source": "fallback", "trades": []})
+                   for d in tender.documents]))
+    captured = {}
+
+    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None, on_error=None):
+        captured["doc_text"] = doc_text
+        return ScopePackages(project_name="GE/2026/14", packages=[
+            TradeWorkPackage(trade="ground_investigation", scope_summary="GI", sor_items=[])])
+    monkeypatch.setattr("api.ingest_tender", fake_ingest)
+
+    body = _ingest_and_wait(files={"files": ("I-GE_2026_14_TSC-MM-01.pdf", b"x", "application/pdf")})
+    assert body["status"] == "done", body
+    assert captured["doc_text"] == ""                                    # neutral doc -> no SoR text extracted
+    assert body["result"]["scope"]["packages"][0]["sor_items"] == []     # zero phantom items
+    assert any("could not be classified" in w and "MM-01" in w for w in body["warnings"])  # loud on the summary

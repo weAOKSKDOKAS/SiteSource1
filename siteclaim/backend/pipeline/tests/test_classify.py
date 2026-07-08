@@ -171,11 +171,36 @@ def test_classify_sets_doc_type_independently_of_general_routing():
     assert all(d.trades == [] for d in by_name.values())                      # all general (routing)
 
 
-def test_low_confidence_doc_type_keeps_the_uploaded_kind():
+class RaisingClient:
+    """An LLM client that always fails — models a transient timeout / provider error."""
+
+    def complete_json(self, **_):
+        raise RuntimeError("timeout classifying")
+
+
+def test_low_confidence_doc_type_falls_back_to_neutral_general():
+    # The fail-safe fix (inverts the old bug): a low-confidence kind is NOT trusted and must NOT keep
+    # the SCHEDULE_OF_RATES seed — the document becomes the neutral GENERAL kind (context only).
     tender = _tender([("mystery.pdf", DocType.SCHEDULE_OF_RATES)])
     client = FakeClient({"mystery.pdf": {"general": True, "doc_type": "method_of_measurement", "confidence": 0.2}})
-    # Low confidence -> the classifier's kind is not trusted; the uploaded doc_type stays.
-    assert classify_documents(tender, client=client).documents[0].doc_type is DocType.SCHEDULE_OF_RATES
+    doc = classify_documents(tender, client=client).documents[0]
+    assert doc.doc_type is DocType.GENERAL and doc.doc_type_source == "fallback"
+
+
+def test_classification_failure_falls_back_to_neutral_general_not_the_seed():
+    # The definitive bug: a transient LLM failure while classifying the MoM left the SCHEDULE_OF_RATES
+    # seed in place, turning 48 pp of MoM prose into phantom priced items. It must fail SAFE now.
+    tender = _tender([("I-GE_2026_14_TSC-MM-01.pdf", DocType.SCHEDULE_OF_RATES)])
+    doc = classify_documents(tender, client=RaisingClient()).documents[0]
+    assert doc.doc_type is DocType.GENERAL          # neutral — never the SoR seed
+    assert doc.doc_type_source == "fallback" and doc.trades == []
+
+
+def test_confident_classification_records_llm_provenance():
+    tender = _tender([("sr01.pdf", DocType.SCHEDULE_OF_RATES)])
+    client = FakeClient({"sr01.pdf": {"general": True, "doc_type": "schedule_of_rates", "confidence": 0.9}})
+    doc = classify_documents(tender, client=client).documents[0]
+    assert doc.doc_type is DocType.SCHEDULE_OF_RATES and doc.doc_type_source == "llm"
 
 
 def test_classify_prompt_requests_doc_type_and_general_for_cross_trade_docs():

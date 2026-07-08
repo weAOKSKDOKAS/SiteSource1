@@ -163,9 +163,15 @@ def classify_documents(
     **Text-first**: when ``per_doc_text[i]`` has a usable text layer the document is
     classified from a text snippet (no image is attached, so the call routes to the cheap
     text provider); only a scanned document with no text falls back to vision, using
-    ``per_doc_images[i]`` (its first one or two rendered pages). A per-document
-    classification error falls back to **general** (empty trades) — never a withheld
-    document. The input tender is not mutated; a tagged copy is returned.
+    ``per_doc_images[i]`` (its first one or two rendered pages).
+
+    **Fail safe on BOTH axes.** A per-document error, a low-confidence read, or an
+    unrecognised label falls back to **general** for routing (empty trades — never a
+    withheld document) AND to the neutral ``DocType.GENERAL`` kind — never the caller's
+    seed. So a classification hiccup can promote nothing into the priced-item path; each
+    document records how its kind was decided in ``doc_type_source`` (``llm`` | ``fallback``)
+    so the caller can surface the fallbacks. The input tender is not mutated; a tagged copy
+    is returned.
     """
     client = client or LLMClient()
     tagged: list[TenderDocument] = []
@@ -176,7 +182,13 @@ def classify_documents(
         images = None if text.strip() else (
             per_doc_images[index] if per_doc_images and index < len(per_doc_images) else None
         )
-        doc_type = doc.doc_type  # kept if classification fails or the label is unrecognised
+        # Fail SAFE: default to the NEUTRAL kind, never the caller's seed. A document only leaves
+        # this loop as a Schedule of Rates (or any specific kind) when the classifier CONFIDENTLY
+        # resolves it — so a timeout, a JSON/validation error, a low-confidence read, or an
+        # unrecognised label can never promote a document into the priced-item path by inertia.
+        doc_type: DocType = DocType.GENERAL
+        source = "fallback"
+        trades: list[str] = []
         try:
             result = client.complete_json(
                 system=_system_prompt(),
@@ -189,12 +201,15 @@ def classify_documents(
             trades = _resolve_trades(result)
             resolved_type = _resolve_doc_type(result.doc_type)
             if resolved_type is not None and result.confidence >= MIN_CONFIDENCE:
-                doc_type = resolved_type
+                doc_type, source = resolved_type, "llm"
+            else:
+                # Recognised-but-low-confidence, or an unrecognised label -> neutral (general), surfaced.
+                print(f"[classify] {doc.filename!r}: doc_type not confidently resolved "
+                      f"(label={result.doc_type!r}, confidence={result.confidence}); routing general as context.")
         except (RuntimeError, FileNotFoundError, ValidationError, ValueError) as exc:
-            # Any classification hiccup routes the document general — the safe direction.
-            print(f"[classify] classification failed for {doc.filename!r} ({exc}); routing general.")
-            trades = []
-        tagged.append(doc.model_copy(update={"trades": trades, "doc_type": doc_type}))
+            # Any classification hiccup -> general (empty trades), the safe direction.
+            print(f"[classify] classification failed for {doc.filename!r} ({exc}); routing general as context.")
+        tagged.append(doc.model_copy(update={"trades": trades, "doc_type": doc_type, "doc_type_source": source}))
     return TenderPackage(
         project_name=tender.project_name,
         description=tender.description,

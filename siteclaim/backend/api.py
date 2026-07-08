@@ -537,9 +537,12 @@ def _ingest_live(
     read-out; it never changes the result. Provider routing (text→DeepSeek, images→Claude) and
     the per-section split are unchanged — this is the same body that ran inline before, moved
     onto a worker so it can take as long as it needs."""
+    # Seed every upload as the NEUTRAL kind, never SCHEDULE_OF_RATES: classification must PROMOTE a
+    # document into the priced path, so a classification hiccup can never leave the SoR seed in place
+    # and turn a Method of Measurement's item-like rows into phantom priced items.
     tender = TenderPackage(
         project_name=project_name,
-        documents=[TenderDocument(doc_type=DocType.SCHEDULE_OF_RATES, filename=fn or "upload") for fn, _ct, _data in files_data],
+        documents=[TenderDocument(doc_type=DocType.GENERAL, filename=fn or "upload") for fn, _ct, _data in files_data],
     )
     workspace = Workspace()
     originals: list[tuple[str, bytes]] = []  # saved late — under the final name (below)
@@ -569,6 +572,13 @@ def _ingest_live(
     if progress_cb:
         progress_cb("classifying", 0, 0)
     tagged = classify_documents(tender, per_doc_images, per_doc_text=doc_texts)
+    # Surface every document that ended NEUTRAL because classification could not place it (a hiccup /
+    # low confidence / unrecognised label): it is routed as context, not the priced path — loud, so
+    # the operator sees it at ingest rather than discovering phantom packages at Route.
+    if on_error:
+        for doc in tagged.documents:
+            if doc.doc_type_source == "fallback":
+                on_error(f"{doc.filename!r} could not be classified — routed as context, no items extracted")
     sor_text_parts: list[str] = []
     context_parts: list[str] = []
     scope_images: list[str] = []
