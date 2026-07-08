@@ -124,6 +124,79 @@ def test_priced_return_is_the_generated_sheet_when_no_original_sor_was_uploaded(
     assert sor.mode == "generated" and sor.source_doc == "SoR_joinery.xlsx" and PRICED_RETURN in sor.flags
 
 
+# -- the section is derived from ITEMS for a suffix-less (single/specialty) package -------------
+_FOUR_SECTION_SOR = [
+    ("SECTION G : TRIAL PITS AND HAND AUGER HOLES", "G1 Excavate trial pit by hand to depth"),
+    (None, "G2 Backfill and compact the completed trial pit"),
+    ("SECTION H : ROTARY DRILLING AND SAMPLING", "H1 Boreholes by rotary drilling in soil"),
+    (None, "H2 Standpipe piezometer installation and readings"),
+    ("SECTION I : LABORATORY TESTING", "I1 Triaxial compression test on samples"),
+    ("SECTION J : FIELD INSTRUMENTATION", "J1 Vibrating wire piezometer monitoring"),
+]
+
+
+def _live_sor(tmp_path):
+    """A workspace with the four-section SoR uploaded and indexed — the live dispatch inputs."""
+    ws = Workspace(tmp_path)
+    data = _sor_pdf(_FOUR_SECTION_SOR)
+    ws.save_upload(_TID, _SR, data)
+    entry = build_doc_entry(_SR, DocType.SCHEDULE_OF_RATES, data)
+    save_doc_index(ws, _TID, [entry])
+    return ws, entry
+
+
+def test_a_suffix_less_specialty_package_slices_its_items_section(tmp_path):
+    # The live bug: a single-section specialty package routes with NO ":SECTION" suffix, so the section
+    # must come from its items — otherwise the SoR is sent WHOLE. Items carry section "H".
+    ws, entry = _live_sor(tmp_path)
+    scope = ScopePackages(packages=[TradeWorkPackage(
+        trade="field_installations", scope_summary="Field installations",
+        sor_items=[SorItem(item_ref="H1", description="Rotary drilling", section="H"),
+                   SorItem(item_ref="H2", description="Standpipe", section="H")])])
+    plan = plan_for_firms(scope, {"field_installations": ["F1"]}, tender_id=_TID, workspace=ws)["field_installations"]
+    sor = plan.attachments[0]
+    assert sor.mode == "sliced" and sor.source_doc == _SR            # sliced, NOT the whole SR
+    assert sor.out_filename == "SoR_field_installations_Section_H.pdf"
+    assert sor.pages == [p + 1 for p in sorted(entry.sor_section_pages["H"])]  # exactly H's pages
+    assert PRICED_RETURN in sor.flags
+
+
+def test_a_suffix_carrying_key_slices_the_same_section(tmp_path):
+    # A :H-suffixed key drives off the suffix and yields an identical H slice + name.
+    ws, entry = _live_sor(tmp_path)
+    scope = ScopePackages(packages=[TradeWorkPackage(
+        trade="field_installations", scope_summary="x", sor_items=[])])  # suffix, not items, drives it
+    plan = plan_for_firms(scope, {"field_installations:H": ["F1"]}, tender_id=_TID, workspace=ws)["field_installations:H"]
+    sor = plan.attachments[0]
+    assert sor.mode == "sliced" and sor.out_filename == "SoR_field_installations_Section_H.pdf"
+    assert sor.pages == [p + 1 for p in sorted(entry.sor_section_pages["H"])]
+
+
+def test_a_suffix_less_multi_section_package_slices_the_union_of_its_sections(tmp_path):
+    # A suffix-less package whose items span two sections (H and I) -> the union of both sections' pages.
+    ws, entry = _live_sor(tmp_path)
+    scope = ScopePackages(packages=[TradeWorkPackage(
+        trade="ground_investigation", scope_summary="GI",
+        sor_items=[SorItem(item_ref="H1", description="Drilling", section="H"),
+                   SorItem(item_ref="I1", description="Triaxial", section="I")])])
+    plan = plan_for_firms(scope, {"ground_investigation": ["F1"]}, tender_id=_TID, workspace=ws)["ground_investigation"]
+    sor = plan.attachments[0]
+    union = sorted(set(entry.sor_section_pages["H"]) | set(entry.sor_section_pages["I"]))
+    assert sor.mode == "sliced" and sor.pages == [p + 1 for p in union]
+    assert sor.out_filename == "SoR_ground_investigation_Section_H-I.pdf"
+
+
+def test_a_suffix_less_package_whose_section_is_unindexed_still_flags_whole(tmp_path):
+    # The section genuinely isn't in the indexed SoR -> the whole SoR, flagged (never a silent drop).
+    ws, _ = _live_sor(tmp_path)
+    scope = ScopePackages(packages=[TradeWorkPackage(
+        trade="external_works", scope_summary="x",
+        sor_items=[SorItem(item_ref="Z1", description="Landscape edging", section="Z")])])
+    plan = plan_for_firms(scope, {"external_works": ["F1"]}, tender_id=_TID, workspace=ws)["external_works"]
+    sor = plan.attachments[0]
+    assert sor.mode == "whole" and "whole_section_not_located" in sor.flags and PRICED_RETURN in sor.flags
+
+
 # -- assembly: the slice is sent under its friendly PDF name ----------------
 def test_assembly_sends_the_sor_slice_under_its_friendly_pdf_name(tmp_path):
     ws = Workspace(tmp_path)

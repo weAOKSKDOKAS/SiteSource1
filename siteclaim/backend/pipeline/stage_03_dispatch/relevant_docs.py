@@ -201,43 +201,52 @@ def _unit_out_name(trade: str, package_key: str, section: str) -> str:
 
 
 def _priced_return_attachment(
-    doc_index: list[DocIndexEntry], *, section: str, trade: str, package_key: str, sor_sheet_name: str,
+    doc_index: list[DocIndexEntry], *, sections: list[str], trade: str, package_key: str, sor_sheet_name: str,
 ) -> PlanAttachment:
     """The priced-return sheet this enquiry asks the firm to fill and send back. In order of
     preference: the ORIGINAL Schedule of Rates sliced to this unit's section pages (``mode="sliced"``,
-    emitted as ``SoR_{unit}_Section_{X}.pdf``) when an indexed SoR carries the section; the whole SoR
-    flagged when it is present but the section is not locatable (scanned / unindexed); or — offline,
-    with no original SoR uploaded — the generated ``.xlsx`` sheet (unchanged DEMO / no-upload path).
-    Always flagged :data:`PRICED_RETURN` so the human gate never drops it."""
-    section_key = (section or "").upper()
+    emitted as ``SoR_{unit}_Section_{X}.pdf``) when an indexed SoR carries the section(s); the whole
+    SoR flagged when it is present but NONE of the unit's sections is locatable (scanned / unindexed);
+    or — offline, with no original SoR uploaded — the generated ``.xlsx`` sheet (unchanged DEMO /
+    no-upload path). ``sections`` is the unit's SoR section code(s): the ``:SECTION`` suffix for a
+    split unit, or — for a suffix-less single/specialty package — the distinct sections its items
+    carry; a multi-section unit slices the UNION of their pages. Always flagged :data:`PRICED_RETURN`
+    so the human gate never drops it."""
+    section_keys = list(dict.fromkeys(s.upper() for s in sections if s))  # distinct, order-preserved
     sr_entries = [e for e in doc_index if e.kind == "schedule_of_rates"]
     if not sr_entries:
         return PlanAttachment(
             source_doc=sor_sheet_name, mode="generated", flags=[PRICED_RETURN],
             reason="Priced Schedule of Rates for this section")
-    hit = next((e for e in sr_entries if e.text_layer and section_key in e.sor_section_pages), None)
+    hit = next(
+        (e for e in sr_entries if e.text_layer and any(sk in e.sor_section_pages for sk in section_keys)), None)
     if hit is not None:
-        # The section's OWN pages, exactly — NO ±1 straddle expansion. ±1 is for spec clauses (which
-        # can cross a page break); a SoR section is already delimited at page granularity by _spans,
-        # so expanding it would leak the ADJACENT sections' items into the sheet this firm is asked to
-        # price (and let a firm bid a section it was never enquired on).
-        pages = [p + 1 for p in sorted(hit.sor_section_pages[section_key])]
+        located = [sk for sk in section_keys if sk in hit.sor_section_pages]
+        # Each located section's OWN pages, in page order — the UNION for a multi-section unit, NO ±1
+        # straddle expansion. ±1 is for spec clauses (which can cross a page break); a SoR section is
+        # already delimited at page granularity by _spans, so expanding it would leak the ADJACENT
+        # sections' items into the sheet this firm is asked to price (and let a firm bid a section it
+        # was never enquired on).
+        pages = [p + 1 for p in sorted({p for sk in located for p in hit.sor_section_pages[sk]})]
+        plural = "s" if len(located) > 1 else ""
         return PlanAttachment(
-            source_doc=hit.filename, out_filename=_unit_out_name(trade, package_key, section_key),
+            source_doc=hit.filename, out_filename=_unit_out_name(trade, package_key, "-".join(located)),
             mode="sliced", pages=pages, flags=[PRICED_RETURN],
-            reason=f"Schedule of Rates — Section {section_key} (the priced-return sheet for this enquiry)")
-    # The SoR is present but this section could not be located (scanned / unindexed) -> whole, flagged.
+            reason=f"Schedule of Rates — Section{plural} {', '.join(located)} (the priced-return sheet for this enquiry)")
+    # The SoR is present but none of this unit's sections could be located (scanned / unindexed) -> whole, flagged.
     e = sr_entries[0]
     scanned = not e.text_layer
+    label = ", ".join(section_keys) or "?"
     return PlanAttachment(
         source_doc=e.filename, out_filename=_unit_out_name(trade, package_key, ""), mode="whole",
         flags=[PRICED_RETURN, "scanned_whole" if scanned else "whole_section_not_located"],
-        reason=f"Schedule of Rates — whole ({'scanned' if scanned else f'Section {section_key} not located'})")
+        reason=f"Schedule of Rates — whole ({'scanned' if scanned else f'Section {label} not located'})")
 
 
 def resolve_section_plan(
     *, package_key: str, trade: str, section_title: str, items: list,
     doc_index: list[DocIndexEntry], sor_sheet_name: str, section: str = "",
+    sections: Optional[list[str]] = None,
     page_texts_of: Optional[Callable[[str], list[str]]] = None,
 ) -> SectionPlan:
     """The relevant-only attachment plan for one dispatched SoR section, driven by the clause
@@ -300,9 +309,13 @@ def resolve_section_plan(
     appendix_clauses = _dedup(appendix_clauses + onward)
     cited_appendices = cited_appendices | {spec_section_of(a) for a in onward if spec_section_of(a)}
 
+    # The unit's SoR section code(s): the caller's explicit list (a suffix-less package derives them
+    # from its items) or, by default, the single ``:SECTION`` suffix. Never derive from clause refs.
+    unit_sections = sections if sections is not None else ([section] if section else [])
     plan: list[PlanAttachment] = [
         _priced_return_attachment(
-            doc_index, section=section, trade=trade, package_key=package_key, sor_sheet_name=sor_sheet_name),
+            doc_index, sections=unit_sections, trade=trade, package_key=package_key,
+            sor_sheet_name=sor_sheet_name),
     ]
     present_ps: set[str] = set()
     present_appendices: set[str] = set()

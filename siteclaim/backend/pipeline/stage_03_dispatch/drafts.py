@@ -56,11 +56,19 @@ def plan_for_firms(
     plans: dict[str, SectionPlan] = {}
     for package_key in approvals:
         pkg = pkg_by_key.get(package_key)
-        section = package_key.split(":", 1)[1] if ":" in package_key else ""
+        items = pkg.sor_items if pkg else []
+        suffix = package_key.split(":", 1)[1] if ":" in package_key else ""
+        # A split unit carries its section in the ``:SECTION`` suffix; a suffix-less single/specialty
+        # package (e.g. ``field_installations``) has none, so derive its section(s) from its items —
+        # otherwise the SoR would be sent WHOLE for want of a section to slice on.
+        unit_sections = (
+            [suffix] if suffix
+            else list(dict.fromkeys(s for it in items if (s := (it.section or "").strip().upper())))
+        )
         plans[package_key] = resolve_section_plan(
             package_key=package_key, trade=base_trade(package_key),
-            section_title=(pkg.scope_summary if pkg else ""), section=section,
-            items=(pkg.sor_items if pkg else []), doc_index=doc_index,
+            section_title=(pkg.scope_summary if pkg else ""), section=suffix, sections=unit_sections,
+            items=items, doc_index=doc_index,
             sor_sheet_name=ws.sor_sheet_path(tender_id, package_key).name,
             page_texts_of=page_texts_of,
         )
