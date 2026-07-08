@@ -27,7 +27,45 @@ _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 # A Hong Kong contract number: a letter prefix then 2–3 slash-separated numeric groups,
 # e.g. "GE/2026/14", "HY/2020/09". Preferred as the slug — short, human, and stable.
 _CONTRACT_RE = re.compile(r"[A-Za-z]{1,5}(?:\s*/\s*\d{1,4}){2,3}")
+# The same contract number embedded in free DOCUMENT text — stricter than `_CONTRACT_RE` (which
+# slugs an already-short project name): the middle group must be a 4-digit YEAR (19xx/20xx), so a
+# clause reference like "PS/7/34" or a bare date buried in a spec is not mistaken for a contract.
+_DOC_CONTRACT_RE = re.compile(r"[A-Za-z]{1,4}\s*/\s*(?:19|20)\d{2}\s*/\s*\d{1,3}\b")
 _SLUG_MAX = 40  # keep slugs short so nested artifact paths stay well under Windows' 259-char limit
+
+
+def name_has_contract_number(project_name: str) -> bool:
+    """Whether ``project_name`` already embeds a contract number ``tender_slug`` would key off."""
+    return bool(_CONTRACT_RE.search(project_name or ""))
+
+
+def contract_number_in_text(text: str) -> str:
+    """The first Hong Kong contract number found in a block of document text, normalised to its
+    canonical ``GE/2026/14`` form (whitespace around the slashes dropped, prefix upper-cased), or
+    ``""`` when none is present. Pure and deterministic — a regex read of the cached document text,
+    no model — used at ingest to anchor a tender's identity on its contract number."""
+    match = _DOC_CONTRACT_RE.search(text or "")
+    if not match:
+        return ""
+    return re.sub(r"\s+", "", match.group(0)).upper()
+
+
+def anchor_name_on_contract(project_name: str, document_text: str) -> str:
+    """Return ``project_name`` guaranteed to carry a contract number ``tender_slug`` keys off, so a
+    tender's on-disk identity and its ``[SiteSource Ref: …]`` slug are the stable ``ge-2026-14``.
+
+    If the name already embeds a contract number it is returned unchanged; else, if a contract
+    number is found in ``document_text``, it is prepended (``"Contract No. GE/2026/14 — {name}"``, or
+    just ``"Contract No. GE/2026/14"`` when the name is empty); else the name is returned unchanged.
+    Pure and deterministic. The caller applies it only to NEW ingests, so existing slugs/refs — which
+    store their own full name — are untouched."""
+    if name_has_contract_number(project_name):
+        return project_name
+    contract = contract_number_in_text(document_text)
+    if not contract:
+        return project_name
+    base = (project_name or "").strip()
+    return f"Contract No. {contract} — {base}" if base else f"Contract No. {contract}"
 
 
 def tender_slug(project_name: str) -> str:

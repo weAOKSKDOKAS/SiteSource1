@@ -42,7 +42,11 @@ from pipeline.stage_04_level.level import level_bids, load_demo_replies, merge_r
 from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  # noqa: E402
 from pipeline.stage_04_level.route_items import route_reply_lines, section_totals  # noqa: E402
 from pipeline.stage_05_recommend.recommend import recommend  # noqa: E402
-from pipeline.workspace import Workspace, tender_slug  # noqa: E402
+from pipeline.workspace import (  # noqa: E402
+    Workspace,
+    anchor_name_on_contract,
+    tender_slug,
+)
 from pipeline.scope_store import load_scope, save_scope  # noqa: E402
 from pipeline import reply_loop  # noqa: E402
 from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E402
@@ -609,6 +613,13 @@ def _ingest_live(
     final_name = project_name
     if project_name == DEFAULT_UPLOAD_PROJECT_NAME and extracted and extracted != DEFAULT_UPLOAD_PROJECT_NAME:
         final_name = extracted
+    # Anchor the tender's identity on its Hong Kong contract number: when the finalised name does
+    # not already embed one (the extracted title dropped it) but the documents carry one, prepend
+    # it so `tender_slug` yields the stable, human `ge-2026-14` rather than a name hash. New ingests
+    # only (this runs solely on the live path); `tender_slug` is unchanged and already-recorded refs
+    # store their own full name, so they keep resolving.
+    base_name = "" if final_name == DEFAULT_UPLOAD_PROJECT_NAME else final_name
+    final_name = anchor_name_on_contract(base_name, "\n".join(sor_text_parts + context_parts)) or final_name
     for filename, data in originals:
         workspace.save_upload(final_name, filename, data)
     # Structural per-document index (kind, spec section, text layer, clause -> page) for the
