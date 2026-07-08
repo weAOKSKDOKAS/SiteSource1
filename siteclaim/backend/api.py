@@ -1036,6 +1036,10 @@ def post_inbound_reply(
     # sections than the enquiry named. Route each priced line to its true SoR section by matching
     # item identity against the tender's canonical scope, and produce one bid per section it priced.
     scope = load_scope(workspace, tender_id)
+    if scope is not None:
+        # Re-key any stale pre-fix reply into the tender's real routed units before we re-level,
+        # so an old misrouted entry stops flooding another unit's comparison.
+        reply_loop.migrate_stale_replies(workspace, tender_id, scope)
     new_replies, extras_notes, coverage = _route_reply(
         parsed, scope, firm_id=firm_id, trade=trade, tender_id=tender_id
     )
@@ -1118,9 +1122,11 @@ def get_leveling_xlsx() -> FileResponse:
 # ---------------------------------------------------------------------------
 class TenderReplyInfo(BaseModel):
     firm_id: str
-    trade: str
+    trade: str  # the routed-unit package_key this reply covers (aligned with the enquiry key)
     line_items: int
     claimed_total: float | None = None
+    status: str = "active"  # active | superseded | withdrawn | migrated (history is never deleted)
+    received_at: str | None = None
 
 
 class TenderRepliesResponse(BaseModel):
@@ -1143,8 +1149,14 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
     either the slug or a slash-free tender name resolves to the same tender."""
     workspace = Workspace()
     canonical = tender_slug(slug)
-    replies = reply_loop.tender_replies(workspace, canonical)
-    replied = {(r.firm_id, r.trade) for r in replies}
+    # Migrate on load: re-key any stale reply stored under a non-routed-unit key (a pre-fix
+    # misrouted entry) into the tender's real units, so the received join and comparison align.
+    scope = load_scope(workspace, canonical)
+    if scope is not None:
+        reply_loop.migrate_stale_replies(workspace, canonical, scope)
+    records = reply_loop.tender_reply_records(workspace, canonical)
+    active = [r for r in records if r.get("status") == "active"]
+    replied = {(r["reply"].get("firm_id"), r["reply"].get("trade")) for r in active}  # aligned keys
     outstanding = [
         {"firm_id": d["firm_id"], "trade": d["trade"]}
         for d in reply_loop.outstanding_dispatches(workspace)
@@ -1152,15 +1164,41 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
     ]
     return TenderRepliesResponse(
         tender_slug=canonical,
-        reply_count=len(replies),
+        reply_count=len(active),
         last_received=reply_loop.replies_last_received(workspace, canonical),
         replies=[
-            TenderReplyInfo(firm_id=r.firm_id, trade=r.trade, line_items=len(r.line_items), claimed_total=r.claimed_total)
-            for r in replies
+            TenderReplyInfo(
+                firm_id=r["reply"].get("firm_id", ""), trade=r["reply"].get("trade", ""),
+                line_items=len(r["reply"].get("line_items", [])), claimed_total=r["reply"].get("claimed_total"),
+                status=r.get("status", "active"), received_at=r.get("received_at"),
+            )
+            for r in records
         ],
         outstanding=outstanding,
         comparison_available=reply_loop.comparison_file(workspace, canonical).is_file(),
     )
+
+
+class WithdrawReplyRequest(BaseModel):
+    firm_id: str
+    package_key: str  # the routed-unit key of the reply to withdraw from the comparison
+
+
+@app.post("/tender/{slug}/replies/withdraw")
+def post_withdraw_reply(slug: str, req: WithdrawReplyRequest) -> dict:
+    """Human gate: withdraw a firm's reply for one routed unit from the comparison (a bad upload
+    never permanently pollutes an award). The reply is kept as history, not deleted; the comparison
+    is re-levelled from the remaining active replies. Nothing auto-deletes."""
+    workspace = Workspace()
+    canonical = tender_slug(slug)
+    if not reply_loop.withdraw_reply(workspace, canonical, req.firm_id, req.package_key):
+        raise HTTPException(status_code=404, detail="No active reply for that firm and unit.")
+    scope = load_scope(workspace, canonical)
+    replies = reply_loop.tender_replies(workspace, canonical)  # active only
+    levelled = level_bids(replies, scope)
+    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, canonical), project_name=canonical)
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=canonical)
+    return {"withdrawn": True, "firm_id": req.firm_id, "package_key": req.package_key, "reply_count": len(replies)}
 
 
 @app.get("/tender/{slug}/comparison.xlsx")

@@ -108,33 +108,127 @@ def _replies_path(ws: Workspace, tender_id: str) -> Path:
     return ws.tender_dir(tender_id) / _REPLIES_FILE
 
 
+# A reply is stored as a RECORD, not a bare BidReply, so the registry keeps history: a firm's new
+# reply for the same (firm, routed-unit) SUPERSEDES the prior one in the comparison, but the prior
+# stays on file (status "superseded"), and an operator can WITHDRAW a bad upload — nothing is ever
+# deleted silently. Legacy files (a flat list of BidReply) are read transparently as active records.
+_ACTIVE = "active"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _key(reply: dict) -> tuple[str, str]:
+    """(firm_id, routed-unit key) — the identity a reply supersedes / is withdrawn on."""
+    return (reply.get("firm_id", ""), reply.get("trade", ""))
+
+
+def _load_records(ws: Workspace, tender_id: str) -> list[dict]:
+    """Every stored reply record for ``tender_id`` (each ``{reply, received_at, status}``), reading
+    a legacy flat ``BidReply`` list as active records so an older registry keeps working."""
+    records: list[dict] = []
+    for entry in _read_json(_replies_path(ws, tender_id), []):
+        if not isinstance(entry, dict):
+            continue
+        if "reply" in entry:
+            records.append(entry)  # new record format
+        elif "firm_id" in entry:  # legacy bare BidReply -> wrap as an active record
+            records.append({"reply": entry, "received_at": None, "status": _ACTIVE})
+    return records
+
+
+def _save_records(ws: Workspace, tender_id: str, records: list[dict]) -> None:
+    _write_json(_replies_path(ws, tender_id), records)
+
+
+def tender_reply_records(ws: Workspace, tender_id: str) -> list[dict]:
+    """All reply records (active + superseded + withdrawn + migrated), for the operator view."""
+    return _load_records(ws, tender_id)
+
+
 def tender_replies(ws: Workspace, tender_id: str) -> list[BidReply]:
-    """Every reply received for ``tender_id`` so far."""
-    return [BidReply.model_validate(r) for r in _read_json(_replies_path(ws, tender_id), [])]
+    """The ACTIVE replies for ``tender_id`` — what the comparison / leveling reads (a superseded or
+    withdrawn reply is history and never entered into the levelled set)."""
+    return [BidReply.model_validate(r["reply"]) for r in _load_records(ws, tender_id) if r.get("status") == _ACTIVE]
 
 
-def accumulate_replies(ws: Workspace, tender_id: str, new_replies: list[BidReply]) -> list[BidReply]:
-    """Store one firm's inbound (now possibly SEVERAL per-section bids) for ``tender_id`` and return
-    all replies received so far.
+def accumulate_replies(
+    ws: Workspace, tender_id: str, new_replies: list[BidReply], *, received_at: Optional[str] = None,
+) -> list[BidReply]:
+    """Store one firm's inbound (possibly SEVERAL per-unit bids) and return the ACTIVE replies.
 
-    A firm can hold bids in more than one section — one returned document routes to several
-    sections — so replies are keyed by (firm, section=``trade``). A firm that replies again replaces
-    ALL of its earlier bids (every section) with this fresh batch, so re-leveling never
-    double-counts. ``new_replies`` is normally one firm's per-section bids; the dedup is by the
-    firms present in the batch.
+    Keep-latest per (firm, routed unit): a new bid for the same (firm, ``trade``) supersedes the
+    prior active one — the prior is kept as history (status "superseded"), never dropped. A firm can
+    hold active bids in several units at once; only the units in this batch are superseded.
     """
-    firms = {r.firm_id for r in new_replies}
-    replies = [r for r in tender_replies(ws, tender_id) if r.firm_id not in firms]
-    replies.extend(new_replies)
-    _write_json(_replies_path(ws, tender_id), [r.model_dump() for r in replies])
-    return replies
+    stamp = received_at or _now_iso()
+    records = _load_records(ws, tender_id)
+    incoming = {(r.firm_id, r.trade) for r in new_replies}
+    for rec in records:
+        if rec.get("status") == _ACTIVE and _key(rec["reply"]) in incoming:
+            rec["status"] = "superseded"
+    records.extend({"reply": r.model_dump(), "received_at": stamp, "status": _ACTIVE} for r in new_replies)
+    _save_records(ws, tender_id, records)
+    return tender_replies(ws, tender_id)
 
 
 def accumulate_reply(ws: Workspace, tender_id: str, reply: BidReply) -> list[BidReply]:
-    """Store a single ``reply`` for ``tender_id`` (dedup by firm) and return all replies so far —
-    the one-bid-per-firm path, kept for callers that route no section (the legacy / ref-trade
-    fallback). Delegates to :func:`accumulate_replies`."""
+    """Store a single ``reply`` (keep-latest on its (firm, unit)) and return the active replies."""
     return accumulate_replies(ws, tender_id, [reply])
+
+
+def withdraw_reply(ws: Workspace, tender_id: str, firm_id: str, package_key: str) -> bool:
+    """Human gate: withdraw a firm's active reply for one routed unit from the comparison (marks it
+    "withdrawn" — kept as history, never deleted). Returns True if an active reply was withdrawn."""
+    records = _load_records(ws, tender_id)
+    found = False
+    for rec in records:
+        if rec.get("status") == _ACTIVE and _key(rec["reply"]) == (firm_id, package_key):
+            rec["status"] = "withdrawn"
+            found = True
+    if found:
+        _save_records(ws, tender_id, records)
+    return found
+
+
+def migrate_stale_replies(ws: Workspace, tender_id: str, scope) -> list[dict]:
+    """Re-key STALE active reply records into the tender's real routed units by re-running the
+    item-identity routing on their stored lines. A record is stale when re-routing its lines does
+    NOT reproduce exactly its stored key — a pre-fix reply stamped with the ref trade (all 70 G/H/J
+    lines under one key), or one synthesised on a now-wrong key. The stale record is kept as history
+    (status "migrated") and its lines re-emitted as correctly-keyed active records; anything that
+    re-keys with extras (or cannot re-key at all) is surfaced as needing attention — never dropped.
+    Idempotent: a record whose lines already all route to its own key is untouched."""
+    from pipeline.stage_04_level.route_items import route_reply_lines  # lazy: no import cycle
+
+    records = _load_records(ws, tender_id)
+    needs_attention: list[dict] = []
+    changed = False
+    for rec in list(records):
+        if rec.get("status") != _ACTIVE:
+            continue
+        stored_key = rec["reply"].get("trade")
+        reply = BidReply.model_validate(rec["reply"])
+        result = route_reply_lines(reply.line_items, scope)
+        if set(result.by_key) == {stored_key} and not result.extras:
+            continue  # already correctly keyed — leave it
+        rec["status"] = "migrated"
+        changed = True
+        for key, lines in result.by_key.items():
+            records.append({
+                "reply": BidReply(firm_id=reply.firm_id, trade=key, line_items=lines,
+                                  exclusions=reply.exclusions).model_dump(),
+                "received_at": rec.get("received_at"), "status": _ACTIVE,
+            })
+        if result.extras or not result.by_key:
+            needs_attention.append({
+                "firm_id": reply.firm_id, "stale_key": stored_key or "",
+                "extras": len(result.extras), "rekeyed": bool(result.by_key),
+            })
+    if changed:
+        _save_records(ws, tender_id, records)
+    return needs_attention
 
 
 def comparison_path(ws: Workspace, tender_id: str) -> Path:
