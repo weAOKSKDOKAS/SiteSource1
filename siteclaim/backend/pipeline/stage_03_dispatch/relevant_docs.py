@@ -21,10 +21,13 @@ The plan is data (testable offline); the actual file slicing (``slice_pdf``) run
 
 from __future__ import annotations
 
+import re
+from typing import Callable, Optional
+
 from pydantic import BaseModel, Field
 
 from pipeline.stage_01_ingest.doc_index import DocIndexEntry
-from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of, refs_for_items, spec_section_of
+from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of, extract_refs, refs_for_items, spec_section_of
 
 
 class PlanAttachment(BaseModel):
@@ -34,6 +37,8 @@ class PlanAttachment(BaseModel):
     mode: str                  # "sliced" | "whole" | "generated"
     pages: list[int] = Field(default_factory=list)   # 1-based pages (sliced mode only)
     clauses: list[str] = Field(default_factory=list)  # the clause ids this extract contains
+    directed_clauses: list[str] = Field(default_factory=list)  # of ``clauses``, those the blind index
+    #   MISSED and the directed text search located (engine-independent) — for the location report
     reason: str = ""
     flags: list[str] = Field(default_factory=list)   # e.g. "scanned_whole" | "whole_clause_not_located"
 
@@ -73,22 +78,87 @@ def apply_attachment_overrides(
     return plan.model_copy(update={"attachments": kept})
 
 
+def _expand(pages0: set[int], page_count: int) -> list[int]:
+    """0-based pages expanded ±1 and clamped to the doc, so a clause straddling a page break stays
+    whole. Shared by the blind-index slice and the directed-search slice."""
+    last = max(0, page_count - 1)
+    out: set[int] = set()
+    for p in pages0:
+        for q in (p - 1, p, p + 1):
+            if 0 <= q <= last:
+                out.add(q)
+    return sorted(out)
+
+
 def _slice_pages(entry: DocIndexEntry, clauses: list[str]) -> list[int]:
-    """0-based pages spanned by a set of clause ids, each page expanded ±1 (clamped to the doc)
-    so a clause straddling a page break is kept whole. ``clause_index`` maps a clause to the
-    list of pages it spans."""
+    """0-based pages spanned by a set of clause ids, each page expanded ±1. ``clause_index`` maps a
+    clause to the list of pages it spans."""
     hits: set[int] = set()
     for c in clauses:
         hits.update(entry.clause_index.get(c, []))
-    if not hits:
-        return []
-    pages: set[int] = set()
-    last = max(0, entry.page_count - 1)
-    for p in hits:
-        for q in (p - 1, p, p + 1):
-            if 0 <= q <= last:
-                pages.add(q)
-    return sorted(pages)
+    return _expand(hits, entry.page_count) if hits else []
+
+
+# -- directed clause location over cached OCR text (engine-independent) -------
+# We KNOW which PS/GS clauses a section references (its SoR clause_refs). When the blind clause_index
+# missed one (the live symptom: a scanned multi-column page whose word-box column path could not run),
+# locate that specific clause by searching the doc's CACHED OCR text — no live engine, works on single-
+# and multi-column layouts alike. A clause id as it appears in the text (>= 1 dot, optional letter /
+# bracket suffix), tolerant of leading OCR punctuation, anchored so it is not matched inside a longer
+# number.
+_TEXT_CLAUSE = re.compile(r"(?<![\w.])[=.]*\d+(?:\.\d+)+[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?")
+
+
+def _located_headings(page_texts: list[str], section_number: str) -> dict[str, list[int]]:
+    """``{canonical clause id -> sorted 0-based pages}`` for every clause id that appears as a HEADING
+    in the cached OCR text — at a line start, or mid-line NOT immediately preceded by a cue word (a
+    multi-column page where the id sits after a label). A cue-preceded occurrence ("in accordance with
+    Clause 7.286A") is an inline cross-reference and is skipped. Reuses ``doc_index``'s
+    inline-vs-heading discrimination; reads text only, so it is engine-independent and layout-agnostic."""
+    from pipeline.stage_01_ingest.doc_index import _CUE_WORDS, _accept_clause_id, _clean_word
+
+    out: dict[str, set[int]] = {}
+    for page_no, text in enumerate(page_texts):
+        for line in text.splitlines():
+            for m in _TEXT_CLAUSE.finditer(line):
+                before = line[: m.start()]
+                if before.strip(" \t=.:)|("):  # not a line start -> the immediately-preceding word decides
+                    words = re.findall(r"[A-Za-z]+", before)
+                    if words and _clean_word(words[-1]) in _CUE_WORDS:
+                        continue  # inline cross-reference, not a heading
+                cid = clause_of(m.group(0))
+                if cid and _accept_clause_id(cid, section_number):
+                    out.setdefault(cid, set()).add(page_no)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def _directed_for_entry(
+    entry: DocIndexEntry, ps_clauses: list[str], gs_clauses: list[str], page_texts: list[str],
+) -> dict[str, list[int]]:
+    """``{clause id -> located 0-based pages}`` for the referenced clauses this PS doc SHOULD carry but
+    whose blind ``clause_index`` MISSED — located by a directed heading search over the cached OCR
+    text. PS clauses match exactly; a GS clause matches a heading whose ``base_clause`` equals it (its
+    suffixed PS amendment). Empty when no text is available (DEMO / no upload)."""
+    if not page_texts:
+        return {}
+    sec = entry.spec_section_number
+    ps_wanted = [c for c in ps_clauses
+                 if c not in entry.clause_index and base_clause(c).split(".")[0] == sec]
+    gs_wanted = [g for g in gs_clauses
+                 if base_clause(g).split(".")[0] == sec
+                 and not any(k == g or base_clause(k) == g for k in entry.clause_index)]
+    if not (ps_wanted or gs_wanted):
+        return {}
+    located = _located_headings(page_texts, sec)
+    out: dict[str, list[int]] = {}
+    for c in ps_wanted:
+        if c in located:
+            out[c] = located[c]
+    for g in gs_wanted:
+        pages = sorted({p for k, pgs in located.items() if (k == g or base_clause(k) == g) for p in pgs})
+        if pages:
+            out[g] = pages
+    return out
 
 
 def _dedup(seq: list[str]) -> list[str]:
@@ -115,9 +185,15 @@ def _resolving_ps_clauses(entry: DocIndexEntry, ps_clauses: list[str], gs_clause
 def resolve_section_plan(
     *, package_key: str, trade: str, section_title: str, items: list,
     doc_index: list[DocIndexEntry], sor_sheet_name: str, section: str = "",
+    page_texts_of: Optional[Callable[[str], list[str]]] = None,
 ) -> SectionPlan:
     """The relevant-only attachment plan for one dispatched SoR section, driven by the clause
-    references its items carry (Clause Ref column). See the module docstring for the slicing rules."""
+    references its items carry (Clause Ref column). See the module docstring for the slicing rules.
+
+    ``page_texts_of`` (filename -> cached OCR page texts) enables the DIRECTED clause search: a
+    referenced clause the blind ``clause_index`` missed is located over the doc's cached text,
+    engine-independent. Omitted (DEMO / no upload) -> the directed search is skipped and the plan is
+    exactly the blind-index behaviour."""
     refs = refs_for_items(items)
     ps_clauses = _dedup([clause_of(r) for r in refs.get("ps", [])])
     gs_clauses = _dedup([clause_of(r) for r in refs.get("gs", [])])
@@ -129,6 +205,26 @@ def resolve_section_plan(
     relevant_ps_specs = ps_ref_specs | gs_ref_specs  # a PS section is relevant if a PS or GS clause in it is cited
     cited_appendices = {spec_section_of(a) for a in refs.get("appendix", []) if spec_section_of(a)}
 
+    # Directed location (engine-independent): for each relevant PS doc, the referenced clauses the
+    # blind clause_index missed, located by a heading search over the doc's CACHED OCR text. Each
+    # doc's text is read at most once. Empty when no text reader is supplied (DEMO / no upload).
+    _texts_cache: dict[str, list[str]] = {}
+
+    def _texts(filename: str) -> list[str]:
+        if page_texts_of is None:
+            return []
+        if filename not in _texts_cache:
+            try:
+                _texts_cache[filename] = page_texts_of(filename) or []
+            except Exception:  # noqa: BLE001 — a text read must never fail the plan (whole-file remains)
+                _texts_cache[filename] = []
+        return _texts_cache[filename]
+
+    directed_by_doc: dict[str, dict[str, list[int]]] = {}
+    for e in doc_index:
+        if e.kind == "particular_specification" and e.text_layer and e.spec_section_number in relevant_ps_specs:
+            directed_by_doc[e.filename] = _directed_for_entry(e, ps_clauses, gs_clauses, _texts(e.filename))
+
     # Onward hop: a resolved PS clause may point to a SEPARATE appendix document ("refer to
     # Appendix 7.8.20"). Gather those appendix clause ids from the persisted clause_onward index
     # (a pre-pass so order in doc_index doesn't matter), and merge them into what the appendix
@@ -138,7 +234,16 @@ def resolve_section_plan(
         if e.kind in ("particular_specification", "general_specification") and e.spec_section_number in relevant_ps_specs:
             for c in (_resolving_ps_clauses(e, ps_clauses, gs_clauses) if e.text_layer else []):
                 onward += e.clause_onward_appendices.get(c, [])
-    onward = _dedup(onward)
+            # A directed-located clause has no clause_onward_appendices entry (that is built from the
+            # index at ingest) — scan its located pages' text for onward appendix refs directly, so an
+            # appendix a directed-found clause points to is still pulled.
+            directed = directed_by_doc.get(e.filename, {})
+            if directed:
+                texts = _texts(e.filename)
+                for pages in directed.values():
+                    span = "\n".join(texts[p] for p in pages if 0 <= p < len(texts))
+                    onward += [clause_of(a) for a in extract_refs(span).get("appendix", [])]
+    onward = _dedup([o for o in onward if o])
     appendix_clauses = _dedup(appendix_clauses + onward)
     cited_appendices = cited_appendices | {spec_section_of(a) for a in onward if spec_section_of(a)}
 
@@ -173,15 +278,23 @@ def resolve_section_plan(
             if not (e.spec_section_number and e.spec_section_number in relevant_ps_specs):
                 continue  # this PS section is not referenced by the dispatched section
             present_ps.add(e.spec_section_number)
-            resolved = _resolving_ps_clauses(e, ps_clauses, gs_clauses) if e.text_layer else []
-            for g in gs_clauses:  # record which GS clauses this PS doc amends
-                if any(k == g or base_clause(k) == g for k in e.clause_index):
+            blind = _resolving_ps_clauses(e, ps_clauses, gs_clauses) if e.text_layer else []
+            directed = directed_by_doc.get(e.filename, {})  # referenced clauses the index missed
+            for g in gs_clauses:  # a GS clause this PS doc amends — by the index OR the directed search
+                if g in directed or any(k == g or base_clause(k) == g for k in e.clause_index):
                     gs_covered.add(g)
-            pages = _slice_pages(e, resolved) if e.text_layer else []
+            index_pages = set(_slice_pages(e, blind)) if e.text_layer else set()
+            directed_pages = set(_expand({p for pgs in directed.values() for p in pgs}, e.page_count))
+            pages = sorted(index_pages | directed_pages)
+            directed_ids = [c for c in directed if c not in blind]  # located ONLY by the directed search
+            located = _dedup(blind + list(directed))
             if pages:
+                reason = f"PS Section {e.spec_section_number} — referenced clauses"
+                if directed_ids:
+                    reason += f" ({len(directed_ids)} located by directed text search: {', '.join(directed_ids)})"
                 plan.append(PlanAttachment(
-                    source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=resolved,
-                    reason=f"PS Section {e.spec_section_number} — referenced clauses"))
+                    source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages],
+                    clauses=located, directed_clauses=directed_ids, reason=reason))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(

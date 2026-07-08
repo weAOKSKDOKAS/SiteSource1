@@ -23,6 +23,25 @@ from rules_engine.taxonomy import base_trade
 from schemas.models import ScopePackages
 
 
+def _page_texts_reader(ws: Workspace, tender_id: str) -> "callable":
+    """A ``filename -> cached OCR page texts`` reader for the directed clause search: reads the
+    original from the workspace and serves its page text from the OCR spine's content-addressed cache
+    (populated at ingest), so re-reading needs no live engine. A read never fails the plan — a missing
+    file or an unreachable engine yields ``[]`` (the whole-file fallback remains)."""
+    from pipeline import ocr
+
+    def _get(filename: str) -> list[str]:
+        path = ws.doc_path(tender_id, filename)
+        if not path.is_file():
+            return []
+        try:
+            return ocr.page_texts(path.read_bytes())
+        except Exception:  # noqa: BLE001 — cached text read is best-effort; whole-file is the fallback
+            return []
+
+    return _get
+
+
 def plan_for_firms(
     scope: Optional[ScopePackages], approvals: dict[str, list[str]], *, tender_id: str,
     workspace: Optional[Workspace] = None,
@@ -32,6 +51,7 @@ def plan_for_firms(
     doc_index — empty (DEMO / no upload) yields a plan with just the SoR sheet."""
     ws = workspace or Workspace()
     doc_index = load_doc_index(ws, tender_id)
+    page_texts_of = _page_texts_reader(ws, tender_id)  # shared cache across this run's sections
     pkg_by_key = {p.trade: p for p in (scope.packages if scope else [])}
     plans: dict[str, SectionPlan] = {}
     for package_key in approvals:
@@ -42,6 +62,7 @@ def plan_for_firms(
             section_title=(pkg.scope_summary if pkg else ""), section=section,
             items=(pkg.sor_items if pkg else []), doc_index=doc_index,
             sor_sheet_name=ws.sor_sheet_path(tender_id, package_key).name,
+            page_texts_of=page_texts_of,
         )
     return plans
 
