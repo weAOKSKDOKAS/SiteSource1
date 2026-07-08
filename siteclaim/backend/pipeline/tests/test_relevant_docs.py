@@ -35,7 +35,7 @@ def test_ps_and_mm_sliced_by_clause_ref_not_trade_map():
     ps = by["PS-S07.pdf"]
     assert ps.mode == "sliced" and set(ps.pages) == {3, 4, 5, 6} and ps.clauses == ["7.34A", "7.37A"]
     mm = by["MM-01.pdf"]
-    assert mm.mode == "sliced" and set(mm.pages) == {11, 12, 13} and mm.clauses == ["PB 71"]  # not whole
+    assert mm.mode == "sliced" and set(mm.pages) == {12} and mm.clauses == ["PB 71"]  # PB 71 page only, no ±1
     assert by["APPENDIX 7.pdf"].mode == "whole" and "scanned_whole" in by["APPENDIX 7.pdf"].flags
     assert by["AECOM Clarification.pdf"].mode == "whole"
     assert "PS-S26.pdf" not in by                                          # not pulled by a trade/topic guess
@@ -248,7 +248,33 @@ def test_directed_search_does_not_touch_the_mm_or_native_index_paths():
         page_texts_of=_texts(texts))
     by = {a.source_doc: a for a in plan.attachments}
     assert by["PS-S07.pdf"].clauses == ["7.34A"] and by["PS-S07.pdf"].directed_clauses == []  # index hit
-    assert by["MM-01.pdf"].mode == "sliced" and set(by["MM-01.pdf"].pages) == {11, 12, 13}     # MM unchanged
+    assert by["MM-01.pdf"].mode == "sliced" and set(by["MM-01.pdf"].pages) == {12}             # PB 71 page only
+
+
+def test_mm_slice_is_page_precise_with_no_straddle_expansion():
+    # The MM bug: PB 72/73/74 all sit on MM page 22 (0-based 21); the slice must be page 22 ONLY,
+    # not 21-23. A PB clause the index shows crossing a break (PB 3 -> [2,3]) still slices both pages.
+    # The PS branch keeps its ±1 straddle (a spec clause body can cross a page break) — unchanged.
+    doc_index = [
+        DocIndexEntry(filename="MM-01.pdf", kind="method_of_measurement", text_layer=True, page_count=30,
+                      clause_index={"PB 72": [21], "PB 73": [21], "PB 74": [21], "PB 3": [2, 3]}),
+        DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                      text_layer=True, page_count=40, clause_index={"7.34A": [3]}),
+    ]
+
+    def _plan(refs):
+        return resolve_section_plan(
+            package_key="x", trade="ground_investigation", section_title="DRILLING",
+            items=[_item(refs)], doc_index=doc_index, sor_sheet_name="s.xlsx").attachments
+
+    mm = next(a for a in _plan(["PB 72", "PB 73", "PB 74"]) if a.source_doc == "MM-01.pdf")
+    assert mm.mode == "sliced" and set(mm.pages) == {22}          # exactly PB's page — no 21/23 neighbours
+
+    crossing = next(a for a in _plan(["PB 3"]) if a.source_doc == "MM-01.pdf")
+    assert set(crossing.pages) == {3, 4}                          # a genuinely cross-break PB keeps both pages
+
+    ps = next(a for a in _plan(["PS 7.34A"]) if a.source_doc == "PS-S07.pdf")
+    assert ps.mode == "sliced" and set(ps.pages) == {3, 4, 5}     # PS still ±1 (clause page 4, 1-based)
 
 
 def test_slice_pdf_extracts_requested_pages():

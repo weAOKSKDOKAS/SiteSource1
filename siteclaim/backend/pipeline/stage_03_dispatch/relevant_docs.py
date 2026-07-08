@@ -102,13 +102,19 @@ def _expand(pages0: set[int], page_count: int) -> list[int]:
     return sorted(out)
 
 
-def _slice_pages(entry: DocIndexEntry, clauses: list[str]) -> list[int]:
-    """0-based pages spanned by a set of clause ids, each page expanded ±1. ``clause_index`` maps a
-    clause to the list of pages it spans."""
+def _slice_pages(entry: DocIndexEntry, clauses: list[str], *, straddle: bool = True) -> list[int]:
+    """0-based pages spanned by a set of clause ids. ``clause_index`` maps a clause to the pages it
+    spans. ``straddle`` (default) expands each page ±1 so a spec clause whose body crosses a page
+    break (and whose marker can sit mid-clause) stays whole — right for PS/GS/appendix. The Method of
+    Measurement passes ``straddle=False``: a PB preamble clause's span is already page-precise
+    (``_spans`` captures a genuine cross-break PB as multiple pages), so ±1 would only pull the
+    adjacent, irrelevant pages around it."""
     hits: set[int] = set()
     for c in clauses:
         hits.update(entry.clause_index.get(c, []))
-    return _expand(hits, entry.page_count) if hits else []
+    if not hits:
+        return []
+    return _expand(hits, entry.page_count) if straddle else sorted(hits)
 
 
 # -- directed clause location over cached OCR text (engine-independent) -------
@@ -330,7 +336,8 @@ def resolve_section_plan(
             if not pb_clauses:
                 continue  # this section references no measurement preamble — no MM extract
             resolved = [c for c in pb_clauses if c in e.clause_index]
-            pages = _slice_pages(e, resolved) if e.text_layer else []
+            # No ±1: a PB clause's page span is already precise; ±1 only pulls neighbouring pages.
+            pages = _slice_pages(e, resolved, straddle=False) if e.text_layer else []
             if pages:
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=resolved,
