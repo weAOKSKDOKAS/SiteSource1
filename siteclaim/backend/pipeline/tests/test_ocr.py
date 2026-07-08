@@ -101,6 +101,41 @@ def test_an_empty_ocr_result_is_not_cached_but_a_real_one_is(tmp_path, monkeypat
     assert list(tmp_path.rglob("*.json"))                          # now it caches
 
 
+def test_page_words_ocrs_once_then_serves_from_cache(monkeypatch):
+    # page_words recovers word boxes once, then serves them from the versioned cache next to the
+    # page text — tesseract runs only on a miss — and restores row_key to a tuple off JSON so the
+    # row grouping (which keys a dict on it) never crashes.
+    import pipeline.ocr_table as ocr_table
+
+    calls = {"n": 0}
+
+    def _fake_words(png, lang, psm):
+        calls["n"] += 1
+        return [{"text": "7.286A", "conf": 90.0, "cx": 255.0, "left": 220.0, "top": 100.0, "row_key": (1, 1, 1)}]
+
+    monkeypatch.setattr(ocr_table, "_words", _fake_words)
+    data = _blank_pdf()  # a real one-page PDF to rasterise; the word reader is stubbed
+
+    first = ocr.page_words(data, 0)
+    second = ocr.page_words(data, 0)  # same bytes + page -> served from the cache, no second OCR
+    assert calls["n"] == 1
+    assert first == second and second[0]["text"] == "7.286A"
+    assert isinstance(second[0]["row_key"], tuple)  # re-tupled off JSON, not a list
+
+
+def test_page_words_raises_on_a_missing_engine_never_empty(monkeypatch):
+    # A configured-but-missing engine on the word-box path is loud (OcrEngineUnavailable), never a
+    # silent [] that would read as "this page has no clause column".
+    import pipeline.ocr_table as ocr_table
+
+    def _no_engine(png, lang, psm):
+        raise ocr.OcrEngineUnavailable("no tesseract")
+
+    monkeypatch.setattr(ocr_table, "_words", _no_engine)
+    with pytest.raises(ocr.OcrEngineUnavailable):
+        ocr.page_words(_blank_pdf(), 0)
+
+
 def test_line_structure_is_preserved_for_clause_markers():
     # doc_index matches clause / PB markers at line start, so line breaks must survive.
     pages = page_texts(_text_pdf(["7.34A Rotary drilling in rock", "7.37A Standard penetration test"]))

@@ -231,14 +231,15 @@ def _open_pdf(data: bytes):
         return None
 
 
-def _column_headings(page, section_number: str) -> list[str]:
-    """Clause-heading ids for one SCANNED spec page via word-box OCR. Any OCR failure degrades to
-    no markers for this page (whole-file fallback) — the loud engine-missing signal is owned by the
+def _column_headings(data: bytes, page_no: int, section_number: str) -> list[str]:
+    """Clause-heading ids for one SCANNED spec page via CACHED word-box OCR (``ocr.page_words`` —
+    served from the versioned cache, tesseract only on a miss). Any OCR failure degrades to no
+    markers for this page (whole-file fallback) — the loud engine-missing signal is owned by the
     OCR spine, and this path only runs after ``page_texts`` already OCR'd the doc successfully."""
-    from pipeline import ocr, ocr_table
+    from pipeline import ocr
 
     try:
-        words = ocr_table._words(ocr._render_png(page, ocr._env_dpi()), ocr._env_lang(), 6)
+        words = ocr.page_words(data, page_no)
     except Exception:  # noqa: BLE001 — engine glitch / not installed -> no column markers here
         return []
     return _headings_from_words(words, section_number)
@@ -263,7 +264,7 @@ def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> 
             if page is None or len(native.strip()) >= _NATIVE_MIN:
                 markers.extend(_page_line_markers(text, heading, page_no))  # native page, unchanged
             else:
-                markers.extend((cid, page_no) for cid in _column_headings(page, section_number))
+                markers.extend((cid, page_no) for cid in _column_headings(data, page_no, section_number))
                 for lm in _PS_LEADIN.finditer(text):  # lead-ins from the OCR text on a scanned page
                     markers.append((lm.group(1), page_no))
     finally:

@@ -134,7 +134,17 @@ def _cache_key(data: bytes, dpi: int, lang: str, psm: int) -> str:
     return f"{hashlib.sha256(data).hexdigest()}-{dpi}-{lang}-psm{psm}"
 
 
-def _cache_read(key: str) -> Optional[list[str]]:
+# One cache file per key holds BOTH the per-page text and (filled lazily) the per-page OCR word
+# boxes: ``{"pages": [...], "words": [[...] | null, ...], "v": 2}``. The two consumers — page text
+# (``page_texts``) and column-recovery word boxes (``page_words``) — share the file so a document is
+# OCR'd at most once per purpose across every dispatch re-run. ``words[i]`` is null until page ``i``
+# is asked for; a legacy v1 payload (``{"pages": ...}`` only) still reads its text and recomputes
+# words on demand.
+_CACHE_VERSION = 2
+
+
+def _cache_load(key: str) -> Optional[dict]:
+    """The raw cached payload dict for ``key`` (``None`` if absent / corrupt / not a dict)."""
     path = _cache_root() / f"{key}.json"
     if not path.is_file():
         return None
@@ -142,19 +152,34 @@ def _cache_read(key: str) -> Optional[list[str]]:
         obj = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, ValueError):
         return None  # corrupt / unreadable cache -> recompute
-    pages = obj.get("pages") if isinstance(obj, dict) else None
+    return obj if isinstance(obj, dict) else None
+
+
+def _cache_store(key: str, payload: dict) -> None:
+    try:
+        root = _cache_root()
+        root.mkdir(parents=True, exist_ok=True)
+        (root / f"{key}.json").write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass  # a cache write must never fail the pipeline
+
+
+def _cache_read(key: str) -> Optional[list[str]]:
+    obj = _cache_load(key)
+    pages = obj.get("pages") if obj else None
     if isinstance(pages, list) and all(isinstance(p, str) for p in pages) and any(p.strip() for p in pages):
         return pages
     return None  # missing / corrupt, or an all-empty (poisoned) payload -> treat as a miss
 
 
 def _cache_write(key: str, pages: list[str]) -> None:
-    try:
-        root = _cache_root()
-        root.mkdir(parents=True, exist_ok=True)
-        (root / f"{key}.json").write_text(json.dumps({"pages": pages}), encoding="utf-8")
-    except OSError:
-        pass  # a cache write must never fail the pipeline
+    """Persist the page text, PRESERVING any word boxes already cached for this key (same bytes +
+    params -> the boxes are still valid). A cache write must never fail the pipeline."""
+    obj = _cache_load(key) or {}
+    words = obj.get("words")
+    if not isinstance(words, list) or len(words) != len(pages):
+        words = [None] * len(pages)
+    _cache_store(key, {"pages": pages, "words": words, "v": _CACHE_VERSION})
 
 
 # -- OCR worker (lazy tesseract) --------------------------------------------
@@ -243,3 +268,78 @@ def page_texts(
     if any(p.strip() for p in pages):
         _cache_write(key, pages)  # only persist a real result — a transient failure never sticks
     return pages
+
+
+# -- per-page OCR word boxes (cached; column recovery) ----------------------
+def _render_page_png(data: bytes, page_no: int, dpi: int) -> tuple[bytes, int]:
+    """Rasterise ONE page of ``data`` to PNG bytes, and the doc's page count (for the cache slot).
+    Raises :class:`NotAPdf` when the bytes are not a readable PDF."""
+    import fitz  # PyMuPDF — lazy
+
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as exc:  # noqa: BLE001 — any open failure means "not a readable PDF"
+        raise NotAPdf(str(exc)) from exc
+    try:
+        return _render_png(doc[page_no], dpi), doc.page_count
+    finally:
+        doc.close()
+
+
+def _reify_words(words: list) -> list[dict]:
+    """Cached word boxes come back off JSON with ``row_key`` as a list; restore it to the tuple the
+    row grouping needs as a dict key (an unhashable list would crash ``ocr_table._group_rows``)."""
+    out: list[dict] = []
+    for w in words:
+        if not isinstance(w, dict):
+            continue
+        w = dict(w)
+        rk = w.get("row_key")
+        if isinstance(rk, list):
+            w["row_key"] = tuple(rk)
+        out.append(w)
+    return out
+
+
+def _store_page_words(key: str, page_no: int, words: list[dict], page_count: int) -> None:
+    """Persist one page's word boxes into the shared cache file's ``words`` slot, preserving the
+    page text and any other page's already-cached boxes."""
+    obj = _cache_load(key) or {}
+    pages = obj.get("pages")
+    pages = pages if isinstance(pages, list) else []
+    cached = obj.get("words")
+    if not isinstance(cached, list) or len(cached) != page_count:
+        cached = [None] * page_count
+    if 0 <= page_no < page_count:
+        cached[page_no] = words
+    _cache_store(key, {"pages": pages, "words": cached, "v": _CACHE_VERSION})
+
+
+def page_words(
+    data: bytes, page_no: int, *, dpi: Optional[int] = None, lang: Optional[str] = None, psm: int = 6,
+) -> list[dict]:
+    """Per-word OCR boxes for ONE page (``text`` / ``conf`` / ``cx`` / ``left`` / ``top`` / ``row_key``
+    dicts, as :func:`ocr_table._words`) — served from the versioned cache next to the page text, so
+    tesseract runs at most once per (bytes, page) across every dispatch re-run. Content-addressed on
+    the same key as :func:`page_texts` (default ``dpi`` / ``lang`` / ``psm``), so the boxes and the
+    text share one file.
+
+    Fails LOUD, never silently to ``[]``: raises :class:`NotAPdf` when the bytes are not a PDF and
+    :class:`OcrEngineUnavailable` when the engine is configured-but-missing (the word-box path must
+    not be mistaken for a page that genuinely has no clause column). A page the engine reads as
+    having no words returns ``[]`` (a valid, cacheable result)."""
+    dpi = _env_dpi() if dpi is None else dpi
+    lang = _env_lang() if lang is None else lang
+    key = _cache_key(data, dpi, lang, psm)
+    if ocr_enabled():
+        obj = _cache_load(key)
+        cached = obj.get("words") if isinstance(obj, dict) else None
+        if isinstance(cached, list) and 0 <= page_no < len(cached) and isinstance(cached[page_no], list):
+            return _reify_words(cached[page_no])  # a hit (possibly an empty page cached as [])
+    png, page_count = _render_page_png(data, page_no, dpi)
+    from pipeline import ocr_table  # reuse the image_to_data word reader; lazy, no tesseract at import
+
+    words = ocr_table._words(png, lang, psm)  # raises OcrEngineUnavailable loudly on a missing engine
+    if ocr_enabled():
+        _store_page_words(key, page_no, words, page_count)
+    return words
