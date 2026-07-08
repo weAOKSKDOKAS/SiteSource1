@@ -7,12 +7,14 @@ export type DispatchStatus = "drafted" | "approved" | "sent_mock" | "sent" | "se
 // Relevant-document assembler (per dispatched section): the attachment plan + any
 // referenced-but-unsupplied spec sections.
 export interface PlanAttachment {
-  source_doc: string;
+  source_doc: string; // the disk lookup key (the original filename, or the generated sheet name)
+  out_filename: string; // the emitted filename when it differs from source_doc (the SoR slice is
+  //   looked up under the original SR name but sent as "SoR_{unit}_Section_{X}.pdf"); "" -> source_doc
   mode: "sliced" | "whole" | "generated";
   pages: number[];
   clauses: string[]; // the clause ids a sliced spec extract contains (7.34A, PB 71)
   reason: string;
-  flags: string[];
+  flags: string[]; // "scanned_whole" | "whole_clause_not_located" | "whole_section_not_located" | "priced_return"
 }
 export interface MissingSpec {
   spec: string;

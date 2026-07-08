@@ -38,6 +38,12 @@ _APPENDIX_COVER = re.compile(r"\bAppendix\s+(\d+)(?!\.\d)", re.I)
 # (a scanned cover, or a file that starts mid-section) so the clause index can still scope.
 _FILENAME_SECTION = re.compile(r"(?:^|[^A-Za-z])S0*(\d+)\b", re.I)
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
+# A Schedule-of-Rates section header — "SECTION A : PRELIMINARIES ITEMS", "SECTION BA : GENERAL".
+# LETTER codes (A, BA), unlike the numeric PS/GS `_SECTION_DECL`; the separator + a title are
+# required so a bare "SECTION A" mention is not taken as a header. Mirrors the stage-01 ingest
+# chunker header (`ingest._SECTION_HEADER_RE`) so the SoR page ranges index on the SAME section
+# codes dispatch routes by. Group 1 = code (upper-cased at collection), group 2 = title.
+_SOR_SECTION_HEADER = re.compile(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)\s*[:.\-]\s*(.+?)\s*$")
 
 # A PS/GS clause id: a dotted number with optional letter / bracket / trailing-letter suffixes
 # (7.34, 7.34A, 7.39S, 7.41.(4)S, 7.72(6)S — the dot before the bracket is optional). Kept verbatim
@@ -79,6 +85,10 @@ class DocIndexEntry(BaseModel):
     # "7.07A" -> ["7.8.20"] from "refer to Appendix 7.8.20"). Lets dispatch pull the SEPARATE
     # appendix document a PS clause points to — the onward hop SoR item -> PS clause -> appendix.
     clause_onward_appendices: dict[str, list[str]] = Field(default_factory=dict)
+    # SoR section code (upper) -> the 0-based pages that section spans, so dispatch can slice the
+    # ORIGINAL Schedule of Rates to a dispatched unit's own section pages (the priced-return sheet)
+    # instead of a derived .xlsx. Text-layer schedule_of_rates only; ±1 is applied at slice time.
+    sor_section_pages: dict[str, list[int]] = Field(default_factory=dict)
 
 
 def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
@@ -161,6 +171,20 @@ def _spec_markers(pages: list[str], section_number: str) -> list[tuple[str, int]
     scoped to the doc's own section numbering when known, e.g. ``7.34A``), plus the GS clauses named
     in amendment lead-ins. In document order."""
     return [m for page_no, text in enumerate(pages) for m in _page_line_markers(text, page_no, section_number)]
+
+
+def _sor_section_markers(pages: list[str]) -> list[tuple[str, int]]:
+    """``(SECTION_CODE_upper, 0-based page)`` for every Schedule-of-Rates section header, in document
+    order — fed to :func:`_spans` to map each section code to the pages it spans. A section header is
+    a standalone row even in a multi-column SoR (it precedes the item table), so a line-start match is
+    enough; a code repeated in a running header simply unions onto that section's page span."""
+    markers: list[tuple[str, int]] = []
+    for page_no, text in enumerate(pages):
+        for line in text.splitlines():
+            m = _SOR_SECTION_HEADER.match(line)
+            if m:
+                markers.append((m.group(1).upper(), page_no))
+    return markers
 
 
 # -- layout-aware spec markers (multi-column scanned PS / GS) ----------------
@@ -410,7 +434,12 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
     kind = _kind_for(doc_type, page1, filename)
     clause_index: dict[str, list[int]] = {}
     clause_onward: dict[str, list[str]] = {}
-    if text_layer and kind == "method_of_measurement":
+    sor_section_pages: dict[str, list[int]] = {}
+    if text_layer and kind == "schedule_of_rates":
+        # Index the original SoR's section page ranges so dispatch can slice it to a unit's own
+        # section (the priced-return sheet) rather than send a derived .xlsx.
+        sor_section_pages = _spans(_sor_section_markers(pages), len(pages))
+    elif text_layer and kind == "method_of_measurement":
         clause_index = _spans(_mm_markers(pages), len(pages))
     elif text_layer and kind in ("particular_specification", "general_specification"):
         # PS/GS pages are multi-column when scanned, so the clause id lands mid-line under OCR;
@@ -447,6 +476,7 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
         filename=filename, kind=kind, spec_section_number=section_number,
         spec_section_title=section_title, text_layer=text_layer, page_count=len(pages),
         clause_index=clause_index, clause_onward_appendices=clause_onward,
+        sor_section_pages=sor_section_pages,
     )
 
 

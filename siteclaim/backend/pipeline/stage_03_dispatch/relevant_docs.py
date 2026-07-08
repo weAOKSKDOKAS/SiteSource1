@@ -33,7 +33,9 @@ from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of, extract_
 class PlanAttachment(BaseModel):
     """One document in a section's assembled set."""
 
-    source_doc: str            # the original filename, or the generated SoR sheet name
+    source_doc: str            # the original filename (disk lookup key), or the generated SoR sheet name
+    out_filename: str = ""     # the emitted filename when it differs from source_doc (the SoR slice is
+    #   looked up under the original SR name but sent as "SoR_{unit}_Section_{X}.pdf"); "" -> source_doc
     mode: str                  # "sliced" | "whole" | "generated"
     pages: list[int] = Field(default_factory=list)   # 1-based pages (sliced mode only)
     clauses: list[str] = Field(default_factory=list)  # the clause ids this extract contains
@@ -43,6 +45,12 @@ class PlanAttachment(BaseModel):
     #   (neither index nor directed) though this section IS present — surfaced, never silently dropped
     reason: str = ""
     flags: list[str] = Field(default_factory=list)   # e.g. "scanned_whole" | "whole_clause_not_located"
+
+
+# The priced-return sheet the enquiry asks the firm to fill and send back — the SoR sliced to this
+# unit's section (or, offline, the generated .xlsx). Carried as a flag so the human gate protects it
+# regardless of its mode (a slice, a whole-SoR fallback, or the generated sheet).
+PRICED_RETURN = "priced_return"
 
 
 class MissingSpec(BaseModel):
@@ -62,16 +70,18 @@ def apply_attachment_overrides(
 ) -> SectionPlan:
     """Apply the human gate's per-document decisions to a section plan and return a NEW plan:
     drop any document the person removed, and expand any *sliced* document they chose to send
-    whole (mode -> "whole", pages cleared). The generated SoR sheet is never removable — it is
-    the priced-return sheet the enquiry is asking for. ``missing_specs`` are left intact so a
+    whole (mode -> "whole", pages cleared). The priced-return sheet (the SoR slice — or, offline,
+    the generated sheet) is never removable and never expanded to the whole SoR: it is exactly the
+    section the enquiry asks the firm to price. ``missing_specs`` are left intact so a
     referenced-but-unsupplied spec stays visible even after edits. Deterministic; no I/O."""
     removed_set = set(removed or [])
     whole_set = set(whole or [])
     kept: list[PlanAttachment] = []
     for att in plan.attachments:
-        if att.source_doc in removed_set and att.mode != "generated":
+        protected = att.mode == "generated" or PRICED_RETURN in att.flags
+        if att.source_doc in removed_set and not protected:
             continue
-        if att.source_doc in whole_set and att.mode == "sliced":
+        if att.source_doc in whole_set and att.mode == "sliced" and not protected:
             att = att.model_copy(update={
                 "mode": "whole", "pages": [],
                 "reason": (att.reason + " · expanded to whole file at the gate").lstrip(" ·"),
@@ -182,6 +192,45 @@ def _resolving_ps_clauses(entry: DocIndexEntry, ps_clauses: list[str], gs_clause
     return _dedup(resolved)
 
 
+def _unit_out_name(trade: str, package_key: str, section: str) -> str:
+    """The friendly emit-name for the priced-return SoR slice: ``SoR_{unit}_Section_{X}.pdf`` (or
+    ``SoR_{unit}.pdf`` with no section). The unit token is filename-safe — ``:`` in a package_key and
+    spaces are replaced."""
+    unit = (trade or package_key or "unit").replace(" ", "_").replace(":", "-").strip("-") or "unit"
+    return f"SoR_{unit}_Section_{section}.pdf" if section else f"SoR_{unit}.pdf"
+
+
+def _priced_return_attachment(
+    doc_index: list[DocIndexEntry], *, section: str, trade: str, package_key: str, sor_sheet_name: str,
+) -> PlanAttachment:
+    """The priced-return sheet this enquiry asks the firm to fill and send back. In order of
+    preference: the ORIGINAL Schedule of Rates sliced to this unit's section pages (``mode="sliced"``,
+    emitted as ``SoR_{unit}_Section_{X}.pdf``) when an indexed SoR carries the section; the whole SoR
+    flagged when it is present but the section is not locatable (scanned / unindexed); or — offline,
+    with no original SoR uploaded — the generated ``.xlsx`` sheet (unchanged DEMO / no-upload path).
+    Always flagged :data:`PRICED_RETURN` so the human gate never drops it."""
+    section_key = (section or "").upper()
+    sr_entries = [e for e in doc_index if e.kind == "schedule_of_rates"]
+    if not sr_entries:
+        return PlanAttachment(
+            source_doc=sor_sheet_name, mode="generated", flags=[PRICED_RETURN],
+            reason="Priced Schedule of Rates for this section")
+    hit = next((e for e in sr_entries if e.text_layer and section_key in e.sor_section_pages), None)
+    if hit is not None:
+        pages = [p + 1 for p in _expand(set(hit.sor_section_pages[section_key]), hit.page_count)]
+        return PlanAttachment(
+            source_doc=hit.filename, out_filename=_unit_out_name(trade, package_key, section_key),
+            mode="sliced", pages=pages, flags=[PRICED_RETURN],
+            reason=f"Schedule of Rates — Section {section_key} (the priced-return sheet for this enquiry)")
+    # The SoR is present but this section could not be located (scanned / unindexed) -> whole, flagged.
+    e = sr_entries[0]
+    scanned = not e.text_layer
+    return PlanAttachment(
+        source_doc=e.filename, out_filename=_unit_out_name(trade, package_key, ""), mode="whole",
+        flags=[PRICED_RETURN, "scanned_whole" if scanned else "whole_section_not_located"],
+        reason=f"Schedule of Rates — whole ({'scanned' if scanned else f'Section {section_key} not located'})")
+
+
 def resolve_section_plan(
     *, package_key: str, trade: str, section_title: str, items: list,
     doc_index: list[DocIndexEntry], sor_sheet_name: str, section: str = "",
@@ -248,7 +297,8 @@ def resolve_section_plan(
     cited_appendices = cited_appendices | {spec_section_of(a) for a in onward if spec_section_of(a)}
 
     plan: list[PlanAttachment] = [
-        PlanAttachment(source_doc=sor_sheet_name, mode="generated", reason="Priced Schedule of Rates for this section"),
+        _priced_return_attachment(
+            doc_index, section=section, trade=trade, package_key=package_key, sor_sheet_name=sor_sheet_name),
     ]
     present_ps: set[str] = set()
     present_appendices: set[str] = set()

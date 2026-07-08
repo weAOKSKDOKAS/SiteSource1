@@ -90,9 +90,10 @@ def assemble_firm_attachments(
         data = _attachment_bytes(att, ws, tender_id, package_key)
         if data is None:
             continue
+        emit_name = att.out_filename or att.source_doc  # the SoR slice is sent under its friendly name
         out.append({
-            "filename": att.source_doc,
-            "mime": mimetypes.guess_type(att.source_doc)[0] or "application/octet-stream",
+            "filename": emit_name,
+            "mime": mimetypes.guess_type(emit_name)[0] or "application/octet-stream",
             "content_b64": base64.b64encode(data).decode("ascii"),
         })
     return out

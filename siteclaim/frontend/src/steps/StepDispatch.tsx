@@ -73,22 +73,25 @@ function AttachmentPlanPreview({
             <ul className="space-y-1">
               {plan.attachments.map((a, i) => {
                 const removed = ov.removed.includes(a.source_doc);
+                const priced = a.flags.includes("priced_return"); // the SoR slice / generated sheet the firm prices
                 const expanded = a.mode === "sliced" && ov.whole.includes(a.source_doc);
-                const removable = a.mode !== "generated"; // the SoR sheet is the priced return — never removable
+                const removable = a.mode !== "generated" && !priced; // the priced return is never removable
                 return (
                   <li key={i} className={cx("flex flex-wrap items-baseline gap-1.5 text-xs", removed && "opacity-45")}>
-                    <span className={cx("font-medium text-ink", removed && "line-through")}>{a.source_doc}</span>
-                    <Pill tone={expanded ? "neutral" : a.mode === "sliced" ? "brand" : a.mode === "generated" ? "ok" : "neutral"}>
+                    <span className={cx("font-medium text-ink", removed && "line-through")}>{a.out_filename || a.source_doc}</span>
+                    <Pill tone={expanded ? "neutral" : a.mode === "sliced" ? "brand" : a.mode === "generated" ? "ok" : priced ? "ok" : "neutral"}>
                       {a.mode === "sliced" ? (expanded ? "whole file" : `pp. ${formatPages(a.pages)}`) : a.mode === "generated" ? "SoR sheet" : "whole file"}
                     </Pill>
+                    {priced && <Pill tone="ok">priced return</Pill>}
                     {a.clauses.length > 0 && !expanded && (
                       <span className="tabular font-medium text-ink-soft">{a.clauses.join(", ")}</span>
                     )}
                     {a.flags.includes("scanned_whole") && <Pill tone="warn">scanned</Pill>}
                     {a.flags.includes("whole_clause_not_located") && <Pill tone="warn">clause not located</Pill>}
+                    {a.flags.includes("whole_section_not_located") && <Pill tone="warn">section not located</Pill>}
                     <span className="text-ink-faint">{a.reason}</span>
                     <span className="ml-auto flex items-center gap-2">
-                      {a.mode === "sliced" && !removed && (
+                      {a.mode === "sliced" && !removed && !priced && (
                         <button type="button" className="font-medium text-brand underline" onClick={() => toggle(plan.package_key, "whole", a.source_doc)}>
                           {expanded ? "use slice" : "expand to whole file"}
                         </button>
