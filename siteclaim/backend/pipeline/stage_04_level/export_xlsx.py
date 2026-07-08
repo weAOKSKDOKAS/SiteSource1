@@ -42,11 +42,14 @@ def export_leveling_xlsx(
     *,
     project_name: str = "",
     extras: Optional[list[str]] = None,
+    awaiting: Optional[dict[str, list[str]]] = None,
 ) -> Path:
-    """Write the levelled comparison to ``path`` and return it — one styled sheet per
-    trade, plus a Summary cover tab when the comparison spans more than one trade. When
-    ``extras`` is given (returned lines priced outside the tender's SoR — surfaced, never
-    added to any section's totals), an "Extras" tab lists them for the operator."""
+    """Write the levelled comparison to ``path`` and return it — one styled sheet per ROUTED UNIT
+    (the dispatched enquiry), one rate column per firm whose active reply covers that unit, plus a
+    Summary cover tab when more than one unit is compared. ``awaiting`` (unit key -> firm labels
+    enquired but not yet replied) is noted on each sheet so the operator sees coverage at a glance.
+    When ``extras`` is given (returned lines priced outside the tender's SoR — surfaced, never added
+    to any unit's totals), an "Extras" tab lists them."""
     from openpyxl import Workbook  # lazy — leveling math must not require openpyxl
 
     # Group by trade, preserving first-seen order. Each trade is written as its own
@@ -76,6 +79,7 @@ def export_leveling_xlsx(
             [r for r in replies if r.trade == trade],
             item_order,
             project_name,
+            awaiting_firms=(awaiting or {}).get(trade),
         )
 
     if extras:  # out-of-scope returned lines — surfaced, never folded into a section
@@ -139,9 +143,12 @@ def _write_trade_sheet(
     replies: list[BidReply],
     item_order: Optional[list[str]],
     project_name: str = "",
+    *,
+    awaiting_firms: Optional[list[str]] = None,
 ) -> None:
-    """One trade's comparison table onto ``ws`` (this trade's firms/items only),
-    styled with the shared kit — the table's values are exactly the leveling output."""
+    """One routed unit's comparison table onto ``ws`` (this unit's firms/items only), one rate
+    column per firm whose reply covers it — styled with the shared kit; the values are exactly the
+    leveling output. ``awaiting_firms`` (enquired, not yet replied) is noted below the table."""
     import datetime as _dt
 
     from pipeline._xlsx_style import (
@@ -239,5 +246,11 @@ def _write_trade_sheet(
     for firm_id in firm_ids:
         for exclusion in levelled_by_firm[firm_id].exclusions:
             ws.append([levelled_by_firm[firm_id].firm_name, exclusion])
+
+    if awaiting_firms:  # enquired but not yet replied — coverage at a glance, not a priced column
+        ws.append([])
+        footer_note(ws, "Awaiting reply (enquired, no priced return yet)")
+        for firm in awaiting_firms:
+            ws.append([firm])
 
     autofit(ws, min_row=header_row)

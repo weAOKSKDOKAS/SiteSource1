@@ -1046,14 +1046,28 @@ def post_inbound_reply(
 
     replies = reply_loop.accumulate_replies(workspace, tender_id, new_replies)
     levelled = level_bids(replies, scope)  # scope-aware leveling (reserved param now populated)
+    awaiting = _awaiting_by_unit(workspace, tender_id, replies)  # enquired-but-not-replied per unit
     export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, tender_id),
-                         project_name=tender_id, extras=extras_notes or None)
+                         project_name=tender_id, extras=extras_notes or None, awaiting=awaiting)
     export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=tender_id,
-                         extras=extras_notes or None)  # refresh the /leveling.xlsx download
+                         extras=extras_notes or None, awaiting=awaiting)  # refresh /leveling.xlsx
     return InboundReplyResponse(
         status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
         reply_count=len(replies), comparison=levelled, sections=coverage, extras=extras_notes,
     )
+
+
+def _awaiting_by_unit(workspace: Workspace, tender_id: str, active_replies: list[BidReply]) -> dict[str, list[str]]:
+    """``routed-unit key -> firm ids enquired on that unit but not yet (actively) replied`` — the
+    comparison's coverage note, read from the dispatch registry against the active replies."""
+    canonical = tender_slug(tender_id)
+    replied = {(r.firm_id, r.trade) for r in active_replies}
+    awaiting: dict[str, list[str]] = {}
+    for d in reply_loop.outstanding_dispatches(workspace):
+        if tender_slug(d["tender_id"]) != canonical or (d["firm_id"], d["trade"]) in replied:
+            continue
+        awaiting.setdefault(d["trade"], []).append(d["firm_id"])
+    return awaiting
 
 
 def _extra_note(firm_id: str, line: BidLineItem) -> str:
@@ -1196,8 +1210,10 @@ def post_withdraw_reply(slug: str, req: WithdrawReplyRequest) -> dict:
     scope = load_scope(workspace, canonical)
     replies = reply_loop.tender_replies(workspace, canonical)  # active only
     levelled = level_bids(replies, scope)
-    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, canonical), project_name=canonical)
-    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=canonical)
+    awaiting = _awaiting_by_unit(workspace, canonical, replies)
+    export_leveling_xlsx(levelled, replies, path=reply_loop.comparison_path(workspace, canonical),
+                         project_name=canonical, awaiting=awaiting)
+    export_leveling_xlsx(levelled, replies, path=OUT_PATH, project_name=canonical, awaiting=awaiting)
     return {"withdrawn": True, "firm_id": req.firm_id, "package_key": req.package_key, "reply_count": len(replies)}
 
 
