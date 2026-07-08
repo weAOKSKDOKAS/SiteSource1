@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
-import type { AwaitingFirm, AwaitingPackage, BidReply, LevelledBid, ReplyStatus, TenderReplies, TenderReplyInfo } from "../types";
+import type { AwaitingFirm, AwaitingPackage, BidReply, LevelledBid, MisdirectedHint, ReplyStatus, TenderReplies, TenderReplyInfo } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine, SeverityTag, cx } from "../ui";
 import { hkd, tradeLabel } from "../format";
@@ -40,7 +40,7 @@ export function StepLevel({
   // waiting show the awaiting state with a manual-intake affordance.
   live?: boolean;
   awaiting?: AwaitingPackage[];
-  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
+  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<MisdirectedHint | null>;
   // Live run: the inbound reply registry (aligned keys, supersede history, received times) — the
   // true "what arrived" state — plus the tender's comparison link, a refresh, and the withdraw gate.
   tenderReplies?: TenderReplies | null;
@@ -414,7 +414,7 @@ function LiveLevel({
 }: {
   sections: Record<string, LevelledBid[]>;
   awaiting: AwaitingPackage[];
-  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
+  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<MisdirectedHint | null>;
   xlsxUrl: string;
   onBack: () => void;
   onNext: () => void;
@@ -693,10 +693,14 @@ function ReturnRow({
   firm: AwaitingFirm;
   reply?: TenderReplyInfo | null;
   unitTotal: number;
-  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
+  onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<MisdirectedHint | null>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A misdirect hint from the last upload (the return priced another unit strongly) + the retained
+  // files, so the operator can confirm reattaching them to the matched unit. Nothing moved silently.
+  const [misdirect, setMisdirect] = useState<MisdirectedHint | null>(null);
+  const [retained, setRetained] = useState<File[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -705,8 +709,28 @@ function ReturnRow({
     if (!picked.length || !onUploadReturn) return;
     setBusy(true);
     setError(null);
+    setMisdirect(null);
     try {
-      await onUploadReturn(trade, firm.firm_id, picked);
+      const hint = await onUploadReturn(trade, firm.firm_id, picked);
+      if (hint) {  // misdirected — hold the files and prompt the operator to reattach
+        setMisdirect(hint);
+        setRetained(picked);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reattach = async () => {
+    if (!misdirect || !onUploadReturn || !retained.length) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onUploadReturn(misdirect.matched_unit, firm.firm_id, retained);  // human-confirmed move
+      setMisdirect(null);
+      setRetained([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -737,6 +761,22 @@ function ReturnRow({
           </div>
         )}
         {firm.ref && <div className="tabular mt-0.5 text-[11px] text-ink-faint">Ref {firm.ref}</div>}
+        {misdirect && (
+          <div className="mt-1.5 rounded-lg border border-warn/40 bg-warn-bg px-2.5 py-2 text-xs text-ink">
+            This return prices <span className="font-semibold">{tradeLabel(misdirect.matched_unit)}</span> items
+            ({misdirect.matched_items}{misdirect.unit_total ? ` of ${misdirect.unit_total}` : ""}) — it looks like that
+            enquiry's return, not {tradeLabel(trade)}'s. It was NOT attached here.
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              <Button variant="ghost" loading={busy} onClick={reattach}>
+                Attach to {tradeLabel(misdirect.matched_unit)} instead
+              </Button>
+              <button type="button" className="text-[11px] font-semibold text-ink-faint hover:text-ink"
+                onClick={() => { setMisdirect(null); setRetained([]); }}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
         {error && <div className="mt-1 text-xs text-bad">{error}</div>}
       </div>
       <input ref={inputRef} type="file" multiple accept=".xlsx,application/pdf,image/*" className="sr-only" onChange={onPick} />

@@ -70,7 +70,9 @@ def test_manual_priced_return_attaches_to_its_package(tmp_path, monkeypatch):
         data={"firm_id": "TGD-LAND", "trade": "external_works"},
     )
     assert resp.status_code == 200
-    levelled = resp.json()
+    body = resp.json()
+    levelled = body["levelled"]
     assert len(levelled) == 1  # one firm's return, not a demo comparison
     assert levelled[0]["firm_id"] == "TGD-LAND" and levelled[0]["trade"] == "external_works"
     assert levelled[0]["corrected_total"] == 200.0 * 350 + 120.0 * 900  # Layer-1 qty x rate
+    assert body["misdirected"] is None  # no tender/scope supplied -> no misdirect guard run

@@ -484,6 +484,22 @@ export interface DispatchSet {
   bundles: DispatchBundle[];
 }
 
+// A return uploaded for one enquiry whose lines actually price ANOTHER unit strongly (the exact
+// operator mistake). Advisory only — the operator confirms a reattach; nothing moves automatically.
+export interface MisdirectedHint {
+  target_unit: string;
+  matched_unit: string;
+  matched_items: number;
+  unit_total: number;
+}
+
+// The /level-upload envelope: the levelled bid(s) plus a misdirect hint when the return looks like
+// it belongs to a different enquiry.
+export interface LevelUploadResult {
+  levelled: LevelledBid[];
+  misdirected: MisdirectedHint | null;
+}
+
 // Live-run awaiting state (Prompt 1): a dispatched sublet package whose priced returns
 // have not all arrived. `ref` is the [SiteSource Ref] the enquiry carries; `received` is
 // true once a reply for that firm has been levelled into the package's section.

@@ -61,7 +61,7 @@ def test_level_upload_in_demo_returns_the_baked_levelling():
     data = {"firm_id": "F-EL-03", "trade": "electrical"}
     resp = client.post("/level-upload", files=files, data=data)
     assert resp.status_code == 200
-    levelled = resp.json()
+    levelled = resp.json()["levelled"]
     assert levelled and all("corrected_total" in bid for bid in levelled)
 
 
@@ -295,7 +295,7 @@ def test_level_upload_parses_an_xlsx_reply_with_no_model_call(monkeypatch, tmp_p
     )
 
     assert resp.status_code == 200
-    (bid,) = resp.json()
+    (bid,) = resp.json()["levelled"]
     assert bid["firm_id"] == "F-EL-02" and bid["trade"] == "electrical"
     assert bid["corrected_total"] == 1200000.0  # 1 x 950,000 + 100 x 2,500 — Layer 1 arithmetic
     assert {ir["item_ref"]: ir["rate"] for ir in bid["item_rates"]} == {"E-01": 950000.0, "E-02": 2500.0}

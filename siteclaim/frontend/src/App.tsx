@@ -17,6 +17,7 @@ import type {
   DispatchSet,
   IngestUpload,
   LevelledBid,
+  MisdirectedHint,
   Recommendation,
   RouteDecisionResult,
   RouteProposal,
@@ -378,16 +379,21 @@ export default function App() {
     });
 
   // Manual priced-return intake (live): level one firm's returned SoR and merge it into its
-  // package's section so that section activates. Idempotent per firm (a re-upload replaces).
-  const uploadReturn = async (trade: string, firmId: string, upload: File[]) => {
-    const levelled = await api.levelUpload(upload, firmId, trade);
+  // package's section so that section activates. Idempotent per firm (a re-upload replaces). The
+  // backend runs the misdirect guard against the tender's scope; when the return actually prices a
+  // DIFFERENT unit strongly, the hint is returned and the (likely wrong) uploaded unit is NOT merged
+  // — the operator confirms a reattach (nothing moves silently). Returns the hint, or null.
+  const uploadReturn = async (trade: string, firmId: string, upload: File[]): Promise<MisdirectedHint | null> => {
+    const result = await api.levelUpload(upload, firmId, trade, tenderSlug || undefined);
+    if (result.misdirected) return result.misdirected;  // hold: do not pollute the uploaded unit
     setLevelledByTrade((cur) => {
       const kept = (cur?.[trade] ?? []).filter((b) => b.firm_id !== firmId);
-      return { ...(cur ?? {}), [trade]: [...kept, ...levelled] };
+      return { ...(cur ?? {}), [trade]: [...kept, ...result.levelled] };
     });
     setRecommendationByTrade(null); // a new return invalidates any prior recommendation
     setAwardByTrade({});
     setMaxReached((m) => (m > 5 ? 5 : m));
+    return null;
   };
 
   // The dispatched sublet packages awaiting returns (live) — each firm with its status and

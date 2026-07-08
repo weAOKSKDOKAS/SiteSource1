@@ -22,6 +22,7 @@ import type {
   LetterOfOffer,
   LevelAllResponse,
   LevelledBid,
+  LevelUploadResult,
   MatchConfirm,
   MatchProposal,
   ProjectDashboard,
@@ -226,12 +227,13 @@ export const api = {
   // Manual priced-return intake (live): the operator drops a subcontractor's returned SoR
   // (xlsx parses deterministically; PDF/image via the existing fallback) for one firm+trade;
   // Layer 1 levels it. Never called in demo (the awaiting/upload affordance is live-only).
-  levelUpload: (files: File[], firmId: string, trade: string) => {
+  levelUpload: (files: File[], firmId: string, trade: string, tender = "") => {
     const fd = new FormData();
     for (const f of files) fd.append("files", f);
     fd.append("firm_id", firmId);
     fd.append("trade", trade);
-    return fetch(BASE + "/level-upload", { method: "POST", body: fd }).then((r) => handle<LevelledBid[]>(r));
+    if (tender) fd.append("tender", tender);  // lets the backend run the misdirect guard against scope
+    return fetch(BASE + "/level-upload", { method: "POST", body: fd }).then((r) => handle<LevelUploadResult>(r));
   },
 
   // Reply visibility (live): which replies have landed for a tender, refreshed on demand.

@@ -942,28 +942,83 @@ def _parse_reply(
     return merge_replies(sheets + [parsed], firm_id, trade) if sheets else parsed
 
 
-@app.post("/level-upload", response_model=list[LevelledBid])
+class MisdirectedHint(BaseModel):
+    """A return uploaded/sent FOR one enquiry whose lines actually price ANOTHER unit strongly — the
+    exact operator mistake (wrong file to the wrong enquiry). Advisory only: nothing moves until the
+    human confirms 'Attach to {matched_unit}'."""
+
+    target_unit: str      # the enquiry the return was uploaded/sent for
+    matched_unit: str     # the unit its lines actually match
+    matched_items: int    # distinct canonical items of matched_unit the return priced
+    unit_total: int       # matched_unit's canonical item total (the denominator)
+
+
+def _misdirect_hint(
+    lines: list[BidLineItem], scope: Optional[ScopePackages], target_trade: str,
+) -> Optional[MisdirectedHint]:
+    """A misdirected-return hint when the return priced NOTHING for its target enquiry but its lines
+    match another routed unit strongly (that unit holds the majority of everything that matched).
+    Pure Layer-1 routing over the tender's canonical scope; ``None`` when no scope or no clear
+    mismatch. Never moves anything — the operator confirms."""
+    if scope is None or not lines:
+        return None
+    result = route_reply_lines(lines, scope)
+    counts = {
+        key: len({r.canonical_ref or "" for r in result.routed if r.package_key == key})
+        for key in result.by_key
+    }
+    if counts.get(target_trade, 0) > 0 or not counts:
+        return None  # the target got coverage (or nothing matched at all) -> not a clear misdirect
+    others = {k: n for k, n in counts.items() if k != target_trade and n > 0}
+    if not others:
+        return None
+    best = max(others, key=lambda k: others[k])
+    total_matched = sum(counts.values())
+    if others[best] <= 0.5 * total_matched:  # no single MAJORITY other unit (a tie is too weak to flag)
+        return None
+    return MisdirectedHint(
+        target_unit=target_trade, matched_unit=best,
+        matched_items=others[best], unit_total=section_totals(scope).get(best, 0),
+    )
+
+
+class LevelUploadResponse(BaseModel):
+    """A manual priced-return upload: the levelled bid(s), plus a misdirected hint when the return
+    looks like it belongs to a different enquiry (the operator confirms a reattach; nothing auto-moves)."""
+
+    levelled: list[LevelledBid] = Field(default_factory=list)
+    misdirected: Optional[MisdirectedHint] = None
+
+
+@app.post("/level-upload", response_model=LevelUploadResponse)
 def post_level_upload(
     files: list[UploadFile] = File(...),
     firm_id: str = Form(...),
     trade: str = Form(...),
-) -> list[LevelledBid]:
+    tender: str = Form(""),
+) -> LevelUploadResponse:
     """Inbound channel (Phase A): the operator drops a subcontractor's returned
-    Schedule of Rates here. In DEMO_MODE the baked levelled comparison is returned;
-    live, an xlsx (our returned SoR sheet) is parsed deterministically and a PDF/image
-    is parsed by Layer 2; Layer 1 levels the result.
+    Schedule of Rates here for one enquiry (``trade``). In DEMO_MODE the baked levelled
+    comparison is returned; live, an xlsx (our returned SoR sheet) is parsed deterministically and a
+    PDF/image is parsed by Layer 2; Layer 1 levels the result.
+
+    ``tender`` (the tender slug) lets the misdirect guard route the return against the persisted
+    scope: if it priced nothing for ``trade`` but matches another unit strongly, a hint is returned
+    so the operator can reattach it — nothing moves automatically.
 
     Sync handler (threadpool): the blocking parse/level below never stalls the loop."""
     if demo_mode():
         levelled = level_bids([], demo_fixture=REPLIES_FIXTURE)
         export_leveling_xlsx(levelled, load_demo_replies(REPLIES_FIXTURE), path=OUT_PATH)
-        return levelled
+        return LevelUploadResponse(levelled=levelled)
 
     sheets, images = _read_reply_uploads(files)
     reply = _parse_reply(sheets, images, firm_id=firm_id, trade=trade)
     levelled = level_bids([reply])
     export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
-    return levelled
+    scope = load_scope(Workspace(), tender_slug(tender)) if tender else None
+    hint = _misdirect_hint(reply.line_items, scope, trade)
+    return LevelUploadResponse(levelled=levelled, misdirected=hint)
 
 
 class SectionCoverage(BaseModel):
@@ -994,6 +1049,9 @@ class InboundReplyResponse(BaseModel):
     # Returned lines that matched no canonical SoR item — surfaced, never folded into a section's
     # totals (the subcontractor priced something outside this tender). Display notes, one per line.
     extras: list[str] = Field(default_factory=list)
+    # A hint when the reply came in on this enquiry's ref but its lines price another unit strongly —
+    # the item-identity routing already filed it under the matched unit; this surfaces the mismatch.
+    misdirected: Optional[MisdirectedHint] = None
 
 
 @app.post("/inbound-reply", response_model=InboundReplyResponse)
@@ -1057,6 +1115,7 @@ def post_inbound_reply(
     return InboundReplyResponse(
         status="matched", tender_id=tender_id, firm_id=firm_id, trade=trade,
         reply_count=len(replies), comparison=levelled, sections=coverage, extras=extras_notes,
+        misdirected=_misdirect_hint(parsed.line_items, scope, trade),
     )
 
 
