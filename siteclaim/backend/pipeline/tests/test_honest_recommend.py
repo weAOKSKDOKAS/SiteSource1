@@ -55,3 +55,26 @@ def test_a_rate_only_bid_with_zero_corrected_total_still_counts_as_priced():
     rec = recommend(level_bids([rate_only]), "ground_investigation:H", unit_total=1)
     assert rec.awaiting_valid_return is False and rec.recommended_firm_id == "F-A"
     assert all(not r.no_priced_coverage for r in rec.ranked)
+
+
+def test_a_rate_only_zero_bid_never_wins_over_a_firm_that_priced_an_extended_total():
+    # The HK$0 trap: a rate-only return (rates, no quantities -> corrected_total 0) must NOT rank as
+    # the "cheapest clean bid" at HK$0 over a firm that actually extended a comparable total. It is
+    # still a valid priced bid (surfaced, not gated) — it just never wins the award at HK$0.
+    rate_only = BidReply(firm_id="F-A", trade="ground_investigation:H",
+                         line_items=[BidLineItem(item_ref="H1", rate=100.0)])  # total 0
+    extended = _priced("F-B", "ground_investigation:H", [("H1", 2000.0)])       # qty*rate -> total 2000
+    rec = recommend(level_bids([rate_only, extended]), "ground_investigation:H", unit_total=1)
+    assert rec.recommended_firm_id == "F-B"                   # the comparable-total firm wins, not HK$0 F-A
+    assert rec.awaiting_valid_return is False
+    assert all(not r.no_priced_coverage for r in rec.ranked)  # F-A stays a valid (rate-only) priced bid
+
+
+def test_when_every_bid_is_rate_only_the_lone_clean_firm_still_recommends():
+    # A genuinely rate-only tender (no firm extended a total): comparison is rate-first, so a zero-
+    # total clean bid may still stand as the recommendation — the positive-total preference only
+    # applies when SOME firm priced a comparable total.
+    a = BidReply(firm_id="F-A", trade="ground_investigation:H", line_items=[BidLineItem(item_ref="H1", rate=90.0)])
+    b = BidReply(firm_id="F-B", trade="ground_investigation:H", line_items=[BidLineItem(item_ref="H1", rate=110.0)])
+    rec = recommend(level_bids([a, b]), "ground_investigation:H", unit_total=1)
+    assert rec.recommended_firm_id in {"F-A", "F-B"} and rec.awaiting_valid_return is False

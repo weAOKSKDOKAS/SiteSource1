@@ -186,18 +186,40 @@ def _write_trade_sheet(
 
     if canonical_items is not None:
         # Enquiry-anchored: ALL of the unit's canonical items, in scope order, matched to a firm's
-        # returned line by NORMALISED ref (routed lines keep their original ref). A returned line
-        # matching no canonical item is appended (defensive — real out-of-scope lines go to Extras).
+        # returned line by the SAME routing leveling uses — exact NORMALISED ref, then a description
+        # fallback for a garbled/absent ref — so a line that priced a canonical item under a garbled
+        # ref lands on its canonical row (not a phantom extra + a false scope-gap). A line matching no
+        # canonical item is appended (defensive — real out-of-scope lines go to Extras).
+        from pipeline.stage_04_level.route_items import DEFAULT_DESC_THRESHOLD, token_set_ratio
+
         canon_norms = {normalize_ref(it.item_ref) for it in canonical_items}
         desc_by_ref = {it.item_ref: (it.description or "") for it in canonical_items}
+
+        def _resolved_norm(line) -> str:
+            nr = normalize_ref(line.item_ref)
+            if nr in canon_norms:
+                return nr  # primary: exact normalised ref
+            desc = line.description or ""
+            if desc.strip():  # secondary: description token-set similarity (only when the ref missed)
+                best, best_score = None, 0.0
+                for it in canonical_items:
+                    if not (it.description or "").strip():
+                        continue
+                    score = token_set_ratio(desc, it.description)
+                    if score > best_score:
+                        best, best_score = it, score
+                if best is not None and best_score >= DEFAULT_DESC_THRESHOLD:
+                    return normalize_ref(best.item_ref)
+            return nr  # unmatched -> its own norm (rendered as an appended extra row)
+
         items = [it.item_ref for it in canonical_items]
         for reply in replies:
             for line in reply.line_items:
-                if normalize_ref(line.item_ref) not in canon_norms and line.item_ref not in items:
+                if _resolved_norm(line) not in canon_norms and line.item_ref not in items:
                     items.append(line.item_ref)
         norm_by_ref = {ref: normalize_ref(ref) for ref in items}
         line_index = {
-            (r.firm_id, normalize_ref(line.item_ref)): line for r in replies for line in r.line_items
+            (r.firm_id, _resolved_norm(line)): line for r in replies for line in r.line_items
         }
     else:
         # Reply-anchored (unchanged): the priced refs in scope order, then any extra the bids introduced.

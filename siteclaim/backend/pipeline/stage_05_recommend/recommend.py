@@ -98,7 +98,14 @@ def recommend(
             for b in priced  # ONLY valid priced bids enter the ranking — order unchanged for them
         ]
         ranked = rank_by_total(ranked_input)  # marks recommended_against + reason, sorts
-        recommended_id = next((r.firm_id for r in ranked if not r.recommended_against), None)
+        # The recommended winner is the cheapest CLEAN bid with a comparable (positive) corrected
+        # total. A rate-only / all-zero return is valid coverage (it stays in the ranking) but must
+        # never win the award at HK$0 over a firm that priced an extended total. Only when NO clean
+        # bid carries a positive total (a genuinely rate-only tender) does a zero-total clean bid
+        # stand as the recommendation.
+        recommended_id = next(
+            (r.firm_id for r in ranked if not r.recommended_against and r.corrected_total > 0), None,
+        ) or next((r.firm_id for r in ranked if not r.recommended_against), None)
         # Invalid returns are surfaced AFTER the ranked list (never sorted with valid bids, never
         # awardable at HK$0), each marked with why it did not qualify.
         denom = f" of {unit_total}" if unit_total else ""

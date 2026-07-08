@@ -162,19 +162,36 @@ def level_bids(
     if not replies and demo_fixture:
         replies = load_demo_replies(demo_fixture)
 
-    from pipeline.stage_04_level.route_items import normalize_ref
+    from pipeline.stage_04_level.route_items import normalize_ref, route_items
 
     canon_by_unit, peer_by_norm = _scope_basis(replies, scope) if scope is not None else ({}, {})
 
     own_conn = conn is None
     conn = conn or store.get_connection()
     try:
-        peer = peer_item_reference(replies)
+        # Value both gap kinds (returned-but-unpriced AND not-returned scope) on the SAME norm-keyed
+        # peer basis, so a gap whose ref form drifts from its peers' (J5(a) vs J5A) is still priced at
+        # the peer median. `peer` is keyed by each returned raw ref (what level_reply looks up) but
+        # valued via peer_by_norm. The reply-anchored (no-scope) path has no norm basis -> raw peer.
+        peer = (
+            {line.item_ref: peer_by_norm[normalize_ref(line.item_ref)]
+             for reply in replies for line in reply.line_items
+             if line.item_ref and normalize_ref(line.item_ref) in peer_by_norm}
+            if scope is not None else peer_item_reference(replies)
+        )
         levelled = []
         for reply in replies:
             profile = store.firm_profile(conn, reply.firm_id)
             firm_name = profile.name if profile is not None else reply.firm_id
-            returned = {normalize_ref(line.item_ref) for line in reply.line_items}
+            # Which canonical items of this unit the reply actually covered — by the SAME routing
+            # (exact ref, then description) that grouped the lines. So a line matched by description
+            # (a garbled / absent ref) marks its canonical item returned and is NOT then double-counted
+            # as an unpriced gap valued at the peer price.
+            returned = {
+                normalize_ref(r.canonical_ref)
+                for r in (route_items(reply.line_items, scope) if scope is not None else [])
+                if r.canonical_ref and r.package_key == reply.trade
+            }
             unpriced = [
                 (c.item_ref, c.description, peer_by_norm.get(c.norm_ref, 0.0))
                 for c in canon_by_unit.get(reply.trade, [])

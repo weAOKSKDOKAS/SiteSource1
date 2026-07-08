@@ -92,7 +92,7 @@ def test_priced_return_is_the_sor_section_slice_not_the_generated_sheet():
     sor = plan.attachments[0]
     assert sor.mode == "sliced" and sor.source_doc == _SR       # the ORIGINAL SoR, sliced
     assert sor.out_filename == "SoR_ground_investigation_Section_E.pdf"
-    assert sor.pages == [2, 3, 4, 5] and PRICED_RETURN in sor.flags  # E pages (0-based 1..4) 1-based, ±1
+    assert sor.pages == [3, 4] and PRICED_RETURN in sor.flags  # E's own pages (0-based 2,3), no ±1 leak
     assert not any(a.mode == "generated" for a in plan.attachments)  # no generated .xlsx anymore
 
 
@@ -143,7 +143,9 @@ def test_assembly_sends_the_sor_slice_under_its_friendly_pdf_name(tmp_path):
     with fitz.open(stream=sliced, filetype="pdf") as d:
         text = " ".join(p.get_text() for p in d)
         page_count = d.page_count
-    assert page_count < 5 and "E1" in text and "A1" not in text  # sliced to E, not the whole SoR
+    # Sliced to E's own pages only — E1/E2 present; NO adjacent-section leak (A1/A2 or I1).
+    assert page_count == 2 and "E1" in text and "E2" in text
+    assert "A1" not in text and "A2" not in text and "I1" not in text
 
 
 def test_the_priced_return_slice_is_never_removable_or_whole_expandable_at_the_gate():
@@ -152,4 +154,4 @@ def test_the_priced_return_slice_is_never_removable_or_whole_expandable_at_the_g
         items=[_item("E")], doc_index=[_sr_entry()], sor_sheet_name="SoR_gi.xlsx", section="E")
     edited = apply_attachment_overrides(plan, removed=[_SR], whole=[_SR])
     sor = edited.attachments[0]
-    assert sor.source_doc == _SR and sor.mode == "sliced" and sor.pages == [2, 3, 4, 5]  # untouched
+    assert sor.source_doc == _SR and sor.mode == "sliced" and sor.pages == [3, 4]  # untouched

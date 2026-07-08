@@ -6,7 +6,14 @@ from openpyxl import load_workbook
 
 from pipeline.stage_04_level.export_xlsx import export_leveling_xlsx, sheet_title
 from pipeline.stage_04_level.level import level_bids
-from schemas.models import BidLineItem, BidReply, SorItem
+from schemas.models import (
+    BidLineItem,
+    BidReply,
+    ScopePackages,
+    SectionMeta,
+    SorItem,
+    TradeWorkPackage,
+)
 
 
 def _texts(ws):
@@ -62,6 +69,56 @@ def test_return_matching_the_wrong_reformed_ref_still_anchors_on_canonical(tmp_p
     texts = _texts(ws)
     assert "100" in texts and "H1" in texts                       # rate on the canonical row
     assert "h1" not in texts                                      # no phantom original-ref row appended
+
+
+# -- scope-aware leveling: coverage + like-for-like valuation over the routed unit ----------
+def _gi_split_scope() -> ScopePackages:
+    # >3 sections -> route_units auto-splits ground_investigation into per-section units (G/H/I/J).
+    return ScopePackages(project_name="GE/2026/14", packages=[TradeWorkPackage(
+        trade="ground_investigation", scope_summary="GI",
+        sor_items=[
+            SorItem(item_ref="G4", description="Trial pit excavation", section="G"),
+            SorItem(item_ref="H5A", description="Rotary drilling in rock", section="H"),
+            SorItem(item_ref="H12", description="Field vane shear test in soft clay", section="H"),
+            SorItem(item_ref="H13", description="Standpipe piezometer installation", section="H"),
+            SorItem(item_ref="I3", description="Rotary core drilling in rock", section="I"),
+            SorItem(item_ref="J1", description="Instrumentation monitoring", section="J")],
+        sections=[SectionMeta(code=c, item_count=n) for c, n in [("G", 1), ("H", 3), ("I", 1), ("J", 1)]])])
+
+
+def test_a_description_routed_line_is_not_double_counted_as_an_unpriced_gap():
+    # A garbled ref ("H1Z") that routes to canonical H12 only by DESCRIPTION must count as returning
+    # H12 — not be added to the unpriced scope (valued at the peer price) AND left priced, which would
+    # double-count H12 in normalized_total and falsely mark it "not returned".
+    scope = _gi_split_scope()
+    a = BidReply(firm_id="F-A", trade="ground_investigation:H", line_items=[
+        BidLineItem(item_ref="H1Z", description="Field vane shear test in soft clay",
+                    qty=1.0, rate=100.0, amount=100.0)])
+    b = BidReply(firm_id="F-B", trade="ground_investigation:H", line_items=[
+        BidLineItem(item_ref="H12", description="Field vane shear test in soft clay",
+                    qty=1.0, rate=200.0, amount=200.0)])
+    by = {x.firm_id: x for x in level_bids([a, b], scope)}
+    fa = by["F-A"]
+    assert fa.corrected_total == 100.0
+    assert fa.normalized_total == 100.0                       # NOT 300 — H12 not double-counted at peer price
+    assert not any("H12" in g for g in fa.scope_gaps)         # H12 was priced (by description), not a gap
+    assert any(g.startswith("H13") for g in fa.scope_gaps)    # H13 genuinely not returned -> a real gap
+
+
+def test_a_returned_but_unpriced_gap_is_valued_at_the_peer_price_despite_ref_drift():
+    # F-A returns H5A under the drifted form "H5(a)" with NO rate -> a returned-but-unpriced gap; a
+    # peer priced "H5A". The gap must be valued at the peer price (matched on the normalised ref),
+    # not 0 — otherwise a firm that left expensive scope unpriced ranks artificially cheap.
+    scope = _gi_split_scope()
+    a = BidReply(firm_id="F-A", trade="ground_investigation:H", line_items=[
+        BidLineItem(item_ref="H5(a)", description="Rotary drilling in rock")])  # no rate/amount -> gap
+    b = BidReply(firm_id="F-B", trade="ground_investigation:H", line_items=[
+        BidLineItem(item_ref="H5A", description="Rotary drilling in rock", qty=1.0, rate=200.0, amount=200.0)])
+    by = {x.firm_id: x for x in level_bids([a, b], scope)}
+    fa = by["F-A"]
+    assert fa.corrected_total == 0.0
+    assert fa.normalized_total == 200.0                       # peer price applied despite H5(a)/H5A drift
+    assert any(g.startswith("H5(a)") for g in fa.scope_gaps)  # the returned-but-unpriced line is surfaced
 
 
 def test_two_dispatched_units_each_get_a_sheet_even_when_only_one_replied(tmp_path):

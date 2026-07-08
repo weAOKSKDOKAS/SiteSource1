@@ -217,7 +217,11 @@ def _priced_return_attachment(
             reason="Priced Schedule of Rates for this section")
     hit = next((e for e in sr_entries if e.text_layer and section_key in e.sor_section_pages), None)
     if hit is not None:
-        pages = [p + 1 for p in _expand(set(hit.sor_section_pages[section_key]), hit.page_count)]
+        # The section's OWN pages, exactly — NO ±1 straddle expansion. ±1 is for spec clauses (which
+        # can cross a page break); a SoR section is already delimited at page granularity by _spans,
+        # so expanding it would leak the ADJACENT sections' items into the sheet this firm is asked to
+        # price (and let a firm bid a section it was never enquired on).
+        pages = [p + 1 for p in sorted(hit.sor_section_pages[section_key])]
         return PlanAttachment(
             source_doc=hit.filename, out_filename=_unit_out_name(trade, package_key, section_key),
             mode="sliced", pages=pages, flags=[PRICED_RETURN],
