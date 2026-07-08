@@ -13,12 +13,15 @@ persisted with the run so dispatch can read it back.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 from schemas.models import DocType
+
+_log = logging.getLogger(__name__)
 
 # Page-1 self-declaration: "SECTION 7 – GEOTECHNICAL WORKS", "SECTION 26 - PRESERVATION …".
 # The dash/colon separator is optional (a scanned header may drop the en-dash glyph); the
@@ -233,14 +236,19 @@ def _open_pdf(data: bytes):
 
 def _column_headings(data: bytes, page_no: int, section_number: str) -> list[str]:
     """Clause-heading ids for one SCANNED spec page via CACHED word-box OCR (``ocr.page_words`` —
-    served from the versioned cache, tesseract only on a miss). Any OCR failure degrades to no
-    markers for this page (whole-file fallback) — the loud engine-missing signal is owned by the
-    OCR spine, and this path only runs after ``page_texts`` already OCR'd the doc successfully."""
+    served from the versioned cache, tesseract only on a miss).
+
+    A configured-but-missing ENGINE (:class:`ocr.OcrEngineUnavailable`) PROPAGATES — it is a
+    deployment fault, and swallowing it to ``[]`` would silently produce an empty clause index that
+    reads as 'this page has no clauses'. Only a NARROW per-page glitch (no pytesseract installed at
+    all, a rasterise error) degrades to no markers for THIS page (whole-file fallback)."""
     from pipeline import ocr
 
     try:
         words = ocr.page_words(data, page_no)
-    except Exception:  # noqa: BLE001 — engine glitch / not installed -> no column markers here
+    except ocr.OcrEngineUnavailable:
+        raise  # engine misconfiguration — fail loud, never a silent empty index
+    except Exception:  # noqa: BLE001 — no pytesseract / a per-page rasterise glitch -> no markers here
         return []
     return _headings_from_words(words, section_number)
 
@@ -342,6 +350,16 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
         # PS/GS pages are multi-column when scanned, so the clause id lands mid-line under OCR;
         # scan the word boxes column-aware (native pages keep the line-start path). Do NOT touch MM.
         clause_index = _spans(_spec_markers_layout(data, pages, section_number), len(pages))
+        if not clause_index:
+            # The doc WAS readable (text layer / OCR) yet produced no clause markers — surface it
+            # rather than trust a silently-empty index: it will be sent WHOLE, and an empty index on
+            # a readable spec usually means a broken OCR engine or unrecognised markers, not "no
+            # clauses". No silent engine dependence.
+            _log.warning(
+                "PS/GS %r has a text layer but produced an EMPTY clause index (%d pages) — it will be "
+                "sent whole; verify the OCR engine and clause markers rather than trusting the empty index",
+                filename, len(pages),
+            )
         # A PS clause may point onward to an appendix ("refer to Appendix 7.8.20"); record it now,
         # while the page text is in hand, so dispatch reads only the persisted index.
         clause_onward = _onward_appendices(pages, clause_index)

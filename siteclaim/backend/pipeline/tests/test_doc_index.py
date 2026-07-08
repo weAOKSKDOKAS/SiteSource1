@@ -236,6 +236,39 @@ def test_layout_marker_maps_a_column_scanned_clause_to_its_page(monkeypatch):
     assert e.clause_index.get("7.286A") == [1]   # scanned page 1, recovered from the word boxes
 
 
+def test_engine_missing_on_the_word_box_path_fails_loud_not_a_silent_empty_index(monkeypatch):
+    # A configured-but-missing engine on the scanned word-box path PROPAGATES (OcrEngineUnavailable),
+    # never a silent [] that reads as "this page has no clauses". Mixed doc: native page 0 + scanned 1.
+    import pipeline.ocr as ocr
+    import pipeline.ocr_table as ocr_table
+
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "SECTION 7 - GEOTECHNICAL WORKS\n7.1 General requirements")
+    scan = doc.new_page()
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 400, 400))
+    pix.clear_with(255)  # image-only page => the scanned/word-box path
+    scan.insert_image(scan.rect, pixmap=pix)
+    data = doc.tobytes()
+    doc.close()
+
+    def _no_engine(*a, **k):
+        raise ocr.OcrEngineUnavailable("tesseract not found")
+
+    monkeypatch.setattr(ocr_table, "_words", _no_engine)  # word-box path hits the missing engine
+    with pytest.raises(ocr.OcrEngineUnavailable):
+        build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+
+
+def test_readable_ps_with_no_clause_markers_warns_instead_of_trusting_empty_index(caplog):
+    # A PS with a real text layer but NO clause ids yields an empty index — surfaced as a WARNING
+    # (it will be sent whole), never silently trusted as "no clauses" (no silent engine dependence).
+    data = _pdf([["SECTION 7 - GEOTECHNICAL WORKS", "General prose with no clause numbers here."]])
+    with caplog.at_level("WARNING"):
+        e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.text_layer and e.clause_index == {}
+    assert any("EMPTY clause index" in r.getMessage() for r in caplog.records)
+
+
 @requires_tesseract
 def test_real_multi_column_scanned_ps_is_sliced_not_whole(tmp_path, monkeypatch):
     # The whole point, end to end on a real render: a MULTI-COLUMN scanned PS (label column, a
