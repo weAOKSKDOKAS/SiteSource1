@@ -304,6 +304,38 @@ def test_readable_ps_with_no_clause_markers_warns_instead_of_trusting_empty_inde
     assert any("EMPTY clause index" in r.getMessage() for r in caplog.records)
 
 
+def test_multicolumn_native_ps_indexes_a_sections_midline_clauses_end_to_end():
+    # The headline, on REAL native extraction (no stub, no OCR): a multi-column PS whose Section-J
+    # clauses 7.77.2A/3A/4A sit MID-LINE after a label is now fully indexed by the blind pass, and the
+    # resolver slices to exactly those clauses instead of falling back to whole-file.
+    from pipeline.stage_03_dispatch.relevant_docs import resolve_section_plan
+    from schemas.models import SorItem
+
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "SECTION 7 - GEOTECHNICAL WORKS", fontsize=11)
+    for cid, body in [("7.77.2A", "(1) Within three weeks of commencement of the Contract"),
+                      ("7.77.3A", "(a) Readings shall be taken at the intervals"),
+                      ("7.77.4A", "(1) The contractor shall monitor and report")]:
+        doc.new_page().insert_text((36, 72), f"Instrumentation and monitoring {cid} {body}", fontsize=11)
+    data = doc.tobytes()
+    doc.close()
+
+    e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.text_layer and e.kind == "particular_specification"
+    assert e.clause_index.get("7.77.2A") == [1]   # mid-line heading, real native extraction
+    assert e.clause_index.get("7.77.3A") == [2]
+    assert e.clause_index.get("7.77.4A") == [3]
+
+    items = [SorItem(item_ref="J1", description="instruments", section="J",
+                     clause_refs=["PS 7.77.2A", "PS 7.77.3A", "PS 7.77.4A"])]
+    plan = resolve_section_plan(
+        package_key="ground_investigation:J", trade="ground_investigation", section_title="INSTRUMENTS",
+        items=items, doc_index=[e], sor_sheet_name="s.xlsx", section="J")
+    ps = next(a for a in plan.attachments if a.source_doc == "PS-S07.pdf")
+    assert ps.mode == "sliced"                                          # not whole (clause not located)
+    assert set(ps.clauses) == {"7.77.2A", "7.77.3A", "7.77.4A"} and ps.directed_clauses == []
+
+
 def test_multicolumn_linearised_clause_heading_is_indexed_mid_line(monkeypatch):
     # The real root cause: a MULTI-COLUMN native PS page is linearised (pymupdf sort=True) so the
     # clause id lands MID-LINE ("label … 7.77.2A (1) body"). It must still index as a heading — the
