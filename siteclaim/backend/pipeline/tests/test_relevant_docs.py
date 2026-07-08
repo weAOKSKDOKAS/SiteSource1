@@ -134,6 +134,103 @@ def test_onward_appendix_with_no_appendix_document_is_flagged_missing():
     assert "Appendix 7" in [m.spec for m in plan.missing_specs]  # onward appendix, no doc -> flagged
 
 
+# -- directed clause location over cached OCR text (engine-independent) -------
+def _texts(mapping):
+    return lambda filename: mapping.get(filename, [])
+
+
+def test_directed_search_locates_referenced_clauses_the_blind_index_missed():
+    # The reliability fix: PS-S07's blind index located nothing (word-box column path dead live), but
+    # the referenced A-clauses 7.286A / 7.301A ARE in the cached OCR text as headings — the directed
+    # search finds them and the PS is sliced to their pages instead of sent whole.
+    entry = DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                          text_layer=True, page_count=10, clause_index={})
+    texts = {"PS-S07.pdf": [
+        "SECTION 7 - GEOTECHNICAL WORKS", "Replace GS Clause 7.70(4) with the following:", "prose",
+        "Standpipes in trial pits 7.286A (1) When instructed by the Engineer",   # p3: id after a label
+        "prose", "prose",
+        "Rotary core drilling 7.301A (1) The contractor shall provide",          # p6
+    ]}
+    plan = resolve_section_plan(
+        package_key="ground_investigation:G", trade="ground_investigation", section_title="DRILLING",
+        items=[_item(["PS 7.286A", "PS 7.301A"], section="G")], doc_index=[entry],
+        sor_sheet_name="s.xlsx", section="G", page_texts_of=_texts(texts))
+    ps = next(a for a in plan.attachments if a.source_doc == "PS-S07.pdf")
+    assert ps.mode == "sliced"
+    assert set(ps.directed_clauses) == {"7.286A", "7.301A"}           # located by the directed search
+    assert "7.286A" in ps.clauses and "7.301A" in ps.clauses
+    assert set(ps.pages) == {3, 4, 5, 6, 7, 8}                        # p3 ±1 ∪ p6 ±1 (1-based)
+    assert ps.clauses_not_located == [] and plan.missing_specs == []
+
+
+def test_directed_search_ignores_an_inline_cross_reference_when_a_real_heading_exists():
+    # "… in accordance with Clause 7.286A …" is an inline cross-reference (cue-preceded), NOT a
+    # heading — the clause is located to its real heading page, never the page that only cites it.
+    entry = DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                          text_layer=True, page_count=10, clause_index={})
+    texts = {"PS-S07.pdf": [
+        "SECTION 7",
+        "carried out in accordance with Clause 7.286A of this specification",     # p1: inline, cue-preceded
+        "prose",
+        "Standpipes in trial pits 7.286A (1) When instructed by the Engineer",    # p3: the real heading
+    ]}
+    plan = resolve_section_plan(
+        package_key="x", trade="ground_investigation", section_title="DRILLING",
+        items=[_item(["PS 7.286A"], section="G")], doc_index=[entry], sor_sheet_name="s.xlsx",
+        page_texts_of=_texts(texts))
+    ps = next(a for a in plan.attachments if a.source_doc == "PS-S07.pdf")
+    assert ps.directed_clauses == ["7.286A"]
+    assert set(ps.pages) == {3, 4, 5}          # the heading page (p3) ±1 — 1-based
+    assert 2 not in ps.pages                    # NOT the inline-only page (p1 -> 1-based 2)
+
+
+def test_directed_search_a_genuinely_absent_clause_stays_whole_and_flagged():
+    # A referenced clause found NOWHERE in the text (not even inline) is not fabricated — the PS falls
+    # back to whole with the existing flag, never a silent drop.
+    entry = DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                          text_layer=True, page_count=6, clause_index={})
+    texts = {"PS-S07.pdf": ["SECTION 7", "general prose with no such clause anywhere", "more prose"]}
+    plan = resolve_section_plan(
+        package_key="x", trade="ground_investigation", section_title="DRILLING",
+        items=[_item(["PS 7.286A"], section="G")], doc_index=[entry], sor_sheet_name="s.xlsx",
+        page_texts_of=_texts(texts))
+    ps = next(a for a in plan.attachments if a.source_doc == "PS-S07.pdf")
+    assert ps.mode == "whole" and "whole_clause_not_located" in ps.flags
+
+
+def test_directed_search_joins_the_sor_ref_and_the_located_heading_on_the_canonical_id():
+    # The SoR cites "PS 7.286A"; the PS heading in the text is "7.286A" — both canonicalise to 7.286A,
+    # so the directed search joins them (regression on the canonical match).
+    entry = DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                          text_layer=True, page_count=6, clause_index={})
+    texts = {"PS-S07.pdf": ["SECTION 7", "Trial pit standpipes 7.286A (1) When instructed"]}
+    plan = resolve_section_plan(
+        package_key="x", trade="ground_investigation", section_title="DRILLING",
+        items=[_item(["PS 7.286A"], section="G")], doc_index=[entry], sor_sheet_name="s.xlsx",
+        page_texts_of=_texts(texts))
+    ps = next(a for a in plan.attachments if a.source_doc == "PS-S07.pdf")
+    assert ps.directed_clauses == ["7.286A"] and "7.286A" in ps.clauses
+
+
+def test_directed_search_does_not_touch_the_mm_or_native_index_paths():
+    # A text reader is supplied, but the MM is still sliced by its own index (PB 71) — the directed
+    # search is PS-only; the MM and native line-start paths are unchanged.
+    doc_index = [
+        DocIndexEntry(filename="PS-S07.pdf", kind="particular_specification", spec_section_number="7",
+                      text_layer=True, page_count=40, clause_index={"7.34A": [3]}),
+        DocIndexEntry(filename="MM-01.pdf", kind="method_of_measurement", text_layer=True,
+                      page_count=20, clause_index={"PB 71": [11]}),
+    ]
+    texts = {"PS-S07.pdf": ["SECTION 7", "7.34A drilling"], "MM-01.pdf": ["PB 71 boreholes"]}
+    plan = resolve_section_plan(
+        package_key="x", trade="ground_investigation", section_title="DRILLING",
+        items=[_item(["PS 7.34A", "PB 71"], section="G")], doc_index=doc_index, sor_sheet_name="s.xlsx",
+        page_texts_of=_texts(texts))
+    by = {a.source_doc: a for a in plan.attachments}
+    assert by["PS-S07.pdf"].clauses == ["7.34A"] and by["PS-S07.pdf"].directed_clauses == []  # index hit
+    assert by["MM-01.pdf"].mode == "sliced" and set(by["MM-01.pdf"].pages) == {11, 12, 13}     # MM unchanged
+
+
 def test_slice_pdf_extracts_requested_pages():
     fitz = pytest.importorskip("fitz")
     doc = fitz.open()

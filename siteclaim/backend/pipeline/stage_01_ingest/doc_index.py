@@ -284,18 +284,22 @@ def _column_headings(data: bytes, page_no: int, section_number: str) -> list[str
     return _headings_from_words(words, section_number)
 
 
-def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> list[tuple[str, int]]:
-    """``(clause_id, page)`` for a PS / GS doc, LAYOUT-AWARE: a native-text page keeps the line-start
-    scan; a scanned page (multi-column PS/GS whose OCR fuses the clause id mid-line) is read from its
-    word boxes so the clause-number column is recovered. Amendment lead-ins are read from the page
-    text either way. With OCR disabled it is exactly ``_spec_markers`` (native-only)."""
+def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> tuple[list[tuple[str, int]], int, int]:
+    """``(markers, scanned_page_count, column_heading_count)`` for a PS / GS doc, LAYOUT-AWARE: a
+    native-text page keeps the line-start scan; a scanned page (multi-column PS/GS whose OCR fuses the
+    clause id mid-line) is read from its word boxes so the clause-number column is recovered, unioned
+    with the line-start scan over the OCR text. Amendment lead-ins are read from the page text either
+    way. The two counts feed the ingest engine-health signal (a scanned spec with a text layer but
+    ZERO column headings is the live word-box symptom). With OCR off it is native-only line-start."""
     from pipeline import ocr
 
     heading = _heading_re(section_number)
     doc = _open_pdf(data) if ocr.ocr_enabled() else None
     if doc is None:
-        return _spec_markers(pages, section_number)  # OCR off / unreadable -> native line-start only
+        return _spec_markers(pages, section_number), 0, 0  # OCR off / unreadable -> native line-start
     markers: list[tuple[str, int]] = []
+    n_scanned = 0
+    n_column = 0
     try:
         for page_no, text in enumerate(pages):
             page = doc[page_no] if page_no < doc.page_count else None
@@ -309,11 +313,14 @@ def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> 
                 # are unavailable — a cheap coverage net, no new dependency. Union: on a multi-column
                 # page the line-start scan matches nothing (the id is mid-line), so no false positives.
                 # _page_line_markers also reads the amendment lead-ins from the OCR text.
-                markers.extend((cid, page_no) for cid in _column_headings(data, page_no, section_number))
+                n_scanned += 1
+                col = _column_headings(data, page_no, section_number)
+                n_column += len(col)
+                markers.extend((cid, page_no) for cid in col)
                 markers.extend(_page_line_markers(text, heading, page_no, section_number))
     finally:
         doc.close()
-    return markers
+    return markers, n_scanned, n_column
 
 
 def _mm_markers(pages: list[str]) -> list[tuple[str, int]]:
@@ -389,7 +396,8 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
     elif text_layer and kind in ("particular_specification", "general_specification"):
         # PS/GS pages are multi-column when scanned, so the clause id lands mid-line under OCR;
         # scan the word boxes column-aware (native pages keep the line-start path). Do NOT touch MM.
-        clause_index = _spans(_spec_markers_layout(data, pages, section_number), len(pages))
+        markers, n_scanned, n_column = _spec_markers_layout(data, pages, section_number)
+        clause_index = _spans(markers, len(pages))
         if not clause_index:
             # The doc WAS readable (text layer / OCR) yet produced no clause markers — surface it
             # rather than trust a silently-empty index: it will be sent WHOLE, and an empty index on
@@ -399,6 +407,16 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
                 "PS/GS %r has a text layer but produced an EMPTY clause index (%d pages) — it will be "
                 "sent whole; verify the OCR engine and clause markers rather than trusting the empty index",
                 filename, len(pages),
+            )
+        elif n_scanned > 0 and n_column == 0:
+            # Engine-health signal: the scanned pages produced NO word-box column headings (only
+            # line-start / lead-in markers survived) — the live word-box symptom. Loud, not silent:
+            # referenced clauses are still located from the cached text by the directed search at
+            # dispatch, but the operator should check the OCR engine.
+            _log.warning(
+                "PS/GS %r: %d scanned page(s) but the word-box column path found NO headings — check "
+                "the OCR engine; referenced clauses will be located from cached text at dispatch",
+                filename, n_scanned,
             )
         # A PS clause may point onward to an appendix ("refer to Appendix 7.8.20"); record it now,
         # while the page text is in hand, so dispatch reads only the persisted index.

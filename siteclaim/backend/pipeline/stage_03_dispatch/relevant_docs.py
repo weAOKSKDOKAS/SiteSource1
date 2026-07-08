@@ -39,6 +39,8 @@ class PlanAttachment(BaseModel):
     clauses: list[str] = Field(default_factory=list)  # the clause ids this extract contains
     directed_clauses: list[str] = Field(default_factory=list)  # of ``clauses``, those the blind index
     #   MISSED and the directed text search located (engine-independent) — for the location report
+    clauses_not_located: list[str] = Field(default_factory=list)  # referenced clauses located NOWHERE
+    #   (neither index nor directed) though this section IS present — surfaced, never silently dropped
     reason: str = ""
     flags: list[str] = Field(default_factory=list)   # e.g. "scanned_whole" | "whole_clause_not_located"
 
@@ -288,13 +290,20 @@ def resolve_section_plan(
             pages = sorted(index_pages | directed_pages)
             directed_ids = [c for c in directed if c not in blind]  # located ONLY by the directed search
             located = _dedup(blind + list(directed))
+            # Referenced PS clauses of THIS section located nowhere (index or directed) — surfaced on
+            # the (present) section so a partial gap is never silent, per the no-drop invariant.
+            not_located = [c for c in ps_clauses
+                           if base_clause(c).split(".")[0] == e.spec_section_number and c not in located]
             if pages:
                 reason = f"PS Section {e.spec_section_number} — referenced clauses"
                 if directed_ids:
                     reason += f" ({len(directed_ids)} located by directed text search: {', '.join(directed_ids)})"
+                if not_located:
+                    reason += f" · {len(not_located)} not located: {', '.join(not_located)}"
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages],
-                    clauses=located, directed_clauses=directed_ids, reason=reason))
+                    clauses=located, directed_clauses=directed_ids, clauses_not_located=not_located,
+                    reason=reason))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
