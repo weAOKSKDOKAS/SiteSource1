@@ -90,10 +90,11 @@ def test_trade_labels_are_normalised_to_canonical_keys():
 
 
 def test_geotechnical_spec_now_classifies_to_ground_investigation():
-    # v2: a Geotechnical Works spec (like GE/2026/14 PS-S07) resolves to the real GI
-    # trade instead of falling to general.
-    tender = _tender([("ps_s07_geotechnical.pdf", DocType.PARTICULAR_SPECIFICATION)])
-    client = FakeClient({"ps_s07_geotechnical.pdf": {"general": False, "trades": ["Geotechnical Works"], "confidence": 0.9}})
+    # v2: a Geotechnical Works spec resolves to the real GI trade instead of falling to general.
+    # (A signal-less filename, so the LLM trade-normalisation path is exercised — a PS-S07 filename
+    # is now decided deterministically, which the deterministic tests cover.)
+    tender = _tender([("geotechnical_works_spec.pdf", DocType.PARTICULAR_SPECIFICATION)])
+    client = FakeClient({"geotechnical_works_spec.pdf": {"general": False, "trades": ["Geotechnical Works"], "confidence": 0.9}})
     tagged = classify_documents(tender, client=client)
     assert tagged.documents[0].trades == ["ground_investigation"]
     assert tagged.documents[0].filename in {d.filename for d in route_documents(tagged, "ground_investigation")[1]}
@@ -188,17 +189,19 @@ def test_low_confidence_doc_type_falls_back_to_neutral_general():
 
 
 def test_classification_failure_falls_back_to_neutral_general_not_the_seed():
-    # The definitive bug: a transient LLM failure while classifying the MoM left the SCHEDULE_OF_RATES
-    # seed in place, turning 48 pp of MoM prose into phantom priced items. It must fail SAFE now.
-    tender = _tender([("I-GE_2026_14_TSC-MM-01.pdf", DocType.SCHEDULE_OF_RATES)])
+    # A transient LLM failure on a SIGNAL-LESS document must fail SAFE: neutral, never the SoR seed.
+    # (The real MoM filename is now decided deterministically and never reaches the LLM at all —
+    # covered by the deterministic tests below.)
+    tender = _tender([("mystery_upload.pdf", DocType.SCHEDULE_OF_RATES)])
     doc = classify_documents(tender, client=RaisingClient()).documents[0]
     assert doc.doc_type is DocType.GENERAL          # neutral — never the SoR seed
     assert doc.doc_type_source == "fallback" and doc.trades == []
 
 
 def test_confident_classification_records_llm_provenance():
-    tender = _tender([("sr01.pdf", DocType.SCHEDULE_OF_RATES)])
-    client = FakeClient({"sr01.pdf": {"general": True, "doc_type": "schedule_of_rates", "confidence": 0.9}})
+    # A signal-less document the LLM confidently types records "llm" provenance.
+    tender = _tender([("priced_bills.pdf", DocType.GENERAL)])
+    client = FakeClient({"priced_bills.pdf": {"general": True, "doc_type": "schedule_of_rates", "confidence": 0.9}})
     doc = classify_documents(tender, client=client).documents[0]
     assert doc.doc_type is DocType.SCHEDULE_OF_RATES and doc.doc_type_source == "llm"
 
@@ -225,16 +228,69 @@ class RecordingClient:
 
 
 def test_a_document_with_text_classifies_from_text_and_renders_no_image():
+    # Text-first LLM path: a signal-less document with a usable text layer is classified from text
+    # (no vision render). The text is deliberately NOT a title signal, so it reaches the LLM.
     tender = _tender([("ps_electrical.pdf", DocType.PARTICULAR_SPECIFICATION)])
     client = RecordingClient()
     classify_documents(
         tender, per_doc_images=[["would-be-render"]],  # available, but must NOT be used
-        per_doc_text=["PARTICULAR SPECIFICATION — ELECTRICAL INSTALLATION, Section 16"],
+        per_doc_text=["Low-voltage electrical distribution and containment for the building services"],
         client=client,
     )
     (call,) = client.calls
     assert call["images"] is None                         # text-first: no vision render
-    assert "PARTICULAR SPECIFICATION" in call["user"]     # the text reached the prompt
+    assert "Low-voltage electrical distribution" in call["user"]  # the text reached the prompt
+
+
+# -- deterministic pre-classification: Layer 1 first, LLM only for the remainder --------
+def test_a_method_of_measurement_filename_classifies_deterministically_without_the_llm():
+    # The definitive fix: the real MoM filename is decided by its "-MM-" token BEFORE any LLM call,
+    # so a classifier hiccup can never turn it into a Schedule of Rates.
+    tender = _tender([("I-GE_2026_14_TSC-MM-01.pdf", DocType.SCHEDULE_OF_RATES)])
+    client = RecordingClient()
+    doc = classify_documents(tender, per_doc_text=[""], client=client).documents[0]
+    assert doc.doc_type is DocType.METHOD_OF_MEASUREMENT and doc.doc_type_source == "filename"
+    assert client.calls == []                              # decided deterministically — no LLM call
+
+
+def test_an_sr_filename_classifies_schedule_of_rates_deterministically():
+    tender = _tender([("I-GE_2026_14_TSC-SR-01.pdf", DocType.GENERAL)])
+    client = RecordingClient()
+    doc = classify_documents(tender, per_doc_text=[""], client=client).documents[0]
+    assert doc.doc_type is DocType.SCHEDULE_OF_RATES and doc.doc_type_source == "filename"
+    assert client.calls == []
+
+
+def test_a_first_page_title_classifies_deterministically_for_an_arbitrary_filename():
+    # No filename signal, but the first page's title decides the kind — still no LLM call.
+    tender = _tender([("upload_2.pdf", DocType.SCHEDULE_OF_RATES)])
+    client = RecordingClient()
+    doc = classify_documents(
+        tender, per_doc_text=["METHOD OF MEASUREMENT\nPreamble to the measured works"], client=client,
+    ).documents[0]
+    assert doc.doc_type is DocType.METHOD_OF_MEASUREMENT and doc.doc_type_source == "title"
+    assert client.calls == []
+
+
+def test_the_filename_token_wins_over_a_schedule_of_rates_mention_in_the_text():
+    # The misclassification trap: an MoM's page 1 mentions "Schedule of Rates" repeatedly. The
+    # filename token must decide FIRST, so the mention never flips the kind.
+    tender = _tender([("I-GE_2026_14_TSC-MM-01.pdf", DocType.GENERAL)])
+    client = RecordingClient()
+    doc = classify_documents(
+        tender, per_doc_text=["SCHEDULE OF RATES preamble ... measured in accordance with ..."],
+        client=client,
+    ).documents[0]
+    assert doc.doc_type is DocType.METHOD_OF_MEASUREMENT  # filename beats the SoR mention
+    assert client.calls == []
+
+
+def test_a_signal_less_document_still_reaches_the_llm():
+    tender = _tender([("upload_9.pdf", DocType.GENERAL)])
+    client = RecordingClient()
+    doc = classify_documents(tender, per_doc_text=["Conditions of contract, clause 1 to 40"], client=client).documents[0]
+    assert client.calls and client.calls[0]["images"] is None   # no signal -> the LLM classifies it
+    assert doc.doc_type_source == "llm"
 
 
 def test_a_scanned_document_with_no_text_falls_back_to_vision():

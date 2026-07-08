@@ -493,6 +493,38 @@ def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
     assert body["result"]["scope"]["packages"][0]["sor_items"] == []
 
 
+def test_ingest_reports_the_deterministic_classification_and_gates_by_it(monkeypatch, tmp_path):
+    # Commit 2 end-to-end: the real (unmocked) classifier decides both filenames deterministically —
+    # no LLM call — so the response lists each doc's kind + "filename" provenance, and item
+    # extraction is gated to the SoR (the MoM's payment prose never reaches the extractor).
+    from schemas.models import ScopePackages, SorItem, TradeWorkPackage
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    texts = {"I-GE_2026_14_TSC-SR-01.pdf": "A1 rotary drilling m 300",
+             "I-GE_2026_14_TSC-MM-01.pdf": "toolbox talks; payment of wages; sprayed concrete"}
+    monkeypatch.setattr("api.extract_document", lambda data, ct: (texts[data.decode()], []))
+    monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
+    captured = {}
+
+    def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None, on_error=None):
+        captured["doc_text"] = doc_text
+        return ScopePackages(project_name="GE/2026/14", packages=[TradeWorkPackage(
+            trade="ground_investigation", scope_summary="GI",
+            sor_items=[SorItem(item_ref="A1", description="rotary drilling", unit="m", qty=300.0)])])
+    monkeypatch.setattr("api.ingest_tender", fake_ingest)  # classify is NOT mocked — it runs for real
+
+    body = _ingest_and_wait(files=[
+        ("files", ("I-GE_2026_14_TSC-SR-01.pdf", b"I-GE_2026_14_TSC-SR-01.pdf", "application/pdf")),
+        ("files", ("I-GE_2026_14_TSC-MM-01.pdf", b"I-GE_2026_14_TSC-MM-01.pdf", "application/pdf")),
+    ])
+    assert body["status"] == "done", body
+    kinds = {c["filename"]: (c["doc_type"], c["source"]) for c in body["result"]["classification"]}
+    assert kinds["I-GE_2026_14_TSC-SR-01.pdf"] == ("schedule_of_rates", "filename")
+    assert kinds["I-GE_2026_14_TSC-MM-01.pdf"] == ("method_of_measurement", "filename")
+    assert "rotary drilling" in captured["doc_text"] and "toolbox talks" not in captured["doc_text"]
+
+
 def test_a_classification_fallback_extracts_no_items_and_warns(monkeypatch, tmp_path):
     # Fail-safe: when classification cannot place a document it becomes the neutral GENERAL kind, so
     # its MoM-like text (toolbox talks / payment of wages) never reaches the priced-item extractor —

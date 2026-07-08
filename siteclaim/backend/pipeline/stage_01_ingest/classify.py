@@ -29,6 +29,7 @@ a fixture and opens no socket offline; the module imports no provider SDK.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError
@@ -38,6 +39,30 @@ from rules_engine import taxonomy
 from schemas.models import DocType, TenderDocument, TenderPackage
 
 MIN_CONFIDENCE = 0.5
+
+# -- Layer-1 deterministic doc-type signals (run BEFORE any LLM call) -------------------------
+# Hong Kong tender document sets are filename-disciplined ("…-SR-…", "…-MM-…", "…-PS-S07-…"), so
+# the KIND that gates item extraction can be decided by a regex over the name / first-page title —
+# removing the classifier's non-determinism (a per-run LLM call that, on any hiccup, used to leave
+# the SCHEDULE_OF_RATES seed in place and turn a Method of Measurement into phantom priced items).
+# A filename token wins over the page title on purpose: an MM's page 1 mentions "Schedule of Rates"
+# repeatedly, so its "-MM-" token must decide the kind before any title text is read. Order matters —
+# the first matching pattern wins; PS-S## is checked before the bare APPENDIX token.
+_FILENAME_SIGNALS: list[tuple[re.Pattern, DocType]] = [
+    (re.compile(r"(?i)(?<![A-Za-z])S(?:OR|R)(?![A-Za-z])"), DocType.SCHEDULE_OF_RATES),  # -SR- / -SOR-
+    (re.compile(r"(?i)(?<![A-Za-z])MM(?![A-Za-z])"), DocType.METHOD_OF_MEASUREMENT),      # -MM-
+    (re.compile(r"(?i)(?<![A-Za-z])P?S[-_ ]?S\d+"), DocType.PARTICULAR_SPECIFICATION),    # PS-S07 / GS-S26
+    (re.compile(r"(?i)APPENDIX"), DocType.GENERAL),                                        # appendix -> context
+    (re.compile(r"(?i)CLARIF|ADDEND"), DocType.TENDER_ADDENDUM),
+]
+# First-page TITLE text (line-start anchored, so an inline mention is not taken as the title).
+_TITLE_SIGNALS: list[tuple[re.Pattern, DocType]] = [
+    (re.compile(r"(?im)^\s*(?:THE\s+)?SCHEDULE\s+OF\s+RATES"), DocType.SCHEDULE_OF_RATES),
+    (re.compile(r"(?im)^\s*METHOD\s+OF\s+MEASUREMENT"), DocType.METHOD_OF_MEASUREMENT),
+    (re.compile(r"(?im)^\s*(?:PARTICULAR|GENERAL)\s+SPECIFICATION"), DocType.PARTICULAR_SPECIFICATION),
+    (re.compile(r"(?im)^\s*APPENDIX\s+\d"), DocType.GENERAL),
+    (re.compile(r"(?im)^\s*(?:CLARIFICATION|TENDER\s+ADDENDUM|ADDENDUM)"), DocType.TENDER_ADDENDUM),
+]
 
 def _system_prompt() -> str:
     """The classification instruction, embedding the canonical trades so a trade-specific
@@ -114,6 +139,26 @@ def _resolve_doc_type(label: str) -> Optional[DocType]:
 _DOC_TEXT_SNIPPET_CHARS = 2000  # the header / first page identifies the kind; a snippet suffices
 
 
+def _deterministic_doc_type(filename: str, text: str = "") -> tuple[Optional[DocType], str]:
+    """The document's kind from deterministic Layer-1 signals, or ``(None, "")`` when none applies.
+
+    Filename tokens first (they win over the page title so an MM's SoR mentions cannot flip it), then
+    the first-page TITLE — of the title matches, the EARLIEST wins, so a document's own top-of-page
+    title beats a later inline mention of another kind. Pure regex; writes no decision value."""
+    name = filename or ""
+    for pattern, dt in _FILENAME_SIGNALS:
+        if pattern.search(name):
+            return dt, "filename"
+    head = (text or "")[:_DOC_TEXT_SNIPPET_CHARS]
+    best_pos: Optional[int] = None
+    best_dt: Optional[DocType] = None
+    for pattern, dt in _TITLE_SIGNALS:
+        m = pattern.search(head)
+        if m is not None and (best_pos is None or m.start() < best_pos):
+            best_pos, best_dt = m.start(), dt
+    return (best_dt, "title") if best_dt is not None else (None, "")
+
+
 def _doc_prompt(doc: TenderDocument, text: str = "") -> str:
     base = (
         f"Document type (as uploaded): {doc.doc_type.value}\n"
@@ -177,6 +222,14 @@ def classify_documents(
     tagged: list[TenderDocument] = []
     for index, doc in enumerate(tender.documents):
         text = per_doc_text[index] if per_doc_text and index < len(per_doc_text) else ""
+        # Layer 1 first: a deterministic filename / title signal decides the kind with NO LLM call,
+        # and is FINAL — the LLM cannot override it. Routing stays general (empty trades): sending a
+        # whole file to everyone is the safe default, and the relevant-doc assembler slices per
+        # section at dispatch regardless. Only a signal-less document reaches the classifier below.
+        det_type, det_source = _deterministic_doc_type(doc.filename, text)
+        if det_type is not None:
+            tagged.append(doc.model_copy(update={"doc_type": det_type, "doc_type_source": det_source, "trades": []}))
+            continue
         # Text-first: a usable text layer classifies from text (cheap provider, no render);
         # only a scanned document with no text is sent to vision.
         images = None if text.strip() else (

@@ -429,15 +429,27 @@ class IngestRequest(BaseModel):
     demo_fixture: str | None = SCOPE_FIXTURE
 
 
+class DocKind(BaseModel):
+    """How one uploaded document was classified — surfaced so a wrong assignment (e.g. a Method of
+    Measurement mistaken for a Schedule of Rates) is visible at ingest, not discovered as phantom
+    packages at Route."""
+
+    filename: str
+    doc_type: str
+    source: str  # filename | title | llm | fallback | "" (unclassified)
+
+
 class IngestUploadResponse(BaseModel):
     """The scope split plus the trade-tagged tender, so the client can hand the tagged
     tender to ``/dispatch`` for per-trade document routing. ``tender_slug`` is the
     server-derived slug the client uses to poll ``/tender/{slug}/replies`` (so it never
-    re-implements the slug logic)."""
+    re-implements the slug logic). ``classification`` lists each document's resolved kind and
+    how it was decided (deterministic filename / title, the LLM, or a fail-safe fallback)."""
 
     scope: ScopePackages
     tender: TenderPackage
     tender_slug: str = ""
+    classification: list[DocKind] = Field(default_factory=list)
 
 
 @app.post("/ingest", response_model=ScopePackages)
@@ -644,7 +656,13 @@ def _ingest_live(
     # Persist the canonical scope split so the inbound-reply loop can route each returned line to
     # its true SoR section by item identity, instead of stamping it with the enquiry's trade.
     save_scope(workspace, final_name, scope)
-    return IngestUploadResponse(scope=scope, tender=tagged, tender_slug=tender_slug(final_name))
+    return IngestUploadResponse(
+        scope=scope, tender=tagged, tender_slug=tender_slug(final_name),
+        classification=[
+            DocKind(filename=d.filename, doc_type=d.doc_type.value, source=d.doc_type_source)
+            for d in tagged.documents
+        ],
+    )
 
 
 def _run_ingest_job(job_id: str, files_data: list[tuple[str, Optional[str], bytes]], project_name: str) -> None:

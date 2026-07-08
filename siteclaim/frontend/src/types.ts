@@ -93,11 +93,20 @@ export interface ScopePackages {
   packages: TradeWorkPackage[];
 }
 
+// How one uploaded document was classified — surfaced so a wrong assignment (e.g. a Method of
+// Measurement mistaken for a Schedule of Rates) is visible at ingest, not found as phantom packages.
+export interface DocKind {
+  filename: string;
+  doc_type: string;
+  source: string; // filename | title | llm | fallback | "" (unclassified)
+}
+
 // Live upload returns the scope split plus the trade-tagged tender (for /dispatch routing).
 export interface IngestUpload {
   scope: ScopePackages;
   tender: TenderPackage;
   tender_slug: string;
+  classification?: DocKind[]; // each document's resolved kind + how it was decided
 }
 
 // Async ingest transport: the kick-off + poll envelope. Live: {job_id, status:"queued"} then
