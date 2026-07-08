@@ -16,8 +16,11 @@ Matching is pure Layer-1 work (the LLM already parsed the raw lines; it must not
   than forcing it into a section.
 
 ``normalize_ref`` unifies the sub-item forms the documents drift between (``J5(a)`` / ``J5A`` /
-``J5.a`` → ``J5A``); the ``package_key`` is ``"{trade}:{section}"`` exactly as ``routing/split.py``
-forms it (or the bare ``trade`` for a section-less item). No DB, no network, no model.
+``J5.a`` → ``J5A``); each line's group ``package_key`` is the tender's ACTUAL routed unit — the same
+``routing.split.route_units`` key dispatch enquired on (the bare ``trade`` for a whole-routed
+package, ``trade:SECTION`` only where the tender split that trade) — so replies and enquiries share
+one key vocabulary and every downstream join (received counters, leveling, comparison) lines up.
+No DB, no network, no model.
 """
 
 from __future__ import annotations
@@ -59,26 +62,38 @@ def token_set_ratio(a: str, b: str) -> float:
     return 2.0 * len(ta & tb) / (len(ta) + len(tb))
 
 
-def _package_key(trade: str, section: str) -> str:
-    """``"{trade}:{section}"`` (a section sub-package) exactly as ``routing/split.py`` forms it, or
-    the bare ``trade`` when the item carries no section."""
-    return f"{trade}:{section}" if section else trade
+def unit_key_map(scope: ScopePackages) -> dict[tuple[str, str], str]:
+    """``(trade, section) -> the routed-unit package_key that CONTAINS it``, from
+    ``routing.split.route_units`` — the SAME function dispatch used to key each enquiry. A
+    whole-routed trade maps all its sections to the bare ``trade``; a split trade maps each section
+    to ``trade:SECTION``. So a reply is grouped under the key its enquiry was actually dispatched
+    on, never a synthesised ``trade:SECTION`` that was not a routed unit of this tender."""
+    from pipeline.routing.split import route_units  # lazy: keep stage-04 import light, no cycle
+
+    mapping: dict[tuple[str, str], str] = {}
+    for unit in route_units(scope):
+        for it in unit["package"].sor_items:
+            mapping.setdefault((unit["trade"], (it.section or "").strip()), unit["package_key"])
+    return mapping
 
 
 @dataclass(frozen=True)
 class CanonicalItem:
-    """One canonical SoR item from the tender's persisted scope, with its routing target."""
+    """One canonical SoR item from the tender's persisted scope, with its routing target — the
+    routed-unit ``package_key`` that contains it, or ``None`` when the item's section belongs to no
+    routed unit (a line matching it is surfaced as an extra, never invented into a unit)."""
 
     item_ref: str
     norm_ref: str
     description: str
     section: str
-    package_key: str
+    package_key: Optional[str]
 
 
 def build_canonical_items(scope: ScopePackages) -> list[CanonicalItem]:
-    """The tender's canonical SoR items, each tagged with the section + package key a returned line
-    that matches it routes to."""
+    """The tender's canonical SoR items, each tagged with the routed unit a returned line that
+    matches it belongs to (so replies and enquiries share one key vocabulary)."""
+    units = unit_key_map(scope)
     items: list[CanonicalItem] = []
     for pkg in scope.packages:
         for it in pkg.sor_items:
@@ -88,16 +103,17 @@ def build_canonical_items(scope: ScopePackages) -> list[CanonicalItem]:
                 norm_ref=normalize_ref(it.item_ref),
                 description=it.description or "",
                 section=section,
-                package_key=_package_key(pkg.trade, section),
+                package_key=units.get((pkg.trade, section)),  # routed unit; None -> no unit -> extra
             ))
     return items
 
 
 def section_totals(scope: ScopePackages) -> dict[str, int]:
-    """``package_key -> canonical item count`` — the denominator for a reply's section coverage."""
+    """``package_key -> canonical item count`` — the denominator for a reply's unit coverage."""
     totals: dict[str, int] = {}
     for c in build_canonical_items(scope):
-        totals[c.package_key] = totals.get(c.package_key, 0) + 1
+        if c.package_key is not None:
+            totals[c.package_key] = totals.get(c.package_key, 0) + 1
     return totals
 
 

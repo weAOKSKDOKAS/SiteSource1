@@ -7,20 +7,23 @@ from fastapi.testclient import TestClient
 from pipeline import reply_loop
 from pipeline.scope_store import save_scope
 from pipeline.workspace import Workspace
-from schemas.models import BidLineItem, BidReply, ScopePackages, SorItem, TradeWorkPackage
+from schemas.models import BidLineItem, BidReply, ScopePackages, SectionMeta, SorItem, TradeWorkPackage
 
 client = TestClient(api.app)
 
 
 def _gi_scope(project: str) -> ScopePackages:
-    # One GI trade spanning G/H/J — the multi-section shape behind the bug.
+    # One GI trade spanning FOUR sections (> 3) so route_units splits it into per-section units,
+    # each its own dispatched enquiry — the multi-section shape behind the 70-item bug.
     return ScopePackages(project_name=project, packages=[TradeWorkPackage(
         trade="ground_investigation", scope_summary="GI", sor_items=[
             SorItem(item_ref="G4", description="Trial pit in soil", section="G"),
             SorItem(item_ref="G7", description="Trial pit backfill", section="G"),
             SorItem(item_ref="H12", description="Field vane shear test", section="H"),
+            SorItem(item_ref="I3", description="Borehole log record", section="I"),
             SorItem(item_ref="J1", description="Install standpipe piezometer", section="J"),
-        ])])
+        ],
+        sections=[SectionMeta(code=c, item_count=n) for c, n in [("G", 2), ("H", 1), ("I", 1), ("J", 1)]])])
 
 
 def _stub_parse(monkeypatch, reply: BidReply) -> None:
