@@ -91,6 +91,22 @@ def test_appendix_declared_on_page_one_is_kind_appendix():
     assert e.kind == "appendix" and e.spec_section_number == "7"
 
 
+def test_ps_without_a_cover_page_keeps_ps_kind_and_scopes_from_the_filename():
+    # A PS whose page 1 lost its "SECTION 7" header (scanned cover / starts mid-section) and merely
+    # CITES an appendix inline must NOT be reclassified appendix: it stays a PS, its section is
+    # derived from the "PS-S07" filename, and its clause index scopes to 7 (so a stray 0.5 is noise).
+    data = _pdf([
+        ["7.34A Rotary drilling in rock", "Refer to Appendix 7.4.16 for the borehole logs."],
+        ["7.37A Standard penetration test", "0.5 m nominal diameter"],
+    ])
+    e = build_doc_entry("PS-S07-particular-spec.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.kind == "particular_specification"      # not appendix, despite the inline "Appendix 7.4.16"
+    assert e.spec_section_number == "7"              # derived from the filename
+    assert e.clause_index.get("7.34A") == [0] and e.clause_index.get("7.37A") == [1]
+    assert "7.4.16" not in e.clause_index            # inline appendix cross-reference, not a heading
+    assert "0.5" not in e.clause_index               # bare decimal, not a clause
+
+
 def test_non_pdf_bytes_degrade_to_no_text_layer():
     e = build_doc_entry("scan.png", DocType.PARTICULAR_SPECIFICATION, b"not a pdf")
     assert e.text_layer is False and e.page_count == 0 and e.clause_index == {}
@@ -209,7 +225,26 @@ def test_headings_from_word_boxes_scope_to_the_declared_section():
     rows = [_wb("2.1", 220, 40, row=1, top=100), _wb("stray", 360, 40, row=1, top=100),
             _wb("7.34A", 220, 60, row=2, top=130), _wb("Rotary", 360, 50, row=2, top=130)]
     assert _headings_from_words(rows, "7") == ["7.34A"]          # scoped to section 7
-    assert set(_headings_from_words(rows, "")) == {"2.1", "7.34A"}  # unscoped: both are clauses
+    # Unscoped, a real clause must show structure — 7.34A has a letter suffix and is kept; a bare
+    # 1-dot "2.1" is indistinguishable from a decimal and is rejected as noise (no section to vouch).
+    assert _headings_from_words(rows, "") == ["7.34A"]
+
+
+def test_headings_from_word_boxes_reject_bare_decimals():
+    # A bare decimal like "0.5" in the clause-number band (an OCR'd quantity) is NOT a clause id — a
+    # real clause shows >=2 dots or a letter suffix. "7.278.5A" still indexes.
+    rowA = [_wb("7.278.5A", 220, 70, row=1, top=100), _wb("Rotary", 360, 50, row=1, top=100)]
+    rowB = [_wb("0.5", 220, 40, row=2, top=130), _wb("metre", 360, 40, row=2, top=130)]
+    assert _headings_from_words(rowA + rowB, "") == ["7.278.5A"]  # unscoped: bare 0.5 rejected as noise
+
+
+def test_headings_from_word_boxes_reject_inline_appendix_reference():
+    # "… see Appendix 7.4.16 …" in the band is an onward cross-reference (the cue word "Appendix"
+    # precedes the id), not a heading. A real heading on the page anchors the band.
+    heading = [_wb("Rotary", 40, 60, row=1, top=100), _wb("7.286A", 220, 70, row=1, top=100)]
+    app_cue = [_wb("see", 110, 30, row=2, top=130), _wb("Appendix", 150, 70, row=2, top=130),
+               _wb("7.4.16", 230, 55, row=2, top=130), _wb("for", 300, 25, row=2, top=130)]
+    assert _headings_from_words(heading + app_cue, "") == ["7.286A"]  # the inline appendix ref rejected
 
 
 def test_layout_marker_maps_a_column_scanned_clause_to_its_page(monkeypatch):

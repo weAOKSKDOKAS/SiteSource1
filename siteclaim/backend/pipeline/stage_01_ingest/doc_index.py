@@ -28,6 +28,15 @@ _log = logging.getLogger(__name__)
 # title must start with a letter so a bare "SECTION 7" heading does not match with no title.
 _SECTION_DECL = re.compile(r"SECTION\s+(\d+)\s*[–—:.\-]?\s*([A-Za-z][^\n]{1,79})", re.I)
 _APPENDIX_DECL = re.compile(r"\bAppendix\s+(\d+(?:\.\d+)*)", re.I)
+# An appendix COVER declares a BARE "Appendix N" (not a dotted sub-reference): "Appendix 7",
+# "APPENDIX 7.pdf". The negative lookahead ``(?!\.\d)`` excludes an INLINE cross-reference like
+# "Appendix 7.4.16", so a Particular Specification that merely cites an appendix is not mistaken for
+# one. Used only to DECIDE kind (``_kind_for``); section extraction still uses ``_APPENDIX_DECL``.
+_APPENDIX_COVER = re.compile(r"\bAppendix\s+(\d+)(?!\.\d)", re.I)
+# A section number declared in the FILENAME (the HK "PS-S07" / "GS-S26" convention): "S" then the
+# section digits, leading zeros dropped. A fallback when a PS's page 1 lost its "SECTION n" header
+# (a scanned cover, or a file that starts mid-section) so the clause index can still scope.
+_FILENAME_SECTION = re.compile(r"(?:^|[^A-Za-z])S0*(\d+)\b", re.I)
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
 
 # A PS/GS clause id: a dotted number with optional letter / bracket / trailing-letter suffixes
@@ -71,10 +80,15 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
         return "method_of_measurement"
     if doc_type == DocType.TENDER_ADDENDUM:
         return "clarification"
-    if _APPENDIX_DECL.search(hay) and not _SECTION_DECL.search(page1):
-        return "appendix"
+    # A genuine appendix COVER declares a BARE "Appendix N" (page 1 or filename) with no competing
+    # SECTION header — NOT an inline "Appendix 7.4.16" cross-reference. An explicit PARTICULAR_
+    # SPECIFICATION is reclassified appendix ONLY on such a cover, so a PS whose page-1 SECTION header
+    # was lost (scanned / starts mid-section) and merely cites an appendix still indexes as a PS.
+    is_appendix_cover = bool(_APPENDIX_COVER.search(hay)) and not _SECTION_DECL.search(page1)
     if doc_type == DocType.PARTICULAR_SPECIFICATION:
-        return "particular_specification"
+        return "appendix" if is_appendix_cover else "particular_specification"
+    if is_appendix_cover:
+        return "appendix"
     if _GENERAL_SPEC.search(hay):
         return "general_specification"
     return "other"
@@ -104,13 +118,16 @@ def _heading_re(section_number: str) -> re.Pattern:
     return re.compile(rf"^\s*({scoped})(?=[\s.:)]|$)")
 
 
-def _page_line_markers(text: str, heading: re.Pattern, page_no: int) -> list[tuple[str, int]]:
+def _page_line_markers(text: str, heading: re.Pattern, page_no: int, section_number: str) -> list[tuple[str, int]]:
     """Line-start clause headings + amendment lead-ins on one page's text — the native-text path
-    (a real text layer, or a single-column page whose OCR keeps clause ids at line start)."""
+    (a real text layer, or a single-column page whose OCR keeps clause ids at line start). A matched
+    heading id is kept only if :func:`_accept_clause_id` vouches for it (so a bare ``0.5`` at line
+    start in an unscoped doc is not indexed); amendment lead-ins ("GS Clause 7.28") are explicit
+    references and pass through unchanged."""
     markers: list[tuple[str, int]] = []
     for line in text.splitlines():
         m = heading.match(line)
-        if m:
+        if m and _accept_clause_id(m.group(1), section_number):
             markers.append((m.group(1), page_no))
         for lm in _PS_LEADIN.finditer(line):
             markers.append((lm.group(1), page_no))
@@ -123,7 +140,7 @@ def _spec_markers(pages: list[str], section_number: str) -> list[tuple[str, int]
     amendment lead-ins. In document order. Line-start only — the layout-aware scanned-spec path is
     :func:`_spec_markers_layout` (used for PS/GS, which are multi-column when scanned)."""
     heading = _heading_re(section_number)
-    return [m for page_no, text in enumerate(pages) for m in _page_line_markers(text, heading, page_no)]
+    return [m for page_no, text in enumerate(pages) for m in _page_line_markers(text, heading, page_no, section_number)]
 
 
 # -- layout-aware spec markers (multi-column scanned PS / GS) ----------------
@@ -143,6 +160,7 @@ _LOOSE_CLAUSE = re.compile(r"^[=.]*\d+\.\d")
 _CUE_WORDS = {
     "clause", "clauses", "subclause", "specification", "specifications", "general", "particular",
     "gs", "ps", "in", "under", "see", "refer", "reference", "ref", "per",
+    "appendix", "appendices",  # "… in Appendix 7.4.16 …" is an onward reference, not a heading
 }
 
 
@@ -152,16 +170,29 @@ def _clean_word(text: str) -> str:
     return re.sub(r"[^a-z]", "", (text or "").lower())
 
 
+def _accept_clause_id(cid: str, section_number: str) -> bool:
+    """Whether a matched clause id is a real heading id, not marker noise. When the doc declares a
+    section, that section vouches for its own ids (its leading group must equal the section). With no
+    section, the id must show real clause structure — ``>= 2`` dots (``7.278.5``) or a letter suffix
+    (``7.34A``) — so a bare decimal like ``0.5`` (an OCR'd quantity, or a stray number in prose) is
+    rejected rather than indexed as a clause."""
+    from pipeline.stage_03_dispatch.doc_refs import base_clause  # lazy: pure util
+
+    if section_number:
+        return base_clause(cid).split(".")[0] == str(section_number)
+    return cid.count(".") >= 2 or bool(re.search(r"[A-Za-z]", cid))
+
+
 def _canonical_heading(raw: str, section_number: str) -> Optional[str]:
     """Normalise a clause-number cell to the SAME canonical clause id the resolver's ``clause_of``
     produces (so index keys match referenced refs), dropping internal OCR spaces. ``None`` unless
     it is a dotted clause id and — when the doc declares a section — in that section."""
-    from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of  # lazy: pure util
+    from pipeline.stage_03_dispatch.doc_refs import clause_of  # lazy: pure util
 
     cid = clause_of((raw or "").replace(" ", ""))
     if not cid or "." not in cid:
         return None
-    if section_number and base_clause(cid).split(".")[0] != str(section_number):
+    if not _accept_clause_id(cid, section_number):  # scope check, and reject bare decimals when unscoped
         return None
     return cid
 
@@ -270,7 +301,7 @@ def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> 
             page = doc[page_no] if page_no < doc.page_count else None
             native = page.get_text("text", sort=True) if page is not None else text
             if page is None or len(native.strip()) >= _NATIVE_MIN:
-                markers.extend(_page_line_markers(text, heading, page_no))  # native page, unchanged
+                markers.extend(_page_line_markers(text, heading, page_no, section_number))  # native page
             else:
                 markers.extend((cid, page_no) for cid in _column_headings(data, page_no, section_number))
                 for lm in _PS_LEADIN.finditer(text):  # lead-ins from the OCR text on a scanned page
@@ -337,9 +368,13 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
     if sec:
         section_number, section_title = sec.group(1), sec.group(2).strip()
     else:
-        app = _APPENDIX_DECL.search(page1)
+        app = _APPENDIX_COVER.search(page1)  # a real "Appendix 7" cover, not an inline "Appendix 7.4.16"
         if app:
             section_number, section_title = app.group(1), f"Appendix {app.group(1)}"
+        else:
+            fn = _FILENAME_SECTION.search(filename)
+            if fn:  # page-1 header lost (scanned / mid-section) -> scope from the "PS-S07" filename
+                section_number = fn.group(1)
 
     kind = _kind_for(doc_type, page1, filename)
     clause_index: dict[str, list[int]] = {}
