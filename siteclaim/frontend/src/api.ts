@@ -237,6 +237,13 @@ export const api = {
   // Reply visibility (live): which replies have landed for a tender, refreshed on demand.
   tenderReplies: (slug: string) => get<TenderReplies>(`/tender/${encodeURIComponent(slug)}/replies`),
   tenderComparisonUrl: (slug: string) => BASE + `/tender/${encodeURIComponent(slug)}/comparison.xlsx`,
+  // Human gate (live): withdraw a firm's active reply for one routed unit from the comparison. The
+  // reply is kept as history server-side (never deleted); the comparison is re-levelled without it.
+  withdrawReply: (slug: string, firm_id: string, package_key: string) =>
+    post<{ withdrawn: boolean; firm_id: string; package_key: string; reply_count: number }>(
+      `/tender/${encodeURIComponent(slug)}/replies/withdraw`,
+      { firm_id, package_key },
+    ),
 
   // --- Benchmark estimator (Phase B1) --------------------------------------
   benchmarkProjects: () => get<BenchmarkProject[]>("/benchmark/projects"),

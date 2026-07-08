@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
-import type { AwaitingFirm, AwaitingPackage, BidReply, LevelledBid } from "../types";
+import type { AwaitingFirm, AwaitingPackage, BidReply, LevelledBid, ReplyStatus, TenderReplies, TenderReplyInfo } from "../types";
 import { Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine, SeverityTag, cx } from "../ui";
 import { hkd, tradeLabel } from "../format";
@@ -22,6 +22,10 @@ export function StepLevel({
   live = false,
   awaiting = [],
   onUploadReturn,
+  tenderReplies,
+  comparisonUrl,
+  onRefreshReplies,
+  onWithdrawReply,
 }: {
   sections: Record<string, LevelledBid[]>;
   replies: BidReply[];
@@ -37,6 +41,12 @@ export function StepLevel({
   live?: boolean;
   awaiting?: AwaitingPackage[];
   onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
+  // Live run: the inbound reply registry (aligned keys, supersede history, received times) — the
+  // true "what arrived" state — plus the tender's comparison link, a refresh, and the withdraw gate.
+  tenderReplies?: TenderReplies | null;
+  comparisonUrl?: string;
+  onRefreshReplies?: () => void;
+  onWithdrawReply?: (firmId: string, packageKey: string) => Promise<void>;
 }) {
   const [detail, setDetail] = useState<LevelledBid | null>(null);
   const trades = Object.keys(sections);
@@ -44,7 +54,19 @@ export function StepLevel({
 
   if (live)
     return (
-      <LiveLevel sections={sections} awaiting={awaiting} onUploadReturn={onUploadReturn} xlsxUrl={xlsxUrl} onBack={onBack} onNext={onNext} loading={loading} />
+      <LiveLevel
+        sections={sections}
+        awaiting={awaiting}
+        onUploadReturn={onUploadReturn}
+        xlsxUrl={xlsxUrl}
+        onBack={onBack}
+        onNext={onNext}
+        loading={loading}
+        tenderReplies={tenderReplies ?? null}
+        comparisonUrl={comparisonUrl ?? ""}
+        onRefreshReplies={onRefreshReplies}
+        onWithdrawReply={onWithdrawReply}
+      />
     );
 
   return (
@@ -371,11 +393,12 @@ function CalloutCard({ title, tone, children }: { title: string; tone: "bad" | "
   );
 }
 
-// --- Live run: awaiting returns + per-firm manual intake ---------------------
-// One block per dispatched sublet package. A package with returns shows the read-only
-// levelled comparison (the raw reply and its editable rate matrix belong to the demo path);
-// every dispatched firm shows its status and the [SiteSource Ref] its enquiry carries, with
-// an "Upload a priced return" affordance that levels one firm's SoR into this section.
+// --- Live run: what arrived (inbound registry + manual intake) ----------------
+// One block per dispatched routed unit. The received state is the TRUE "what arrived": a unit's
+// enquiry counts answered when an ACTIVE reply is aligned to it (the inbound loop, keyed to the
+// unit) or a return is uploaded here. Each unit links to its comparison and opens a replies drawer
+// (firm, coverage M/N, received time, supersede history) with the human withdraw gate, so a bad
+// upload can be pulled without opening Excel. No demo bids are ever shown on a live run.
 function LiveLevel({
   sections,
   awaiting,
@@ -384,6 +407,10 @@ function LiveLevel({
   onBack,
   onNext,
   loading,
+  tenderReplies,
+  comparisonUrl,
+  onRefreshReplies,
+  onWithdrawReply,
 }: {
   sections: Record<string, LevelledBid[]>;
   awaiting: AwaitingPackage[];
@@ -392,16 +419,46 @@ function LiveLevel({
   onBack: () => void;
   onNext: () => void;
   loading: boolean;
+  tenderReplies: TenderReplies | null;
+  comparisonUrl: string;
+  onRefreshReplies?: () => void;
+  onWithdrawReply?: (firmId: string, packageKey: string) => Promise<void>;
 }) {
   const [detail, setDetail] = useState<LevelledBid | null>(null);
-  const totalReceived = Object.values(sections).reduce((n, bids) => n + bids.length, 0);
+  const [drawerUnit, setDrawerUnit] = useState<string | null>(null);
+
+  const records = tenderReplies?.replies ?? [];
+  const unitTotals = tenderReplies?.unit_totals ?? {};
+  const recordsForUnit = (unit: string) => records.filter((r) => r.trade === unit);
+  const activeReply = (unit: string, firmId: string) =>
+    records.find((r) => r.trade === unit && r.firm_id === firmId && r.status === "active") ?? null;
+
+  // Received across all units by EITHER path (registry active reply or manual upload) — set on each
+  // firm by App.awaitingPackages, so this drives the step gate and the download affordance honestly.
+  const totalReceived = awaiting.reduce((n, pkg) => n + pkg.firms.filter((f) => f.received).length, 0);
+  const totalSent = awaiting.reduce((n, pkg) => n + pkg.firms.length, 0);
+  // Prefer the tender's accumulating comparison (the inbound source of truth); fall back to the
+  // global sheet a manual upload writes when no inbound comparison exists yet.
+  const downloadUrl = (tenderReplies?.comparison_available && comparisonUrl) || xlsxUrl;
 
   return (
     <div className="space-y-6">
       <StepHeading
         title="Level & compare"
-        lead="Live run — each dispatched package waits for its priced returns. As a return lands (via the inbound loop, or uploaded here) the rules engine levels it and that package's comparison activates. No demo bids are ever shown on a live run."
+        lead="Live run — each dispatched enquiry waits for its priced return. A return counts as received when it aligns to the enquiry's routed unit (the inbound loop) or is uploaded here; the rules engine levels it and the unit's comparison activates. No demo bids are ever shown on a live run."
       />
+
+      {awaiting.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-ink-soft">
+            {totalReceived} of {totalSent} enquir{totalSent === 1 ? "y" : "ies"} answered
+            {tenderReplies?.last_received ? ` · last reply ${new Date(tenderReplies.last_received).toLocaleString()}` : ""}
+          </p>
+          {onRefreshReplies && (
+            <Button variant="ghost" onClick={onRefreshReplies}>Refresh replies</Button>
+          )}
+        </div>
+      )}
 
       {awaiting.length === 0 && (
         <Card className="p-6 text-sm text-ink-soft">
@@ -412,32 +469,57 @@ function LiveLevel({
       {awaiting.map((pkg) => {
         const bids = sections[pkg.trade] ?? [];
         const received = pkg.firms.filter((f) => f.received).length;
+        const unitRecords = recordsForUnit(pkg.trade);
+        const total = unitTotals[pkg.trade] ?? 0;
         return (
           <section key={pkg.trade} className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-display text-base font-semibold tracking-display text-ink">{tradeLabel(pkg.trade)}</h2>
-              <Pill tone={received > 0 ? "ok" : "neutral"}>
-                {pkg.firms.length} enquir{pkg.firms.length === 1 ? "y" : "ies"} sent · {received} priced return{received === 1 ? "" : "s"} received
-              </Pill>
+              <div className="flex items-center gap-2">
+                <Pill tone={received > 0 ? "ok" : "neutral"}>
+                  {pkg.firms.length} enquir{pkg.firms.length === 1 ? "y" : "ies"} sent · {received} priced return{received === 1 ? "" : "s"} received
+                </Pill>
+                {unitRecords.length > 0 && (
+                  <Button variant="ghost" onClick={() => setDrawerUnit(pkg.trade)}>
+                    View replies ({unitRecords.length})
+                  </Button>
+                )}
+              </div>
             </div>
 
             {bids.length > 0 && <LiveComparison bids={bids} onOpenDetail={setDetail} />}
 
             <Card className="divide-y divide-line-soft">
               {pkg.firms.map((f) => (
-                <ReturnRow key={f.firm_id} trade={pkg.trade} firm={f} onUploadReturn={onUploadReturn} />
+                <ReturnRow
+                  key={f.firm_id}
+                  trade={pkg.trade}
+                  firm={f}
+                  reply={activeReply(pkg.trade, f.firm_id)}
+                  unitTotal={total}
+                  onUploadReturn={onUploadReturn}
+                />
               ))}
             </Card>
-            <p className="text-xs text-ink-faint">
-              Replies quoting the enquiry's <span className="tabular">[SiteSource Ref]</span> attach automatically once the inbound loop is wired; upload a return above in the meantime.
-            </p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <p className="text-xs text-ink-faint">
+                Replies quoting the enquiry's <span className="tabular">[SiteSource Ref]</span> attach automatically via the inbound loop; upload a return above to add one by hand.
+              </p>
+              {tenderReplies?.comparison_available && comparisonUrl && (
+                <a className="text-xs font-semibold text-brand underline" href={comparisonUrl} target="_blank" rel="noreferrer">
+                  Open this tender's comparison ↗
+                </a>
+              )}
+            </div>
           </section>
         );
       })}
 
       {totalReceived > 0 && (
         <a
-          href={xlsxUrl}
+          href={downloadUrl}
+          target="_blank"
+          rel="noreferrer"
           className="inline-flex items-center gap-2 rounded-lg border border-line bg-card px-4 py-2.5 text-sm font-semibold text-ink hover:bg-line-soft"
         >
           ⤓ Download Excel comparison
@@ -446,7 +528,109 @@ function LiveLevel({
 
       <StepNav onBack={onBack} onNext={onNext} nextLabel="Recommend an award →" loading={loading} nextDisabled={totalReceived === 0} />
       <BidDrawer bid={detail} claimed={0} onClose={() => setDetail(null)} />
+      <RepliesDrawer
+        unit={drawerUnit}
+        records={drawerUnit ? recordsForUnit(drawerUnit) : []}
+        unitTotal={drawerUnit ? unitTotals[drawerUnit] ?? 0 : 0}
+        comparisonUrl={tenderReplies?.comparison_available ? comparisonUrl : ""}
+        onWithdraw={onWithdrawReply}
+        onClose={() => setDrawerUnit(null)}
+      />
     </div>
+  );
+}
+
+// The per-enquiry replies drawer: every reply on file for one routed unit — active + history —
+// with each firm's coverage (M/N items), received time, a status badge (the supersede badge when a
+// reply was replaced), and the human withdraw gate on the active one. Links to the unit's comparison.
+function statusTone(s: ReplyStatus): "ok" | "neutral" | "bad" {
+  return s === "active" ? "ok" : s === "withdrawn" ? "bad" : "neutral";
+}
+
+function RepliesDrawer({
+  unit,
+  records,
+  unitTotal,
+  comparisonUrl,
+  onWithdraw,
+  onClose,
+}: {
+  unit: string | null;
+  records: TenderReplyInfo[];
+  unitTotal: number;
+  comparisonUrl: string;
+  onWithdraw?: (firmId: string, packageKey: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Active first, then history newest-first, so the current comparison state reads at the top.
+  const ordered = [...records].sort((a, b) => {
+    if ((a.status === "active") !== (b.status === "active")) return a.status === "active" ? -1 : 1;
+    return (b.received_at ?? "").localeCompare(a.received_at ?? "");
+  });
+  const activeCount = records.filter((r) => r.status === "active").length;
+
+  const withdraw = async (firmId: string) => {
+    if (!unit || !onWithdraw) return;
+    setBusyKey(firmId);
+    setError(null);
+    try {
+      await onWithdraw(firmId, unit);
+      onClose(); // the registry re-pull is driven by App; close so the refreshed state shows cleanly
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  return (
+    <Drawer
+      open={unit != null}
+      onClose={onClose}
+      eyebrow="Replies to this enquiry"
+      tone="ink"
+      title={unit ? tradeLabel(unit) : ""}
+      subtitle={<span className="tabular">{activeCount} active · {records.length} on file</span>}
+      footer="A superseded or withdrawn reply is kept as history — nothing is deleted. Withdraw re-levels the comparison without that firm's return; out-of-scope priced lines appear on the comparison's Extras tab."
+    >
+      {unit && (
+        <div className="space-y-3">
+          {error && <div className="text-xs text-bad">{error}</div>}
+          {ordered.length === 0 && <p className="text-xs text-ink-faint">No replies have landed for this enquiry yet.</p>}
+          <ul className="space-y-2">
+            {ordered.map((r, i) => (
+              <li key={`${r.firm_id}-${r.status}-${i}`} className="rounded-xl border border-line-soft bg-paper-soft px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-ink">{r.firm_id}</span>
+                  <Pill tone={statusTone(r.status)}>{r.status}</Pill>
+                  <span className="tabular ml-auto text-xs text-ink-faint">
+                    {unitTotal > 0 ? `${r.line_items}/${unitTotal}` : `${r.line_items}`} items priced
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] text-ink-faint">
+                    {r.received_at ? `received ${new Date(r.received_at).toLocaleString()}` : "received time unknown"}
+                  </span>
+                  {r.status === "active" && onWithdraw && (
+                    <Button variant="ghost" loading={busyKey === r.firm_id} onClick={() => withdraw(r.firm_id)}>
+                      Withdraw from comparison
+                    </Button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+          {comparisonUrl && (
+            <a className="inline-block text-xs font-semibold text-brand underline" href={comparisonUrl} target="_blank" rel="noreferrer">
+              Open this unit's comparison ↗
+            </a>
+          )}
+        </div>
+      )}
+    </Drawer>
   );
 }
 
@@ -495,14 +679,20 @@ function LiveComparison({ bids, onOpenDetail }: { bids: LevelledBid[]; onOpenDet
   );
 }
 
-// One dispatched firm awaiting its return, with the manual-intake affordance.
+// One dispatched firm awaiting its return, with the manual-intake affordance. When an active reply
+// is aligned to this (unit, firm), its coverage (M/N items priced) and received time are shown —
+// the true received state, not a guess from what was uploaded here.
 function ReturnRow({
   trade,
   firm,
+  reply,
+  unitTotal,
   onUploadReturn,
 }: {
   trade: string;
   firm: AwaitingFirm;
+  reply?: TenderReplyInfo | null;
+  unitTotal: number;
   onUploadReturn?: (trade: string, firmId: string, files: File[]) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -524,6 +714,10 @@ function ReturnRow({
     }
   };
 
+  const coverage = reply
+    ? `${unitTotal > 0 ? `${reply.line_items}/${unitTotal}` : `${reply.line_items}`} items priced`
+    : null;
+
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
       <div className="min-w-0 flex-1">
@@ -536,6 +730,12 @@ function ReturnRow({
             <Pill tone="neutral">{firm.status === "sent_mock" ? "in outbox · awaiting" : "awaiting reply"}</Pill>
           )}
         </div>
+        {coverage && (
+          <div className="mt-0.5 text-[11px] text-ink-soft">
+            {coverage}
+            {reply?.received_at ? ` · received ${new Date(reply.received_at).toLocaleString()}` : ""}
+          </div>
+        )}
         {firm.ref && <div className="tabular mt-0.5 text-[11px] text-ink-faint">Ref {firm.ref}</div>}
         {error && <div className="mt-1 text-xs text-bad">{error}</div>}
       </div>

@@ -1154,6 +1154,9 @@ class TenderRepliesResponse(BaseModel):
     replies: list[TenderReplyInfo] = Field(default_factory=list)
     outstanding: list[dict] = Field(default_factory=list)  # dispatched, not yet replied
     comparison_available: bool = False
+    # routed-unit package_key -> that unit's SoR item count (the denominator for a reply's coverage,
+    # so the operator reads "31/31 H items priced" not a bare count). Empty when no scope is persisted.
+    unit_totals: dict[str, int] = Field(default_factory=dict)
 
 
 @app.get("/tender/{slug}/replies", response_model=TenderRepliesResponse)
@@ -1190,6 +1193,7 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
         ],
         outstanding=outstanding,
         comparison_available=reply_loop.comparison_file(workspace, canonical).is_file(),
+        unit_totals=section_totals(scope) if scope is not None else {},
     )
 
 

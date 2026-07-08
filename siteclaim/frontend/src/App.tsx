@@ -23,6 +23,7 @@ import type {
   ScopePackages,
   ShortlistSet,
   TenderPackage,
+  TenderReplies,
 } from "./types";
 import { Button, Card, ErrorBanner, LayerBadge } from "./ui";
 import { StepIngest } from "./steps/StepIngest";
@@ -74,6 +75,10 @@ export default function App() {
   // levelled against its own bids (Prompt 1).
   const [levelledByTrade, setLevelledByTrade] = useState<Record<string, LevelledBid[]> | null>(null);
   const [levelStale, setLevelStale] = useState(false);
+  // Live run: the inbound reply registry for this tender — the true "what arrived" state (aligned
+  // routed-unit keys, supersede history, received times). Drives the received counts and the
+  // per-enquiry replies drawer on Level & compare; refreshed on entering the step and on demand.
+  const [tenderReplies, setTenderReplies] = useState<TenderReplies | null>(null);
   // One recommendation and one HUMAN award per sublet trade ("" = explicitly skipped).
   const [recommendationByTrade, setRecommendationByTrade] = useState<Record<string, Recommendation> | null>(null);
   const [awardByTrade, setAwardByTrade] = useState<Record<string, string>>({});
@@ -96,6 +101,14 @@ export default function App() {
     api.demoCases().then(setDemoCases).catch(() => {});
     api.coverage().then(setCoverage).catch(() => {});
   }, []);
+
+  // Live: pull the inbound reply registry when Level & compare opens, so the received counts and the
+  // per-enquiry replies drawer show the true "what arrived" state (not just what was uploaded here).
+  useEffect(() => {
+    if (step === 5 && liveRun && tenderSlug) {
+      api.tenderReplies(tenderSlug).then(setTenderReplies).catch(() => {});
+    }
+  }, [step, liveRun, tenderSlug]);
 
   async function run(fn: () => Promise<void>) {
     setLoading(true);
@@ -378,20 +391,48 @@ export default function App() {
   };
 
   // The dispatched sublet packages awaiting returns (live) — each firm with its status and
-  // the [SiteSource Ref] its enquiry carries. `received` flips once a return is levelled in.
+  // the [SiteSource Ref] its enquiry carries. `received` is true once a priced return has landed
+  // for that (routed unit, firm) by EITHER path: an active reply in the inbound registry (aligned
+  // keys) or a manual upload levelled in here. Both are "what arrived".
   function awaitingPackages(): AwaitingPackage[] {
     if (!liveRun || !dispatch) return [];
     const sublet = new Set(sourceScope?.packages.map((p) => p.trade) ?? []);
+    const registryReceived = new Set(
+      (tenderReplies?.replies ?? [])
+        .filter((r) => r.status === "active")
+        .map((r) => `${r.trade}:${r.firm_id}`),
+    );
     const byTrade = new Map<string, AwaitingPackage>();
     for (const b of dispatch.bundles) {
       if (!sublet.has(b.trade)) continue;
       const ref = b.email_subject.match(/\[SiteSource Ref:\s*([^\]]+)\]/)?.[1]?.trim() ?? "";
-      const received = (levelledByTrade?.[b.trade] ?? []).some((x) => x.firm_id === b.firm_id);
+      const received =
+        registryReceived.has(`${b.trade}:${b.firm_id}`) ||
+        (levelledByTrade?.[b.trade] ?? []).some((x) => x.firm_id === b.firm_id);
       if (!byTrade.has(b.trade)) byTrade.set(b.trade, { trade: b.trade, firms: [] });
       byTrade.get(b.trade)!.firms.push({ firm_id: b.firm_id, firm_name: b.firm_name, ref, received, status: b.status });
     }
     return [...byTrade.values()];
   }
+
+  // Re-pull the inbound reply registry on demand (the Level step's Refresh control).
+  const refreshTenderReplies = () => {
+    if (!liveRun || !tenderSlug) return;
+    api.tenderReplies(tenderSlug).then(setTenderReplies).catch(() => {});
+  };
+
+  // Human gate (live): withdraw a firm's active reply for one routed unit from the comparison. The
+  // server keeps it as history and re-levels without it; we re-pull the registry so the received
+  // counts and drawer reflect the withdrawal, and invalidate any recommendation built on it.
+  const withdrawReply = async (firmId: string, packageKey: string) => {
+    if (!tenderSlug) return;
+    await api.withdrawReply(tenderSlug, firmId, packageKey);
+    const fresh = await api.tenderReplies(tenderSlug);
+    setTenderReplies(fresh);
+    setRecommendationByTrade(null);
+    setAwardByTrade({});
+    setMaxReached((m) => (m > 5 ? 5 : m));
+  };
 
   function editRate(firmId: string, itemRef: string, rate: number | null) {
     setReplies((cur) =>
@@ -456,6 +497,7 @@ export default function App() {
     setDispatch(null);
     setLevelledByTrade(null);
     setLevelStale(false);
+    setTenderReplies(null);
     setRecommendationByTrade(null);
     setAwardByTrade({});
     setError(null);
@@ -576,6 +618,10 @@ export default function App() {
                 live={liveRun}
                 awaiting={awaitingPackages()}
                 onUploadReturn={uploadReturn}
+                tenderReplies={tenderReplies}
+                comparisonUrl={tenderSlug ? api.tenderComparisonUrl(tenderSlug) : ""}
+                onRefreshReplies={refreshTenderReplies}
+                onWithdrawReply={withdrawReply}
               />
             )}
 

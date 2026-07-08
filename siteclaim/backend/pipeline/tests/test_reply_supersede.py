@@ -83,6 +83,18 @@ def test_legacy_flat_reply_file_reads_as_active(tmp_path):
     assert [r.firm_id for r in reply_loop.tender_replies(ws, "T")] == ["F1"]  # wrapped as active, still read
 
 
+def test_replies_endpoint_reports_unit_totals_for_coverage(tmp_path, monkeypatch):
+    # The frontend reads "M/N items priced" — N is each routed unit's SoR item count, exposed
+    # as unit_totals so the coverage denominator is Layer-1 (never guessed on the client).
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    ws = Workspace()
+    save_scope(ws, "gi-cov", _split_gi_scope())  # 4 sections -> splits into per-section units
+    reply_loop.accumulate_replies(ws, "gi-cov", [_reply("F1", "ground_investigation:H", [("H12", 2.0)])])
+    body = client.get("/tender/gi-cov/replies").json()
+    assert body["unit_totals"] == {f"ground_investigation:{c}": 1 for c in ("G", "H", "I", "J")}
+    assert body["reply_count"] == 1 and body["replies"][0]["trade"] == "ground_investigation:H"
+
+
 def test_withdraw_endpoint_removes_from_comparison(tmp_path, monkeypatch):
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
     ws = Workspace()

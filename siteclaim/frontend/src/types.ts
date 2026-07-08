@@ -112,11 +112,17 @@ export interface IngestJobState {
   warnings?: string[]; // per-section batches the extractor couldn't read (non-fatal)
 }
 
+// A reply record for a tender. `trade` is the aligned routed-unit package_key the reply covers.
+// `status` distinguishes the ACTIVE reply (in the comparison) from history: a `superseded` reply
+// was replaced by a later one, `withdrawn` was pulled by the operator, `migrated` was re-keyed.
+export type ReplyStatus = "active" | "superseded" | "withdrawn" | "migrated";
 export interface TenderReplyInfo {
   firm_id: string;
   trade: string;
   line_items: number;
   claimed_total: number | null;
+  status: ReplyStatus;
+  received_at: string | null;
 }
 
 export interface TenderReplies {
@@ -126,6 +132,8 @@ export interface TenderReplies {
   replies: TenderReplyInfo[];
   outstanding: { firm_id: string; trade: string }[];
   comparison_available: boolean;
+  // routed-unit package_key -> that unit's SoR item count (the coverage denominator, Layer 1).
+  unit_totals: Record<string, number>;
 }
 
 // --- Benchmark estimator (Phase B1) ---------------------------------------
