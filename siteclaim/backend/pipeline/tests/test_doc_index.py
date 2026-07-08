@@ -304,6 +304,23 @@ def test_readable_ps_with_no_clause_markers_warns_instead_of_trusting_empty_inde
     assert any("EMPTY clause index" in r.getMessage() for r in caplog.records)
 
 
+def test_scanned_single_column_ps_line_start_heading_unioned_when_word_boxes_empty(monkeypatch):
+    # A SINGLE-column scanned PS page: the clause id is at the OCR line start. Even when the word-box
+    # column path finds nothing (the engine-live symptom), the line-start scan over the cached OCR
+    # TEXT catches "7.286A" — the blind index degrades gracefully without a live word-box call.
+    import pipeline.ocr as ocr
+
+    data = _pdf([[], []])  # two image-less pages: no native text -> both take the scanned path
+    monkeypatch.setattr(ocr, "page_texts", lambda *a, **k: [
+        "SECTION 7 - GEOTECHNICAL WORKS",
+        "7.286A Rotary drilling in rock\nthe clause body continues",
+    ])
+    monkeypatch.setattr(ocr, "page_words", lambda *a, **k: [])  # column path returns nothing
+    e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.text_layer is True
+    assert e.clause_index.get("7.286A") == [1]  # located from the line-start union over OCR text
+
+
 @requires_tesseract
 def test_real_multi_column_scanned_ps_is_sliced_not_whole(tmp_path, monkeypatch):
     # The whole point, end to end on a real render: a MULTI-COLUMN scanned PS (label column, a

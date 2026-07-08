@@ -303,9 +303,14 @@ def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> 
             if page is None or len(native.strip()) >= _NATIVE_MIN:
                 markers.extend(_page_line_markers(text, heading, page_no, section_number))  # native page
             else:
+                # Scanned page: the word-box COLUMN path recovers a clause id that OCR fused mid-line
+                # on a MULTI-column page. ALSO run the line-start scan over the OCR text so a
+                # SINGLE-column scanned page (clause id at line start) is covered even when word boxes
+                # are unavailable — a cheap coverage net, no new dependency. Union: on a multi-column
+                # page the line-start scan matches nothing (the id is mid-line), so no false positives.
+                # _page_line_markers also reads the amendment lead-ins from the OCR text.
                 markers.extend((cid, page_no) for cid in _column_headings(data, page_no, section_number))
-                for lm in _PS_LEADIN.finditer(text):  # lead-ins from the OCR text on a scanned page
-                    markers.append((lm.group(1), page_no))
+                markers.extend(_page_line_markers(text, heading, page_no, section_number))
     finally:
         doc.close()
     return markers
