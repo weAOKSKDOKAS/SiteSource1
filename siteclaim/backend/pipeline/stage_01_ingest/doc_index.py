@@ -50,6 +50,16 @@ _PS_LEADIN = re.compile(r"(?:Replace|Add)\b[^\n]*?GS\s+Clause\s+(\d+(?:\.\d+)*[A
 # MM preamble clause markers: "PB 71". A running-header noise line ("- PB/2 -") never matches —
 # the marker must start the line and have digits immediately after PB.
 _MM_MARKER = re.compile(r"^\s*PB\s*(\d+)\b", re.I)
+# A clause id occurring ANYWHERE on a line (>= 1 dot, so a bare integer or a body "(1)" is not a
+# candidate), anchored so it is not matched inside a longer number. HK GI spec pages are MULTI-COLUMN
+# and both native extraction (pymupdf ``sort=True``) and OCR linearise them, dropping the clause id
+# MID-LINE ("General requirements  7.77.2A  (1) Within 3 weeks …") — so headings must be found
+# mid-line, not only at line start. Section scoping / noise rejection is applied by _accept_clause_id.
+_LINE_CLAUSE = re.compile(r"(?<![\w.])\d+(?:\.\d+)+[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?")
+# A clause BODY signal immediately after a heading id — "(1)" / "(a)" / a capitalised body word. Its
+# presence (with a short non-cue label before) distinguishes a mid-line heading from an inline
+# cross-reference ("… reporting requirements indicated in Clauses 7.301A (4) …").
+_BODY_SIGNAL = re.compile(r"\(\s*(?:\d+|[a-z])\s*\)|[A-Z]")
 
 
 class DocIndexEntry(BaseModel):
@@ -110,37 +120,47 @@ def _pages_text(data: bytes) -> Optional[list[str]]:
         return None
 
 
-def _heading_re(section_number: str) -> re.Pattern:
-    """A line-start clause-heading matcher, scoped to the doc's own section number when known
-    (``7.34A`` under Section 7) so a stray dotted number elsewhere is not mistaken for a clause;
-    else any clause id."""
-    scoped = rf"{re.escape(section_number)}\.\d+(?:\.\d+)*[A-Za-z]?(?:\.?\(\d+\))?[A-Za-z]?" if section_number else _CLAUSE_ID
-    return re.compile(rf"^\s*({scoped})(?=[\s.:)]|$)")
+def _is_heading_occurrence(line: str, m: "re.Match", section_number: str) -> bool:
+    """Whether the clause-id match ``m`` on ``line`` is a HEADING (it STARTS a clause), not an inline
+    cross-reference. True when the id is at the line start (tolerating leading OCR punctuation), OR —
+    the multi-column linearised case — it is preceded ONLY by a short label (<= 6 words) that is not a
+    cue word, AND is immediately FOLLOWED by a clause-body signal ("(1)" / "(a)" / a capitalised word).
+    So ``General requirements 7.77.2A (1) Within …`` is a heading, while ``… indicated in Clauses
+    7.301A (4)`` (cue-preceded) and ``… value 7.5 metres`` (no body signal) are not."""
+    before = line[: m.start()]
+    if not before.strip(" \t=.:)|("):  # line start (leading punctuation tolerated) -> heading
+        return True
+    words = re.findall(r"[A-Za-z]+", before)
+    if len(words) > 6:  # a long run of prose before the id -> a body mention, not a heading label
+        return False
+    if words and _clean_word(words[-1]) in _CUE_WORDS:  # "… in Clauses 7.301A" -> inline cross-reference
+        return False
+    return bool(_BODY_SIGNAL.match(line[m.end():].lstrip()))  # a clause body must start right after
 
 
-def _page_line_markers(text: str, heading: re.Pattern, page_no: int, section_number: str) -> list[tuple[str, int]]:
-    """Line-start clause headings + amendment lead-ins on one page's text — the native-text path
-    (a real text layer, or a single-column page whose OCR keeps clause ids at line start). A matched
-    heading id is kept only if :func:`_accept_clause_id` vouches for it (so a bare ``0.5`` at line
-    start in an unscoped doc is not indexed); amendment lead-ins ("GS Clause 7.28") are explicit
-    references and pass through unchanged."""
+def _page_line_markers(text: str, page_no: int, section_number: str) -> list[tuple[str, int]]:
+    """Clause headings + amendment lead-ins on one page's text. A heading is a clause id at a line
+    START, or MID-LINE where it starts a clause (multi-column pages linearise the id mid-line under
+    both native extraction and OCR — see :func:`_is_heading_occurrence`). A matched id is kept only if
+    :func:`_accept_clause_id` vouches for it (section scope; a bare ``0.5`` is rejected). Amendment
+    lead-ins ("GS Clause 7.28") are explicit references and pass through unchanged. Runs on page TEXT,
+    so it is engine-independent and covers multi-column native and scanned pages alike."""
     markers: list[tuple[str, int]] = []
     for line in text.splitlines():
-        m = heading.match(line)
-        if m and _accept_clause_id(m.group(1), section_number):
-            markers.append((m.group(1), page_no))
+        for m in _LINE_CLAUSE.finditer(line):
+            cid = m.group(0)
+            if _accept_clause_id(cid, section_number) and _is_heading_occurrence(line, m, section_number):
+                markers.append((cid, page_no))
         for lm in _PS_LEADIN.finditer(line):
             markers.append((lm.group(1), page_no))
     return markers
 
 
 def _spec_markers(pages: list[str], section_number: str) -> list[tuple[str, int]]:
-    """``(clause_id, page)`` for a PS / appendix / GS doc: clause headings at line start (scoped to
-    the doc's own section numbering when known, e.g. ``7.34A``), plus the GS clauses named in
-    amendment lead-ins. In document order. Line-start only — the layout-aware scanned-spec path is
-    :func:`_spec_markers_layout` (used for PS/GS, which are multi-column when scanned)."""
-    heading = _heading_re(section_number)
-    return [m for page_no, text in enumerate(pages) for m in _page_line_markers(text, heading, page_no, section_number)]
+    """``(clause_id, page)`` for a PS / appendix / GS doc: clause headings (line-start or mid-line,
+    scoped to the doc's own section numbering when known, e.g. ``7.34A``), plus the GS clauses named
+    in amendment lead-ins. In document order."""
+    return [m for page_no, text in enumerate(pages) for m in _page_line_markers(text, page_no, section_number)]
 
 
 # -- layout-aware spec markers (multi-column scanned PS / GS) ----------------
@@ -161,6 +181,7 @@ _CUE_WORDS = {
     "clause", "clauses", "subclause", "specification", "specifications", "general", "particular",
     "gs", "ps", "in", "under", "see", "refer", "reference", "ref", "per",
     "appendix", "appendices",  # "… in Appendix 7.4.16 …" is an onward reference, not a heading
+    "to", "from", "of",        # "… pursuant to 7.301A", "requirements of 7.286A" — inline references
 }
 
 
@@ -285,18 +306,17 @@ def _column_headings(data: bytes, page_no: int, section_number: str) -> list[str
 
 
 def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> tuple[list[tuple[str, int]], int, int]:
-    """``(markers, scanned_page_count, column_heading_count)`` for a PS / GS doc, LAYOUT-AWARE: a
-    native-text page keeps the line-start scan; a scanned page (multi-column PS/GS whose OCR fuses the
-    clause id mid-line) is read from its word boxes so the clause-number column is recovered, unioned
-    with the line-start scan over the OCR text. Amendment lead-ins are read from the page text either
-    way. The two counts feed the ingest engine-health signal (a scanned spec with a text layer but
-    ZERO column headings is the live word-box symptom). With OCR off it is native-only line-start."""
+    """``(markers, scanned_page_count, column_heading_count)`` for a PS / GS doc, LAYOUT-AWARE: every
+    page runs the text heading scan (line-start AND mid-line — multi-column pages linearise the id
+    mid-line); a scanned page ALSO reads its word boxes so the clause-number column is recovered,
+    unioned with the text scan. Amendment lead-ins are read from the page text either way. The two
+    counts feed the ingest engine-health signal (a scanned spec with a text layer but ZERO column
+    headings is the live word-box symptom). With OCR off it is the text heading scan only."""
     from pipeline import ocr
 
-    heading = _heading_re(section_number)
     doc = _open_pdf(data) if ocr.ocr_enabled() else None
     if doc is None:
-        return _spec_markers(pages, section_number), 0, 0  # OCR off / unreadable -> native line-start
+        return _spec_markers(pages, section_number), 0, 0  # OCR off / unreadable -> text heading scan
     markers: list[tuple[str, int]] = []
     n_scanned = 0
     n_column = 0
@@ -305,19 +325,18 @@ def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> 
             page = doc[page_no] if page_no < doc.page_count else None
             native = page.get_text("text", sort=True) if page is not None else text
             if page is None or len(native.strip()) >= _NATIVE_MIN:
-                markers.extend(_page_line_markers(text, heading, page_no, section_number))  # native page
+                markers.extend(_page_line_markers(text, page_no, section_number))  # native page
             else:
-                # Scanned page: the word-box COLUMN path recovers a clause id that OCR fused mid-line
-                # on a MULTI-column page. ALSO run the line-start scan over the OCR text so a
-                # SINGLE-column scanned page (clause id at line start) is covered even when word boxes
-                # are unavailable — a cheap coverage net, no new dependency. Union: on a multi-column
-                # page the line-start scan matches nothing (the id is mid-line), so no false positives.
+                # Scanned page: the text heading scan over the OCR text already recovers a clause id
+                # that OCR fused MID-LINE (the multi-column case) as well as a line-start id. The
+                # word-box COLUMN path stays as a SECONDARY source (unioned) for pages where the OCR
+                # text is poor but the column is recoverable — correctness no longer depends on it.
                 # _page_line_markers also reads the amendment lead-ins from the OCR text.
                 n_scanned += 1
                 col = _column_headings(data, page_no, section_number)
                 n_column += len(col)
                 markers.extend((cid, page_no) for cid in col)
-                markers.extend(_page_line_markers(text, heading, page_no, section_number))
+                markers.extend(_page_line_markers(text, page_no, section_number))
     finally:
         doc.close()
     return markers, n_scanned, n_column

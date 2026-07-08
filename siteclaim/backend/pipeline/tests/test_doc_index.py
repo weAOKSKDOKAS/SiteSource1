@@ -304,6 +304,26 @@ def test_readable_ps_with_no_clause_markers_warns_instead_of_trusting_empty_inde
     assert any("EMPTY clause index" in r.getMessage() for r in caplog.records)
 
 
+def test_multicolumn_linearised_clause_heading_is_indexed_mid_line(monkeypatch):
+    # The real root cause: a MULTI-COLUMN native PS page is linearised (pymupdf sort=True) so the
+    # clause id lands MID-LINE ("label … 7.77.2A (1) body"). It must still index as a heading — the
+    # earlier line-start-only scan missed every regular clause. Feed the linearised text directly.
+    import pipeline.ocr as ocr
+
+    data = _pdf([[], []])  # real 2-page PDF; the page text is supplied below
+    monkeypatch.setattr(ocr, "page_texts", lambda *a, **k: [
+        "SECTION 7 - GEOTECHNICAL WORKS",
+        "General requirements    7.77.2A     (1)  Within 3 weeks of commencement of the Contract\n"
+        "reporting requirements indicated in Clauses 7.301A (4) of this specification\n"
+        "7.286A     (1)  The boreholes shall be sunk",
+    ])
+    monkeypatch.setattr(ocr, "page_words", lambda *a, **k: [])  # no word boxes -> text path alone
+    e = build_doc_entry("PS-S07.pdf", DocType.PARTICULAR_SPECIFICATION, data)
+    assert e.clause_index.get("7.77.2A") == [1]   # mid-line heading (label + body signal) located
+    assert e.clause_index.get("7.286A") == [1]    # a bare line-start id still located
+    assert "7.301A" not in e.clause_index          # inline "in Clauses 7.301A (4)" is NOT a heading
+
+
 def test_scanned_single_column_ps_line_start_heading_unioned_when_word_boxes_empty(monkeypatch):
     # A SINGLE-column scanned PS page: the clause id is at the OCR line start. Even when the word-box
     # column path finds nothing (the engine-live symptom), the line-start scan over the cached OCR
