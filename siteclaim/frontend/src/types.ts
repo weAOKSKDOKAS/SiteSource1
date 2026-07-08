@@ -560,6 +560,8 @@ export interface RankedFirm {
   risk_flags: RiskFlag[];
   recommended_against: boolean;
   reason: string;
+  // A return that priced NOTHING for this unit — excluded from the ranking, never awardable at HK$0.
+  no_priced_coverage: boolean;
 }
 
 export interface BidDistributionPoint {
@@ -580,6 +582,8 @@ export interface Recommendation {
   rationale: string;
   bid_distribution: BidDistributionPoint[];
   historical_band: HistoricalBand | null;
+  // True when no valid priced return has arrived — the award gate is closed for this package.
+  awaiting_valid_return: boolean;
 }
 
 export interface DemoCaseSummary {

@@ -49,6 +49,22 @@ _NARRATE_SYSTEM = (
 )
 
 
+def _priced_item_count(bid: LevelledBid) -> int:
+    """The distinct canonical items this bid actually PRICED — a unit rate or a stated amount (for
+    the coverage reason line)."""
+    return len({ir.item_ref for ir in bid.item_rates if ir.rate is not None or ir.amount is not None})
+
+
+def _has_priced_coverage(bid: LevelledBid) -> bool:
+    """Whether this bid priced ANYTHING for its unit. A bid that priced nothing has no price signal on
+    any item AND a zero corrected total. Note ``corrected_total == 0`` alone is NOT "priced nothing"
+    (a rate-only SoR has rates but no computable amount — caught by the ``item_rates`` test); and a
+    positive corrected total is priced coverage even if ``item_rates`` is sparse."""
+    return bid.corrected_total > 0 or any(
+        ir.rate is not None or ir.amount is not None for ir in bid.item_rates
+    )
+
+
 def recommend(
     levelled: list[LevelledBid],
     trade: str,
@@ -56,9 +72,19 @@ def recommend(
     *,
     conn: Optional[sqlite3.Connection] = None,
     client: Optional[LLMClient] = None,
+    unit_total: Optional[int] = None,
 ) -> Recommendation:
-    """Produce the risk-adjusted recommendation for ``trade``."""
+    """Produce the risk-adjusted recommendation for ``trade``.
+
+    A return that priced NOTHING for this unit is not a valid bid: it is EXCLUDED from the ranking
+    (so a HK$0 non-bid is never picked as "cheapest clean"), surfaced with ``no_priced_coverage`` and
+    the reason "0 of N items priced". A unit whose only returns are invalid withholds a winner and
+    sets ``awaiting_valid_return`` (the award gate closes). ``unit_total`` (the unit's canonical item
+    count) is the coverage denominator for the reason line. With >= 1 valid bid the ranking is
+    exactly as before."""
     bids = [b for b in levelled if b.trade == trade]
+    priced = [b for b in bids if _has_priced_coverage(b)]
+    invalid = [b for b in bids if not _has_priced_coverage(b)]
     own_conn = conn is None
     conn = conn or store.get_connection()
     try:
@@ -69,25 +95,38 @@ def recommend(
                 corrected_total=b.corrected_total,
                 risk_flags=score_firm(profile) if (profile := store.firm_profile(conn, b.firm_id)) else [],
             )
-            for b in bids
+            for b in priced  # ONLY valid priced bids enter the ranking — order unchanged for them
         ]
         ranked = rank_by_total(ranked_input)  # marks recommended_against + reason, sorts
         recommended_id = next((r.firm_id for r in ranked if not r.recommended_against), None)
+        # Invalid returns are surfaced AFTER the ranked list (never sorted with valid bids, never
+        # awardable at HK$0), each marked with why it did not qualify.
+        denom = f" of {unit_total}" if unit_total else ""
+        for b in invalid:
+            ranked.append(RankedFirm(
+                firm_id=b.firm_id, firm_name=b.firm_name, corrected_total=b.corrected_total,
+                no_priced_coverage=True,
+                reason=f"return did not cover this scope — {_priced_item_count(b)}{denom} items priced",
+            ))
         # A section sub-package (trade:SECTION) reads its parent trade's historical band.
         band_values = store.historical_pricing(conn, base_trade(trade))
     finally:
         if own_conn:
             conn.close()
 
+    awaiting = not priced  # a reply arrived but priced nothing (or none arrived): no valid bid to award
     historical_band = (
         HistoricalBand(low=band_values[0], median=band_values[1], high=band_values[2])
         if band_values is not None
         else None
     )
-    bid_distribution = [
-        BidDistributionPoint(firm_name=b.firm_name, corrected_total=b.corrected_total) for b in bids
+    bid_distribution = [  # priced bids only — never an HK$0 non-bid point on the chart
+        BidDistributionPoint(firm_name=b.firm_name, corrected_total=b.corrected_total) for b in priced
     ]
-    rationale = _narrate(ranked, recommended_id, trade, historical_band, demo_fixture, client or LLMClient())
+    rationale = _narrate(
+        ranked, recommended_id, trade, historical_band, demo_fixture, client or LLMClient(),
+        awaiting=awaiting,
+    )
 
     return Recommendation(
         trade=trade,
@@ -96,10 +135,17 @@ def recommend(
         rationale=rationale,
         bid_distribution=bid_distribution,
         historical_band=historical_band,
+        awaiting_valid_return=awaiting,
     )
 
 
-def _narrate(ranked, recommended_id, trade, band, demo_fixture, client) -> str:
+def _narrate(ranked, recommended_id, trade, band, demo_fixture, client, *, awaiting: bool = False) -> str:
+    if awaiting:
+        # No valid priced return — the deterministic withhold narration (never an LLM HK$0 story).
+        return (
+            f"No valid priced return for the {trade.replace('_', ' ')} package yet — the award is "
+            "withheld pending a return that prices this scope."
+        )
     if demo_fixture or not demo_mode():
         try:
             drafted = client.complete_json(

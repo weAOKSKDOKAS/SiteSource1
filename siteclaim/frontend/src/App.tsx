@@ -465,7 +465,7 @@ export default function App() {
     run(async () => {
       if (!levelledByTrade) return;
       const flat = Object.values(levelledByTrade).flat();
-      const result = await api.recommendAll(flat, rationaleFixtures);
+      const result = await api.recommendAll(flat, rationaleFixtures, sourceScope);
       setRecommendationByTrade(Object.fromEntries(result.sections.map((s) => [s.trade, s.recommendation])));
       // Default each package's award to the engine's recommended firm — the human
       // changes/overrides/skips per package (the award stays a Layer-4 decision).

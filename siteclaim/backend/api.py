@@ -1274,11 +1274,13 @@ class RecommendRequest(BaseModel):
     levelled: list[LevelledBid]
     trade: str
     demo_fixture: str | None = RATIONALE_FIXTURE
+    scope: ScopePackages | None = None  # the unit's canonical total feeds the coverage reason line
 
 
 @app.post("/recommend", response_model=Recommendation)
 def post_recommend(req: RecommendRequest) -> Recommendation:
-    return recommend(req.levelled, req.trade, demo_fixture=req.demo_fixture)
+    unit_total = section_totals(req.scope).get(req.trade) if req.scope is not None else None
+    return recommend(req.levelled, req.trade, demo_fixture=req.demo_fixture, unit_total=unit_total)
 
 
 class RecommendSection(BaseModel):
@@ -1293,6 +1295,7 @@ class RecommendAllRequest(BaseModel):
     # trade -> rationale fixture (DEMO). A trade with no entry narrates via the offline
     # deterministic template — Layer 2 only ever narrates; the ranking is Layer 1's.
     demo_fixtures: dict[str, str] = Field(default_factory=dict)
+    scope: ScopePackages | None = None  # per-unit canonical totals feed each coverage reason line
 
 
 class RecommendAllResponse(BaseModel):
@@ -1308,11 +1311,15 @@ def post_recommend_all(req: RecommendAllRequest) -> RecommendAllResponse:
     for bid in req.levelled:
         if bid.trade not in trades:
             trades.append(bid.trade)
+    unit_totals = section_totals(req.scope) if req.scope is not None else {}
     return RecommendAllResponse(
         sections=[
             RecommendSection(
                 trade=trade,
-                recommendation=recommend(req.levelled, trade, demo_fixture=req.demo_fixtures.get(trade)),
+                recommendation=recommend(
+                    req.levelled, trade, demo_fixture=req.demo_fixtures.get(trade),
+                    unit_total=unit_totals.get(trade),
+                ),
             )
             for trade in trades
         ]

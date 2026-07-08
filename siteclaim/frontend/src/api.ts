@@ -218,8 +218,8 @@ export const api = {
   // trade. demoFixtures maps trade -> baked rationale (a missing trade narrates offline).
   levelAll: (replies: BidReply[], scope: ScopePackages | null) =>
     post<LevelAllResponse>("/level-all", { replies, scope }),
-  recommendAll: (levelled: LevelledBid[], demoFixtures: Record<string, string>) =>
-    post<RecommendAllResponse>("/recommend-all", { levelled, demo_fixtures: demoFixtures }),
+  recommendAll: (levelled: LevelledBid[], demoFixtures: Record<string, string>, scope: ScopePackages | null = null) =>
+    post<RecommendAllResponse>("/recommend-all", { levelled, demo_fixtures: demoFixtures, scope }),
 
   levelingXlsxUrl: () => BASE + "/leveling.xlsx",
 

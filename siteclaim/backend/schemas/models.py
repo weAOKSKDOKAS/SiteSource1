@@ -413,6 +413,9 @@ class RankedFirm(BaseModel):
     risk_flags: list[RiskFlag] = Field(default_factory=list)
     recommended_against: bool = False
     reason: str = ""
+    # A return that priced NOTHING for this unit is not a valid bid: excluded from the ranking (so a
+    # HK$0 non-bid is never "cheapest clean"), surfaced with the reason ("0 of N items priced").
+    no_priced_coverage: bool = False
 
 
 class BidDistributionPoint(BaseModel):
@@ -435,6 +438,9 @@ class Recommendation(BaseModel):
     rationale: str = ""
     bid_distribution: list[BidDistributionPoint] = Field(default_factory=list)
     historical_band: Optional[HistoricalBand] = None
+    # True when NO valid priced return has arrived (every return priced nothing) — the recommendation
+    # withholds a winner and the UI closes the award gate rather than awarding a HK$0 non-bid.
+    awaiting_valid_return: bool = False
 
 
 __all__ = [

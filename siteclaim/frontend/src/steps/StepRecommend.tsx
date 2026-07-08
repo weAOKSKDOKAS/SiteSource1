@@ -46,7 +46,11 @@ export function StepRecommend({
   onReset: () => void;
 }) {
   const trades = Object.keys(sections);
-  const decided = trades.filter((t) => awards[t] !== undefined);
+  // A package awaiting a valid priced return has no award to make — it is not counted against the
+  // "all decided" tally, so the banner stays honest and the award gate can close without blocking.
+  const awardable = trades.filter((t) => !sections[t].awaiting_valid_return);
+  const decided = awardable.filter((t) => awards[t] !== undefined);
+  const gatedCount = trades.length - awardable.length;
   const [detail, setDetail] = useState<{ firm: RankedFirm; recommended: boolean } | null>(null);
 
   return (
@@ -60,13 +64,16 @@ export function StepRecommend({
         <div
           className={cx(
             "rounded-lg border px-4 py-2.5 text-sm",
-            decided.length === trades.length ? "border-ok/30 bg-ok-bg text-ink" : "border-line bg-card text-ink-soft",
+            decided.length === awardable.length ? "border-ok/30 bg-ok-bg text-ink" : "border-line bg-card text-ink-soft",
           )}
         >
-          {decided.length === trades.length ? (
-            <>All <span className="tabular font-semibold">{trades.length}</span> packages decided — each award below is recorded.</>
+          {decided.length === awardable.length ? (
+            <>All <span className="tabular font-semibold">{awardable.length}</span> awardable packages decided — each award below is recorded.</>
           ) : (
-            <><span className="tabular font-semibold">{decided.length}/{trades.length}</span> packages decided — award or skip each package to finish.</>
+            <><span className="tabular font-semibold">{decided.length}/{awardable.length}</span> awardable packages decided — award or skip each package to finish.</>
+          )}
+          {gatedCount > 0 && (
+            <> <span className="tabular font-semibold">{gatedCount}</span> awaiting a valid priced return (award withheld).</>
           )}
         </div>
       )}
@@ -124,6 +131,7 @@ function TradeRecommendation({
 }) {
   const winner = rec.ranked.find((r) => r.firm_id === rec.recommended_firm_id) ?? null;
   const against = rec.ranked.filter((r) => r.recommended_against);
+  const awaiting = rec.awaiting_valid_return;  // no valid priced return — the award gate is closed
   const skipped = award === "";
   const awarded = award ? rec.ranked.find((r) => r.firm_id === award) ?? null : null;
   const overriding = awarded != null && awarded.recommended_against;
@@ -139,6 +147,16 @@ function TradeRecommendation({
 
       {/* Headline */}
       <Card className="overflow-hidden">
+        {awaiting && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-line-soft bg-card px-4 py-3">
+            <span className="text-lg">⏳</span>
+            <div>
+              <div className="text-sm font-bold text-ink">Awaiting a valid priced return</div>
+              <div className="text-xs text-ink-soft">No return has priced this scope yet — the award is withheld until one does.</div>
+            </div>
+            <Pill tone="neutral">no valid bid</Pill>
+          </div>
+        )}
         {winner && (
           <div className="flex flex-wrap items-center gap-3 border-b border-line-soft bg-ok-bg/40 px-4 py-3">
             <span className="text-lg">✅</span>
@@ -204,7 +222,10 @@ function TradeRecommendation({
               <span className="tabular text-xs text-ink-faint">{r.firm_id}</span>
               {r.firm_id === rec.recommended_firm_id && <Pill tone="ok">recommended</Pill>}
               {r.recommended_against && <Pill tone="bad">recommended against</Pill>}
-              <span className="tabular ml-auto text-sm font-semibold text-ink">{hkd(r.corrected_total)}</span>
+              {r.no_priced_coverage && <Pill tone="neutral">no priced return</Pill>}
+              <span className="tabular ml-auto text-sm font-semibold text-ink">
+                {r.no_priced_coverage ? <span className="text-ink-faint">{r.reason || "priced nothing"}</span> : hkd(r.corrected_total)}
+              </span>
             </li>
           ))}
         </ol>
@@ -221,32 +242,47 @@ function TradeRecommendation({
       {/* Override & award (Layer 4) */}
       <Card className="p-4">
         <h3 className="mb-1 text-sm font-semibold text-ink">Award — {tradeLabel(trade)} (human decision)</h3>
-        <p className="mb-3 text-xs text-ink-faint">
-          The recommendation is decision support. Select the firm to award this package — you may override, but overriding onto a flagged firm is recorded.
-        </p>
-        <div className="space-y-1.5">
-          {rec.ranked.map((r) => (
-            <label
-              key={r.firm_id}
-              className={cx(
-                "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2",
-                award === r.firm_id ? "border-brand bg-brand-bg" : "border-line bg-card hover:bg-line-soft",
-              )}
-            >
-              <input
-                type="radio"
-                name={`award-${trade}`}
-                checked={award === r.firm_id}
-                onChange={() => onSetAward(r.firm_id)}
-                className="h-4 w-4 accent-[var(--color-brand)]"
-              />
-              <span className="text-sm font-medium text-ink">{r.firm_name}</span>
-              <span className="tabular text-xs text-ink-faint">{hkd(r.corrected_total)}</span>
-              {r.recommended_against && <Pill tone="bad">flagged</Pill>}
-            </label>
-          ))}
-        </div>
-        {awarded && (
+        {awaiting ? (
+          <div className="rounded-lg bg-line-soft px-3 py-2 text-sm text-ink-soft">
+            No valid priced return has arrived for this package — the award control is closed. It opens once a
+            return prices this scope (upload one on Level &amp; compare).
+          </div>
+        ) : (
+          <>
+            <p className="mb-3 text-xs text-ink-faint">
+              The recommendation is decision support. Select the firm to award this package — you may override, but overriding onto a flagged firm is recorded.
+            </p>
+            <div className="space-y-1.5">
+              {rec.ranked.map((r) => {
+                const noCoverage = r.no_priced_coverage;  // a return that priced nothing — not awardable
+                return (
+                  <label
+                    key={r.firm_id}
+                    className={cx(
+                      "flex items-center gap-2 rounded-lg border px-3 py-2",
+                      noCoverage ? "cursor-not-allowed border-line bg-paper-soft/60 opacity-60"
+                        : award === r.firm_id ? "cursor-pointer border-brand bg-brand-bg" : "cursor-pointer border-line bg-card hover:bg-line-soft",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name={`award-${trade}`}
+                      checked={award === r.firm_id}
+                      disabled={noCoverage}
+                      onChange={() => !noCoverage && onSetAward(r.firm_id)}
+                      className="h-4 w-4 accent-[var(--color-brand)]"
+                    />
+                    <span className="text-sm font-medium text-ink">{r.firm_name}</span>
+                    <span className="tabular text-xs text-ink-faint">{noCoverage ? "no priced return" : hkd(r.corrected_total)}</span>
+                    {r.recommended_against && <Pill tone="bad">flagged</Pill>}
+                    {noCoverage && <Pill tone="neutral">excluded</Pill>}
+                  </label>
+                );
+              })}
+            </div>
+          </>
+        )}
+        {!awaiting && awarded && (
           <div className={cx("mt-3 rounded-lg px-3 py-2 text-sm", overriding ? "bg-bad-bg text-bad" : "bg-ok-bg text-ok")}>
             {overriding
               ? `Override recorded: awarding ${awarded.firm_name} for ${tradeLabel(trade)}, which the engine recommends against.`
