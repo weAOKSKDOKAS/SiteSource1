@@ -439,17 +439,31 @@ class DocKind(BaseModel):
     source: str  # filename | title | llm | fallback | "" (unclassified)
 
 
+class UnrecognisedItem(BaseModel):
+    """An extracted item quarantined by the provenance backstop — its section is not one the
+    Schedule of Rates itself declares, so it never became a real SoR item. Surfaced, never silently
+    dropped, and never formed into a package."""
+
+    item_ref: str
+    description: str = ""
+    section: str = ""
+    reason: str = ""
+
+
 class IngestUploadResponse(BaseModel):
     """The scope split plus the trade-tagged tender, so the client can hand the tagged
     tender to ``/dispatch`` for per-trade document routing. ``tender_slug`` is the
     server-derived slug the client uses to poll ``/tender/{slug}/replies`` (so it never
     re-implements the slug logic). ``classification`` lists each document's resolved kind and
-    how it was decided (deterministic filename / title, the LLM, or a fail-safe fallback)."""
+    how it was decided (deterministic filename / title, the LLM, or a fail-safe fallback);
+    ``unrecognised_items`` lists any extracted item quarantined because its section is not one the
+    Schedule of Rates itself declares."""
 
     scope: ScopePackages
     tender: TenderPackage
     tender_slug: str = ""
     classification: list[DocKind] = Field(default_factory=list)
+    unrecognised_items: list[UnrecognisedItem] = Field(default_factory=list)
 
 
 @app.post("/ingest", response_model=ScopePackages)
@@ -533,6 +547,37 @@ class IngestJobState(BaseModel):
     error: Optional[str] = None
     result: Optional[IngestUploadResponse] = None
     warnings: list[str] = Field(default_factory=list)  # per-section batches that couldn't be read
+
+
+def _quarantine_unrecognised_items(
+    scope: ScopePackages, sr_sections: set[str],
+) -> tuple[ScopePackages, list[UnrecognisedItem]]:
+    """Provenance backstop: drop any extracted item whose section is NOT one of the Schedule of
+    Rates' OWN section codes — an item that exists in no SR section never was a real SoR item (a
+    phantom from another document's item-like rows). Dropped items are returned FLAGGED — surfaced,
+    never silently lost — and a package left with no items is dropped (never routed). Deterministic;
+    the caller runs it only when the SR actually declared section headers to check against."""
+    from collections import Counter
+
+    kept_packages = []
+    unrecognised: list[UnrecognisedItem] = []
+    for pkg in scope.packages:
+        kept = []
+        for it in pkg.sor_items:
+            code = (it.section or "").strip().upper()
+            if code in sr_sections:
+                kept.append(it)
+            else:
+                unrecognised.append(UnrecognisedItem(
+                    item_ref=it.item_ref, description=it.description or "", section=code,
+                    reason=f"section {code or '—'} is not a Schedule-of-Rates section",
+                ))
+        if not kept:
+            continue  # the whole package was unrecognised -> never routed
+        counts = Counter((it.section or "").strip().upper() for it in kept)
+        sections = [m.model_copy(update={"item_count": counts[m.code]}) for m in pkg.sections if counts.get(m.code)]
+        kept_packages.append(pkg.model_copy(update={"sor_items": kept, "sections": sections}))
+    return scope.model_copy(update={"packages": kept_packages}), unrecognised
 
 
 def _ingest_live(
@@ -624,6 +669,23 @@ def _ingest_live(
         progress_cb=_on_chunk, on_error=on_error,
     )
 
+    # Provenance backstop: an extracted item must belong to a section the Schedule of Rates ITSELF
+    # declares. Index each document structurally (reused for the assembler below), and when at least
+    # one SoR indexed its own section headers, quarantine any item whose section is not among them —
+    # surfaced and never routed. With no SoR headers to check against (a fully unindexed SoR), skip
+    # the guard rather than block a legitimate ingest. Deterministic; makes any leak visible.
+    doc_index_entries = build_doc_index(
+        [(doc.filename or "upload", doc.doc_type, data)
+         for doc, (_fn, data) in zip(tagged.documents, originals)]
+    )
+    sr_sections = {c for e in doc_index_entries if e.kind == "schedule_of_rates" for c in e.sor_section_pages}
+    unrecognised_items: list[UnrecognisedItem] = []
+    if sr_sections:
+        scope, unrecognised_items = _quarantine_unrecognised_items(scope, sr_sections)
+        if on_error:
+            for it in unrecognised_items:
+                on_error(f"item {it.item_ref!r} — {it.reason} (SoR sections {sorted(sr_sections)}); quarantined, not routed")
+
     # Adopt the extracted contract name when the form was left at its default (the split
     # reads the real name off the documents, e.g. "Contract No. GE/2026/14 — ..."); an
     # explicit operator value is kept. Either way scope, tender, and the saved originals
@@ -644,12 +706,9 @@ def _ingest_live(
     final_name = anchor_name_on_contract(base_name, "\n".join(sor_text_parts + context_parts)) or final_name
     for filename, data in originals:
         workspace.save_upload(final_name, filename, data)
-    # Structural per-document index (kind, spec section, text layer, clause -> page) for the
-    # relevant-document assembler at dispatch. Deterministic (pymupdf); persisted with the run.
-    save_doc_index(workspace, final_name, build_doc_index(
-        [(doc.filename or "upload", doc.doc_type, data)
-         for doc, (_fn, data) in zip(tagged.documents, originals)]
-    ))
+    # Persist the structural per-document index (kind, spec section, text layer, clause -> page)
+    # already built above for the provenance guard — reused by the relevant-document assembler.
+    save_doc_index(workspace, final_name, doc_index_entries)
 
     scope = scope.model_copy(update={"project_name": final_name})
     tagged = tagged.model_copy(update={"project_name": final_name})
@@ -662,6 +721,7 @@ def _ingest_live(
             DocKind(filename=d.filename, doc_type=d.doc_type.value, source=d.doc_type_source)
             for d in tagged.documents
         ],
+        unrecognised_items=unrecognised_items,
     )
 
 

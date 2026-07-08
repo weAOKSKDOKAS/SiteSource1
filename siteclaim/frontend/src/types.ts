@@ -101,12 +101,22 @@ export interface DocKind {
   source: string; // filename | title | llm | fallback | "" (unclassified)
 }
 
+// An extracted item quarantined because its section is not one the Schedule of Rates itself declares
+// — surfaced (never silently dropped), never formed into a package.
+export interface UnrecognisedItem {
+  item_ref: string;
+  description: string;
+  section: string;
+  reason: string;
+}
+
 // Live upload returns the scope split plus the trade-tagged tender (for /dispatch routing).
 export interface IngestUpload {
   scope: ScopePackages;
   tender: TenderPackage;
   tender_slug: string;
   classification?: DocKind[]; // each document's resolved kind + how it was decided
+  unrecognised_items?: UnrecognisedItem[]; // items quarantined by the provenance backstop
 }
 
 // Async ingest transport: the kick-off + poll envelope. Live: {job_id, status:"queued"} then
