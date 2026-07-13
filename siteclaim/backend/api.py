@@ -11,11 +11,13 @@ send real email (gated — see ``mailer``); ``/level-upload`` catches a subcontr
 returned Schedule of Rates; ``/contacts`` exposes the address book.
 """
 
+import asyncio
 import logging
 import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -48,7 +50,7 @@ from pipeline.workspace import (  # noqa: E402
     tender_slug,
 )
 from pipeline.scope_store import load_scope, save_scope  # noqa: E402
-from pipeline import reply_loop  # noqa: E402
+from pipeline import reply_loop, reply_poller  # noqa: E402
 from pipeline.benchmark import actuals_xlsx, matcher, tender_snapshot  # noqa: E402
 from pipeline.benchmark.eos_reason import EOS_REASON_FIXTURE, extract_reason_candidates  # noqa: E402
 from pipeline.routing.recommend import ROUTE_SUGGESTIONS_FIXTURE, recommend_routes  # noqa: E402
@@ -134,10 +136,25 @@ INBOUND_FALLBACK_FIXTURE = "cases/inbound/fallback_match.json"  # DEMO AI fallba
 
 _log = logging.getLogger("sitesource.api")
 
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Start the background Gmail reply poller when enabled (GMAIL_POLLING_ENABLED=true and not
+    DEMO) and stop it cleanly on shutdown. Off by default, so the demo, the tests, and an
+    unconfigured install never poll."""
+    task = None
+    if reply_poller.polling_enabled():
+        task = asyncio.create_task(reply_poller.run_forever(_poller_process_reply))
+    yield
+    if task is not None:
+        task.cancel()
+
+
 app = FastAPI(
     title="SiteSource API",
     version="0.3.0",
     description="AI subcontractor-sourcing and bid-leveling platform.",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -1041,27 +1058,32 @@ def post_level_all(req: LevelRequest) -> LevelAllResponse:
     return LevelAllResponse(sections=sections)
 
 
-def _read_reply_uploads(files: list[UploadFile]) -> tuple[list[BidReply], list[str]]:
-    """Split reply uploads into deterministically-parsed SoR sheets and rasterised pages.
+def _read_reply_files(items: list[tuple[str, Optional[str], bytes]]) -> tuple[list[BidReply], list[str]]:
+    """Split reply files (``(filename, content_type, bytes)``) into deterministically-parsed SoR
+    sheets and rasterised pages.
 
-    An xlsx reply is our own dispatched SoR sheet returned with the Rate column filled —
-    we authored the format, so it parses with openpyxl and NO model call
-    (``parse_sor_xlsx``). PDFs and images keep the existing vision/text parse path.
-
-    Sync (called from sync route handlers): reads the spooled upload directly so the
-    blocking render/parse below runs in FastAPI's threadpool, not on the event loop."""
+    An xlsx reply is our own dispatched SoR sheet returned with the Rate column filled — we
+    authored the format, so it parses with openpyxl and NO model call (``parse_sor_xlsx``). PDFs
+    and images keep the existing vision/text parse path. Raises ``ValueError`` on an unreadable
+    file — the HTTP route maps it to a 400; the poller records it against that message."""
     sheets: list[BidReply] = []
     images: list[str] = []
-    for upload in files:
-        data = upload.file.read()
-        try:
-            if is_xlsx_upload(upload.filename, upload.content_type):
-                sheets.append(parse_sor_xlsx(data))
-            else:
-                images += to_images(data, upload.content_type)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for filename, content_type, data in items:
+        if is_xlsx_upload(filename, content_type):
+            sheets.append(parse_sor_xlsx(data))
+        else:
+            images += to_images(data, content_type)
     return sheets, images
+
+
+def _read_reply_uploads(files: list[UploadFile]) -> tuple[list[BidReply], list[str]]:
+    """The multipart wrapper over :func:`_read_reply_files`. Sync (called from sync route
+    handlers): reads the spooled upload directly so the blocking render/parse runs in FastAPI's
+    threadpool, not on the event loop."""
+    try:
+        return _read_reply_files([(f.filename or "", f.content_type, f.file.read()) for f in files])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _parse_reply(
@@ -1190,28 +1212,15 @@ class InboundReplyResponse(BaseModel):
     misdirected: Optional[MisdirectedHint] = None
 
 
-@app.post("/inbound-reply", response_model=InboundReplyResponse)
-def post_inbound_reply(
-    files: list[UploadFile] = File(...),
-    ref: str = Form(""),
+def process_inbound_reply(
+    ref: str, sheets: list[BidReply], images: list[str], *, workspace: Optional[Workspace] = None,
 ) -> InboundReplyResponse:
-    """Close the reply loop (Phase A): n8n posts a subcontractor's reply attachment plus
-    the correlation ref it read from the subject. The ref resolves the reply to its
-    tender/firm/trade deterministically (AI matching is only a fallback for a ref-less
-    reply); the reply is parsed, accumulated onto that tender, re-leveled, and the
-    comparison xlsx regenerated with the existing leveling/export code. This fills the
-    comparison only — a human still awards.
-
-    Sync handler (threadpool): the blocking parse/level below never stalls the loop."""
-    workspace = Workspace()
-
-    # Read the attachment on the live path: an xlsx (our returned SoR sheet) parses
-    # deterministically, a PDF/image is rasterised for parse + fallback; DEMO uses fixtures.
-    sheets: list[BidReply] = []
-    images: list[str] = []
-    if not demo_mode():
-        sheets, images = _read_reply_uploads(files)
-
+    """The ONE inbound-reply processing path — shared verbatim by the HTTP route and the Gmail
+    poller (neither reimplements it): resolve the correlation ref deterministically (AI matching
+    only for a ref-less reply), parse, route each priced line to its true SoR section by item
+    identity, accumulate/supersede onto the tender, re-level, and regenerate the comparison xlsx.
+    This fills the comparison only — a human still awards."""
+    workspace = workspace or Workspace()
     resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
     if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
         resolved = reply_loop.fallback_match(
@@ -1253,6 +1262,34 @@ def post_inbound_reply(
         reply_count=len(replies), comparison=levelled, sections=coverage, extras=extras_notes,
         misdirected=_misdirect_hint(parsed.line_items, scope, trade),
     )
+
+
+@app.post("/inbound-reply", response_model=InboundReplyResponse)
+def post_inbound_reply(
+    files: list[UploadFile] = File(...),
+    ref: str = Form(""),
+) -> InboundReplyResponse:
+    """Close the reply loop: a subcontractor's reply attachment plus the correlation ref from its
+    subject. Normally the background Gmail poller feeds this same processing path directly; this
+    route stays as the manual/testing entry point (and for any external forwarder). See
+    :func:`process_inbound_reply` for the shared pipeline.
+
+    Sync handler (threadpool): the blocking parse/level never stalls the loop."""
+    # Read the attachment on the live path: an xlsx (our returned SoR sheet) parses
+    # deterministically, a PDF/image is rasterised for parse + fallback; DEMO uses fixtures.
+    sheets: list[BidReply] = []
+    images: list[str] = []
+    if not demo_mode():
+        sheets, images = _read_reply_uploads(files)
+    return process_inbound_reply(ref, sheets, images)
+
+
+def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]]) -> str:
+    """The Gmail poller's adapter onto the SHARED processing path: read the downloaded attachment
+    bytes exactly as the route reads uploads, then run :func:`process_inbound_reply`. Returns the
+    outcome status ("matched" / "unmatched") the poller records against the message id."""
+    sheets, images = _read_reply_files([(fn, None, data) for fn, data in attachments])
+    return process_inbound_reply(ref, sheets, images).status
 
 
 def _awaiting_by_unit(workspace: Workspace, tender_id: str, active_replies: list[BidReply]) -> dict[str, list[str]]:
