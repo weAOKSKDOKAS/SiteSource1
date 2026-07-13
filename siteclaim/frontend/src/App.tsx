@@ -330,10 +330,10 @@ export default function App() {
       setDispatch(result);
     });
 
-  // Prepare Gmail drafts (live): assemble each approved firm's relevant-only bundle and hand it
-  // to the n8n Gmail-draft workflow behind N8N_DRAFTS_WEBHOOK. Same request the outbox confirm
+  // Prepare Gmail drafts (live): assemble each approved firm's relevant-only bundle and create
+  // one Gmail draft each via the backend's Gmail API client. Same request the outbox confirm
   // builds — the edited draft text rides along in draft_overrides — but this writes Gmail drafts,
-  // not the outbox. If the webhook is unset the backend no-ops and reports webhook_configured=false.
+  // not the outbox. A Gmail failure returns per-firm `failed` reasons + a message, never a 500.
   const prepareDrafts = (attachment_overrides: AttachmentOverride[] = []): Promise<DispatchDraftsResponse> => {
     if (!shortlist || !sourceScope) return Promise.reject(new Error("nothing to draft"));
     const draft_overrides = Object.entries(drafts)

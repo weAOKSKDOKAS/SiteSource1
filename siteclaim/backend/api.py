@@ -878,7 +878,7 @@ def post_dispatch(req: DispatchRequest) -> DispatchSet:
     return send_bundles(dispatch, dry_run=req.dry_run) if req.send else dispatch
 
 
-# --- Relevant-document assembler + n8n Gmail-draft hand-off -----------------
+# --- Relevant-document assembler + Gmail draft hand-off (direct API) --------
 class DispatchPlanRequest(BaseModel):
     scope: ScopePackages | None = None
     approvals: dict[str, list[str]] = Field(default_factory=dict)
@@ -897,20 +897,36 @@ def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
     return [p.model_dump() for p in plans.values()]
 
 
+class DraftFailure(BaseModel):
+    """One enquiry Gmail could not draft, with the actionable reason (no contact email, missing
+    credential, API error). Surfaced, never a 500 — the enquiry stays in the outbox."""
+
+    firm_id: str
+    reason: str
+
+
 class DispatchDraftsResponse(BaseModel):
-    drafted: int
-    webhook_configured: bool
+    """The Gmail-draft hand-off result: which firms now have a draft in Gmail, which failed and
+    why, and — always — that the composed enquiries are safe in the outbox (a Gmail failure
+    never loses the assembled work; drafting can simply be run again)."""
+
+    drafted: list[str] = Field(default_factory=list)   # firm ids with a Gmail draft created
+    failed: list[DraftFailure] = Field(default_factory=list)
+    outbox_written: bool = True
+    message: str = ""  # top-level actionable notice (Gmail unconfigured / DEMO), "" when all good
     bundles: list[DispatchBundle] = Field(default_factory=list)
 
 
 @app.post("/dispatch/drafts", response_model=DispatchDraftsResponse)
 def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
-    """Assemble each approved firm's relevant-only attachment set (sliced/whole PDFs + the SoR
-    sheet) and hand it to the n8n Gmail-draft workflow behind ``N8N_DRAFTS_WEBHOOK`` (empty =
-    no-op). The human gate approves the plan first. Sync handler (blocking assemble + one POST)."""
+    """Assemble each approved firm's relevant-only attachment set (sliced/whole PDFs + the
+    priced-return sheet) and create ONE Gmail draft per firm via the Gmail API (no n8n). The
+    human gate approves the plan first, and holds after: drafts only, never a send. A Gmail
+    failure returns partial success (``failed`` + ``message``), never a 500 — the enquiries are
+    already prepared in the outbox and can be drafted again. Sync handler."""
     import re as _re
 
-    from pipeline.stage_03_dispatch.drafts import assemble_firm_attachments, plan_for_firms, post_drafts
+    from pipeline.stage_03_dispatch.drafts import assemble_firm_attachments, create_gmail_drafts, plan_for_firms
     from pipeline.stage_03_dispatch.relevant_docs import apply_attachment_overrides
     from rules_engine.taxonomy import base_trade
 
@@ -945,9 +961,30 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     finally:
         conn.close()
 
-    webhook = post_drafts(req.project_name, drafts)
-    bundles = [b.model_copy(update={"status": DispatchStatus.DRAFTED_GMAIL}) for b in dispatch.bundles]
-    return DispatchDraftsResponse(drafted=len(drafts), webhook_configured=webhook, bundles=bundles)
+    drafted_ids: list[str] = []
+    failures: list[DraftFailure] = []
+    message = ""
+    if demo_mode():
+        # DEMO stays fully offline: no Gmail import, no token read — the assembled bundles are
+        # returned and the mock outbox remains the record.
+        message = "DEMO mode — Gmail drafting is off; the enquiries are recorded in the mock outbox."
+    else:
+        raw_drafted, raw_failed = create_gmail_drafts(drafts)
+        drafted_ids = raw_drafted
+        failures = [DraftFailure(**f) for f in raw_failed]
+        if failures and not drafted_ids:
+            message = (
+                f"Gmail drafts unavailable — {failures[0].reason} "
+                "The enquiries are prepared in the outbox and can be drafted again."
+            )
+    drafted_set = set(drafted_ids)
+    bundles = [
+        b.model_copy(update={"status": DispatchStatus.DRAFTED_GMAIL}) if b.firm_id in drafted_set else b
+        for b in dispatch.bundles
+    ]
+    return DispatchDraftsResponse(
+        drafted=drafted_ids, failed=failures, outbox_written=True, message=message, bundles=bundles,
+    )
 
 
 # ---------------------------------------------------------------------------

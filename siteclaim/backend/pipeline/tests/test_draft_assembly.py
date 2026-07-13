@@ -1,11 +1,11 @@
-"""Relevant-only attachment assembly + n8n hand-off (relevant-doc assembler, RD5)."""
+"""Relevant-only attachment assembly + the Gmail draft hand-off (direct API, no n8n)."""
 
 import base64
 
 import pytest
 
 from pipeline.stage_01_ingest.doc_index import DocIndexEntry, save_doc_index
-from pipeline.stage_03_dispatch.drafts import assemble_firm_attachments, plan_for_firms, post_drafts
+from pipeline.stage_03_dispatch.drafts import assemble_firm_attachments, create_gmail_drafts, plan_for_firms
 from pipeline.stage_03_dispatch.relevant_docs import (
     PlanAttachment,
     SectionPlan,
@@ -74,25 +74,67 @@ def test_override_drops_the_removed_file_from_the_assembled_bundle(tmp_path):
     assert {a["filename"] for a in atts} == {ws.sor_sheet_path(_TID, _PKG).name}  # Clar.pdf base64 omitted
 
 
-def test_n8n_post_fires_only_when_the_webhook_is_set(tmp_path, monkeypatch):
-    ws, scope, _ = _run(tmp_path)
+# -- the Gmail draft hand-off (direct API; a failure is data, never an exception) ------------
+def _draft(firm_id="F1", to="f1@x.com", atts=None):
+    return {"firm_id": firm_id, "to": to, "subject": "RFQ [SiteSource Ref: x]", "body": "…",
+            "ref": "x", "attachments": atts or []}
+
+
+def test_gmail_drafts_are_created_from_the_assembled_bundle(tmp_path):
+    # The full path: plan -> assemble -> one Gmail draft per firm, carrying exactly the planned
+    # files (decoded back from base64 for the MIME build). Stubbed service — no Google SDK.
+    from pipeline.tests.test_gmail_client import StubService
+
+    ws, scope, clar_bytes = _run(tmp_path)
     plan = plan_for_firms(scope, {_PKG: ["F1"]}, tender_id=_TID, workspace=ws)[_PKG]
     atts = assemble_firm_attachments(plan, ws, _TID, _PKG)
-    drafts = [{"firm_id": "F1", "to": "f1@x.com", "subject": "RFQ [SiteSource Ref: x]", "body": "…",
-               "ref": "x", "attachments": atts}]
+    svc = StubService(draft_result={"id": "d-1"})
 
-    captured: dict = {}
-    monkeypatch.setattr("pipeline.stage_03_dispatch.drafts._http_post",
-                        lambda url, payload: captured.update(url=url, payload=payload))
+    drafted, failed = create_gmail_drafts([_draft(atts=atts)], service=svc)
+    assert drafted == ["F1"] and failed == []
+    (name, payload), = svc.calls
+    assert name == "drafts.create"
+    import email as _email
+    msg = _email.message_from_bytes(base64.urlsafe_b64decode(payload["body"]["message"]["raw"]))
+    by_name = {p.get_filename(): p.get_payload(decode=True) for p in msg.walk() if p.get_filename()}
+    assert by_name["Clar.pdf"] == clar_bytes                          # exactly the planned bytes
+    assert set(by_name) == {"Clar.pdf", ws.sor_sheet_path(_TID, _PKG).name}
 
-    monkeypatch.delenv("N8N_DRAFTS_WEBHOOK", raising=False)
-    assert post_drafts(_TID, drafts) is False and captured == {}  # no webhook -> no network
 
-    monkeypatch.setenv("N8N_DRAFTS_WEBHOOK", "https://n8n.example/webhook/abc")
-    assert post_drafts(_TID, drafts) is True
-    assert captured["url"].endswith("/webhook/abc")
-    sent = captured["payload"]
-    assert sent["tender"] == _TID
-    sent_atts = sent["drafts"][0]["attachments"]
-    assert {a["filename"] for a in sent_atts} == {"Clar.pdf", ws.sor_sheet_path(_TID, _PKG).name}
-    assert all("content_b64" in a for a in sent_atts)  # base64 of exactly the planned files
+def test_a_firm_with_no_contact_email_is_reported_never_silently_skipped():
+    from pipeline.tests.test_gmail_client import StubService
+
+    svc = StubService()
+    drafted, failed = create_gmail_drafts([_draft(firm_id="F-NO-MAIL", to="")], service=svc)
+    assert drafted == [] and svc.calls == []                          # nothing drafted with an empty To
+    assert failed == [{"firm_id": "F-NO-MAIL",
+                       "reason": "no contact email on file — add one in the address book (GET /contacts)"}]
+
+
+def test_gmail_unavailable_returns_every_firm_failed_with_the_actionable_reason(monkeypatch, tmp_path):
+    # No injected service and no credentials/token -> ALL enquiries come back failed with the
+    # typed, actionable reason. NOTHING raises — the dispatch endpoint stays 200.
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "absent.json"))
+    drafted, failed = create_gmail_drafts([_draft("F1"), _draft("F2", to="f2@x.com")])
+    assert drafted == []
+    assert [f["firm_id"] for f in failed] == ["F1", "F2"]
+    assert all(f["reason"] for f in failed)                           # a reason on every failure
+
+
+def test_a_per_firm_api_error_fails_that_firm_and_drafts_the_rest():
+    from pipeline.tests.test_gmail_client import StubService, _Call
+
+    class FlakyService(StubService):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def create(self, userId, body):
+            self.n += 1
+            if self.n == 1:  # the first draft blows up, the second succeeds
+                return _Call(RuntimeError("500 backendError"))
+            return super().create(userId, body)
+
+    drafted, failed = create_gmail_drafts([_draft("F1"), _draft("F2", to="f2@x.com")], service=FlakyService())
+    assert drafted == ["F2"]                                          # partial success, order kept
+    assert [f["firm_id"] for f in failed] == ["F1"] and "failed" in failed[0]["reason"]

@@ -207,7 +207,7 @@ export const api = {
     }),
   dispatch: (req: DispatchRequest) => post<DispatchSet>("/dispatch", req),
   // Relevant-document assembler: the per-section attachment plan (human-gate preview) and the
-  // n8n Gmail-draft hand-off (assembles relevant-only files + POSTs behind N8N_DRAFTS_WEBHOOK).
+  // Gmail draft hand-off (assembles relevant-only files; the backend drafts via the Gmail API).
   dispatchPlan: (scope: ScopePackages | null, approvals: Record<string, string[]>, project_name: string) =>
     post<SectionPlan[]>("/dispatch/plan", { scope, approvals, project_name }),
   dispatchDrafts: (req: DispatchRequest) => post<DispatchDraftsResponse>("/dispatch/drafts", req),

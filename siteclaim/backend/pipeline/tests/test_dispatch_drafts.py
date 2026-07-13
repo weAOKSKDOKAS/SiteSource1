@@ -71,3 +71,42 @@ def test_blank_override_fields_keep_the_composed_value():
     bundle = sent["bundles"][0]
     assert bundle["email_subject"] == composed["email_subject"]  # blank -> composed kept
     assert bundle["email_body"] == "Only the body was edited."
+
+
+# -- /dispatch/drafts: Gmail directly, and a Gmail failure NEVER fails the dispatch ------------
+def test_dispatch_drafts_in_demo_skips_gmail_and_stays_offline():
+    shortlist, scope, case = _shortlist_and_scope()
+    body = client.post("/dispatch/drafts", json={
+        "shortlist": shortlist, "approvals": {"electrical": ["F-EL-02"]},
+        "scope": scope, "project_name": case["name"],
+    }).json()
+    assert body["outbox_written"] is True
+    assert body["drafted"] == [] and body["failed"] == []      # nothing attempted, nothing failed
+    assert "DEMO" in body["message"]                            # said plainly, not silently
+    assert {b["firm_id"] for b in body["bundles"]} == {"F-EL-02"}
+
+
+def test_dispatch_drafts_with_gmail_down_returns_partial_success_never_500(monkeypatch, tmp_path):
+    # The production regression this replaces: with the transport down the endpoint 500'd and the
+    # UI showed a dead "Failed to fetch". Now: HTTP 200, every firm in `failed` with an actionable
+    # reason, the outbox intact, and the top-level message says how to fix it and that nothing is lost.
+    from schemas.models import DispatchBundle, DispatchSet
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "absent-token.json"))
+    bundles = DispatchSet(bundles=[DispatchBundle(
+        firm_id="F-EL-02", firm_name="Firm", trade="electrical",
+        email_subject="RFQ [SiteSource Ref: t.F-EL-02.electrical]", email_body="please price",
+    )])
+    monkeypatch.setattr("api.build_dispatch", lambda *a, **k: bundles)
+
+    resp = client.post("/dispatch/drafts", json={"shortlist": {"per_trade": {}},
+                                                 "approvals": {"electrical": ["F-EL-02"]}})
+    assert resp.status_code == 200                              # NEVER a 500 for a Gmail failure
+    body = resp.json()
+    assert body["drafted"] == [] and body["outbox_written"] is True
+    assert [f["firm_id"] for f in body["failed"]] == ["F-EL-02"]
+    assert "Gmail drafts unavailable" in body["message"]        # actionable, top-level
+    assert "outbox" in body["message"]                          # says the work is not lost
+    assert body["bundles"][0]["status"] != "drafted_gmail"      # not claimed drafted when it wasn't

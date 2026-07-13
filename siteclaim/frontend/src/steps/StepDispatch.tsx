@@ -398,9 +398,9 @@ function DispatchReviewModal({
   const [attachmentOverrides, setAttachmentOverrides] = useState<Record<string, SectionOverride>>({});
   const approvedCount = Object.values(approvals).reduce((n, ids) => n + ids.length, 0);
 
-  // Hand the approved bundles to the n8n Gmail-draft workflow, carrying the gate's decisions so
-  // the assembled set matches the preview exactly. Result is surfaced honestly: when
-  // N8N_DRAFTS_WEBHOOK is unset the backend no-ops and webhook_configured is false.
+  // Hand the approved bundles to the backend's Gmail drafting (direct API — no n8n), carrying the
+  // gate's decisions so the assembled set matches the preview exactly. Result is surfaced honestly:
+  // a Gmail failure comes back as per-firm `failed` reasons + an actionable `message`, never a 500.
   const prepareGmailDrafts = () => {
     if (!onPrepareDrafts) return;
     const overrides: AttachmentOverride[] = Object.entries(attachmentOverrides)
@@ -534,20 +534,21 @@ function DispatchReviewModal({
           </div>
         )}
 
-        {/* Gmail-draft hand-off result — surfaced honestly (aggregate + per-firm), incl. the
-            "drafting is off" state the backend returns when N8N_DRAFTS_WEBHOOK is unset. */}
+        {/* Gmail-draft hand-off result — surfaced honestly (aggregate + per-firm). A Gmail
+            failure is a WARNING with the actionable reason, never a dead "Failed to fetch":
+            the backend returns partial success and the enquiries stay safe in the outbox. */}
         {draftError && <p className="rounded-lg bg-bad-bg px-3 py-2 text-xs text-bad">{draftError}</p>}
-        {draftResult && !draftResult.webhook_configured && (
+        {draftResult && draftResult.message && (
           <div className="rounded-lg border border-warn/40 bg-warn-bg px-3 py-2 text-xs text-warn">
-            Drafting is off — set <span className="tabular font-semibold">N8N_DRAFTS_WEBHOOK</span> (and activate the n8n
-            workflow) to create Gmail drafts. Nothing was sent; the outbox confirm below still works.
+            {draftResult.message}
           </div>
         )}
-        {draftResult && draftResult.webhook_configured && (
+        {draftResult && (draftResult.drafted.length > 0 || draftResult.failed.length > 0) && (
           <div className="rounded-lg border border-ok/40 bg-ok-bg px-3 py-2 text-xs">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold text-ink">
-                {draftResult.drafted} Gmail draft{draftResult.drafted === 1 ? "" : "s"} prepared
+                {draftResult.drafted.length} Gmail draft{draftResult.drafted.length === 1 ? "" : "s"} prepared
+                {draftResult.failed.length > 0 && ` · ${draftResult.failed.length} failed`}
               </span>
               <a
                 className="ml-auto font-semibold text-brand underline"
@@ -559,13 +560,19 @@ function DispatchReviewModal({
               </a>
             </div>
             <ul className="mt-1.5 divide-y divide-line-soft">
-              {draftResult.bundles.map((b) => (
-                <li key={`${b.trade}-${b.firm_id}`} className="flex flex-wrap items-center gap-2 py-1">
-                  <span className="text-ink">{b.firm_name}</span>
-                  <Pill tone="brand">{tradeLabel(b.trade)}</Pill>
-                  <Pill tone="ok">Draft created</Pill>
-                </li>
-              ))}
+              {draftResult.bundles.map((b) => {
+                const failure = draftResult.failed.find((f) => f.firm_id === b.firm_id);
+                const ok = draftResult.drafted.includes(b.firm_id);
+                return (
+                  <li key={`${b.trade}-${b.firm_id}`} className="flex flex-wrap items-center gap-2 py-1">
+                    <span className="text-ink">{b.firm_name}</span>
+                    <Pill tone="brand">{tradeLabel(b.trade)}</Pill>
+                    {ok && <Pill tone="ok">Draft created</Pill>}
+                    {failure && <Pill tone="warn">not drafted</Pill>}
+                    {failure && <span className="text-warn">{failure.reason}</span>}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

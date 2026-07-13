@@ -33,9 +33,17 @@ export interface AttachmentOverride {
   removed: string[];
   whole: string[];
 }
+// One enquiry Gmail could not draft, with the actionable reason (no contact email, missing
+// credential, API error). The enquiry itself stays safe in the outbox.
+export interface DraftFailure {
+  firm_id: string;
+  reason: string;
+}
 export interface DispatchDraftsResponse {
-  drafted: number;
-  webhook_configured: boolean;
+  drafted: string[]; // firm ids that now have a Gmail draft
+  failed: DraftFailure[];
+  outbox_written: boolean;
+  message: string; // top-level actionable notice (Gmail unconfigured / DEMO); "" when all good
   bundles: DispatchBundle[];
 }
 // grade | award_history | safety_prosecution | winding_up | debarment | adjudication | distress_filing | closeout_performance | pricing

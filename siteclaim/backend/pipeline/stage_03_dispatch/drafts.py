@@ -1,19 +1,19 @@
-"""Relevant-only attachment assembly + the n8n Gmail-draft hand-off (RD4/RD5).
+"""Relevant-only attachment assembly + the Gmail draft hand-off (direct API, no n8n).
 
-Restores the outbound draft path: build each approved firm's relevant-only attachment set
-(sliced / whole PDFs + the generated SoR sheet) from its per-section plan, and POST them
-base64-encoded to the n8n Gmail-draft webhook behind ``N8N_DRAFTS_WEBHOOK`` (empty = no-op, so
-DEMO and tests are untouched). The human gate (the dispatch pop-up) approves the plan first.
-Sync; the only network is the single webhook POST on the live confirm path.
+The outbound draft path: build each approved firm's relevant-only attachment set (sliced /
+whole PDFs + the priced-return sheet) from its per-section plan, and create ONE Gmail DRAFT per
+firm via :mod:`pipeline.gmail_client` — the human gate holds (the operator reviews and sends
+from Gmail; nothing is auto-sent). The n8n webhook transport this replaced
+(``N8N_DRAFTS_WEBHOOK``) failed whenever n8n was down and 500'd the whole dispatch; a Gmail
+failure here is returned as data (``failed`` with a per-firm reason), never raised — the
+enquiries are already prepared in the outbox and can be drafted again. Sync; the only network
+is the Gmail API on the live confirm path.
 """
 
 from __future__ import annotations
 
 import base64
-import json
 import mimetypes
-import os
-import urllib.request
 from typing import Optional
 
 from pipeline.stage_01_ingest.doc_index import load_doc_index
@@ -107,19 +107,37 @@ def assemble_firm_attachments(
     return out
 
 
-def _http_post(url: str, payload: dict) -> None:  # pragma: no cover — patched in tests
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    urllib.request.urlopen(req, timeout=30).read()
+def create_gmail_drafts(drafts: list[dict], *, service=None) -> tuple[list[str], list[dict]]:
+    """One Gmail DRAFT per assembled enquiry — ``(drafted firm ids, failed [{firm_id, reason}])``.
 
+    NEVER raises: the enquiries are already prepared in the outbox before drafting, so a Gmail
+    failure (no credential, expired token, API error, offline) must not fail the dispatch — it
+    comes back as data with an actionable per-firm reason, and the operator can draft again. A
+    firm with no contact email is reported in ``failed`` too (never a silent empty To). Drafts
+    only, never a send — the human gate holds. ``service`` injects a stub in tests."""
+    from pipeline import gmail_client  # lazy: DEMO/tests never import the Google SDK path
 
-def post_drafts(tender: str, drafts: list[dict]) -> bool:
-    """POST the assembled drafts to the n8n Gmail-draft webhook. No-op (returns False) when
-    ``N8N_DRAFTS_WEBHOOK`` is unset — so DEMO and tests never reach the network."""
-    url = os.getenv("N8N_DRAFTS_WEBHOOK", "").strip()
-    if not url:
-        return False
-    _http_post(url, {"tender": tender, "drafts": drafts})
-    return True
+    if not drafts:
+        return [], []
+    svc = service
+    if svc is None:
+        try:
+            svc = gmail_client.build_service()
+        except gmail_client.GmailUnavailable as exc:
+            return [], [{"firm_id": d.get("firm_id", ""), "reason": str(exc)} for d in drafts]
+    drafted: list[str] = []
+    failed: list[dict] = []
+    for d in drafts:
+        firm_id = d.get("firm_id", "")
+        to = (d.get("to") or "").strip()
+        if not to:
+            failed.append({"firm_id": firm_id,
+                           "reason": "no contact email on file — add one in the address book (GET /contacts)"})
+            continue
+        attachments = [(a["filename"], base64.b64decode(a["content_b64"])) for a in d.get("attachments", [])]
+        try:
+            gmail_client.create_draft(to, d.get("subject", ""), d.get("body", ""), attachments, service=svc)
+            drafted.append(firm_id)
+        except gmail_client.GmailUnavailable as exc:
+            failed.append({"firm_id": firm_id, "reason": str(exc)})
+    return drafted, failed
