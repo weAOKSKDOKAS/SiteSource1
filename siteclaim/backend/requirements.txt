@@ -16,6 +16,12 @@ pymupdf   # PyMuPDF / fitz — rasterise PDF pages to images (pure-pip, no syste
 pytesseract  # local OCR of scanned tender pages (pipeline/ocr.py) — imported LAZILY.
              # Requires the system `tesseract-ocr` binary (apt-get install tesseract-ocr).
              # Absent -> scanned pages degrade to no-text (whole-file / vision), suite stays green.
+# Gmail integration (drafts out + reply polling in; the n8n replacement) — imported
+# LAZILY inside pipeline/gmail_client.py, so DEMO_MODE and the test suite never load
+# a Google SDK or open a socket.
+google-auth
+google-auth-oauthlib
+google-api-python-client
 # Seed-build / live-ingest ONLY — imported lazily inside backend/db/embeddings.py,
 # never at runtime, so DEMO_MODE never imports it.
 sentence-transformers

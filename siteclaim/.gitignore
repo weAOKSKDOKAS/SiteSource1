@@ -13,6 +13,8 @@ venv/
 .env.*
 # the placeholder template (no real key) is safe to commit
 !.env.example
+# the Gmail OAuth token the one-time consent flow writes (pipeline/gmail_client.py)
+.gmail_token.json
 
 # OS / editor
 .DS_Store
