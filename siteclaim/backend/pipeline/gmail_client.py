@@ -35,6 +35,7 @@ import base64
 import json
 import mimetypes
 import os
+import threading
 import time
 from email.message import EmailMessage
 from pathlib import Path
@@ -65,6 +66,45 @@ def token_path() -> Path:
 def credentials_configured() -> bool:
     """Whether the OAuth client env vars are present (says nothing about token validity)."""
     return bool(os.getenv("GOOGLE_CLIENT_ID", "").strip() and os.getenv("GOOGLE_CLIENT_SECRET", "").strip())
+
+
+def token_state() -> tuple[str, str]:
+    """``(state, detail)`` for the status surface — NO network, NO refresh attempt (a status read
+    must never trigger I/O beyond the token file). States: ``valid`` | ``refreshable`` (expired but
+    holding a refresh token — the next real call refreshes it) | ``expired`` | ``unreadable`` |
+    ``missing`` | ``no_libs``."""
+    path = token_path()
+    if not path.is_file():
+        return "missing", f"no token at {path} — run `python -m pipeline.gmail_client` once"
+    try:
+        from google.oauth2.credentials import Credentials
+    except ImportError:
+        return "no_libs", "Google API libraries not installed — pip install -r requirements.txt"
+    try:
+        creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+    except ValueError as exc:
+        return "unreadable", f"token unreadable — delete it and re-authorise ({exc})"
+    if creds.valid:
+        return "valid", ""
+    if creds.expired and creds.refresh_token:
+        return "refreshable", "expired; refreshes automatically on the next Gmail call"
+    return "expired", "expired with no refresh token — publish the consent screen to Production and re-authorise"
+
+
+# Drafts created since startup — the status surface's "did anything actually happen" counter.
+_COUNTER_LOCK = threading.Lock()
+_DRAFTS_CREATED = 0
+
+
+def drafts_created() -> int:
+    with _COUNTER_LOCK:
+        return _DRAFTS_CREATED
+
+
+def _count_draft() -> None:
+    global _DRAFTS_CREATED
+    with _COUNTER_LOCK:
+        _DRAFTS_CREATED += 1
 
 
 def _log(event: str, **fields) -> None:
@@ -165,6 +205,7 @@ def create_draft(
         _log("draft_error", to=to, error=str(exc)[:200])
         raise GmailUnavailable(f"Gmail draft creation failed: {exc}") from exc
     draft_id = str(draft.get("id", ""))
+    _count_draft()
     _log("draft_created", to=to, draft_id=draft_id, attachments=len(attachments))
     return draft_id
 

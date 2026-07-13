@@ -124,6 +124,16 @@ two seed profiles rather than one shared database (spec in Phase C).
 
 ## 4. Architecture: the brain and the nervous system
 
+> **Update (landed):** n8n was REMOVED. It was the transport on both email directions
+> and failed repeatedly in production (ConnectionRefused with n8n down, weekly OAuth
+> expiry in Testing mode, the trigger silently not firing) while requiring a second
+> always-on process. The backend now talks to the Gmail API directly:
+> `pipeline/gmail_client.py` (OAuth + drafts), `/dispatch/drafts` (one Gmail DRAFT per
+> enquiry — the human gate holds), and `pipeline/reply_poller.py` (a background poller
+> feeding the same processing path as `/inbound-reply`, idempotent on the Gmail message
+> id). See `siteclaim/docs/EMAIL_SETUP.md`. The section below is kept as the original
+> design discussion.
+
 Silver asked about n8n. It helps, in specific places. The division below keeps the
 intelligence testable and version-controlled and uses n8n only for glue.
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api";
 import type { AttachmentOverride, Candidate, DispatchDraftsResponse, DispatchSet, DispatchStatus, ScopePackages, SectionPlan, ShortlistSet, TenderReplies } from "../types";
-import { Pill, StepHeading, StepNav } from "../components";
+import { GmailStatusPill, Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, LoadingDots, Modal, cx } from "../ui";
 import { tradeLabel } from "../format";
 
@@ -249,6 +249,7 @@ export function StepDispatch({
         title="Dispatch enquiries"
         lead="The approve-before-send gate: review the selected firms and their enquiry emails in the pop-up, edit any draft, then confirm. Each firm receives only its trade's documents — the electrical firm gets the electrical scope, not the whole tender. Confirming prepares each enquiry in the outbox with exactly your edited text, ready to send."
       />
+      <GmailStatusPill demoMode={demoMode} />
 
       {/* Selection summary per trade — firms are picked on the shortlist or in the pop-up. */}
       <Card className="p-4">

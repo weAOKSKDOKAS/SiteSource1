@@ -1,7 +1,7 @@
 """Phase C — semi-automated public-data refresh with a human-confirm gate.
 
 A refresh never mutates the curated database directly. New public records (the same
-record shape as ``seed_data/public/*.json``, supplied by an operator or an n8n cron
+record shape as ``seed_data/public/*.json``, supplied by an operator or a scheduled job
 POST — there is no live scraper by design) are **staged**: written to ``staged_firms``
 / ``staged_flags`` with status ``pending``. A human reviews what is waiting
 (:func:`list_pending`) and only then **confirms** it (:func:`confirm_pending`), at
@@ -13,7 +13,7 @@ Design guarantees:
 
 * **Idempotent.** A flag is deduped by a stable fingerprint against both the pending
   staging rows and the live ``public_flags`` (which carries no UNIQUE constraint), so
-  re-staging or re-confirming the same n8n batch adds nothing.
+  re-staging or re-confirming the same batch adds nothing.
 * **Honest provenance.** A refresh represents real ingest, so a confirmed firm is
   always ``provenance='public_register'``; the payload cannot inject ``illustrative``.
   So the coverage honesty figures only ever move on confirmed real data.

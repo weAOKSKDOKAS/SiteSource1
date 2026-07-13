@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { AwaitingFirm, AwaitingPackage, BidReply, LevelledBid, MisdirectedHint, ReplyStatus, TenderReplies, TenderReplyInfo } from "../types";
-import { Pill, StepHeading, StepNav } from "../components";
+import { GmailStatusPill, Pill, StepHeading, StepNav } from "../components";
 import { Button, Card, Collapse, Drawer, MonoLabel, ScanLine, SeverityTag, cx } from "../ui";
 import { hkd, tradeLabel } from "../format";
 
@@ -447,6 +447,7 @@ function LiveLevel({
         title="Level & compare"
         lead="Live run — each dispatched enquiry waits for its priced return. A return counts as received when it aligns to the enquiry's routed unit (the inbound loop) or is uploaded here; the rules engine levels it and the unit's comparison activates. No demo bids are ever shown on a live run."
       />
+      <GmailStatusPill demoMode={false} />
 
       {awaiting.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2">

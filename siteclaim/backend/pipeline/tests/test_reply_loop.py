@@ -2,7 +2,7 @@
 
 Ref generation, registry record/resolve, and accumulate-and-relevel are pure JSON work;
 the fallback is exercised with a fake client and the DEMO fixture. The full live loop
-(inbox -> n8n -> /inbound-reply -> Excel) is verified by the manual smoke note in
+(inbox -> poller -> processing -> Excel) is verified by the manual smoke note in
 stage_04_level/CONTEXT.md, not by these offline tests.
 """
 

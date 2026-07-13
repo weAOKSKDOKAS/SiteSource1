@@ -6,9 +6,9 @@ manual upload. Two matchers, in strict order:
 1. **Correlation ref (primary, deterministic).** On dispatch a stable ref
    ``<tender>.<firm>.<trade>`` is put in the email subject (``[SiteSource Ref: <ref>]``)
    and the mapping ``ref -> {tender_id, firm_id, trade}`` is recorded in a registry
-   (a JSON file at the Workspace root). The reply keeps the ref in its subject, so n8n
-   passes it back and the backend resolves the reply with a pure registry lookup — no
-   model, no guessing.
+   (a JSON file at the Workspace root). The reply keeps the ref in its subject, so the
+   Gmail reply poller (or a manual /inbound-reply POST) passes it back and the backend
+   resolves the reply with a pure registry lookup — no model, no guessing.
 2. **AI fallback (secondary, best-effort).** Only when a reply arrives with *no* ref
    (a fresh email) does :func:`fallback_match` read the attachment and pick the matching
    outstanding dispatch — and only if it is confident. If it cannot, the caller reports
@@ -54,7 +54,7 @@ def make_ref(tender_id: str, firm_id: str, trade: str) -> str:
 
 
 def subject_with_ref(subject: str, ref: str) -> str:
-    """Append the correlation tag n8n reads back off the reply's subject."""
+    """Append the correlation tag the reply poller reads back off the reply's subject."""
     return f"{subject} [SiteSource Ref: {ref}]"
 
 

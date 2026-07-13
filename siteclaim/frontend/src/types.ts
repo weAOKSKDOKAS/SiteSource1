@@ -46,6 +46,21 @@ export interface DispatchDraftsResponse {
   message: string; // top-level actionable notice (Gmail unconfigured / DEMO); "" when all good
   bundles: DispatchBundle[];
 }
+// The Gmail integration's health — shown BEFORE the operator clicks, so a broken credential
+// is visible on the gate, not discovered as a failed action.
+export interface GmailStatus {
+  status: "connected" | "not_configured" | "error" | "demo";
+  detail: string;
+  credentials_configured: boolean;
+  token_state: string;
+  polling_enabled: boolean;
+  poll_seconds: number;
+  last_poll_at: string | null;
+  last_error: string;
+  drafts_created: number;
+  replies_processed: number;
+  replies_unmatched: number;
+}
 // grade | award_history | safety_prosecution | winding_up | debarment | adjudication | distress_filing | closeout_performance | pricing
 export type SignalType = string;
 

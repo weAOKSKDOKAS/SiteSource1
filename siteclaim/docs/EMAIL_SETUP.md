@@ -1,75 +1,97 @@
-# Email setup — real RFQ send + the n8n inbound reply loop
+# Email setup — Gmail drafts out + the backend reply poller in (no n8n)
 
 Everything here is configuration; no code changes. Credentials are the operator's task
 and live only in `backend/.env` (gitignored — never commit them).
 
-## 1. Outbound — real SMTP send (Stage 03)
+> **Migration note.** n8n is gone: it was the transport on both directions (the
+> Gmail-draft webhook outbound, the Gmail trigger inbound) and failed repeatedly —
+> `ConnectionRefused` with n8n down, OAuth tokens expiring weekly in Testing mode, the
+> trigger silently not firing — while requiring a second always-on process. Delete the
+> two n8n workflows and remove `N8N_DRAFTS_WEBHOOK` from `backend/.env`; the backend now
+> talks to the Gmail API directly on both directions.
 
-Real send is gated three ways (`pipeline/stage_03_dispatch/mailer.py`): it happens only
-when **all** hold — `DEMO_MODE=false`, the `/dispatch` request has `dry_run=false`, and
-SMTP is configured (`SMTP_HOST` + a from-address). Anything else degrades to the mock
-outbox, so a misconfigured run records instead of sending.
+## 1. Google OAuth — the one-time setup (both directions)
 
-Set in `backend/.env` (see `.env.example`):
+The operator's existing Google Cloud project (Gmail API already enabled) is reused:
 
-```ini
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_STARTTLS=true
-SMTP_USER=<the watched inbox>@gmail.com
-SMTP_PASSWORD=<Gmail App Password>       # Google account -> Security -> 2-Step -> App passwords
-SMTP_FROM=<the watched inbox>@gmail.com  # defaults to SMTP_USER when unset
-```
+1. **Publish the OAuth consent screen to Production** (APIs & Services → OAuth consent
+   screen). This is the fix for the recurring 7-day pain: a *Testing* consent screen
+   expires its refresh tokens after 7 days; a *Production* one does not.
+2. Create (or reuse) an **OAuth client ID** of type **Desktop app** and put both values
+   in `backend/.env`:
 
-Notes:
+   ```ini
+   GOOGLE_CLIENT_ID=<...>.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=<...>
+   ```
 
-- **Gmail needs an App Password** (2-Step Verification enabled); the account password
-  will not work over SMTP.
-- **`SMTP_FROM` must be the watched inbox** — subcontractors reply to it, and the n8n
-  IMAP trigger below reads that same mailbox, closing the loop.
-- Recipients come from the address book (`contacts` table, `GET /contacts`), keyed by
-  firm + trade. A firm with no contact is marked `send_failed`, never silently dropped.
-- Every dispatched subject carries the correlation tag `[SiteSource Ref:
-  <tender>.<firm>.<trade>]`, and the mapping is recorded in the workspace registry —
-  this is what lets a reply resolve deterministically.
+3. Run the **one-time consent flow** on the operator's machine (it opens a browser
+   against the watched inbox's Google account):
 
-## 2. Inbound — the n8n workflow (as configured)
+   ```bash
+   cd backend
+   python -m pipeline.gmail_client
+   ```
 
-One linear workflow: **IMAP trigger → IF → HTTP Request.**
+   This writes the token file (`GMAIL_TOKEN_PATH`, default `backend/.gmail_token.json`,
+   gitignored). After this the backend refreshes the token automatically — no weekly
+   re-consent. Scopes requested: `gmail.compose` (create drafts) + `gmail.readonly`
+   (poll replies); the backend never sends mail by itself.
 
-**Email Trigger (IMAP)** on the watched inbox:
+Check it: `GET /integrations/gmail` reports `connected` / `not_configured` / `error`
+with the exact next step, and the dispatch gate + Level & compare show the same as a
+small pill — a broken credential is visible *before* a click, not after a failed action.
+Set `SITESOURCE_GMAIL_LOG=gmail_calls.jsonl` for a JSONL line per Gmail call.
 
-| Setting | Value |
-| --- | --- |
-| Format | Resolved |
-| Download Attachments | on |
-| Action | Mark as Read |
-| Force Reconnect | every ~10 minutes |
+## 2. Outbound — Gmail drafts (the human gate holds)
 
-**IF node** — continue only when the subject contains `SiteSource Ref:` (replies keep
-the dispatched subject via "Re: …"; anything else is not a tracked reply).
+"Prepare Gmail drafts" on the dispatch gate assembles each approved firm's relevant-only
+bundle (the SR section slice, PS/MM clause slices, clarifications) and creates **one
+Gmail DRAFT per firm** — subject carrying the correlation tag
+`[SiteSource Ref: <tender>.<firm>.<trade>]`, recipient from the address book
+(`contacts` table, `GET /contacts`). Nothing is auto-sent: the operator reviews and
+sends from Gmail.
 
-**HTTP Request node** — `POST {backend}/inbound-reply` as `multipart/form-data`:
+Failure semantics: a Gmail problem (missing credential, expired token, API error) never
+fails the dispatch — the response lists `failed: [{firm_id, reason}]` with the fix, the
+enquiries stay prepared in the outbox, and drafting can simply be run again. A firm with
+no contact email is reported the same way, never silently skipped.
 
-| Field | Type | Value |
-| --- | --- | --- |
-| `files` | binary | the attachment property `attachment_0` |
-| `ref` | text | the ref captured off the subject, e.g. an expression using the regex `SiteSource Ref:\s*([^\]]+)` |
+(Real SMTP send — `SMTP_*` in `.env.example` — remains available and unchanged for the
+send-directly path; the mock outbox stays the default. `SMTP_FROM` must be the watched
+inbox so replies land where the poller reads.)
 
-The backend resolves the ref against the dispatch registry (deterministic — the AI
-fallback only runs for a ref-less reply), parses the attachment (an xlsx — our own
+## 3. Inbound — the backend reply poller
+
+With `GMAIL_POLLING_ENABLED=true` (and `DEMO_MODE=false`) the backend polls the watched
+inbox every `GMAIL_POLL_SECONDS` (default 120) for replies matching
+`subject:"SiteSource Ref" has:attachment newer_than:7d`, extracts the ref from the
+subject, downloads the attachments, and feeds the same processing path as
+`/inbound-reply`: resolve the ref against the dispatch registry (deterministic — the AI
+fallback only runs for a ref-less reply), parse the attachment (an xlsx — our own
 returned SoR sheet — parses with no model call; a PDF/image goes through the vision
-parse), accumulates the reply onto its tender, re-levels, and regenerates the
-comparison xlsx. An unresolvable reply returns `unmatched — needs manual assignment`;
-nothing is guessed.
+parse), route each line to its true SoR section by item identity, accumulate the reply
+onto its tender, re-level, and regenerate the comparison xlsx.
 
-## 3. The one-round-trip smoke
+- **Idempotent**: processed Gmail message ids are persisted
+  (`processed_messages.json`, next to the dispatch registry), so re-reads never
+  double-process — and a backend that was **off for days catches up on the next poll**
+  (the replies sit in Gmail; nothing is lost).
+- **Unresolvable refs are surfaced**, never dropped: the message is recorded
+  `unmatched` and counted on `/integrations/gmail`.
+- The poller never crashes the app: a failure records `last_error` and retries next
+  tick. `/inbound-reply` remains available as a manual/testing entry point, and the
+  manual "Upload a priced return" path is untouched.
 
-1. Seed a contact for a test firm pointing at your own address, then `/dispatch` with
-   `send=true` (DEMO off, SMTP configured) — the RFQ arrives with the trade's documents
-   and the generated SoR sheet attached, ref in the subject.
+## 4. The one-round-trip smoke
+
+1. Seed a contact for a test firm pointing at your own address, then on the dispatch
+   gate **Prepare Gmail drafts** — the draft appears in Gmail with the trade's sliced
+   documents and the priced-return sheet attached, ref in the subject. Send it from
+   Gmail (the human gate).
 2. Reply to that email **keeping the subject**, attaching the SoR sheet with the Rate
    column filled (a priced reply — a blank sheet is a degenerate input and proves
    nothing).
-3. Within one IMAP poll n8n posts it to `/inbound-reply`; the response is `matched`
-   with the growing comparison, and `GET /leveling.xlsx` reflects the new reply.
+3. Within one poll (`GMAIL_POLL_SECONDS`) the backend picks it up; `GET
+   /integrations/gmail` shows `replies_processed` incremented and `GET /leveling.xlsx`
+   reflects the new reply.

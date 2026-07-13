@@ -16,6 +16,7 @@ import type {
   EstimateProject,
   FirmProfile,
   FirmsPage,
+  GmailStatus,
   Health,
   IngestJobState,
   IngestUpload,
@@ -130,6 +131,8 @@ export interface DispatchRequest {
 export const api = {
   base: BASE,
   health: () => get<Health>("/health"),
+  // Gmail integration health (credential/token/poller) — shown on the gate before any action.
+  gmailStatus: () => get<GmailStatus>("/integrations/gmail"),
   coverage: () => get<Coverage>("/coverage"),
 
   // The browseable firm database (Layer 3) — real-provenance register firms only.

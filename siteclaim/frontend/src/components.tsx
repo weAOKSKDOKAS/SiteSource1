@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { api } from "./api";
 import { tradeLabel } from "./format";
 import { shownEmail } from "./theme";
-import type { Evidence, FirmProfile, RiskFlag } from "./types";
+import type { Evidence, FirmProfile, GmailStatus, RiskFlag } from "./types";
 import { Button, Collapse, Docket, MonoLabel, SeverityTag, cx } from "./ui";
 
 export const STEPS = ["Ingest", "Route", "Shortlist", "Dispatch", "Level & compare", "Award"] as const;
@@ -333,4 +335,29 @@ export function Pill({ children, tone = "neutral" }: { children: ReactNode; tone
     warn: "bg-warn-bg text-warn",
   };
   return <span className={cx("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", tones[tone])}>{children}</span>;
+}
+
+// Gmail integration health — visible BEFORE the operator clicks (the dispatch gate and Level &
+// compare), so a broken credential shows as a pill, not as a failed action later. Self-fetching;
+// renders nothing in DEMO (the integration is off by design there). The hover title carries the
+// actionable detail from the backend.
+export function GmailStatusPill({ demoMode }: { demoMode: boolean }) {
+  const [status, setStatus] = useState<GmailStatus | null>(null);
+  useEffect(() => {
+    if (demoMode) return;
+    let alive = true;
+    api.gmailStatus().then((s) => { if (alive) setStatus(s); }).catch(() => { /* backend down — the page shows its own error */ });
+    return () => { alive = false; };
+  }, [demoMode]);
+  if (demoMode || !status || status.status === "demo") return null;
+  const tone = status.status === "connected" ? "ok" : status.status === "not_configured" ? "warn" : "bad";
+  const label =
+    status.status === "connected" ? "Gmail: connected"
+    : status.status === "not_configured" ? "Gmail: not configured"
+    : "Gmail: error";
+  return (
+    <span title={status.detail || status.last_error || undefined}>
+      <Pill tone={tone}>{label}</Pill>
+    </span>
+  );
 }

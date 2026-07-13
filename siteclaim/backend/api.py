@@ -175,6 +175,54 @@ def health() -> dict[str, object]:
     return {"status": "ok", "demo_mode": demo_mode()}
 
 
+class GmailStatus(BaseModel):
+    """The Gmail integration's health, so a broken credential is visible BEFORE the operator
+    clicks (on the dispatch gate and Level & compare), not after a failed action."""
+
+    status: str                 # "connected" | "not_configured" | "error" | "demo"
+    detail: str = ""            # the actionable next step when not connected
+    credentials_configured: bool = False
+    token_state: str = ""       # valid | refreshable | expired | unreadable | missing | no_libs
+    polling_enabled: bool = False
+    poll_seconds: int = 0
+    last_poll_at: Optional[str] = None
+    last_error: str = ""
+    drafts_created: int = 0     # this run
+    replies_processed: int = 0  # this run (poller)
+    replies_unmatched: int = 0  # this run (poller) — surfaced, needing manual assignment
+
+
+@app.get("/integrations/gmail", response_model=GmailStatus)
+def get_gmail_status() -> GmailStatus:
+    """The Gmail integration status: credential present, token state (checked WITHOUT any network
+    call — a status read never triggers a refresh), poller state, and this run's counters."""
+    from pipeline import gmail_client
+
+    if demo_mode():
+        return GmailStatus(status="demo", detail="DEMO mode — Gmail integration is off (fully offline).")
+    configured = gmail_client.credentials_configured()
+    tok_state, tok_detail = gmail_client.token_state()
+    state = reply_poller.poller_state()
+    connected = tok_state in ("valid", "refreshable")
+    if connected:
+        status, detail = "connected", ""
+    elif not configured and tok_state == "missing":
+        status, detail = "not_configured", (
+            "Gmail is not set up — add GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET to backend/.env and "
+            "run `python -m pipeline.gmail_client` once (see docs/EMAIL_SETUP.md)."
+        )
+    else:
+        status, detail = "error", tok_detail
+    return GmailStatus(
+        status=status, detail=detail, credentials_configured=configured, token_state=tok_state,
+        polling_enabled=reply_poller.polling_enabled(), poll_seconds=reply_poller.poll_seconds(),
+        last_poll_at=state.get("last_poll_at"), last_error=state.get("last_error", ""),
+        drafts_created=gmail_client.drafts_created(),
+        replies_processed=state.get("processed_total", 0),
+        replies_unmatched=state.get("unmatched_total", 0),
+    )
+
+
 @app.get("/coverage")
 def coverage() -> dict:
     """Database-coverage figures (read live from the DB) for the screening line:

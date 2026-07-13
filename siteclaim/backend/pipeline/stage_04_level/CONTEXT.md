@@ -32,15 +32,16 @@ The offline tests drive the ref/registry/accumulate logic and the fallback via a
 The full loop over a real inbox is verified by hand:
 
 ```
-# manual: live reply-loop smoke (real key + SMTP + IMAP/n8n, DEMO_MODE off)
-#   1. Dispatch one RFQ to a test address (POST /dispatch send=true with SMTP configured).
-#      Confirm the subject carries [SiteSource Ref: <tender>.<firm>.<trade>].
+# manual: live reply-loop smoke (real key + Gmail OAuth, GMAIL_POLLING_ENABLED, DEMO_MODE off)
+#   1. Dispatch one RFQ to a test address (Gmail draft via /dispatch/drafts, sent from
+#      Gmail; or POST /dispatch send=true with SMTP configured). Confirm the subject
+#      carries [SiteSource Ref: <tender>.<firm>.<trade>].
 #   2. Reply to that email with a sample priced Schedule of Rates attached, leaving the
 #      subject (and its ref) intact.
-#   3. The n8n IMAP/Gmail trigger reads the ref from the subject and POSTs the attachment
-#      + ref to /inbound-reply.
+#   3. The backend reply poller (pipeline/reply_poller.py) reads the ref off the subject,
+#      downloads the attachment and runs the shared /inbound-reply processing path.
 #   4. Confirm the reply lands in that tender's comparison (reply_count grows; the firm
 #      appears in the returned comparison and the regenerated xlsx).
 # This manual run is what proves the live loop; the offline tests do NOT exercise the
-# real inbox -> n8n -> parse path. Keep the two claims separate.
+# real inbox -> poller -> parse path. Keep the two claims separate.
 ```

@@ -153,3 +153,43 @@ def test_token_path_and_credentials_configured_read_the_env(monkeypatch, tmp_pat
     assert credentials_configured() is True
     monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "tok.json"))
     assert token_path() == tmp_path / "tok.json"
+
+
+# -- the status surface (/integrations/gmail) ---------------------------------------------------
+def test_token_state_reports_missing_with_the_next_step(monkeypatch, tmp_path):
+    from pipeline.gmail_client import token_state
+
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "absent.json"))
+    state, detail = token_state()
+    assert state == "missing" and "python -m pipeline.gmail_client" in detail
+
+
+def test_a_successful_draft_bumps_the_drafts_created_counter():
+    from pipeline import gmail_client
+
+    before = gmail_client.drafts_created()
+    create_draft("a@b.c", "s", "b", [], service=StubService())
+    assert gmail_client.drafts_created() == before + 1
+
+
+def test_gmail_status_endpoint_reports_demo_offline():
+    from fastapi.testclient import TestClient
+    import api
+
+    body = TestClient(api.app).get("/integrations/gmail").json()
+    assert body["status"] == "demo"                              # DEMO: integration off, said plainly
+
+
+def test_gmail_status_endpoint_reports_not_configured_with_the_fix(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    import api
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "absent.json"))
+    body = TestClient(api.app).get("/integrations/gmail").json()
+    assert body["status"] == "not_configured"
+    assert "GOOGLE_CLIENT_ID" in body["detail"]                  # the actionable next step
+    assert body["token_state"] == "missing" and body["credentials_configured"] is False
+    assert body["polling_enabled"] is False                      # off by default
