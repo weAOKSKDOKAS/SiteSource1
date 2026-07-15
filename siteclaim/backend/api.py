@@ -245,6 +245,33 @@ def contacts() -> list[Contact]:
         conn.close()
 
 
+class ContactUpsert(BaseModel):
+    firm_id: str
+    trade: str
+    email: str
+    contact_name: str = ""
+
+
+@app.post("/contacts", response_model=Contact)
+def upsert_contact(req: ContactUpsert) -> Contact:
+    """Set or override where a firm's RFQ for a trade is sent — an operator address that wins over
+    the register ``enquiry_email``. Makes the 'no contact email' advice actionable when the register
+    address is wrong or missing. Human-gated, deterministic. Refused in DEMO_MODE so the committed
+    demo DB is never mutated."""
+    if demo_mode():
+        raise HTTPException(status_code=409, detail="Setting contacts is disabled in DEMO_MODE.")
+    email = req.email.strip()
+    if not email:
+        raise HTTPException(status_code=422, detail="email is required")
+    conn = store.get_connection()
+    try:
+        return store.upsert_contact(conn, req.firm_id.strip(), req.trade.strip(), email, req.contact_name.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
 _FIRMS_PAGE_SIZES = {10, 25, 50, 100}
 
 
@@ -970,13 +997,23 @@ class DraftFailure(BaseModel):
     reason: str
 
 
+class DraftRecipient(BaseModel):
+    """The resolved 'To:' address for one firm (address-book override or the register
+    enquiry_email), so the gate can SHOW each recipient before/at drafting. Empty when neither
+    source has an address — that firm is reported in ``failed``."""
+
+    firm_id: str
+    to: str = ""
+
+
 class DispatchDraftsResponse(BaseModel):
     """The Gmail-draft hand-off result: which firms now have a draft in Gmail, which failed and
-    why, and — always — that the composed enquiries are safe in the outbox (a Gmail failure
-    never loses the assembled work; drafting can simply be run again)."""
+    why, the resolved recipient per firm, and — always — that the composed enquiries are safe in
+    the outbox (a Gmail failure never loses the assembled work; drafting can simply be run again)."""
 
     drafted: list[str] = Field(default_factory=list)   # firm ids with a Gmail draft created
     failed: list[DraftFailure] = Field(default_factory=list)
+    recipients: list[DraftRecipient] = Field(default_factory=list)  # resolved To per firm
     outbox_written: bool = True
     message: str = ""  # top-level actionable notice (Gmail unconfigured / DEMO), "" when all good
     bundles: list[DispatchBundle] = Field(default_factory=list)
@@ -1017,8 +1054,9 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
                 plan = apply_attachment_overrides(plan, removed=ov.removed, whole=ov.whole)
             attachments = assemble_firm_attachments(plan, ws, req.project_name, b.trade) if plan else []
             ref_m = _re.search(r"\[SiteSource Ref:\s*([^\]]+)\]", b.email_subject)
-            contact = store.contact_for(conn, b.firm_id, base_trade(b.trade))
-            to = (contact.get("email", "") if isinstance(contact, dict) else getattr(contact, "email", "")) or ""
+            # Recipient chain: address-book override for (firm, trade), else the firm's registered
+            # enquiry_email, else empty (reported in `failed`, never a silent empty To).
+            to = store.recipient_email(conn, b.firm_id, base_trade(b.trade)) or ""
             drafts.append({
                 "firm_id": b.firm_id, "to": to, "subject": b.email_subject, "body": b.email_body,
                 "ref": ref_m.group(1).strip() if ref_m else "", "attachments": attachments,
@@ -1047,8 +1085,12 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
         b.model_copy(update={"status": DispatchStatus.DRAFTED_GMAIL}) if b.firm_id in drafted_set else b
         for b in dispatch.bundles
     ]
+    # The resolved recipient per firm (register enquiry_email or an operator override), so the gate
+    # shows each "To:" — computed from the assembled drafts regardless of the Gmail outcome.
+    recipients = [DraftRecipient(firm_id=d["firm_id"], to=d["to"]) for d in drafts]
     return DispatchDraftsResponse(
-        drafted=drafted_ids, failed=failures, outbox_written=True, message=message, bundles=bundles,
+        drafted=drafted_ids, failed=failures, recipients=recipients,
+        outbox_written=True, message=message, bundles=bundles,
     )
 
 

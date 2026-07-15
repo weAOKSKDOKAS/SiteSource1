@@ -253,6 +253,42 @@ def contact_for(conn: sqlite3.Connection, firm_id: str, trade: str) -> Optional[
     return _contact_from_row(row) if row is not None else None
 
 
+def firm_enquiry_email(conn: sqlite3.Connection, firm_id: str) -> Optional[str]:
+    """The firm's registered enquiry e-mail from the ``firms`` table (the CIC-register address,
+    populated for most register firms), or None. The recipient fallback when the operator set no
+    per-firm/per-trade address-book override."""
+    row = conn.execute("SELECT enquiry_email FROM firms WHERE firm_id = ?", (firm_id,)).fetchone()
+    email = (row["enquiry_email"] if row is not None else None) or ""
+    return email.strip() or None
+
+
+def recipient_email(conn: sqlite3.Connection, firm_id: str, trade: str) -> Optional[str]:
+    """Where to send this firm's RFQ, most-specific first: an operator-set address-book override for
+    (firm, trade), else the firm's registered ``enquiry_email``, else None (a truly-unknown
+    recipient — the caller reports it, never a silent empty To). Deterministic; no model."""
+    contact = contact_for(conn, firm_id, trade)
+    if contact is not None and (contact.email or "").strip():
+        return contact.email.strip()
+    return firm_enquiry_email(conn, firm_id)
+
+
+def upsert_contact(
+    conn: sqlite3.Connection, firm_id: str, trade: str, email: str, contact_name: str = "",
+) -> Contact:
+    """Set or override the address-book entry for ``(firm_id, trade)`` (an operator override that
+    wins over the register ``enquiry_email``). Human-gated, deterministic. Requires the contacts
+    table (present in every seeded DB)."""
+    if not _has_contacts_table(conn):
+        raise ValueError("this database has no contacts table")
+    conn.execute(
+        "INSERT INTO contacts (firm_id, trade, contact_name, email) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(firm_id, trade) DO UPDATE SET email = excluded.email, contact_name = excluded.contact_name",
+        (firm_id, trade, contact_name, email),
+    )
+    conn.commit()
+    return contact_for(conn, firm_id, trade)
+
+
 def all_contacts(conn: sqlite3.Connection) -> list[Contact]:
     """Every address-book entry (empty list if the table predates Phase A)."""
     if not _has_contacts_table(conn):

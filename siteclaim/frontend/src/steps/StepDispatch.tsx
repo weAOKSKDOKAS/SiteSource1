@@ -564,10 +564,12 @@ function DispatchReviewModal({
               {draftResult.bundles.map((b) => {
                 const failure = draftResult.failed.find((f) => f.firm_id === b.firm_id);
                 const ok = draftResult.drafted.includes(b.firm_id);
+                const to = draftResult.recipients.find((r) => r.firm_id === b.firm_id)?.to;
                 return (
                   <li key={`${b.trade}-${b.firm_id}`} className="flex flex-wrap items-center gap-2 py-1">
                     <span className="text-ink">{b.firm_name}</span>
                     <Pill tone="brand">{tradeLabel(b.trade)}</Pill>
+                    {to && <span className="tabular text-ink-faint">→ {to}</span>}
                     {ok && <Pill tone="ok">Draft created</Pill>}
                     {failure && <Pill tone="warn">not drafted</Pill>}
                     {failure && <span className="text-warn">{failure.reason}</span>}

@@ -158,15 +158,22 @@ def send_bundles(
     records: list[dict] = []
     try:
         for bundle in dispatch_set.bundles:
+            # Recipient chain: an address-book override for (firm, trade), else the firm's
+            # registered enquiry_email, else nothing — a truly-unknown recipient fails (never a
+            # silent empty To). Prefer the full Contact for its name; fall back to the register
+            # address alone.
             contact = store.contact_for(conn, bundle.firm_id, bundle.trade)
-            if contact is None:
+            to = (contact.email if contact and (contact.email or "").strip()
+                  else store.firm_enquiry_email(conn, bundle.firm_id))
+            if not to:
                 sent_bundles.append(bundle.model_copy(update={"status": DispatchStatus.SEND_FAILED}))
                 records.append({
                     "firm_id": bundle.firm_id, "firm_name": bundle.firm_name, "trade": bundle.trade,
-                    "status": DispatchStatus.SEND_FAILED.value, "reason": "no address-book contact",
+                    "status": DispatchStatus.SEND_FAILED.value, "reason": "no contact email (address book or register)",
                 })
                 continue
-            message = build_message(bundle, contact, config)
+            recipient = contact or Contact(firm_id=bundle.firm_id, trade=bundle.trade, email=to)
+            message = build_message(bundle, recipient, config)
             attached = [a.filename for a in bundle.attachments if a.source_path and Path(a.source_path).is_file()]
             transport(config, message)
             sent_bundles.append(bundle.model_copy(update={"status": DispatchStatus.SENT}))

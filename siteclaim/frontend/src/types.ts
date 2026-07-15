@@ -39,9 +39,16 @@ export interface DraftFailure {
   firm_id: string;
   reason: string;
 }
+// The resolved "To:" per firm (address-book override or the register enquiry_email) — so the gate
+// can show each recipient. Empty when neither source has an address (that firm is in `failed`).
+export interface DraftRecipient {
+  firm_id: string;
+  to: string;
+}
 export interface DispatchDraftsResponse {
   drafted: string[]; // firm ids that now have a Gmail draft
   failed: DraftFailure[];
+  recipients: DraftRecipient[];
   outbox_written: boolean;
   message: string; // top-level actionable notice (Gmail unconfigured / DEMO); "" when all good
   bundles: DispatchBundle[];

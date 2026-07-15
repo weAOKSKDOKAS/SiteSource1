@@ -97,7 +97,7 @@ def test_live_send_marks_firm_without_a_contact_failed(tmp_path, conn, monkeypat
         conn=conn, config=_CONFIG, transport=refuse, outbox_path=out,
     )
     assert sent.bundles[0].status is DispatchStatus.SEND_FAILED
-    assert read_outbox(out)[-1]["reason"] == "no address-book contact"
+    assert read_outbox(out)[-1]["reason"] == "no contact email (address book or register)"
 
 
 def test_build_message_carries_body_and_only_existing_files(tmp_path, conn):
