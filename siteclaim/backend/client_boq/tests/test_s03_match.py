@@ -50,8 +50,11 @@ def test_rule_flags_are_the_expected_criteria() -> None:
     result = _run()
     flagged = {d.criterion_id for d in result.departures if d.status == STATUS_RULE_FLAGGED}
     assert flagged == {"TP-04", "PS-04", "SQD-05", "LR-05", "PS-01", "PS-05"}
-    # A non-breaching numeric match aligns (no line) and is recorded, not dropped, not unresolved.
-    assert set(result.aligned_criteria) == {"TP-03", "LR-01"}
+    # A non-breaching numeric match aligns (no line) and is recorded richly, not dropped, not unresolved.
+    assert {a.criterion_id for a in result.aligned} == {"TP-03", "LR-01"}
+    # The aligned section carries the value + why (decision 2A), not just an id.
+    lr01 = next(a for a in result.aligned if a.criterion_id == "LR-01")
+    assert lr01.extracted_value and lr01.why
 
 
 def test_no_verdict_is_written_and_nothing_dropped() -> None:
@@ -65,5 +68,5 @@ def test_no_verdict_is_written_and_nothing_dropped() -> None:
     lib = load_criteria()
     unresolved = {d.criterion_id for d in result.departures if d.status == STATUS_UNRESOLVED}
     resolved = {d.criterion_id for d in result.departures if d.criterion_id and d.status != STATUS_UNRESOLVED}
-    accounted = unresolved | resolved | set(result.aligned_criteria)
+    accounted = unresolved | resolved | {a.criterion_id for a in result.aligned}
     assert {c.id for c in lib.criteria} <= accounted

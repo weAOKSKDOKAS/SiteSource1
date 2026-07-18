@@ -184,15 +184,22 @@ class DepartureProposalSet(BaseModel):
     departures: list[DepartureProposal] = Field(default_factory=list)
 
 
+# Where a register line came from — so s04/s05/s06 findings live in the ONE register, tagged.
+SOURCE_CRITERIA = "criteria"           # s03 criteria match
+SOURCE_SCOPE_ALIGNMENT = "scope_alignment"  # s04
+SOURCE_PROGRAM = "program"             # s05
+SOURCE_CASHFLOW = "cashflow"           # s06 (verdict-needing findings only; the curve is a section)
+
+
 class DepartureItem(BaseModel):
     """One assembled register line (the workflow's line-item record). ``status`` is set by rule code
-    (rule_flagged), s03 (candidate/uncovered/unresolved), s08 (citation_failed), or the human approve
-    endpoint (confirmed/dismissed) — never by the AI. Negotiation columns (``client_response`` /
-    ``contractor_response``) start empty; ``register_status`` is the review-doc Open/Closed column."""
+    (rule_flagged), s03/s04/s05 (candidate/uncovered/unresolved), s08 (citation_failed), or the human
+    approve endpoint (confirmed/dismissed) — never by the AI. ``source`` tags which check produced the
+    line. Negotiation columns start empty; ``register_status`` is the review-doc Open/Closed column."""
 
     item: int = 0
-    clause: str = ""                  # cited clause_id ("" for an unresolved criterion)
-    criterion_id: str = ""            # matched criterion ("" for an uncovered clause)
+    clause: str = ""                  # cited clause_id ("" for an unresolved criterion / an input gap)
+    criterion_id: str = ""            # matched criterion ("" for an uncovered clause / s04-s06 finding)
     category: str = ""
     clause_area: str = ""
     extracted_value: str = ""
@@ -201,29 +208,62 @@ class DepartureItem(BaseModel):
     rationale: str = ""
     proposed_position: str = ""
     status: str = STATUS_CANDIDATE
-    rule_ref: str = ""                # the threshold rule id that fired (rule_flagged only)
+    source: str = SOURCE_CRITERIA     # criteria | scope_alignment | program | cashflow
+    kind: str = ""                    # finding sub-type for s04/s05/s06 (e.g. "precedence", "input_missing")
+    rule_ref: str = ""                # the rule id that fired (rule_flagged only)
     citation_note: str = ""           # why a citation failed (s08)
     client_response: str = ""         # negotiation (human)
     contractor_response: str = ""     # negotiation (human)
     register_status: str = "open"     # Open | Closed (the review-doc status column)
 
 
+class AlignedItem(BaseModel):
+    """A numeric criterion the rule resolved as COMPLIANT — no departure line, but surfaced in the
+    register's 'aligned' section with the value and why it passes (locked decision 2A), so a
+    resolved-and-fine criterion is never mistaken for unresolved and never silently dropped."""
+
+    criterion_id: str = ""
+    clause_area: str = ""
+    clause: str = ""
+    extracted_value: str = ""
+    why: str = ""
+
+
 class DepartureSet(BaseModel):
     """REVIEW s03 final output. The wrapper field ``departures`` matches the locked decision; this is
     the *computed* result (never loaded from the AI fixture — that is :class:`DepartureProposalSet`),
-    so it also carries ``aligned_criteria``: numeric criteria the rule resolved as compliant (no
-    departure line), recorded so a resolved-and-fine criterion is never mistaken for unresolved."""
+    so it also carries ``aligned``: numeric criteria the rule resolved as compliant."""
 
     departures: list[DepartureItem] = Field(default_factory=list)
-    aligned_criteria: list[str] = Field(default_factory=list)
+    aligned: list[AlignedItem] = Field(default_factory=list)
+
+
+class CashflowPoint(BaseModel):
+    period: str = ""                  # "M1", "M2", …
+    inflow: float = 0.0               # receipts that month
+    outflow: float = 0.0             # cost that month
+    net: float = 0.0
+    cumulative: float = 0.0
+
+
+class CashflowSection(BaseModel):
+    """REVIEW s06 output attached to the register as its own section (locked decision 3A) — a curve
+    plus findings, not line items. Verdict-needing commercial adjustments become tagged line items
+    (``source == cashflow``) instead."""
+
+    points: list[CashflowPoint] = Field(default_factory=list)
+    negative_periods: list[str] = Field(default_factory=list)
+    working_capital_peak: float = 0.0   # most-negative cumulative (the funding requirement)
+    findings: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
 
 
 class DepartureRegister(BaseModel):
-    """REVIEW s07 assembled register — the workflow's decision surface, structured per the review doc
-    (header fields + line items). ``approved`` is the review→estimate gate; the DB table is the
-    source of truth for the gate, this object is persisted to ``artifacts/client_boq/register.json``
-    as a convenience copy. ``aligned_criteria`` records numeric criteria the rule resolved as
-    compliant (no departure line) so nothing is silently dropped."""
+    """REVIEW s07 assembled register — the ONE decision surface (locked decision 3A), structured per
+    the review doc (header fields + line items). All checks fold in here: s03 criteria, s04 scope,
+    s05 program as tagged line ``items``; s06 cash flow as the ``cashflow`` section; compliant numeric
+    criteria as the ``aligned`` section. ``approved`` is the review→estimate gate (the DB table is the
+    source of truth); this object is also persisted to ``artifacts/client_boq/register.json``."""
 
     set_id: str = ""
     # Header fields (review doc):
@@ -235,16 +275,20 @@ class DepartureRegister(BaseModel):
     submission_date: str = ""
     # Body:
     items: list[DepartureItem] = Field(default_factory=list)
-    aligned_criteria: list[str] = Field(default_factory=list)   # criterion ids resolved as compliant
-    slice2_pending: list[str] = Field(default_factory=list)     # e.g. ["scope_alignment","program","cashflow"]
+    aligned: list[AlignedItem] = Field(default_factory=list)
+    cashflow: Optional[CashflowSection] = None
     approved: bool = False
 
 
-# --- slice-2 handoffs (kept from scaffold; stages s04–s06 remain stubs) -----
+# --- slice-2 handoffs -------------------------------------------------------
 class ScopeAlignmentFinding(BaseModel):
-    kind: str = ""
+    """s04 AI-proposed scope finding. ``contract_ref``/``cited_text`` let it flow through s08 citation
+    verification like any line; ``priced`` records whether the AI thinks the item was priced."""
+
+    kind: str = ""                    # gap | inconsistency | silent_assumption | responsibility_creep
     description: str = ""
     contract_ref: str = ""
+    cited_text: str = ""
     priced: Optional[bool] = None
 
 
@@ -253,26 +297,23 @@ class ScopeAlignmentSet(BaseModel):
 
 
 class ProgramFinding(BaseModel):
-    kind: str = ""
+    """s05 AI-proposed program risk. Numeric fields (when the AI extracts them) feed the DETERMINISTIC
+    recompute — the AI never computes the exposure itself."""
+
+    kind: str = ""                    # duration | sequencing | access | mobilisation | milestone | ld_exposure
     description: str = ""
-    recomputed_value: str = ""
+    contract_ref: str = ""
+    cited_text: str = ""
+    ld_rate_per_day: Optional[float] = None
+    program_days: Optional[float] = None
+    ld_cap_value: Optional[float] = None
+    scope_mobilisations: Optional[int] = None
+    program_mobilisations: Optional[int] = None
+    recomputed_value: str = ""        # set by the deterministic recompute, never by the AI
 
 
 class ProgramFindingSet(BaseModel):
     findings: list[ProgramFinding] = Field(default_factory=list)
-
-
-class CashflowPoint(BaseModel):
-    period: str = ""
-    inflow: float = 0.0
-    outflow: float = 0.0
-    net: float = 0.0
-    cumulative: float = 0.0
-
-
-class CashflowProfile(BaseModel):
-    points: list[CashflowPoint] = Field(default_factory=list)
-    negative_periods: list[str] = Field(default_factory=list)
 
 
 class CitationCheck(BaseModel):

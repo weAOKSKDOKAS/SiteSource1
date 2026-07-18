@@ -163,3 +163,61 @@ def known_threshold_ids() -> set[str]:
     """The 8 threshold-criterion ids this module implements — asserted against the criteria file so a
     change to the doc's threshold table is caught rather than silently diverging."""
     return set(THRESHOLD_PREDICATES)
+
+
+# ===========================================================================
+# s04 — document order-of-precedence (deterministic; criterion SQD-01)
+# ===========================================================================
+# Expected priority, highest first: Contract → Scope → Drawings → Specifications (SQD-01).
+PRECEDENCE_EXPECTED = ["contract", "scope", "drawings", "specification"]
+
+# Canonical doc type → phrases that name it (checked longest-first so "scope of works" wins).
+_PRECEDENCE_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("contract", ("subcontract agreement", "conditions of contract", "this agreement", "the agreement", "the contract")),
+    ("scope", ("scope of works", "scope of work", "the scope")),
+    ("drawings", ("drawings", "drawing")),
+    ("specification", ("particular specification", "specifications", "specification", "the spec")),
+]
+
+
+def extract_precedence_order(text: str) -> list[str]:
+    """The canonical document types named in a precedence clause, in the order they appear. Pure text
+    scan — deterministic. Returns [] when no document types are found."""
+    low = (text or "").lower()
+    hits: list[tuple[int, str]] = []
+    for canon, phrases in _PRECEDENCE_KEYWORDS:
+        idxs = [low.find(p) for p in phrases if p in low]
+        if idxs:
+            hits.append((min(idxs), canon))
+    hits.sort()
+    order: list[str] = []
+    for _idx, canon in hits:
+        if canon not in order:
+            order.append(canon)
+    return order
+
+
+def precedence_violation(stated_order: list[str]) -> bool:
+    """True when the stated precedence order inverts the expected hierarchy (a higher-priority
+    document listed below a lower-priority one). Needs at least two recognised documents to judge."""
+    ranks = [PRECEDENCE_EXPECTED.index(t) for t in stated_order if t in PRECEDENCE_EXPECTED]
+    return any(ranks[i] > ranks[i + 1] for i in range(len(ranks) - 1))
+
+
+# ===========================================================================
+# s05 — program numerics (deterministic recompute; the AI never computes these)
+# ===========================================================================
+def recompute_ld_exposure(rate_per_day: Optional[float], days: Optional[float]) -> float:
+    """Liquidated-damages exposure = rate/day × delay days. Deterministic math."""
+    return round((rate_per_day or 0.0) * (days or 0.0), 2)
+
+
+def ld_exceeds_cap(exposure: float, cap_value: Optional[float]) -> bool:
+    """True when the recomputed LD exposure exceeds a stated cap. An absent cap is judged elsewhere
+    (an uncapped LD is a TP-04 breach), so 'no cap' is not treated as 'exceeds' here."""
+    return cap_value is not None and exposure > cap_value
+
+
+def mobilisation_mismatch(scope_implied: Optional[int], program_stated: Optional[int]) -> bool:
+    """True when the mobilisation count the scope implies differs from what the program allows."""
+    return scope_implied is not None and program_stated is not None and scope_implied != program_stated

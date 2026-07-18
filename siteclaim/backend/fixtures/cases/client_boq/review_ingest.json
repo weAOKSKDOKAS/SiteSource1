@@ -5,6 +5,14 @@
   "documents": ["subcontract_agreement.pdf", "scope_of_works.pdf", "particular_conditions.pdf"],
   "clauses": [
     {
+      "clause_id": "2.1",
+      "ref": "Clause 2.1",
+      "heading": "Order of Precedence",
+      "text": "In the event of any conflict between the documents, they shall take precedence in the following order: the Specification, the Drawings, the Scope of Works, and this Agreement.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 2
+    },
+    {
       "clause_id": "3.2",
       "ref": "Clause 3.2",
       "heading": "Warranties",

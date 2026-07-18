@@ -25,6 +25,7 @@ from client_boq.models import (
     STATUS_RULE_FLAGGED,
     STATUS_UNCOVERED,
     STATUS_UNRESOLVED,
+    AlignedItem,
     ContextSummary,
     CriteriaLibrary,
     DepartureItem,
@@ -100,7 +101,7 @@ def match_criteria(
     flagged: list[DepartureItem] = []
     candidates: list[DepartureItem] = []
     uncovered: list[DepartureItem] = []
-    aligned: list[str] = []
+    aligned: list[AlignedItem] = []
     resolved: set[str] = set()
 
     for p in proposals.departures:
@@ -113,6 +114,7 @@ def match_criteria(
 
         resolved.add(p.criterion_id)
         item = _item_from_proposal(p, library)
+        crit = library.by_id(p.criterion_id)
         if rules.is_threshold_criterion(p.criterion_id):
             # Deterministic numeric decision — the rule flags, never the AI.
             if rules.evaluate_threshold(p.criterion_id, p.extracted_value):
@@ -120,17 +122,24 @@ def match_criteria(
                 item.rule_ref = p.criterion_id
                 flagged.append(item)
             else:
-                # Resolved and compliant — no departure line, but recorded so it is not "unresolved".
-                aligned.append(p.criterion_id)
+                # Resolved and compliant — no departure line, but surfaced in the aligned section.
+                aligned.append(AlignedItem(
+                    criterion_id=p.criterion_id,
+                    clause_area=crit.clause_area if crit else "",
+                    clause=p.clause_id,
+                    extracted_value=p.extracted_value,
+                    why=f"within the acceptable position: {crit.acceptable_position}" if crit else "compliant",
+                ))
         else:
             # Qualitative match the rule cannot judge — a candidate for the human.
             item.status = STATUS_CANDIDATE
             candidates.append(item)
 
+    aligned_ids = {a.criterion_id for a in aligned}
     # Any populated criterion no clause resolved — surfaced as unresolved (never silently dropped).
     unresolved: list[DepartureItem] = []
     for crit in library.criteria:
-        if crit.id in resolved or crit.id in aligned:
+        if crit.id in resolved or crit.id in aligned_ids:
             continue
         unresolved.append(DepartureItem(
             clause="", criterion_id=crit.id, category=crit.category, clause_area=crit.clause_area,
@@ -140,4 +149,4 @@ def match_criteria(
     ordered = [*flagged, *candidates, *uncovered, *unresolved]
     for i, item in enumerate(ordered, start=1):
         item.item = i
-    return DepartureSet(departures=ordered, aligned_criteria=sorted(set(aligned)))
+    return DepartureSet(departures=ordered, aligned=sorted(aligned, key=lambda a: a.criterion_id))

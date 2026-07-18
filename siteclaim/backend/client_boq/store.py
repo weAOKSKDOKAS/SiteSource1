@@ -14,21 +14,42 @@ lazily on first use via ``models.init_tables``.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+from pathlib import Path
 from typing import Optional
 
 from client_boq import models
 from client_boq.models import DepartureRegister, ParsedDocumentSet
 from db import store as db_store
+from pipeline.llm_client import demo_mode
 from pipeline.workspace import Workspace
 
 
 # ---------------------------------------------------------------------------
 # Connections
 # ---------------------------------------------------------------------------
+def _demo_db_path() -> Path:
+    """A gitignored scratch DB for DEMO runs — under the workspace out dir (``backend/fixtures/out/``,
+    already gitignored), so a DEMO review never writes the committed ``sitesource.db`` (decision 4A)."""
+    return Workspace().root.parent / "client_boq_demo.db"
+
+
 def get_conn() -> sqlite3.Connection:
-    """Open the shared DB and ensure the module's own tables exist (idempotent)."""
-    conn = db_store.get_connection()
+    """Open the DB the module's tables live in and ensure those tables exist (idempotent).
+
+    Path: an explicit ``SITESOURCE_DB`` always wins (live, tests). Otherwise, in DEMO mode the module
+    defaults to a gitignored scratch DB (decision 4A) so an offline demo leaves the committed
+    ``sitesource.db`` byte-identical; live with no override uses the shared default DB as before.
+    """
+    if not os.getenv("SITESOURCE_DB", "").strip() and demo_mode():
+        path = _demo_db_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.is_file():
+            sqlite3.connect(str(path)).close()  # create the file so get_connection accepts it
+        conn = db_store.get_connection(path)
+    else:
+        conn = db_store.get_connection()
     models.init_tables(conn)
     return conn
 

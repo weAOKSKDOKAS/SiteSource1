@@ -50,9 +50,19 @@ def test_review_run_produces_every_status_and_gates_estimate() -> None:
     for status in (STATUS_RULE_FLAGGED, STATUS_CANDIDATE, STATUS_UNCOVERED, STATUS_UNRESOLVED, STATUS_CITATION_FAILED):
         assert counts.get(status, 0) >= 1, f"missing status {status} in {counts}"
 
-    # Slice-2 stages are explicitly marked pending, not silently missing.
-    assert set(result["slice2_pending"]) == {"scope_alignment", "program", "cashflow"}
-    assert result["slice"] == "1"
+    # The full review ran (all three slice-2 checks folded in).
+    assert result["slice"] == "2"
+    regbody = result["register"]
+    # 3A — one register, every check tagged by source.
+    sources = {i["source"] for i in regbody["items"]}
+    assert {"criteria", "scope_alignment", "program", "cashflow"} <= sources, sources
+    # 1A — unresolved presented as one grouped section; the actionable line list excludes them.
+    assert regbody["unresolved"]["count"] >= 1
+    assert all(i["status"] != STATUS_UNRESOLVED for i in regbody["line_items"])
+    # 2A — the aligned section carries value + why, not just a count.
+    assert regbody["aligned"] and all(a["extracted_value"] and a["why"] for a in regbody["aligned"])
+    # 3A — the cash-flow section is present with at least one negative-cash month.
+    assert regbody["cashflow"] is not None and regbody["cashflow"]["negative_periods"]
 
     # The register is persisted and readable from the tables (source of truth).
     reg = client.get(f"/client-boq/review/register/{set_id}")

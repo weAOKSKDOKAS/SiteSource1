@@ -93,5 +93,8 @@ is fully independent (CSV rates only). See `siteclaim/docs/client_boq/how_it_fit
 
 ## Status
 
-**Scaffold only.** Every stage raises `NotImplementedError`; the loaders, the job store,
-the DB-table init, and the gate mechanics are real. No workflow logic yet.
+**REVIEW workflow implemented** (slices 1–2): s01→s02→s03→s04→s05→s06→s07→s08 run end to
+end and fold into one register (tagged line items + aligned section + cash-flow section),
+gated by the human approve endpoint. In DEMO the module writes a gitignored scratch DB, so
+an offline run never touches the committed `sitesource.db`. The **ESTIMATE** stages remain
+stubs (`NotImplementedError`) — a later slice.

@@ -1,14 +1,16 @@
-"""REVIEW stage 07 — assemble the departure register.
+"""REVIEW stage 07 — assemble the ONE departure register.
 
-Bucket (mapping doc task 9): **Deterministic** (template fill). Collects the s03 departures into one
-:class:`DepartureRegister` structured exactly per the review doc — header fields (Project, Contract
-Type, Package, Subcontract Reference, Subcontractor Name, Submission Date) plus the line items with
-their Open/Closed status column. No AI.
+Bucket (mapping doc task 9): **Deterministic** (template fill). Folds every check into a single
+register (locked decision 3A): s03 criteria departures, s04 scope-alignment lines, and s05 program
+lines all become tagged line ``items``; s06's cash-flow curve attaches as the ``cashflow`` section
+(with its own verdict-needing lines already tagged ``source == cashflow``); s03's compliant numeric
+criteria are the ``aligned`` section. No AI.
 
-This slice runs s01→s02→s03→s07→s08 only; ``scope_findings`` / ``program_findings`` / ``cashflow``
-(s04–s06) are slice 2. When they are absent, the register records them in ``slice2_pending`` so the
-gap is explicit rather than silently missing. Assembly does not approve — every verdict stays as s03
-left it; only the human approve endpoint moves a line to confirmed/dismissed.
+Line numbering puts the actionable lines first and the grouped ``unresolved`` criteria last (locked
+decision 1A is a presentation concern handled in the router payload; here we simply keep unresolved
+lines after the actionable ones so their item numbers are stable and high). Assembly does not
+approve — verdicts stay as the stages left them; only the human approve endpoint moves a line to
+confirmed/dismissed.
 """
 
 from __future__ import annotations
@@ -16,13 +18,13 @@ from __future__ import annotations
 from typing import Optional
 
 from client_boq.models import (
-    CashflowProfile,
+    STATUS_UNRESOLVED,
+    CashflowSection,
     ContextSummary,
+    DepartureItem,
     DepartureRegister,
     DepartureSet,
     ParsedDocumentSet,
-    ProgramFindingSet,
-    ScopeAlignmentSet,
 )
 
 
@@ -32,25 +34,32 @@ def assemble_register(
     summary: ContextSummary,
     departures: DepartureSet,
     *,
-    scope_findings: Optional[ScopeAlignmentSet] = None,
-    program_findings: Optional[ProgramFindingSet] = None,
-    cashflow: Optional[CashflowProfile] = None,
+    scope_items: Optional[list[DepartureItem]] = None,
+    program_items: Optional[list[DepartureItem]] = None,
+    cashflow: Optional[CashflowSection] = None,
+    cashflow_items: Optional[list[DepartureItem]] = None,
 ) -> DepartureRegister:
-    """Assemble the departure register from the review findings (verdicts left as s03 set them)."""
-    pending: list[str] = []
-    if scope_findings is None:
-        pending.append("scope_alignment")
-    if program_findings is None:
-        pending.append("program")
-    if cashflow is None:
-        pending.append("cashflow")
+    """Assemble the one register from all review findings (verdicts left as the stages set them)."""
+    criteria_actionable = [d for d in departures.departures if d.status != STATUS_UNRESOLVED]
+    unresolved = [d for d in departures.departures if d.status == STATUS_UNRESOLVED]
+
+    # Actionable lines first (criteria, then scope, program, cashflow), grouped-unresolved last.
+    ordered = [
+        *criteria_actionable,
+        *(scope_items or []),
+        *(program_items or []),
+        *(cashflow_items or []),
+        *unresolved,
+    ]
+    for i, item in enumerate(ordered, start=1):
+        item.item = i
 
     return DepartureRegister(
         set_id=set_id,
         project=parsed.name,
         package=parsed.name,
-        items=list(departures.departures),
-        aligned_criteria=list(departures.aligned_criteria),
-        slice2_pending=pending,
+        items=ordered,
+        aligned=list(departures.aligned),
+        cashflow=cashflow,
         approved=False,
     )

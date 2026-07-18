@@ -1,1 +1,11 @@
-{"findings": []}
+{
+  "findings": [
+    {
+      "kind": "responsibility_creep",
+      "description": "The life-of-building fitness-for-purpose warranty implies design responsibility beyond the priced supply-and-install scope, and should be qualified or excluded.",
+      "contract_ref": "3.2",
+      "cited_text": "fit for their intended purpose",
+      "priced": false
+    }
+  ]
+}

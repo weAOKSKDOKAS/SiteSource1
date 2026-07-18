@@ -20,13 +20,16 @@ from client_boq.review import (
     s01_ingest,
     s02_context_summary,
     s03_criteria_match,
+    s04_scope_align,
+    s05_program_check,
+    s06_cashflow,
     s07_register,
     s08_citation_verify,
 )
 from pipeline.workspace import Workspace, tender_slug
 
 DEFAULT_REVIEW_NAME = "Client document set"
-SLICE = "1"  # s01→s03→s07→s08; s04–s06 are slice 2
+SLICE = "2"  # s01→s02→s03→s04→s05→s06→s07→s08 (the full review)
 
 ProgressCB = Callable[[str], None]
 
@@ -70,11 +73,29 @@ def run_review(
         library = criteria_loader.load_criteria()
         departures = s03_criteria_match.match_criteria(parsed, summary, library)
 
-        # s07 — assemble the register (slice-2 stages absent → recorded as pending).
-        step("assembling")
-        register = s07_register.assemble_register(slug, parsed, summary, departures)
+        # s04 — scope alignment (AI propose + deterministic precedence + input gaps).
+        step("scope")
+        scope_items = s04_scope_align.check_scope_alignment(parsed, summary)
 
-        # s08 — deterministic citation guard (mutates the register's failed lines).
+        # s05 — program check (program-not-provided guard + AI propose + deterministic recompute).
+        step("program")
+        program_items = s05_program_check.check_program(parsed, summary)
+
+        # s06 — deterministic cash-flow profile (no AI) from the extracted terms.
+        step("cashflow")
+        cashflow_section, cashflow_items = s06_cashflow.check_cashflow(
+            parsed, summary, departures.departures,
+        )
+
+        # s07 — fold everything into the one register.
+        step("assembling")
+        register = s07_register.assemble_register(
+            slug, parsed, summary, departures,
+            scope_items=scope_items, program_items=program_items,
+            cashflow=cashflow_section, cashflow_items=cashflow_items,
+        )
+
+        # s08 — deterministic citation guard over ALL line items (mutates failed lines).
         step("verifying")
         s08_citation_verify.verify_citations(register, parsed)
 

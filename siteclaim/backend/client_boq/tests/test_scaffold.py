@@ -109,18 +109,13 @@ def test_rates_loader_parses_csv() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Slice-2 stages remain stubs — they raise NotImplementedError (no accidental logic).
-# (Slice-1 stages s01/s02/s03/s07/s08 are implemented and covered by their own tests.)
+# The ESTIMATE stages remain stubs — they raise NotImplementedError (no accidental logic).
+# (All REVIEW stages s01–s08 are implemented and covered by their own tests.)
 # ---------------------------------------------------------------------------
-def test_slice2_stages_are_stubs() -> None:
-    from client_boq.estimate import s01_scope_review
-    from client_boq.review import s04_scope_align, s05_program_check, s06_cashflow
+def test_estimate_stages_are_stubs() -> None:
+    from client_boq.estimate import s01_scope_review, s03_cost_buildup
 
     with pytest.raises(NotImplementedError):
-        s04_scope_align.check_scope_alignment(None, None)
-    with pytest.raises(NotImplementedError):
-        s05_program_check.check_program(None, None)
-    with pytest.raises(NotImplementedError):
-        s06_cashflow.build_cashflow(None, None)
-    with pytest.raises(NotImplementedError):
         s01_scope_review.review_scope(None)
+    with pytest.raises(NotImplementedError):
+        s03_cost_buildup.build_cost(None, {}, [])

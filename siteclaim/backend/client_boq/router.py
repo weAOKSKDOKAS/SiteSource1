@@ -20,7 +20,13 @@ from pydantic import BaseModel, Field
 from client_boq import jobs, store
 from client_boq.models import (
     HUMAN_VERDICTS,
+    STATUS_CANDIDATE,
     STATUS_CITATION_FAILED,
+    STATUS_CONFIRMED,
+    STATUS_DISMISSED,
+    STATUS_RULE_FLAGGED,
+    STATUS_UNCOVERED,
+    STATUS_UNRESOLVED,
     DepartureRegister,
     RawUpload,
 )
@@ -55,16 +61,45 @@ def _status_counts(register: DepartureRegister) -> dict[str, int]:
     return counts
 
 
+# Presentation order for the actionable line list (locked decision 1A: actionable first).
+_ACTIONABLE_ORDER = {
+    STATUS_RULE_FLAGGED: 0, STATUS_CITATION_FAILED: 1, STATUS_CANDIDATE: 2,
+    STATUS_UNCOVERED: 3, STATUS_CONFIRMED: 4, STATUS_DISMISSED: 5,
+}
+
+
 def _result_payload(register: DepartureRegister) -> dict:
-    """The review run's result envelope — the register plus a status breakdown and the slice marker."""
+    """The review run's result envelope. Presents the one register (locked decisions 1A/2A/3A):
+    actionable line items first, the unresolved criteria as one grouped section, the aligned section,
+    and the cash-flow section. ``items`` keeps the full canonical list (stable item numbers the approve
+    endpoint references)."""
+    items = register.items
+    actionable = sorted(
+        (i for i in items if i.status != STATUS_UNRESOLVED),
+        key=lambda i: (_ACTIONABLE_ORDER.get(i.status, 9), i.item),
+    )
+    unresolved = [i for i in items if i.status == STATUS_UNRESOLVED]
     return {
         "set_id": register.set_id,
         "slice": review_run.SLICE,
-        "slice2_pending": register.slice2_pending,
         "status_counts": _status_counts(register),
-        "aligned_criteria": register.aligned_criteria,
         "review_approved": register.approved,
-        "register": register.model_dump(),
+        "register": {
+            "set_id": register.set_id,
+            "project": register.project,
+            "package": register.package,
+            "line_items": [i.model_dump() for i in actionable],
+            "unresolved": {
+                "count": len(unresolved),
+                "criteria": [
+                    {"item": i.item, "criterion_id": i.criterion_id, "clause_area": i.clause_area}
+                    for i in unresolved
+                ],
+            },
+            "aligned": [a.model_dump() for a in register.aligned],
+            "cashflow": register.cashflow.model_dump() if register.cashflow else None,
+            "items": [i.model_dump() for i in items],
+        },
     }
 
 
