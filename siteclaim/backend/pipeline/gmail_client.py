@@ -76,6 +76,17 @@ def token_state() -> tuple[str, str]:
     path = token_path()
     if not path.is_file():
         return "missing", f"no token at {path} — run `python -m pipeline.gmail_client` once"
+    # File-shape checks first, before any library is needed: google-auth's from_authorized_user_file
+    # raises ValueError for a token missing refresh_token, so WITHOUT this pre-check that case
+    # reports `unreadable` and the `expired` branch below is unreachable. Parse the JSON here so a
+    # token with no refresh token is correctly `expired`, and genuine garbage is `unreadable` — and
+    # so both classify the same whether or not the Google libs are installed.
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return "unreadable", f"token unreadable — delete it and re-authorise ({exc})"
+    if not (isinstance(data, dict) and str(data.get("refresh_token") or "").strip()):
+        return "expired", "expired with no refresh token — publish the consent screen to Production and re-authorise"
     try:
         from google.oauth2.credentials import Credentials
     except ImportError:

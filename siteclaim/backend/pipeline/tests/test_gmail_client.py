@@ -3,6 +3,7 @@ Google builder-chain shape), no Google SDK import, no socket. The suite environm
 has no google-* packages installed, so these tests also prove the lazy-import invariant."""
 
 import base64
+import json
 from email import message_from_bytes
 
 import pytest
@@ -162,6 +163,47 @@ def test_token_state_reports_missing_with_the_next_step(monkeypatch, tmp_path):
     monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "absent.json"))
     state, detail = token_state()
     assert state == "missing" and "python -m pipeline.gmail_client" in detail
+
+
+def test_token_state_reads_a_missing_refresh_token_as_expired_not_unreadable(monkeypatch, tmp_path):
+    from pipeline.gmail_client import token_state
+
+    # google-auth's from_authorized_user_file raises ValueError for a token missing refresh_token,
+    # so before the fix this valid-JSON-but-no-refresh-token file reported `unreadable` and the
+    # `expired` branch was unreachable. The file-only pre-check now classifies it correctly — and
+    # does so without any Google library, so it holds with the packages uninstalled.
+    tok = tmp_path / "no_refresh.json"
+    tok.write_text(json.dumps({"token": "x", "client_id": "a", "client_secret": "b"}), encoding="utf-8")
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tok))
+    state, detail = token_state()
+    assert state == "expired" and "no refresh token" in detail
+
+
+def test_token_state_reports_unreadable_for_garbage_bytes(monkeypatch, tmp_path):
+    from pipeline.gmail_client import token_state
+
+    tok = tmp_path / "garbage.json"
+    tok.write_bytes(b"\x00\x01 not json {{{")
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tok))
+    state, _ = token_state()
+    assert state == "unreadable"
+
+
+def test_token_state_with_a_refresh_token_falls_through_to_the_existing_path(monkeypatch, tmp_path):
+    from pipeline.gmail_client import token_state
+
+    # A well-formed token (carrying a refresh_token) is passed through UNCHANGED to the existing
+    # library-dependent path — proving the pre-check intercepts only the broken-file cases. The
+    # suite deliberately runs with the Google packages uninstalled, so that path reports `no_libs`
+    # here, exactly as any existing token file did before this fix (never misread as expired).
+    tok = tmp_path / "good.json"
+    tok.write_text(
+        json.dumps({"token": "x", "refresh_token": "r", "client_id": "a", "client_secret": "b"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tok))
+    state, _ = token_state()
+    assert state == "no_libs"
 
 
 def test_a_successful_draft_bumps_the_drafts_created_counter():
