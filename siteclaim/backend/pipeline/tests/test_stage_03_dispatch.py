@@ -117,6 +117,8 @@ def test_dispatch_set_object_payload_still_parses():
 import re  # noqa: E402
 import threading  # noqa: E402
 
+from pydantic import ValidationError  # noqa: E402
+
 import pipeline.stage_03_dispatch.dispatch as dispatch_mod  # noqa: E402
 from schemas.models import DispatchBundle  # noqa: E402
 
@@ -167,3 +169,38 @@ def test_a_failed_compose_batch_falls_back_to_templates_without_failing_dispatch
     assert emails[("electrical", "F-EL-00")][0] == "S-F-EL-00"  # first batch model-composed
     subj, _body = emails[("electrical", "F-EL-07")]
     assert subj == "RFQ — Electrical package — Proj X"        # failed batch -> deterministic template
+
+
+class FakeSDKError(Exception):
+    """A non-transient provider/SDK error — a bad or unfunded API key's AuthenticationError, or a
+    missing SDK's ImportError, which `llm_client._retry` re-raises as-is. Crucially it is NONE of
+    RuntimeError / FileNotFoundError / ValidationError / ValueError, so the old narrow compose catch
+    let it escape and 500 `POST /dispatch/drafts`."""
+
+
+class _RaisingClient:
+    def complete_json(self, **_):
+        raise FakeSDKError("401 Unauthorized — bad or unfunded API key")
+
+
+def test_a_non_transient_compose_error_never_fails_the_dispatch(shortlisted, scope, monkeypatch):
+    # The regression Fix 1 closes: a dead API key (or a missing SDK's ImportError) is none of the
+    # four types the compose catch used to name, so it escaped `_compose_batch`, propagated through
+    # build_dispatch, and turned the endpoint into a 500 — contradicting the module's own contract.
+    assert not issubclass(FakeSDKError, (RuntimeError, FileNotFoundError, ValidationError, ValueError))
+    monkeypatch.setattr(dispatch_mod, "demo_mode", lambda: False)  # force the live compose path
+
+    ds = _dispatch_with_client(shortlisted, scope, {"electrical": ["F-EL-02"]}, _RaisingClient())
+
+    assert isinstance(ds, DispatchSet)                         # a DispatchSet, not a raised exception
+    bundle = next(b for b in ds.bundles if b.firm_id == "F-EL-02")
+    tmpl_subject, tmpl_body = dispatch_mod._template_email(bundle.firm_name, "electrical", scope.project_name)
+    assert bundle.email_body == tmpl_body                      # the deterministic template body …
+    assert bundle.email_subject.startswith(tmpl_subject)       # … and its subject (before the ref tag)
+    assert "[SiteSource Ref:" in bundle.email_subject          # a real dispatched bundle, not a bare compose
+
+
+def _dispatch_with_client(shortlisted, scope, approvals, client):
+    return build_dispatch(
+        shortlisted, approvals, scope=scope, project_name=scope.project_name, client=client,
+    )

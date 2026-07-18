@@ -20,9 +20,8 @@ mock outbox JSON file and flips their status to ``sent_mock``.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
-
-from pydantic import ValidationError
 
 from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient, demo_mode
@@ -38,6 +37,8 @@ from schemas.models import (
     ShortlistSet,
     TenderPackage,
 )
+
+_log = logging.getLogger(__name__)
 
 _EMAIL_SYSTEM = (
     "You write concise, professional sub-contract enquiry (RFQ) emails for a Hong "
@@ -103,7 +104,16 @@ def _compose_batch(
             demo_fixture=demo_fixture,
             purpose="compose",
         )
-    except (RuntimeError, FileNotFoundError, ValidationError, ValueError):
+    except Exception as exc:  # noqa: BLE001 — broad by contract (see below)
+        # Compose is best-effort; the deterministic template is the floor. No compose error may fail
+        # the dispatch — not even a non-transient provider error (a bad/unfunded API key) or a
+        # missing SDK, which `llm_client._retry` re-raises as-is and so escapes the four narrow
+        # types this used to catch. Log at warning level with the batch size so a dead key is
+        # visible in the uvicorn log instead of silently degrading every firm to the template.
+        _log.warning(
+            "email compose failed for a batch of %d firm(s); falling back to the deterministic "
+            "template (%s)", len(batch), exc,
+        )
         return {}
     return {(b.trade, b.firm_id): (b.email_subject, b.email_body) for b in drafted.bundles}
 
