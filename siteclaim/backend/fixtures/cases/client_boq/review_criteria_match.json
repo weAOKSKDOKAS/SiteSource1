@@ -3,7 +3,7 @@
     {
       "clause_id": "8.3",
       "criterion_id": "TP-04",
-      "extracted_value": "Liquidated damages HK$25,000/day, uncapped (no aggregate cap)",
+      "extracted_value": "Aggregate liquidated damages: uncapped (no aggregate cap)",
       "cited_text": "no cap on the aggregate amount",
       "amendment_proposal": "Cap aggregate liquidated damages at 10% of the Subcontract value.",
       "rationale": "Uncapped LDs expose the Subcontractor to unlimited delay damages disproportionate to the package.",

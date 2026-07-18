@@ -34,14 +34,43 @@ def test_threshold_breach(cid: str, breach: str, ok: str) -> None:
 
 
 def test_absent_arms_flag() -> None:
-    # The rules whose threshold table row includes an "or none/absent" arm must flag on absence.
+    # The rules whose threshold table row includes an "or none/absent" arm must flag on absence. Each
+    # rule detects absence with FIELD-SPECIFIC phrasing (not a shared generic token like "none", which
+    # caused cross-field false positives), so these use realistic extracted values.
     assert rules.evaluate_threshold("TP-04", "no cap") is True
-    assert rules.evaluate_threshold("PS-05", "none") is True
+    assert rules.evaluate_threshold("PS-05", "no prior notice before calling the security") is True
     assert rules.evaluate_threshold("LR-01", "no liability cap") is True
     assert rules.evaluate_threshold("LR-05", "no cure period") is True
     # ...while the number-only rules do not treat a missing value as a breach.
     assert rules.evaluate_threshold("TP-03", "no notice requirement stated") is False
     assert rules.evaluate_threshold("SQD-05", "defects period unspecified") is False
+
+
+def test_ps04_no_release_arm_at_or_below_cap() -> None:
+    # The "no release at Practical Completion" arm must flag independently of the >5% cap arm — i.e.
+    # for a retention AT or BELOW 5% that is still not released at PC (regression guard: the >5% arm
+    # must not be the only thing tested).
+    assert rules.evaluate_threshold("PS-04", "Retention 5%, released only at Final Certificate") is True
+    assert rules.evaluate_threshold("PS-04", "Retention 4%, no release until end of the DLP") is True
+    # ...but a <=5% retention that IS released at PC is compliant, even with the balance at Final
+    # Certificate, and even when PC is written as the "PC" abbreviation (the fix for the flagged bug).
+    assert rules.evaluate_threshold("PS-04", "Retention 5%, half released at PC and half at Final Certificate") is False
+    assert rules.evaluate_threshold("PS-04", "5% retention, 2.5% released at PC") is False
+
+
+def test_lr01_present_cap_with_carveout_is_not_flagged() -> None:
+    # A liability cap IS present — a standard fraud/PI carve-out that is "unlimited" must NOT be read
+    # as "no cap present" (adequacy of a present cap is a human judgement, not a rule flag).
+    assert rules.evaluate_threshold("LR-01", "Total liability capped at the Subcontract value; save for fraud, which is unlimited") is False
+    assert rules.evaluate_threshold("LR-01", "Liability limited to the Contract Sum") is False
+    # A genuinely absent cap still flags.
+    assert rules.evaluate_threshold("LR-01", "The Subcontractor's liability is unlimited") is True
+
+
+def test_absent_keywords_do_not_bleed_across_fields() -> None:
+    # A PS-05 phrase appearing in an LD-cap value must not flag TP-04 as "LD cap absent" (the shared
+    # word list that caused cross-field bleed is gone).
+    assert rules.evaluate_threshold("TP-04", "LD cap 8% of contract; the Employer may call security without notice") is False
 
 
 def test_non_threshold_criterion_raises() -> None:

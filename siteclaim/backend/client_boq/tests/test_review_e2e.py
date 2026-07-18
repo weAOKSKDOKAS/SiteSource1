@@ -14,6 +14,7 @@ from client_boq.models import (
     STATUS_CANDIDATE,
     STATUS_CITATION_FAILED,
     STATUS_CONFIRMED,
+    STATUS_DISMISSED,
     STATUS_RULE_FLAGGED,
     STATUS_UNCOVERED,
     STATUS_UNRESOLVED,
@@ -81,3 +82,26 @@ def test_review_run_produces_every_status_and_gates_estimate() -> None:
     reg2 = client.get(f"/client-boq/review/register/{set_id}").json()
     confirmed = {d["item"]: d["status"] for d in reg2["register"]["items"]}
     assert confirmed[flagged_item] == STATUS_CONFIRMED
+
+
+def test_dismiss_verdict_persists_and_citation_failed_can_be_dismissed() -> None:
+    # The 'dismissed' verdict is a distinct human path from 'confirmed' — and a citation_failed line,
+    # which cannot be CONFIRMED, CAN be dismissed. Exercise both, end to end.
+    client = _client()
+    result = _run_review(client)
+    set_id = result["set_id"]
+    items = result["register"]["items"]
+    candidate_item = next(d["item"] for d in items if d["status"] == STATUS_CANDIDATE)
+    failed_item = next(d["item"] for d in items if d["status"] == STATUS_CITATION_FAILED)
+
+    resp = client.post("/client-boq/review/approve", json={
+        "set_id": set_id,
+        "decisions": {str(candidate_item): STATUS_DISMISSED, str(failed_item): STATUS_DISMISSED},
+        "approved": False,
+    })
+    assert resp.status_code == 200
+
+    reg = client.get(f"/client-boq/review/register/{set_id}").json()
+    status = {d["item"]: d["status"] for d in reg["register"]["items"]}
+    assert status[candidate_item] == STATUS_DISMISSED
+    assert status[failed_item] == STATUS_DISMISSED  # a failed citation may be dismissed, not confirmed

@@ -18,6 +18,14 @@ Semantics come straight from the threshold table (note which rules include an "o
     LR-05  cure period < 7 days, OR none                                    (number OR absent)
     SQD-05 DLP > 12 months                                                  (number only)
 
+Design note (why absence is checked PER RULE, not from one shared word list): "absent" means a
+different thing for each rule — an absent LD cap, an absent liability cap, no notice before a
+security call, no cure period, no release at PC. A single shared substring list produced false
+positives (e.g. an LR-01 value "capped at contract value, unlimited for fraud" tripping on
+"unlimited" even though a cap is plainly present) and cross-field bleed (a phrase meant for one
+field flagging another). So each rule carries its own tailored keywords and, where relevant, a
+presence guard that wins over an absence keyword.
+
 A rule raises the flag; a human still confirms the departure (the verdict is never written here).
 """
 
@@ -29,13 +37,10 @@ from typing import Callable, Optional
 # The first number in a string (percent, days, months — the unit is implied by the rule).
 _NUMBER_RE = re.compile(r"(\d+(?:\.\d+)?)")
 
-# Keywords that mean "the protection is simply not there" — an absent cap / notice / cure / release.
-_ABSENT_WORDS = (
-    "uncapped", "no cap", "not capped", "no limit", "unlimited", "no ld cap",
-    "no liability cap", "no notice", "without notice", "no prior notice", "no cure",
-    "no cure period", "immediate termination", "without cure", "no release",
-    "not released", "no pc release", "absent", "none", "nil", "not present", "not provided",
-)
+# Release at Practical Completion, written either in full or as the near-universal "PC" abbreviation
+# (\bpc\b so it never matches inside another word). Used by PS-04 so a PC release written "at PC" is
+# recognised, not mistaken for "released only at Final Certificate".
+_PC_RELEASE_RE = re.compile(r"\bpractical completion\b|\bpc\b", re.IGNORECASE)
 
 
 def _first_number(value: str) -> Optional[float]:
@@ -44,10 +49,15 @@ def _first_number(value: str) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
-def _mentions_absent(value: str, *extra: str) -> bool:
-    """True when the value signals the protection is absent (base keywords + rule-specific extras)."""
+def _has_any(value: str, words: tuple[str, ...]) -> bool:
     low = (value or "").lower()
-    return any(w in low for w in (*_ABSENT_WORDS, *extra))
+    return any(w in low for w in words)
+
+
+def _released_at_pc(value: str) -> bool:
+    """True when the value says retention is released at Practical Completion ('Practical Completion'
+    or 'PC')."""
+    return bool(_PC_RELEASE_RE.search(value or ""))
 
 
 # --- the 8 predicates -------------------------------------------------------
@@ -56,11 +66,15 @@ def _tp03(v: str) -> bool:  # notice period < 5 business days
     return n is not None and n < 5
 
 
+# LD cap is absent — keywords specific to a liquidated-damages cap (no cross-field bleed).
+_TP04_ABSENT = ("uncapped", "no cap", "no aggregate cap", "not capped", "without cap", "unlimited", "no limit")
+
+
 def _tp04(v: str) -> bool:  # LD cap absent, or > 10%
-    if _mentions_absent(v):
-        return True
     n = _first_number(v)
-    return n is not None and n > 10
+    if n is not None and n > 10:
+        return True
+    return _has_any(v, _TP04_ABSENT)
 
 
 def _ps01(v: str) -> bool:  # payment assessment period > 20 business days
@@ -73,31 +87,46 @@ def _ps04(v: str) -> bool:  # retention > 5%, or no release at Practical Complet
     n = _first_number(v)
     if n is not None and n > 5:
         return True
-    if "no release" in low or "not released" in low:
+    if "no release" in low or "not released" in low or "never released" in low:
         return True
-    # "released only at Final Certificate" = not released at Practical Completion → breach. But if PC
-    # release IS mentioned, the Final-Certificate reference is the balance, not a breach.
-    if ("final certificate" in low or "released at final" in low) and "practical completion" not in low:
+    # "released only at Final Certificate" = NOT released at Practical Completion → breach. But if a
+    # PC release IS mentioned (in full or as "PC"), a Final-Certificate reference is just the balance.
+    if ("final certificate" in low or "released at final" in low) and not _released_at_pc(v):
         return True
     return False
 
 
+# No notice before a call on security — keywords specific to that field.
+_PS05_ABSENT = ("no notice", "without notice", "no prior notice", "immediately", "at any time", "any time without")
+
+
 def _ps05(v: str) -> bool:  # notice before calling security < 5 days, or none
-    if _mentions_absent(v):
-        return True
     n = _first_number(v)
-    return n is not None and n < 5
+    if n is not None and n < 5:
+        return True
+    return _has_any(v, _PS05_ABSENT)
+
+
+# A liability cap is stated as present — these win over an absence keyword (adequacy is human-judged),
+# so a present cap with a carve-out ("capped at X, unlimited for fraud") is NOT flagged as absent.
+_LR01_PRESENT = ("capped at", "cap of", "limited to", "liability cap of", "maximum liability", "aggregate liability of", "cap is")
+_LR01_ABSENT = ("uncapped", "no cap", "no liability cap", "not capped", "no limit on liability", "unlimited liability", "liability is unlimited", "without limit")
 
 
 def _lr01(v: str) -> bool:  # no liability cap present (adequacy of a present cap is human-judged)
-    return _mentions_absent(v)
+    if _has_any(v, _LR01_PRESENT):
+        return False
+    return _has_any(v, _LR01_ABSENT)
+
+
+_LR05_ABSENT = ("no cure", "no cure period", "without cure", "immediate termination", "terminate immediately", "no opportunity to remedy", "no right to remedy")
 
 
 def _lr05(v: str) -> bool:  # cure period < 7 days, or none
-    if _mentions_absent(v):
-        return True
     n = _first_number(v)
-    return n is not None and n < 7
+    if n is not None and n < 7:
+        return True
+    return _has_any(v, _LR05_ABSENT)
 
 
 def _sqd05(v: str) -> bool:  # DLP > 12 months
