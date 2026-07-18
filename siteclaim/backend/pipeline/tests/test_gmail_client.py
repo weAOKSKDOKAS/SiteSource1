@@ -193,3 +193,40 @@ def test_gmail_status_endpoint_reports_not_configured_with_the_fix(monkeypatch, 
     assert "GOOGLE_CLIENT_ID" in body["detail"]                  # the actionable next step
     assert body["token_state"] == "missing" and body["credentials_configured"] is False
     assert body["polling_enabled"] is False                      # off by default
+
+
+# -- last_draft_error: the dead-refresh-token symptom the file-only token_state() cannot see -------
+def test_last_draft_error_records_a_failed_draft_then_clears_on_the_next_success():
+    from pipeline import gmail_client
+
+    # A real draft attempt fails at the transport (the killed-refresh-token symptom): the message is
+    # recorded so the status surface can show WHY a token that token_state() still calls "connected"
+    # cannot actually draft. No new I/O — it is captured on the call the operator already made.
+    with pytest.raises(GmailUnavailable):
+        create_draft("a@b.c", "s", "b", [], service=StubService(draft_result=RuntimeError("invalid_grant")))
+    assert "invalid_grant" in gmail_client.last_draft_error()      # the real per-call failure, captured
+
+    # Recovery clears it on the very next successful draft, so a stale error never holds the pill red.
+    create_draft("a@b.c", "s", "b", [], service=StubService())
+    assert gmail_client.last_draft_error() == ""
+
+
+def test_gmail_status_endpoint_carries_last_draft_error_and_clears_after_recovery(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    import api
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "absent.json"))
+
+    # A failed draft records the error; the status read (no network, no refresh) carries it verbatim.
+    with pytest.raises(GmailUnavailable):
+        create_draft("a@b.c", "s", "b", [], service=StubService(draft_result=RuntimeError("token refresh failed")))
+    body = TestClient(api.app).get("/integrations/gmail").json()
+    assert "token refresh failed" in body["last_draft_error"]
+
+    # After a successful draft the field is empty again — recovery reflected with no status-read I/O.
+    create_draft("a@b.c", "s", "b", [], service=StubService())
+    body = TestClient(api.app).get("/integrations/gmail").json()
+    assert body["last_draft_error"] == ""

@@ -356,7 +356,7 @@ export function GmailStatusPill({ demoMode }: { demoMode: boolean }) {
     : status.status === "not_configured" ? "Gmail: not configured"
     : "Gmail: error";
   return (
-    <span title={status.detail || status.last_error || undefined}>
+    <span title={status.detail || status.last_draft_error || status.last_error || undefined}>
       <Pill tone={tone}>{label}</Pill>
     </span>
   );

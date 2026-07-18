@@ -91,20 +91,39 @@ def token_state() -> tuple[str, str]:
     return "expired", "expired with no refresh token — publish the consent screen to Production and re-authorise"
 
 
-# Drafts created since startup — the status surface's "did anything actually happen" counter.
-_COUNTER_LOCK = threading.Lock()
+# Shared status state guarded by _STATE_LOCK: the "did anything actually happen" draft counter,
+# and the last real-call failure so the status surface can reveal a token that silently died —
+# which the file-only, network-free token_state() cannot see — without any status-read I/O.
+_STATE_LOCK = threading.Lock()
 _DRAFTS_CREATED = 0
+_LAST_ERROR = ""
 
 
 def drafts_created() -> int:
-    with _COUNTER_LOCK:
+    with _STATE_LOCK:
         return _DRAFTS_CREATED
 
 
 def _count_draft() -> None:
     global _DRAFTS_CREATED
-    with _COUNTER_LOCK:
+    with _STATE_LOCK:
         _DRAFTS_CREATED += 1
+
+
+def last_draft_error() -> str:
+    """The last real draft attempt's failure message — ``""`` when the last draft succeeded or none
+    has run yet. The status surface shows this so a dead refresh token (which the file-only
+    ``token_state()`` still reports as connected) becomes visible after the first click; a
+    successful ``create_draft`` clears it, so recovery shows through with no status-read I/O."""
+    with _STATE_LOCK:
+        return _LAST_ERROR
+
+
+def _set_last_error(message: str) -> None:
+    """Record (``message``) or clear (``""``) the last draft failure. Guarded like the counter."""
+    global _LAST_ERROR
+    with _STATE_LOCK:
+        _LAST_ERROR = message
 
 
 def _log(event: str, **fields) -> None:
@@ -195,17 +214,23 @@ def create_draft(
     """Create ONE Gmail draft (never a send — the operator reviews and sends from Gmail) and
     return its draft id. ``attachments`` is ``[(filename, bytes)]`` — the already-assembled
     relevant-only bundle. Raises :class:`GmailUnavailable` when Gmail cannot be reached."""
-    svc = service or build_service()
     raw = _mime_raw(to, subject, body, attachments)
     try:
+        svc = service or build_service()
         draft = svc.users().drafts().create(userId="me", body={"message": {"raw": raw}}).execute()
-    except GmailUnavailable:
+    except GmailUnavailable as exc:
+        # A build_service() credential/token failure or a stub raising the typed error already —
+        # record it so the pill can show why a "connected" token still can't draft, then re-raise.
+        _set_last_error(str(exc))
         raise
     except Exception as exc:  # noqa: BLE001 — normalise SDK/API errors into the typed failure
         _log("draft_error", to=to, error=str(exc)[:200])
-        raise GmailUnavailable(f"Gmail draft creation failed: {exc}") from exc
+        err = GmailUnavailable(f"Gmail draft creation failed: {exc}")
+        _set_last_error(str(err))
+        raise err from exc
     draft_id = str(draft.get("id", ""))
     _count_draft()
+    _set_last_error("")  # this draft succeeded — clear any stale failure so recovery shows through
     _log("draft_created", to=to, draft_id=draft_id, attachments=len(attachments))
     return draft_id
 

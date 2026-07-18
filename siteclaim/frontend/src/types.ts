@@ -64,6 +64,7 @@ export interface GmailStatus {
   poll_seconds: number;
   last_poll_at: string | null;
   last_error: string;
+  last_draft_error?: string;
   drafts_created: number;
   replies_processed: number;
   replies_unmatched: number;

@@ -187,6 +187,9 @@ class GmailStatus(BaseModel):
     poll_seconds: int = 0
     last_poll_at: Optional[str] = None
     last_error: str = ""
+    last_draft_error: str = ""  # the last real draft attempt's failure — reveals a dead token the
+                                # network-free token_state() still reports "connected" (cleared on
+                                # the next successful draft, so recovery is reflected)
     drafts_created: int = 0     # this run
     replies_processed: int = 0  # this run (poller)
     replies_unmatched: int = 0  # this run (poller) — surfaced, needing manual assignment
@@ -217,6 +220,7 @@ def get_gmail_status() -> GmailStatus:
         status=status, detail=detail, credentials_configured=configured, token_state=tok_state,
         polling_enabled=reply_poller.polling_enabled(), poll_seconds=reply_poller.poll_seconds(),
         last_poll_at=state.get("last_poll_at"), last_error=state.get("last_error", ""),
+        last_draft_error=gmail_client.last_draft_error(),
         drafts_created=gmail_client.drafts_created(),
         replies_processed=state.get("processed_total", 0),
         replies_unmatched=state.get("unmatched_total", 0),
