@@ -8,14 +8,13 @@ NEVER written by the model — the draft is prose around a number the engine com
 
 from __future__ import annotations
 
-from client_boq.models import CostBuildup, IndirectsResult, LetterOfOffer, ScopeReviewResult
+from client_boq.models import Estimate, LetterOfOffer, ScopeReviewResult
 
 DEMO_FIXTURE = "cases/client_boq/estimate_offer.json"
 
 
-def draft_offer(
-    scope_review: ScopeReviewResult, direct: CostBuildup, indirects: IndirectsResult,
-) -> LetterOfOffer:
+def draft_offer(scope_review: ScopeReviewResult, estimate: Estimate) -> LetterOfOffer:
     """Draft the letter of offer with the engine-computed price injected (never AI-written).
-    Not implemented yet."""
-    raise NotImplementedError("client_boq ESTIMATE s06 (offer) — scaffold only")
+    Slice-2 stub — the deterministic ``estimate`` (incl. its price) already exists; this stage only
+    drafts the prose around it."""
+    raise NotImplementedError("client_boq ESTIMATE s06 (offer) — estimate slice 2")

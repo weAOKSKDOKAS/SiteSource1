@@ -30,7 +30,9 @@ from client_boq.models import (
     DepartureRegister,
     RawUpload,
 )
+from client_boq.models import Estimate, EstimateSchedule
 from client_boq.review import run as review_run
+from client_boq.estimate import run as estimate_run
 from pipeline.llm_client import demo_mode
 
 router = APIRouter(prefix="/client-boq", tags=["client_boq"])
@@ -222,20 +224,96 @@ def get_gate(set_id: str) -> GateState:
 # ---------------------------------------------------------------------------
 class EstimateRunRequest(BaseModel):
     set_id: str
+    margin_pct: float | None = None                 # required in live (the human states it); DEMO uses the fixture margin
+    schedule: EstimateSchedule | None = None        # required in live; DEMO uses the fixture schedule
 
 
-@router.post("/estimate/run", response_model=JobState)
-def post_estimate_run(req: EstimateRunRequest) -> JobState:
-    """Run ESTIMATE for a document set. REFUSES until the review register is human-approved (the
-    locked review→estimate gate) — a 409 otherwise. The gate is real; the estimate workflow is a
-    later slice."""
+def _flag_counts(estimate: Estimate) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for f in estimate.flags:
+        counts[f.kind] = counts.get(f.kind, 0) + 1
+    return counts
+
+
+def _estimate_payload(estimate: Estimate) -> dict:
+    """The estimate envelope — totals + margin readout, a flag breakdown, and the full estimate
+    (activities with per-line cost traces, indirects, flags)."""
+    return {
+        "set_id": estimate.set_id,
+        "totals": estimate.totals.model_dump(),
+        "flag_counts": _flag_counts(estimate),
+        "estimate": estimate.model_dump(),
+    }
+
+
+def _gate_or_409(set_id: str) -> None:
     conn = store.get_conn()
     try:
-        if not store.review_is_approved(conn, req.set_id):
+        if not store.review_is_approved(conn, set_id):
             raise HTTPException(
                 status_code=409,
                 detail="Estimate is gated: the review register for this document set is not approved yet.",
             )
     finally:
         conn.close()
-    raise NotImplementedError("client_boq /estimate/run — estimate workflow is a later slice (gate passed)")
+
+
+def _run_estimate_job(job_id: str, set_id: str, margin_pct: float, schedule: EstimateSchedule) -> None:
+    jobs.JOBS.update(job_id, status="running", stage="costing")
+    try:
+        estimate = estimate_run.run_estimate(
+            set_id, margin_pct, schedule, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+        )
+        jobs.JOBS.update(job_id, status="done", stage="persisting", result=_estimate_payload(estimate))
+    except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+@router.post("/estimate/run", response_model=JobState)
+def post_estimate_run(req: EstimateRunRequest) -> JobState:
+    """Run the ESTIMATE deterministic spine (s02→s03→s04→s05 + totals/margin). REFUSES until the
+    review register is human-approved (the locked review→estimate gate) — a 409 otherwise.
+
+    Live: requires ``margin_pct`` and a structured ``schedule``; runs as a background job (poll
+    ``/estimate/status/{job_id}``). DEMO: loads the fixture schedule + fixture margin and runs inline
+    (offline), returning the estimate."""
+    _gate_or_409(req.set_id)
+    if demo_mode():
+        estimate = estimate_run.run_estimate(
+            req.set_id, estimate_run.DEMO_MARGIN_PCT, estimate_run.load_demo_schedule(),
+        )
+        return JobState(kind="estimate", status="done", stage="persisting",
+                        result=_estimate_payload(estimate))
+
+    if req.schedule is None or req.margin_pct is None:
+        raise HTTPException(status_code=422, detail="margin_pct and schedule are required for a live estimate run.")
+    job_id = jobs.JOBS.create("estimate")
+    jobs.POOL.submit(_run_estimate_job, job_id, req.set_id, req.margin_pct, req.schedule)
+    return JobState(job_id=job_id, kind="estimate", status="queued", stage="costing")
+
+
+@router.get("/estimate/status/{job_id}", response_model=JobState)
+def get_estimate_status(job_id: str) -> JobState:
+    """Poll a background estimate job (same in-package job store as review)."""
+    job = jobs.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
+    return JobState(
+        job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
+        error=job.error or None, result=job.result if job.status == "done" else None,
+        warnings=list(job.warnings),
+    )
+
+
+@router.get("/estimate/{set_id}")
+def get_estimate(set_id: str) -> dict:
+    """The persisted estimate for a document set: activities with per-line cost traces, indirects,
+    flags, totals, and the margin readout."""
+    conn = store.get_conn()
+    try:
+        estimate = store.load_estimate(conn, set_id)
+    finally:
+        conn.close()
+    if estimate is None:
+        raise HTTPException(status_code=404, detail=f"No estimate for set {set_id!r}.")
+    return _estimate_payload(estimate)

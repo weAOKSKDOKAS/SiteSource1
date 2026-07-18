@@ -104,7 +104,7 @@ def test_rates_loader_parses_csv() -> None:
     assert KNOWN_CATEGORIES <= cats, f"missing categories: {KNOWN_CATEGORIES - cats}"
     assert all(isinstance(r.rate, float) for r in rows)
     # The quoted, comma-bearing description survived CSV parsing intact.
-    sub = next(r for r in rows if r.rate_id == "SUB-001")
+    sub = next(r for r in rows if r.rate_id == "SUB-REBAR")
     assert "," in sub.description and sub.rate == 14500.0
 
 
@@ -112,10 +112,12 @@ def test_rates_loader_parses_csv() -> None:
 # The ESTIMATE stages remain stubs — they raise NotImplementedError (no accidental logic).
 # (All REVIEW stages s01–s08 are implemented and covered by their own tests.)
 # ---------------------------------------------------------------------------
-def test_estimate_stages_are_stubs() -> None:
-    from client_boq.estimate import s01_scope_review, s03_cost_buildup
+def test_estimate_ai_stages_are_stubs() -> None:
+    # The estimate AI-drafting stages are slice 2; the deterministic spine (s02–s05) is implemented
+    # and covered by its own tests.
+    from client_boq.estimate import s01_scope_review, s06_offer
 
     with pytest.raises(NotImplementedError):
         s01_scope_review.review_scope(None)
     with pytest.raises(NotImplementedError):
-        s03_cost_buildup.build_cost(None, {}, [])
+        s06_offer.draft_offer(None, None)

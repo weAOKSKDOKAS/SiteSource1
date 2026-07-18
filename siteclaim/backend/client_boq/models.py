@@ -345,50 +345,106 @@ class ScopeReviewResult(BaseModel):
     clarifying_questions: list[str] = Field(default_factory=list)
 
 
-class ScheduleActivity(BaseModel):
-    activity_id: str = ""
+# --- ESTIMATE input (the structured pricing schedule; request payload in live, fixture in DEMO) ---
+class ResourceLine(BaseModel):
+    """One priced resource within a direct activity. Either name a CSV rate via ``resource_ref`` OR
+    give an ``inline_rate``; ``productivity`` (output units per hour) converts a work quantity into
+    hours before the rate is applied (qty ÷ productivity = hours; hours × rate = amount)."""
+
     description: str = ""
-    unit: str = ""
-    direct: bool = True
-
-
-class PricingSchedule(BaseModel):
-    activities: list[ScheduleActivity] = Field(default_factory=list)
-
-
-class CostLine(BaseModel):
-    activity_id: str = ""
-    description: str = ""
+    resource_ref: str = ""            # rate_id in rates.csv (blank when inline)
+    inline_rate: Optional[float] = None
     qty: float = 0.0
     unit: str = ""
-    rate_id: str = ""
+    productivity: Optional[float] = None
+
+
+class ScheduleItem(BaseModel):
+    """One schedule item. ``category`` is declared by the payload — 'direct' (priced from resource
+    lines) or 'indirect' (computed from a ``basis``). Any other value is left for s05 to flag as
+    ``unclassified_item`` (never guessed). Indirect bases: 'lump' (``amount``), 'per_week'
+    (``rate`` × schedule ``duration_weeks``), 'pct_of_direct' (``pct`` × direct subtotal)."""
+
+    item_id: str = ""                 # assigned by s02 when blank
+    description: str = ""
+    category: str = ""                # "direct" | "indirect" | (other → unclassified)
+    unit: str = ""
+    lines: list[ResourceLine] = Field(default_factory=list)   # direct items
+    basis: str = ""                   # indirect items: lump | per_week | pct_of_direct
+    amount: Optional[float] = None    # lump
+    rate: Optional[float] = None      # per_week rate
+    pct: Optional[float] = None       # pct_of_direct
+
+
+class EstimateSchedule(BaseModel):
+    """The structured pricing schedule. Quantities are given (no take-off in this slice).
+    ``duration_weeks`` feeds per_week indirects."""
+
+    duration_weeks: Optional[float] = None
+    items: list[ScheduleItem] = Field(default_factory=list)
+
+
+# --- ESTIMATE output (the priced estimate) ---
+class CostLine(BaseModel):
+    """One priced resource line with a full, hand-recomputable trace: the quantity, the rate and
+    where it came from (csv|inline|missing), any productivity conversion, and the amount."""
+
+    item_id: str = ""
+    description: str = ""
+    resource_ref: str = ""
+    qty: float = 0.0
+    unit: str = ""
+    productivity: Optional[float] = None
+    hours: Optional[float] = None     # qty ÷ productivity, when productivity is given
     rate: float = 0.0
+    rate_source: str = ""             # "csv" | "inline" | "missing"
     amount: float = 0.0
 
 
-class CostBuildup(BaseModel):
+class CostActivity(BaseModel):
+    item_id: str = ""
+    description: str = ""
+    category: str = "direct"
+    unit: str = ""
     lines: list[CostLine] = Field(default_factory=list)
-    direct_total: float = 0.0
+    activity_total: float = 0.0
 
 
-class IndirectCost(BaseModel):
+class IndirectLine(BaseModel):
+    item_id: str = ""
     label: str = ""
-    basis: str = ""
+    basis: str = ""                   # lump | per_week | pct_of_direct
+    detail: str = ""                  # how it was computed (hand-checkable)
     amount: float = 0.0
 
 
-class IndirectsResult(BaseModel):
-    items: list[IndirectCost] = Field(default_factory=list)
-    indirect_total: float = 0.0
+class EstimateFlag(BaseModel):
+    """A rule-raised flag on the estimate — surfaced for the human, never blocking, never a verdict."""
 
-
-class ValidationFlag(BaseModel):
-    kind: str = ""
+    kind: str = ""                    # missing_rate | zero_or_negative_qty | empty_activity | rate_outlier | unclassified_item
+    item_id: str = ""
     message: str = ""
 
 
-class ValidationResult(BaseModel):
-    flags: list[ValidationFlag] = Field(default_factory=list)
+class EstimateTotals(BaseModel):
+    total_direct: float = 0.0
+    total_indirect: float = 0.0
+    total_cost: float = 0.0
+    margin_pct: float = 0.0
+    price: float = 0.0
+    margin_amount: float = 0.0        # price − total_cost (readout only; no profitable/not verdict)
+
+
+class Estimate(BaseModel):
+    """The full priced estimate persisted to the tables + ``artifacts/client_boq/estimate.json``."""
+
+    set_id: str = ""
+    duration_weeks: Optional[float] = None
+    activities: list[CostActivity] = Field(default_factory=list)   # direct
+    indirects: list[IndirectLine] = Field(default_factory=list)
+    unclassified: list[ScheduleItem] = Field(default_factory=list)  # items with a bad category (flagged)
+    flags: list[EstimateFlag] = Field(default_factory=list)
+    totals: EstimateTotals = Field(default_factory=EstimateTotals)
 
 
 class LetterOfOffer(BaseModel):

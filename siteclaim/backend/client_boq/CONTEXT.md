@@ -93,8 +93,16 @@ is fully independent (CSV rates only). See `siteclaim/docs/client_boq/how_it_fit
 
 ## Status
 
-**REVIEW workflow implemented** (slices 1–2): s01→s02→s03→s04→s05→s06→s07→s08 run end to
-end and fold into one register (tagged line items + aligned section + cash-flow section),
-gated by the human approve endpoint. In DEMO the module writes a gitignored scratch DB, so
-an offline run never touches the committed `sitesource.db`. The **ESTIMATE** stages remain
-stubs (`NotImplementedError`) — a later slice.
+**REVIEW workflow complete** (slices 1–2): s01→…→s08 fold into one register, gated by the
+human approve endpoint.
+
+**ESTIMATE deterministic spine implemented** (estimate slice 1): s02 (schedule
+normalisation) → s03 (cost build-up, qty×rate with productivity + rate traces) → s04
+(indirects: lump / per_week / pct_of_direct) → s05 (five validation flags) + totals and a
+margin readout (cost → price → margin; the human states `margin_pct`, no verdict). Gated on
+review approval; `/estimate/run`, `/estimate/{set_id}`. The estimate **AI-drafting** stages
+(s01 scope review, s06 offer letter) and the register→estimate context wiring remain stubs —
+estimate slice 2.
+
+In DEMO the module writes a gitignored scratch DB, so an offline run never touches the
+committed `sitesource.db`.

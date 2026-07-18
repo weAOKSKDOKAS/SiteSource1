@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from client_boq import models
-from client_boq.models import DepartureRegister, ParsedDocumentSet
+from client_boq.models import DepartureRegister, Estimate, ParsedDocumentSet
 from db import store as db_store
 from pipeline.llm_client import demo_mode
 from pipeline.workspace import Workspace
@@ -165,4 +165,36 @@ def save_parsed_artifact(ws: Workspace, tender_id: str, parsed: ParsedDocumentSe
 def save_register_artifact(ws: Workspace, tender_id: str, register: DepartureRegister) -> None:
     (_client_boq_dir(ws, tender_id) / "register.json").write_text(
         register.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Estimate persistence (client_boq_estimates table + artifact)
+# ---------------------------------------------------------------------------
+def save_estimate(conn: sqlite3.Connection, estimate: Estimate) -> None:
+    """Persist the priced estimate to the tables (upsert per document set)."""
+    conn.execute(
+        """
+        INSERT INTO client_boq_estimates (set_id, estimate_json)
+        VALUES (:set_id, :json)
+        ON CONFLICT(set_id) DO UPDATE SET estimate_json = excluded.estimate_json
+        """,
+        {"set_id": estimate.set_id, "json": estimate.model_dump_json()},
+    )
+    conn.commit()
+
+
+def load_estimate(conn: sqlite3.Connection, set_id: str) -> Optional[Estimate]:
+    """The persisted estimate for ``set_id``, or None."""
+    row = conn.execute(
+        "SELECT estimate_json FROM client_boq_estimates WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    if not row or not row["estimate_json"] or row["estimate_json"] == "{}":
+        return None
+    return Estimate.model_validate_json(row["estimate_json"])
+
+
+def save_estimate_artifact(ws: Workspace, tender_id: str, estimate: Estimate) -> None:
+    (_client_boq_dir(ws, tender_id) / "estimate.json").write_text(
+        estimate.model_dump_json(indent=2), encoding="utf-8"
     )

@@ -65,3 +65,22 @@ def load_rates(path: Optional[Path] = None) -> list[RateRow]:
                 notes=(raw.get("notes") or "").strip(),
             ))
     return rows
+
+
+def rate_index(rows: list[RateRow]) -> dict[str, RateRow]:
+    """Map ``rate_id`` → the FIRST row with that id (first-wins on duplicates, so a duplicate rate_id
+    never silently changes the resolved rate). Callers look up a resource_ref here; a miss (unknown
+    resource) returns None from ``.get`` and is handled by the cost build-up as a missing rate."""
+    idx: dict[str, RateRow] = {}
+    for r in rows:
+        idx.setdefault(r.rate_id, r)
+    return idx
+
+
+def duplicate_rate_ids(rows: list[RateRow]) -> set[str]:
+    """rate_ids that appear more than once in the CSV — surfaced so a human can clean the source."""
+    seen: set[str] = set()
+    dups: set[str] = set()
+    for r in rows:
+        (dups if r.rate_id in seen else seen).add(r.rate_id)
+    return dups
