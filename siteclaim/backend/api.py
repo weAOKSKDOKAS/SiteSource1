@@ -1048,6 +1048,12 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     # The human gate's per-section remove/expand decisions — the assembled set matches exactly
     # what the person confirmed in the preview (keyed by package_key == the bundle's trade).
     overrides_by_key = {o.package_key: o for o in req.attachment_overrides}
+    # Live-testing safety valve: when set, every draft is addressed here instead of the firm's
+    # resolved recipient, so a test round-trip never emails a real subcontractor. Opt-in, off by
+    # default, forced off in DEMO. Shown per-firm on the gate (never a silent redirect).
+    test_recipient = "" if demo_mode() else os.getenv("GMAIL_TEST_RECIPIENT", "").strip()
+    if test_recipient:
+        print(f"[dispatch] test_recipient override active -> {test_recipient} ({len(dispatch.bundles)} firms)", flush=True)
     conn = store.get_connection()
     try:
         drafts: list[dict] = []
@@ -1059,8 +1065,10 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
             attachments = assemble_firm_attachments(plan, ws, req.project_name, b.trade) if plan else []
             ref_m = _re.search(r"\[SiteSource Ref:\s*([^\]]+)\]", b.email_subject)
             # Recipient chain: address-book override for (firm, trade), else the firm's registered
-            # enquiry_email, else empty (reported in `failed`, never a silent empty To).
-            to = store.recipient_email(conn, b.firm_id, base_trade(b.trade)) or ""
+            # enquiry_email, else empty (reported in `failed`, never a silent empty To). The
+            # GMAIL_TEST_RECIPIENT override, when set, wins over the whole chain (live-testing only).
+            resolved = store.recipient_email(conn, b.firm_id, base_trade(b.trade)) or ""
+            to = test_recipient or resolved
             drafts.append({
                 "firm_id": b.firm_id, "to": to, "subject": b.email_subject, "body": b.email_body,
                 "ref": ref_m.group(1).strip() if ref_m else "", "attachments": attachments,
@@ -1084,6 +1092,9 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
                 f"Gmail drafts unavailable — {failures[0].reason} "
                 "The enquiries are prepared in the outbox and can be drafted again."
             )
+    if test_recipient:
+        note = f"TEST MODE — every draft addressed to {test_recipient} (GMAIL_TEST_RECIPIENT), not the firms' real emails."
+        message = f"{note} {message}".strip() if message else note
     drafted_set = set(drafted_ids)
     bundles = [
         b.model_copy(update={"status": DispatchStatus.DRAFTED_GMAIL}) if b.firm_id in drafted_set else b

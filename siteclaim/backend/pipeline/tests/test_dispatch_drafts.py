@@ -143,6 +143,90 @@ def test_dispatch_drafts_resolves_the_register_enquiry_email_not_no_contact(monk
     assert "no contact email" not in body["failed"][0]["reason"]                 # not the old bug's report
 
 
+# -- GMAIL_TEST_RECIPIENT: a live-testing safety valve that never emails a real subcontractor -----
+class _OkGmailService:
+    """A stub Gmail service whose draft-create always succeeds — keeps the test offline (no Google
+    SDK, no socket) while letting create_gmail_drafts reach the real per-firm recipient handling."""
+
+    def users(self):
+        return self
+
+    def drafts(self):
+        return self
+
+    def create(self, userId, body):  # noqa: N803 — the Gmail API's own parameter name
+        return self
+
+    def execute(self):
+        return {"id": "draft-ok"}
+
+
+def _two_firm_bundles(with_email: str, no_email: str):
+    from schemas.models import DispatchBundle, DispatchSet
+
+    return DispatchSet(bundles=[
+        DispatchBundle(firm_id=with_email, firm_name="Register Firm", trade="general",
+                       email_subject=f"RFQ [SiteSource Ref: t.{with_email}.general]", email_body="price"),
+        DispatchBundle(firm_id=no_email, firm_name="No-Email Firm", trade="general",
+                       email_subject=f"RFQ [SiteSource Ref: t.{no_email}.general]", email_body="price"),
+    ])
+
+
+def _firm_with_a_register_email() -> str:
+    from db import store
+
+    conn = store.get_connection()
+    row = conn.execute(
+        "SELECT f.firm_id, f.enquiry_email FROM firms f LEFT JOIN contacts c ON c.firm_id = f.firm_id "
+        "WHERE f.enquiry_email != '' AND c.firm_id IS NULL LIMIT 1"
+    ).fetchone()
+    conn.close()
+    return row["firm_id"], row["enquiry_email"]
+
+
+def test_gmail_test_recipient_overrides_every_firm_to_the_test_inbox(monkeypatch, tmp_path):
+    # With the override set, EVERY draft is addressed to the operator's own inbox: a firm with a real
+    # register email is redirected, and a firm with none drafts to the test inbox instead of failing
+    # "no contact email". Never silent — the overridden To is on recipients[] (shown on the gate) and
+    # the message opens with a TEST MODE notice. A stub Gmail service keeps it fully offline.
+    with_email, _email = _firm_with_a_register_email()
+    no_email = "F-NO-EMAIL-XYZ"                                   # not in the register -> resolves to nothing
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("GMAIL_TEST_RECIPIENT", "test@example.com")
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    monkeypatch.setattr("pipeline.gmail_client.build_service", lambda: _OkGmailService())
+    monkeypatch.setattr("api.build_dispatch", lambda *a, **k: _two_firm_bundles(with_email, no_email))
+
+    body = client.post("/dispatch/drafts", json={"shortlist": {"per_trade": {}}, "approvals": {}}).json()
+    to_by_firm = {r["firm_id"]: r["to"] for r in body["recipients"]}
+    assert to_by_firm == {with_email: "test@example.com", no_email: "test@example.com"}   # every To overridden
+    assert body["failed"] == []                                                           # no firm fails for a missing To
+    assert set(body["drafted"]) == {with_email, no_email}                                 # both drafted to the test inbox
+    assert body["message"].startswith("TEST MODE")                                        # loud, not a silent redirect
+
+
+def test_without_the_override_a_no_email_firm_still_reports_no_contact(monkeypatch, tmp_path):
+    # Env unset -> byte-for-byte the current behaviour: the firm with a register email resolves to it,
+    # and the firm with none is reported "no contact email on file" (never a silent empty To).
+    with_email, email = _firm_with_a_register_email()
+    no_email = "F-NO-EMAIL-XYZ"
+
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.delenv("GMAIL_TEST_RECIPIENT", raising=False)
+    monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
+    monkeypatch.setattr("pipeline.gmail_client.build_service", lambda: _OkGmailService())
+    monkeypatch.setattr("api.build_dispatch", lambda *a, **k: _two_firm_bundles(with_email, no_email))
+
+    body = client.post("/dispatch/drafts", json={"shortlist": {"per_trade": {}}, "approvals": {}}).json()
+    to_by_firm = {r["firm_id"]: r["to"] for r in body["recipients"]}
+    assert to_by_firm == {with_email: email, no_email: ""}                    # the real chain, unchanged
+    assert not body["message"].startswith("TEST MODE")                        # no test notice
+    assert body["drafted"] == [with_email]                                    # the resolvable firm drafts as before
+    reasons = {f["firm_id"]: f["reason"] for f in body["failed"]}
+    assert "no contact email" in reasons[no_email]                            # the no-email firm still reported
+
+
 def test_post_contacts_is_disabled_in_demo():
     resp = client.post("/contacts", json={"firm_id": "F-EL-02", "trade": "electrical", "email": "x@y.com"})
     assert resp.status_code == 409  # never mutate the committed demo DB
