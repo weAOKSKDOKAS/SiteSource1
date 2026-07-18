@@ -1,71 +1,38 @@
 """HTTP surface for the client_boq module — mounted under ``/client-boq``.
 
-This is the ONE thing ``api.py`` imports from the module: a single ``app.include_router(router)``
-line (api.py otherwise declares routes directly on ``app``; this introduces the first APIRouter).
-Everything the two workflows expose lives here — the heavy review-ingest kick-off + poll (the
-in-package job pattern), the human-gate approval endpoints, and the **review→estimate gate check**
-that refuses to run the estimate until the review register for a document set is human-approved.
+The ONE thing ``api.py`` imports from the module: a single ``include_router``. Everything the review
+workflow exposes lives here — the heavy review run (background job in live, inline offline in DEMO),
+the status poll, the register read, the human-gate approve endpoint (the ONLY writer of a
+confirmed/dismissed verdict), and the **review→estimate gate check** that refuses the estimate until
+the review register is approved.
 
-SCAFFOLD STATE: the workflow-producing handlers (ingest, register build, estimate run) raise
-``NotImplementedError`` — no workflow logic yet. The gate MECHANICS are real, because they are
-deterministic infra, not workflow logic: the approval write, the approved-state read, and the job
-status read all work, so the review→estimate gate is enforceable and testable now.
+Slice 1 implements the review workflow (s01→s02→s03→s07→s08); the estimate handler stays gated +
+scaffold.
 """
 
 from __future__ import annotations
 
-import sqlite3
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from client_boq import jobs, models
-from db import store
+from client_boq import jobs, store
+from client_boq.models import (
+    HUMAN_VERDICTS,
+    STATUS_CITATION_FAILED,
+    DepartureRegister,
+    RawUpload,
+)
+from client_boq.review import run as review_run
+from pipeline.llm_client import demo_mode
 
 router = APIRouter(prefix="/client-boq", tags=["client_boq"])
 
 
 # ---------------------------------------------------------------------------
-# DB helpers — the gate mechanics (deterministic infra, not workflow logic)
+# Response shapes
 # ---------------------------------------------------------------------------
-def _conn() -> sqlite3.Connection:
-    """Open the shared DB and ensure the module's own tables exist (idempotent)."""
-    conn = store.get_connection()
-    models.init_tables(conn)
-    return conn
-
-
-def review_is_approved(conn: sqlite3.Connection, set_id: str) -> bool:
-    """True when the review register for ``set_id`` has been human-approved — the estimate gate."""
-    row = conn.execute(
-        "SELECT approved FROM client_boq_review_registers WHERE set_id = ?", (set_id,)
-    ).fetchone()
-    return bool(row and row["approved"])
-
-
-def _set_review_approved(conn: sqlite3.Connection, set_id: str, approved: bool) -> None:
-    """Record the human approval decision on the register (upsert). The gate action itself."""
-    conn.execute(
-        """
-        INSERT INTO client_boq_review_registers (set_id, approved, approved_at)
-        VALUES (?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END)
-        ON CONFLICT(set_id) DO UPDATE SET
-            approved = excluded.approved,
-            approved_at = excluded.approved_at
-        """,
-        (set_id, 1 if approved else 0, 1 if approved else 0),
-    )
-    conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# Request / response shapes
-# ---------------------------------------------------------------------------
-class ReviewApproval(BaseModel):
-    set_id: str
-    approved: bool = True
-
-
 class GateState(BaseModel):
     set_id: str
     review_approved: bool
@@ -73,27 +40,73 @@ class GateState(BaseModel):
 
 class JobState(BaseModel):
     job_id: str | None = None
-    kind: str = ""
-    status: str = "queued"
+    kind: str = "review"
+    status: str = "queued"           # queued | running | done | error
     stage: str = ""
     error: str | None = None
     result: dict | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
+def _status_counts(register: DepartureRegister) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in register.items:
+        counts[item.status] = counts.get(item.status, 0) + 1
+    return counts
+
+
+def _result_payload(register: DepartureRegister) -> dict:
+    """The review run's result envelope — the register plus a status breakdown and the slice marker."""
+    return {
+        "set_id": register.set_id,
+        "slice": review_run.SLICE,
+        "slice2_pending": register.slice2_pending,
+        "status_counts": _status_counts(register),
+        "aligned_criteria": register.aligned_criteria,
+        "review_approved": register.approved,
+        "register": register.model_dump(),
+    }
+
+
 # ---------------------------------------------------------------------------
-# REVIEW workflow
+# REVIEW — run (job in live, inline in DEMO), status, register
 # ---------------------------------------------------------------------------
-@router.post("/review/ingest", response_model=JobState)
-def post_review_ingest() -> JobState:
-    """Kick off a REVIEW ingest as a background job and return a job id to poll (heavy sync work on
-    ``jobs.POOL``, mirroring the procurement ingest). Scaffold: not implemented."""
-    raise NotImplementedError("client_boq /review/ingest — scaffold only")
+def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str) -> None:
+    """Background worker: run the review and record progress/result/error on the job."""
+    jobs.JOBS.update(job_id, status="running", stage="ingesting")
+    try:
+        register = review_run.run_review(
+            uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+        )
+        jobs.JOBS.update(job_id, status="done", stage="verifying", result=_result_payload(register))
+    except Exception as exc:  # noqa: BLE001 — any stage failure becomes a job error, not a crash
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+@router.post("/review/run", response_model=JobState)
+def post_review_run(
+    files: Optional[list[UploadFile]] = File(None),
+    project_name: str = Form(""),
+) -> JobState:
+    """Run REVIEW (s01→s02→s03→s07→s08) over an uploaded document set. Live: kick off a background job
+    and poll ``/review/status/{job_id}``. DEMO: run inline and return the register offline (no job, no
+    network) — the fixtures drive a full register. s04–s06 are skipped (slice 1); the result names
+    them in ``slice2_pending``."""
+    uploads: list[RawUpload] = [
+        (f.filename or "document", f.content_type, f.file.read()) for f in (files or [])
+    ]
+    if demo_mode():
+        register = review_run.run_review(uploads, project_name)
+        return JobState(status="done", stage="verifying", result=_result_payload(register))
+
+    job_id = jobs.JOBS.create("review")
+    jobs.POOL.submit(_run_review_job, job_id, uploads, project_name)
+    return JobState(job_id=job_id, status="queued", stage="uploading")
 
 
 @router.get("/review/status/{job_id}", response_model=JobState)
 def get_review_status(job_id: str) -> JobState:
-    """Poll a client_boq background job (review or estimate). Real: reads the in-package job store."""
+    """Poll a client_boq background job. Returns the result only when ``status == done``."""
     job = jobs.JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
@@ -106,34 +119,71 @@ def get_review_status(job_id: str) -> JobState:
 
 @router.get("/review/register/{set_id}")
 def get_review_register(set_id: str) -> dict:
-    """Return the assembled departure register for a document set. Scaffold: not implemented."""
-    raise NotImplementedError("client_boq /review/register — scaffold only")
+    """The persisted departure register for a document set (from the tables — the source of truth)."""
+    conn = store.get_conn()
+    try:
+        register = store.load_register(conn, set_id)
+    finally:
+        conn.close()
+    if register is None:
+        raise HTTPException(status_code=404, detail=f"No review register for set {set_id!r}.")
+    return _result_payload(register)
+
+
+# ---------------------------------------------------------------------------
+# REVIEW — the human gate (the ONLY writer of confirmed/dismissed + the gate flag)
+# ---------------------------------------------------------------------------
+class ReviewApproval(BaseModel):
+    set_id: str
+    # item number -> "confirmed" | "dismissed". The only place a verdict is written.
+    decisions: dict[int, str] = Field(default_factory=dict)
+    approved: bool = True  # open the review→estimate gate
 
 
 @router.post("/review/approve", response_model=GateState)
 def post_review_approve(req: ReviewApproval) -> GateState:
-    """The human gate: approve (or un-approve) the review register for a document set. This is the
-    ONLY thing that opens the review→estimate gate. Real deterministic infra."""
-    conn = _conn()
+    """The human gate. Records each per-line verdict (confirmed/dismissed) — no other endpoint or
+    stage may write these — and sets the review→estimate gate flag. A citation_failed line cannot be
+    confirmed until re-reviewed (its citation is untrustworthy)."""
+    bad = {v for v in req.decisions.values() if v not in HUMAN_VERDICTS}
+    if bad:
+        raise HTTPException(status_code=422, detail=f"decisions must be one of {sorted(HUMAN_VERDICTS)}; got {sorted(bad)}")
+
+    conn = store.get_conn()
     try:
-        _set_review_approved(conn, req.set_id, req.approved)
-        return GateState(set_id=req.set_id, review_approved=review_is_approved(conn, req.set_id))
+        register = store.load_register(conn, req.set_id)
+        if register is None:
+            raise HTTPException(status_code=404, detail=f"No review register for set {req.set_id!r}.")
+        for item in register.items:
+            verdict = req.decisions.get(item.item)
+            if verdict is None:
+                continue
+            if verdict == "confirmed" and item.status == STATUS_CITATION_FAILED:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Item {item.item} has a failed citation and cannot be confirmed until re-reviewed.",
+                )
+            item.status = verdict
+            item.register_status = "closed"
+        store.save_register(conn, register)
+        store.set_review_approved(conn, req.set_id, req.approved)
+        return GateState(set_id=req.set_id, review_approved=store.review_is_approved(conn, req.set_id))
     finally:
         conn.close()
 
 
 @router.get("/gate/{set_id}", response_model=GateState)
 def get_gate(set_id: str) -> GateState:
-    """The current review→estimate gate state for a document set. Real."""
-    conn = _conn()
+    """The current review→estimate gate state for a document set."""
+    conn = store.get_conn()
     try:
-        return GateState(set_id=set_id, review_approved=review_is_approved(conn, set_id))
+        return GateState(set_id=set_id, review_approved=store.review_is_approved(conn, set_id))
     finally:
         conn.close()
 
 
 # ---------------------------------------------------------------------------
-# ESTIMATE workflow — gated on review approval
+# ESTIMATE — gated on review approval (workflow itself is a later slice)
 # ---------------------------------------------------------------------------
 class EstimateRunRequest(BaseModel):
     set_id: str
@@ -141,16 +191,16 @@ class EstimateRunRequest(BaseModel):
 
 @router.post("/estimate/run", response_model=JobState)
 def post_estimate_run(req: EstimateRunRequest) -> JobState:
-    """Run the ESTIMATE workflow for a document set. REFUSES until the review register is
-    human-approved (the locked review→estimate gate) — a 409 otherwise. The gate check is real;
-    the estimate work itself is scaffold-only."""
-    conn = _conn()
+    """Run ESTIMATE for a document set. REFUSES until the review register is human-approved (the
+    locked review→estimate gate) — a 409 otherwise. The gate is real; the estimate workflow is a
+    later slice."""
+    conn = store.get_conn()
     try:
-        if not review_is_approved(conn, req.set_id):
+        if not store.review_is_approved(conn, req.set_id):
             raise HTTPException(
                 status_code=409,
                 detail="Estimate is gated: the review register for this document set is not approved yet.",
             )
     finally:
         conn.close()
-    raise NotImplementedError("client_boq /estimate/run — scaffold only (gate passed)")
+    raise NotImplementedError("client_boq /estimate/run — estimate workflow is a later slice (gate passed)")

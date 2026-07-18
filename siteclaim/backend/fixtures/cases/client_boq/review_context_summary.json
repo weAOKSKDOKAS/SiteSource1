@@ -1,1 +1,23 @@
-{"summary": "", "scope_responsibilities": [], "obligations": [], "interfaces": []}
+{
+  "summary": "A subcontract for aluminium windows and curtain walling to the Harbour Crest Residences tower. Commercial risk is concentrated in the payment, retention and delay-damages terms, an extended defects liability period, and a fitness-for-purpose warranty that would sit outside professional-indemnity cover.",
+  "scope_responsibilities": [
+    "Supply, fabrication and installation of aluminium windows and unitised curtain walling",
+    "Provision of branded site hoarding and signage at the perimeter"
+  ],
+  "obligations": [
+    "Air and water penetration testing of curtain wall mock-ups",
+    "Structural glazing certification prior to installation"
+  ],
+  "client_assumptions": [
+    "Payment to the subcontractor is conditional on the Contractor being paid by the Employer",
+    "Retention is released only at Final Certificate, not at Practical Completion"
+  ],
+  "interfaces": [
+    "Structural frame tolerances at slab edges",
+    "Waterproofing membrane lap with the facade at parapets"
+  ],
+  "clarifications": [
+    "Confirm whether the fitness-for-purpose warranty is intended to override manufacturer warranties",
+    "Confirm the aggregate cap (if any) on liquidated damages"
+  ]
+}

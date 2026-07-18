@@ -1,1 +1,88 @@
-{"set_id": "demo", "name": "Demo contract set", "slug": "demo", "clauses": []}
+{
+  "set_id": "",
+  "name": "Aluminium Windows & Curtain Wall Subcontract — Harbour Crest Residences",
+  "slug": "",
+  "documents": ["subcontract_agreement.pdf", "scope_of_works.pdf", "particular_conditions.pdf"],
+  "clauses": [
+    {
+      "clause_id": "3.2",
+      "ref": "Clause 3.2",
+      "heading": "Warranties",
+      "text": "The Subcontractor warrants that the works will be fit for their intended purpose for the life of the building.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 4
+    },
+    {
+      "clause_id": "4.8",
+      "ref": "Clause 4.8",
+      "heading": "Assessment of Payment Claims",
+      "text": "Payment claims shall be assessed and certified within 30 business days of submission.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 6
+    },
+    {
+      "clause_id": "5.2",
+      "ref": "Clause 5.2",
+      "heading": "Retention",
+      "text": "Retention of 10% of each payment shall be held and released only upon issue of the Final Certificate.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 7
+    },
+    {
+      "clause_id": "6.1",
+      "ref": "Clause 6.1",
+      "heading": "Notice of Delay",
+      "text": "Any claim for an extension of time must be notified within 10 business days of the event giving rise to it.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 8
+    },
+    {
+      "clause_id": "8.3",
+      "ref": "Clause 8.3",
+      "heading": "Liquidated Damages",
+      "text": "Liquidated damages of HK$25,000 per day shall apply for late completion, with no cap on the aggregate amount.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 11
+    },
+    {
+      "clause_id": "9.9",
+      "ref": "Clause 9.9",
+      "heading": "Limitation of Liability",
+      "text": "The Subcontractor's total liability under this Subcontract is capped at the Subcontract value.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 13
+    },
+    {
+      "clause_id": "10.4",
+      "ref": "Clause 10.4",
+      "heading": "Termination for Default",
+      "text": "The Contractor may terminate this Subcontract if a default is not remedied within 5 days of written notice.",
+      "source_doc": "subcontract_agreement.pdf",
+      "page": 14
+    },
+    {
+      "clause_id": "11.2",
+      "ref": "Clause 11.2",
+      "heading": "Defects Liability Period",
+      "text": "The Defects Liability Period is 24 months from the date of Practical Completion.",
+      "source_doc": "particular_conditions.pdf",
+      "page": 3
+    },
+    {
+      "clause_id": "12.1",
+      "ref": "Clause 12.1",
+      "heading": "Payment Conditionality",
+      "text": "Payment to the Subcontractor is conditional upon the Contractor first receiving payment from the Employer.",
+      "source_doc": "particular_conditions.pdf",
+      "page": 4
+    },
+    {
+      "clause_id": "14.3",
+      "ref": "Clause 14.3",
+      "heading": "Site Hoarding and Signage",
+      "text": "The Subcontractor shall provide branded hoarding and signage at the site perimeter as directed by the Contractor.",
+      "source_doc": "scope_of_works.pdf",
+      "page": 9
+    }
+  ]
+}

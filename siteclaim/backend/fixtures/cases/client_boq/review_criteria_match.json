@@ -1,1 +1,103 @@
-{"departures": []}
+{
+  "departures": [
+    {
+      "clause_id": "8.3",
+      "criterion_id": "TP-04",
+      "extracted_value": "Liquidated damages HK$25,000/day, uncapped (no aggregate cap)",
+      "cited_text": "no cap on the aggregate amount",
+      "amendment_proposal": "Cap aggregate liquidated damages at 10% of the Subcontract value.",
+      "rationale": "Uncapped LDs expose the Subcontractor to unlimited delay damages disproportionate to the package.",
+      "proposed_position": "Liquidated damages capped at 10% of the Subcontract value."
+    },
+    {
+      "clause_id": "5.2",
+      "criterion_id": "PS-04",
+      "extracted_value": "Retention 10%, released only at Final Certificate",
+      "cited_text": "Retention of 10% of each payment",
+      "amendment_proposal": "Reduce retention to 5% with half released at Practical Completion.",
+      "rationale": "10% retention held to Final Certificate ties up working capital for the full defects period.",
+      "proposed_position": "5% retention; 2.5% released at Practical Completion."
+    },
+    {
+      "clause_id": "11.2",
+      "criterion_id": "SQD-05",
+      "extracted_value": "Defects Liability Period 24 months",
+      "cited_text": "Defects Liability Period is 24 months",
+      "amendment_proposal": "Reduce the Defects Liability Period to 12 months.",
+      "rationale": "A 24-month DLP is effectively an unpriced maintenance period.",
+      "proposed_position": "12-month Defects Liability Period."
+    },
+    {
+      "clause_id": "10.4",
+      "criterion_id": "LR-05",
+      "extracted_value": "Cure period 5 days",
+      "cited_text": "not remedied within 5 days of written notice",
+      "amendment_proposal": "Extend the cure period to 14 days.",
+      "rationale": "A 5-day cure period is too short to remedy a genuine default before termination.",
+      "proposed_position": "14-day cure period before termination for default."
+    },
+    {
+      "clause_id": "4.8",
+      "criterion_id": "PS-01",
+      "extracted_value": "Assessment within 30 business days",
+      "cited_text": "assessed and certified within 30 business days",
+      "amendment_proposal": "Reduce the assessment period to 14 business days.",
+      "rationale": "A 30-business-day assessment delays cash recovery well beyond SOPA norms.",
+      "proposed_position": "Payment claims assessed within 14 business days."
+    },
+    {
+      "clause_id": "6.1",
+      "criterion_id": "TP-03",
+      "extracted_value": "Notice of delay within 10 business days",
+      "cited_text": "notified within 10 business days",
+      "amendment_proposal": "",
+      "rationale": "The notice period sits within the acceptable 5-10 business-day range.",
+      "proposed_position": ""
+    },
+    {
+      "clause_id": "9.9",
+      "criterion_id": "LR-01",
+      "extracted_value": "Total liability capped at the Subcontract value",
+      "cited_text": "capped at the Subcontract value",
+      "amendment_proposal": "",
+      "rationale": "A liability cap is present at the Subcontract value; adequacy is a commercial judgement.",
+      "proposed_position": ""
+    },
+    {
+      "clause_id": "3.2",
+      "criterion_id": "SQD-06",
+      "extracted_value": "",
+      "cited_text": "fit for their intended purpose for the life of the building",
+      "amendment_proposal": "Delete the fitness-for-purpose / life-of-building warranty.",
+      "rationale": "Fitness for purpose is typically excluded by professional-indemnity insurance and outlives the business.",
+      "proposed_position": "Warranties limited to pass-through manufacturer warranties."
+    },
+    {
+      "clause_id": "12.1",
+      "criterion_id": "PS-03",
+      "extracted_value": "",
+      "cited_text": "conditional upon the Contractor first receiving payment",
+      "amendment_proposal": "Delete the pay-when-paid condition.",
+      "rationale": "Pay-when-paid is prohibited under SOPA and shifts the Employer's insolvency risk onto the Subcontractor.",
+      "proposed_position": "Payment unconditional per the agreed payment schedule."
+    },
+    {
+      "clause_id": "14.3",
+      "criterion_id": "",
+      "extracted_value": "",
+      "cited_text": "branded hoarding and signage",
+      "amendment_proposal": "",
+      "rationale": "No acceptable-terms criterion covers site hoarding or signage; surfaced for a human to place.",
+      "proposed_position": ""
+    },
+    {
+      "clause_id": "13.5",
+      "criterion_id": "PS-05",
+      "extracted_value": "Security may be called without notice",
+      "cited_text": "call the security without notice",
+      "amendment_proposal": "Require 5 business days' notice before any call on the security.",
+      "rationale": "Calling the bank guarantee without notice is an ambush on the Subcontractor's security.",
+      "proposed_position": "5 business days' written notice before any recourse to security."
+    }
+  ]
+}

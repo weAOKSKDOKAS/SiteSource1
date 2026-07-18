@@ -1,31 +1,56 @@
 """REVIEW stage 07 — assemble the departure register.
 
-Bucket (mapping doc task 9): **Deterministic** (template fill). Collects the s03–s06 findings into
-one :class:`DepartureRegister` in a fixed structure. No AI. This register is the workflow's decision
-surface: the ``approved`` flag on it is the review→estimate gate, set only by a human approval
-endpoint (see ``router``). Assembly here does not approve — it just builds the register with every
-verdict still ``unreviewed``.
+Bucket (mapping doc task 9): **Deterministic** (template fill). Collects the s03 departures into one
+:class:`DepartureRegister` structured exactly per the review doc — header fields (Project, Contract
+Type, Package, Subcontract Reference, Subcontractor Name, Submission Date) plus the line items with
+their Open/Closed status column. No AI.
+
+This slice runs s01→s02→s03→s07→s08 only; ``scope_findings`` / ``program_findings`` / ``cashflow``
+(s04–s06) are slice 2. When they are absent, the register records them in ``slice2_pending`` so the
+gap is explicit rather than silently missing. Assembly does not approve — every verdict stays as s03
+left it; only the human approve endpoint moves a line to confirmed/dismissed.
 """
 
 from __future__ import annotations
 
+from typing import Optional
+
 from client_boq.models import (
     CashflowProfile,
-    DepartureItem,
+    ContextSummary,
     DepartureRegister,
-    ProgramFinding,
-    ScopeAlignmentFinding,
+    DepartureSet,
+    ParsedDocumentSet,
+    ProgramFindingSet,
+    ScopeAlignmentSet,
 )
 
 
 def assemble_register(
     set_id: str,
-    project: str,
-    departures: list[DepartureItem],
-    scope_findings: list[ScopeAlignmentFinding],
-    program_findings: list[ProgramFinding],
-    cashflow: CashflowProfile,
+    parsed: ParsedDocumentSet,
+    summary: ContextSummary,
+    departures: DepartureSet,
+    *,
+    scope_findings: Optional[ScopeAlignmentSet] = None,
+    program_findings: Optional[ProgramFindingSet] = None,
+    cashflow: Optional[CashflowProfile] = None,
 ) -> DepartureRegister:
-    """Assemble the departure register from the review findings (verdicts left unreviewed).
-    Not implemented yet."""
-    raise NotImplementedError("client_boq REVIEW s07 (register assemble) — scaffold only")
+    """Assemble the departure register from the review findings (verdicts left as s03 set them)."""
+    pending: list[str] = []
+    if scope_findings is None:
+        pending.append("scope_alignment")
+    if program_findings is None:
+        pending.append("program")
+    if cashflow is None:
+        pending.append("cashflow")
+
+    return DepartureRegister(
+        set_id=set_id,
+        project=parsed.name,
+        package=parsed.name,
+        items=list(departures.departures),
+        aligned_criteria=list(departures.aligned_criteria),
+        slice2_pending=pending,
+        approved=False,
+    )

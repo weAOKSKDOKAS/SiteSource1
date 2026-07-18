@@ -20,8 +20,11 @@ _MODULES = [
     "client_boq.models",
     "client_boq.criteria_loader",
     "client_boq.rates",
+    "client_boq.rules",
+    "client_boq.store",
     "client_boq.jobs",
     "client_boq.router",
+    "client_boq.review.run",
     "client_boq.review.s01_ingest",
     "client_boq.review.s02_context_summary",
     "client_boq.review.s03_criteria_match",
@@ -106,10 +109,18 @@ def test_rates_loader_parses_csv() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The stages are stubs — they raise NotImplementedError (no accidental logic)
+# Slice-2 stages remain stubs — they raise NotImplementedError (no accidental logic).
+# (Slice-1 stages s01/s02/s03/s07/s08 are implemented and covered by their own tests.)
 # ---------------------------------------------------------------------------
-def test_stage_is_a_stub() -> None:
-    from client_boq.review import s01_ingest
+def test_slice2_stages_are_stubs() -> None:
+    from client_boq.estimate import s01_scope_review
+    from client_boq.review import s04_scope_align, s05_program_check, s06_cashflow
 
     with pytest.raises(NotImplementedError):
-        s01_ingest.ingest_review_documents([], "demo")
+        s04_scope_align.check_scope_alignment(None, None)
+    with pytest.raises(NotImplementedError):
+        s05_program_check.check_program(None, None)
+    with pytest.raises(NotImplementedError):
+        s06_cashflow.build_cashflow(None, None)
+    with pytest.raises(NotImplementedError):
+        s01_scope_review.review_scope(None)
