@@ -1,0 +1,6 @@
+rate_id,category,code,description,unit,rate,currency,source,notes
+LAB-001,labour,LAB-CONC,Concreting crew (all-in gang rate),hr,650,HKD,seed,Illustrative v1 rate — replace with the company book
+PLT-001,plant,PUMP-42,Concrete boom pump 42m (incl. operator),day,4800,HKD,seed,Illustrative
+MAT-001,material,C40,Ready-mixed concrete C40/20 supply,m3,1150,HKD,seed,Illustrative
+SUB-001,subcontract,REBAR,"Reinforcement supply, cut, bend & fix",tonne,14500,HKD,seed,Illustrative subcontract rate
+PRD-001,productivity,FORMWORK,Wall formwork erection output,m2/hr,2.5,,seed,Crew output rate (m2 per crew-hour)
