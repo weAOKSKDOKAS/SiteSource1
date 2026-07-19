@@ -25,6 +25,7 @@ from client_boq.models import (
     DepartureRegister,
     Estimate,
     EstimateScope,
+    LetterOfOffer,
     ParsedDocumentSet,
     ScopeReviewResult,
 )
@@ -278,3 +279,31 @@ def save_scope_artifact(ws: Workspace, tender_id: str, scope: EstimateScope) -> 
     (_client_boq_dir(ws, tender_id) / "estimate_scope.json").write_text(
         scope.model_dump_json(indent=2), encoding="utf-8"
     )
+
+
+# ---------------------------------------------------------------------------
+# Offer letter (draft) persistence
+# ---------------------------------------------------------------------------
+def save_letter(conn: sqlite3.Connection, letter: LetterOfOffer) -> None:
+    conn.execute(
+        """
+        INSERT INTO client_boq_letters (set_id, letter_json)
+        VALUES (:set_id, :json)
+        ON CONFLICT(set_id) DO UPDATE SET letter_json = excluded.letter_json
+        """,
+        {"set_id": letter.set_id, "json": letter.model_dump_json()},
+    )
+    conn.commit()
+
+
+def load_letter(conn: sqlite3.Connection, set_id: str) -> Optional[LetterOfOffer]:
+    row = conn.execute(
+        "SELECT letter_json FROM client_boq_letters WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    if not row or not row["letter_json"] or row["letter_json"] == "{}":
+        return None
+    return LetterOfOffer.model_validate_json(row["letter_json"])
+
+
+def save_letter_artifact(ws: Workspace, tender_id: str, letter: LetterOfOffer) -> None:
+    (_client_boq_dir(ws, tender_id) / "letter_of_offer.md").write_text(letter.markdown, encoding="utf-8")

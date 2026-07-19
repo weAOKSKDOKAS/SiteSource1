@@ -77,6 +77,12 @@ def test_estimate_gated_then_runs_with_hand_checked_totals() -> None:
     got = client.get(f"/client-boq/estimate/{set_id}")
     assert got.status_code == 200 and got.json()["totals"]["price"] == 6_985_002.25
 
+    # The offer letter draft was generated on the run and carries the exact persisted price.
+    letter = client.get(f"/client-boq/estimate/{set_id}/letter")
+    assert letter.status_code == 200
+    lj = letter.json()
+    assert lj["price_str"] == "$6,985,002.25" and lj["price_str"] in lj["markdown"]
+
 
 def test_estimate_demo_leaves_committed_db_byte_identical(monkeypatch) -> None:
     monkeypatch.delenv("SITESOURCE_DB", raising=False)  # exercise the DEMO scratch-DB default (4A)

@@ -18,9 +18,13 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from client_boq import store
-from client_boq.estimate import money, s01_scope_review, s02_schedule, s03_cost_buildup, s04_indirects, s05_validate
+from client_boq.estimate import (
+    money, s01_scope_review, s02_schedule, s03_cost_buildup, s04_indirects, s05_validate, s06_offer,
+)
 from client_boq.rates import load_rates
-from client_boq.models import ContextSummary, Estimate, EstimateSchedule, EstimateTotals, ScopeReviewResult
+from client_boq.models import (
+    ContextSummary, DepartureRegister, Estimate, EstimateSchedule, EstimateTotals, LetterMeta, ScopeReviewResult,
+)
 from pipeline.workspace import Workspace
 
 ProgressCB = Callable[[str], None]
@@ -86,11 +90,20 @@ def assemble_estimate(set_id: str, margin_pct: float, schedule: EstimateSchedule
     )
 
 
+def _resolve_meta(meta: Optional[LetterMeta], set_id: str, register: DepartureRegister) -> LetterMeta:
+    """Fill the letter header defaults (project/ref from the reviewed register) around any supplied
+    meta. All still code-injected — the AI never sees or writes these."""
+    meta = meta or LetterMeta()
+    project = meta.project or register.project or set_id
+    return meta.model_copy(update={"project": project, "ref": meta.ref or project})
+
+
 def run_estimate(
     set_id: str, margin_pct: float, schedule: EstimateSchedule, *,
-    progress_cb: Optional[ProgressCB] = None,
+    letter_meta: Optional[LetterMeta] = None, progress_cb: Optional[ProgressCB] = None,
 ) -> Estimate:
-    """Assemble the estimate and persist it (tables + artifact). Returns the estimate."""
+    """Assemble the estimate, then draft the offer letter (s06), and persist both (tables + artifacts).
+    Returns the estimate; the letter is fetched via ``/estimate/{set_id}/letter``."""
     def step(stage: str) -> None:
         if progress_cb:
             progress_cb(stage)
@@ -104,6 +117,15 @@ def run_estimate(
     try:
         store.save_estimate(conn, estimate)
         store.save_estimate_artifact(ws, set_id, estimate)
+
+        # s06 — offer letter draft (AI prose + code-injected price/fields/schedule + confirmed departures).
+        step("drafting letter")
+        register = store.load_register(conn, set_id)
+        scope = store.load_scope(conn, set_id)
+        if register is not None and scope is not None:
+            letter = s06_offer.build_letter(scope, estimate, register, _resolve_meta(letter_meta, set_id, register))
+            store.save_letter(conn, letter)
+            store.save_letter_artifact(ws, set_id, letter)
     finally:
         conn.close()
     return estimate

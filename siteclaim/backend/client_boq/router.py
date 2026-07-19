@@ -31,7 +31,7 @@ from client_boq.models import (
     DepartureRegister,
     RawUpload,
 )
-from client_boq.models import Estimate, EstimateSchedule
+from client_boq.models import Estimate, EstimateSchedule, LetterMeta
 from client_boq.review import run as review_run
 from client_boq.estimate import run as estimate_run
 from client_boq.estimate import workbook as estimate_workbook
@@ -228,6 +228,7 @@ class EstimateRunRequest(BaseModel):
     set_id: str
     margin_pct: float | None = None                 # required in live (the human states it); DEMO uses the fixture margin
     schedule: EstimateSchedule | None = None        # required in live; DEMO uses the fixture schedule
+    letter: LetterMeta | None = None                # offer-letter header fields (code-injected); defaults applied
 
 
 def _flag_counts(estimate: Estimate) -> dict[str, int]:
@@ -260,11 +261,13 @@ def _gate_or_409(set_id: str) -> None:
         conn.close()
 
 
-def _run_estimate_job(job_id: str, set_id: str, margin_pct: float, schedule: EstimateSchedule) -> None:
+def _run_estimate_job(job_id: str, set_id: str, margin_pct: float, schedule: EstimateSchedule,
+                      letter: LetterMeta | None) -> None:
     jobs.JOBS.update(job_id, status="running", stage="costing")
     try:
         estimate = estimate_run.run_estimate(
-            set_id, margin_pct, schedule, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+            set_id, margin_pct, schedule, letter_meta=letter,
+            progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
         )
         jobs.JOBS.update(job_id, status="done", stage="persisting", result=_estimate_payload(estimate))
     except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
@@ -387,6 +390,7 @@ def post_estimate_run(req: EstimateRunRequest) -> JobState:
     if demo_mode():
         estimate = estimate_run.run_estimate(
             req.set_id, estimate_run.DEMO_MARGIN_PCT, estimate_run.load_demo_schedule(),
+            letter_meta=req.letter,
         )
         return JobState(kind="estimate", status="done", stage="persisting",
                         result=_estimate_payload(estimate))
@@ -394,7 +398,7 @@ def post_estimate_run(req: EstimateRunRequest) -> JobState:
     if req.schedule is None or req.margin_pct is None:
         raise HTTPException(status_code=422, detail="margin_pct and schedule are required for a live estimate run.")
     job_id = jobs.JOBS.create("estimate")
-    jobs.POOL.submit(_run_estimate_job, job_id, req.set_id, req.margin_pct, req.schedule)
+    jobs.POOL.submit(_run_estimate_job, job_id, req.set_id, req.margin_pct, req.schedule, req.letter)
     return JobState(job_id=job_id, kind="estimate", status="queued", stage="costing")
 
 
@@ -443,3 +447,24 @@ def get_estimate_workbook(set_id: str) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="estimate_{set_id}.xlsx"'},
     )
+
+
+@router.get("/estimate/{set_id}/letter")
+def get_estimate_letter(set_id: str) -> dict:
+    """The offer-letter DRAFT for a document set — the rendered markdown plus its structured pieces
+    (price, inclusions/exclusions, pricing schedule, and Appendix A bullets with their source tags).
+    A draft for human editing; nothing sends it."""
+    conn = store.get_conn()
+    try:
+        letter = store.load_letter(conn, set_id)
+    finally:
+        conn.close()
+    if letter is None:
+        raise HTTPException(status_code=404, detail=f"No offer letter for set {set_id!r}; run the estimate first.")
+    return {
+        "set_id": set_id,
+        "price": letter.price,
+        "price_str": letter.price_str,
+        "markdown": letter.markdown,
+        "letter": letter.model_dump(),
+    }

@@ -1,1 +1,21 @@
-{"body": "", "inclusions": [], "exclusions": [], "price": 0.0}
+{
+  "intro": "We greatly appreciate the opportunity to submit a quotation for the aluminium windows and curtain-walling package. Our extensive experience delivering unitised facade systems on comparable towers positions us to deliver exceptional results, and we are confident our proven track record will benefit the construction of this project.",
+  "inclusions": [
+    "Supply, fabrication and installation of aluminium windows and unitised curtain-wall panels to all elevations",
+    "Air and water penetration testing of the curtain-wall mock-up",
+    "Structural glazing certification prior to installation",
+    "All bracketry and fixings for the facade system"
+  ],
+  "exclusions": [
+    "Builder's work in connection (forming openings, making good) by others",
+    "Permanent power and water for on-site testing",
+    "Temporary crane access beyond the installation window",
+    "Podium-level glazing pending resolution of the specification/drawing conflict",
+    "Survey set-out and pre-installation checks"
+  ],
+  "additional_conditions": [
+    "The client provides safe, unimpeded, all-weather access to the facade throughout the installation window.",
+    "Slab-edge tolerances to be confirmed prior to fabrication; bracketry allows for ±15mm adjustment.",
+    "If quantities change by more than ±10% from the priced schedule, rates to be re-discussed."
+  ]
+}

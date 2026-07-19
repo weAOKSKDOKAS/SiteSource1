@@ -108,14 +108,5 @@ def test_rates_loader_parses_csv() -> None:
     assert "," in sub.description and sub.rate == 14500.0
 
 
-# ---------------------------------------------------------------------------
-# The ESTIMATE stages remain stubs — they raise NotImplementedError (no accidental logic).
-# (All REVIEW stages s01–s08 are implemented and covered by their own tests.)
-# ---------------------------------------------------------------------------
-def test_estimate_offer_stage_is_stub() -> None:
-    # s06 (offer letter) is deferred pending the committed letter templates; everything else in the
-    # estimate workflow (s01 scope, s02–s05 spine) is implemented and covered by its own tests.
-    from client_boq.estimate import s06_offer
-
-    with pytest.raises(NotImplementedError):
-        s06_offer.draft_offer(None, None)
+# All REVIEW (s01–s08) and ESTIMATE (s01 scope, s02–s05 spine, s06 letter) stages are implemented and
+# covered by their own tests — no stubs remain in the client_boq workflow.

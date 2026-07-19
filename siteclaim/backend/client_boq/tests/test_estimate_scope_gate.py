@@ -58,6 +58,14 @@ def test_scope_and_run_gate_matrix_with_wiring_and_amendment() -> None:
     # 3) both gates open → run succeeds.
     assert client.post("/client-boq/estimate/run", json={"set_id": set_id}).status_code == 200
 
+    # The offer letter carries the wiring through to Appendix A: the confirmed departure appears
+    # verbatim (source register); the dismissed one is absent everywhere.
+    lj = client.get(f"/client-boq/estimate/{set_id}/letter").json()
+    appendix = lj["letter"]["appendix"]
+    assert any(a["source"] == "register" and a["text"] == confirmed["proposed_position"] for a in appendix)
+    assert all(dismissed["proposed_position"] not in a["text"] for a in appendix)
+    assert dismissed["proposed_position"] not in lj["markdown"]
+
 
 def test_scope_approve_requires_a_draft_first() -> None:
     client = _client()

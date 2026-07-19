@@ -470,11 +470,59 @@ class Estimate(BaseModel):
     totals: EstimateTotals = Field(default_factory=EstimateTotals)
 
 
-class LetterOfOffer(BaseModel):
-    body: str = ""
+class LetterMeta(BaseModel):
+    """The offer-letter header fields — CODE-INJECTED from the run request, never AI-written. Sensible
+    demo defaults so a letter renders without every field supplied."""
+
+    company_name: str = "SiteSource Contracting Ltd"
+    company_address: str = "Unit 1, Example Industrial Building, Kwun Tong, Hong Kong"
+    contact_name: str = "The Estimator"
+    contact_number: str = "+852 0000 0000"
+    project: str = ""            # defaults to the document set name
+    client_name: str = "the Client"
+    date: str = ""               # as supplied; blank renders a placeholder (kept deterministic for tests)
+    ref: str = ""                # defaults to the project
+    validity_days: int = 90
+
+
+class LetterDraft(BaseModel):
+    """The AI-DRAFTED parts of the offer letter (the only parts a model writes). Seeded from the
+    approved scope. Everything else — price, header fields, the pricing-schedule table, and the
+    confirmed-departure Appendix A bullets — is injected by code."""
+
+    intro: str = ""
     inclusions: list[str] = Field(default_factory=list)
     exclusions: list[str] = Field(default_factory=list)
-    price: float = 0.0
+    additional_conditions: list[str] = Field(default_factory=list)  # AI Appendix-A conditions from the scope
+
+
+class LetterAppendixItem(BaseModel):
+    text: str = ""
+    source: str = "draft"        # "register" (confirmed departure, verbatim) | "draft" (AI condition)
+
+
+class PricingScheduleRow(BaseModel):
+    item_id: str = ""
+    description: str = ""
+    total: float = 0.0
+
+
+class LetterOfOffer(BaseModel):
+    """The assembled offer letter (a DRAFT for human editing; nothing sends it). Carries the
+    structured pieces plus the rendered ``markdown``. ``price``/``price_str`` and the
+    ``pricing_schedule`` are injected from the persisted estimate; ``appendix`` is the confirmed
+    departures (source ``register``, verbatim) followed by AI conditions (source ``draft``)."""
+
+    set_id: str = ""
+    meta: LetterMeta = Field(default_factory=LetterMeta)
+    intro: str = ""                                              # AI
+    price: float = 0.0                                          # injected
+    price_str: str = ""                                        # injected, formatted
+    inclusions: list[str] = Field(default_factory=list)         # AI
+    exclusions: list[str] = Field(default_factory=list)         # AI
+    pricing_schedule: list[PricingScheduleRow] = Field(default_factory=list)  # injected
+    appendix: list[LetterAppendixItem] = Field(default_factory=list)
+    markdown: str = ""                                          # the assembled letter
 
 
 # ===========================================================================
@@ -514,6 +562,12 @@ _DDL = [
         amended_summary TEXT NOT NULL DEFAULT '',      -- human-edited scope of record (wins when set)
         approved        INTEGER NOT NULL DEFAULT 0,    -- the scope gate (0/1) — second estimate gate
         approved_at     TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_letters (
+        set_id      TEXT PRIMARY KEY,
+        letter_json TEXT NOT NULL DEFAULT '{}'         -- the assembled LetterOfOffer (draft)
     )
     """,
 ]
