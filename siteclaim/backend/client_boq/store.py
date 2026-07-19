@@ -20,7 +20,14 @@ from pathlib import Path
 from typing import Optional
 
 from client_boq import models
-from client_boq.models import DepartureRegister, Estimate, ParsedDocumentSet
+from client_boq.models import (
+    ContextSummary,
+    DepartureRegister,
+    Estimate,
+    EstimateScope,
+    ParsedDocumentSet,
+    ScopeReviewResult,
+)
 from db import store as db_store
 from pipeline.llm_client import demo_mode
 from pipeline.workspace import Workspace
@@ -88,6 +95,16 @@ def load_parsed(conn: sqlite3.Connection, set_id: str) -> Optional[ParsedDocumen
     if not row or not row["parsed_json"] or row["parsed_json"] == "{}":
         return None
     return ParsedDocumentSet.model_validate_json(row["parsed_json"])
+
+
+def load_summary(conn: sqlite3.Connection, set_id: str) -> Optional[ContextSummary]:
+    """The persisted s02 commercial-risk summary for ``set_id``, or None."""
+    row = conn.execute(
+        "SELECT summary_json FROM client_boq_document_sets WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    if not row or not row["summary_json"] or row["summary_json"] == "{}":
+        return None
+    return ContextSummary.model_validate_json(row["summary_json"])
 
 
 # ---------------------------------------------------------------------------
@@ -197,4 +214,67 @@ def load_estimate(conn: sqlite3.Connection, set_id: str) -> Optional[Estimate]:
 def save_estimate_artifact(ws: Workspace, tender_id: str, estimate: Estimate) -> None:
     (_client_boq_dir(ws, tender_id) / "estimate.json").write_text(
         estimate.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Estimate scope (the s01 draft + the scope gate — the second estimate gate)
+# ---------------------------------------------------------------------------
+def save_scope_draft(conn: sqlite3.Connection, set_id: str, draft: ScopeReviewResult) -> None:
+    """Persist the s01 scope draft, preserving any existing approval/amendment (re-drafting never
+    silently re-opens the gate)."""
+    conn.execute(
+        """
+        INSERT INTO client_boq_estimate_scope (set_id, scope_json)
+        VALUES (:set_id, :json)
+        ON CONFLICT(set_id) DO UPDATE SET scope_json = excluded.scope_json
+        """,
+        {"set_id": set_id, "json": draft.model_dump_json()},
+    )
+    conn.commit()
+
+
+def load_scope(conn: sqlite3.Connection, set_id: str) -> Optional[EstimateScope]:
+    """The scope record (draft + amended summary + approved flag), or None. The stored ``approved``
+    column is authoritative (mirrors the review gate)."""
+    row = conn.execute(
+        "SELECT scope_json, amended_summary, approved FROM client_boq_estimate_scope WHERE set_id = ?",
+        (set_id,),
+    ).fetchone()
+    if not row or not row["scope_json"] or row["scope_json"] == "{}":
+        return None
+    return EstimateScope(
+        set_id=set_id, draft=ScopeReviewResult.model_validate_json(row["scope_json"]),
+        amended_summary=row["amended_summary"] or "", approved=bool(row["approved"]),
+    )
+
+
+def scope_is_approved(conn: sqlite3.Connection, set_id: str) -> bool:
+    """True when the estimate scope for ``set_id`` is human-approved — the estimate's second gate."""
+    row = conn.execute(
+        "SELECT approved FROM client_boq_estimate_scope WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    return bool(row and row["approved"])
+
+
+def approve_scope(conn: sqlite3.Connection, set_id: str, approved: bool, amended_summary: str = "") -> None:
+    """The scope gate writer (the ONLY place scope-approved state is set). An ``amended_summary`` (when
+    non-empty) becomes the approved scope of record; the original draft is retained in ``scope_json``."""
+    conn.execute(
+        """
+        INSERT INTO client_boq_estimate_scope (set_id, amended_summary, approved, approved_at)
+        VALUES (:set_id, :amended, :approved, CASE WHEN :approved THEN datetime('now') ELSE NULL END)
+        ON CONFLICT(set_id) DO UPDATE SET
+            amended_summary = excluded.amended_summary,
+            approved = excluded.approved,
+            approved_at = excluded.approved_at
+        """,
+        {"set_id": set_id, "amended": amended_summary.strip(), "approved": 1 if approved else 0},
+    )
+    conn.commit()
+
+
+def save_scope_artifact(ws: Workspace, tender_id: str, scope: EstimateScope) -> None:
+    (_client_boq_dir(ws, tender_id) / "estimate_scope.json").write_text(
+        scope.model_dump_json(indent=2), encoding="utf-8"
     )

@@ -336,13 +336,36 @@ class CitationCheck(BaseModel):
 # ESTIMATE workflow handoffs (unchanged from scaffold — stages remain stubs)
 # ===========================================================================
 class ScopeReviewNote(BaseModel):
+    """One scope note. ``kind`` is one of inclusion | exclusion | ambiguity | conflict | assumption
+    (estimating doc step 1). ``source`` distinguishes the AI draft from deterministically-injected
+    register context (``register``)."""
+
     kind: str = ""
     text: str = ""
+    source: str = "draft"             # "draft" | "register"
 
 
 class ScopeReviewResult(BaseModel):
+    """ESTIMATE s01 output (AI draft + injected register context). ``summary`` is the scope statement;
+    it is what an ``amended_summary`` at the scope gate overrides. Draft only — no verdicts, no numbers."""
+
+    summary: str = ""
     notes: list[ScopeReviewNote] = Field(default_factory=list)
     clarifying_questions: list[str] = Field(default_factory=list)
+
+
+class EstimateScope(BaseModel):
+    """The persisted scope record for the estimate's first step + its human gate. ``amended_summary``
+    (when non-empty) is the approved scope of record and wins over the draft's ``summary``; the
+    original draft is retained. ``approved`` is the estimate's second gate (mirrors the review gate)."""
+
+    set_id: str = ""
+    draft: ScopeReviewResult = Field(default_factory=ScopeReviewResult)
+    amended_summary: str = ""
+    approved: bool = False
+
+    def summary_of_record(self) -> str:
+        return self.amended_summary.strip() or self.draft.summary
 
 
 # --- ESTIMATE input (the structured pricing schedule; request payload in live, fixture in DEMO) ---
@@ -482,6 +505,15 @@ _DDL = [
         set_id        TEXT PRIMARY KEY,
         estimate_json TEXT NOT NULL DEFAULT '{}',
         created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_estimate_scope (
+        set_id          TEXT PRIMARY KEY,
+        scope_json      TEXT NOT NULL DEFAULT '{}',   -- the s01 draft (ScopeReviewResult)
+        amended_summary TEXT NOT NULL DEFAULT '',      -- human-edited scope of record (wins when set)
+        approved        INTEGER NOT NULL DEFAULT 0,    -- the scope gate (0/1) — second estimate gate
+        approved_at     TEXT
     )
     """,
 ]

@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from client_boq import jobs, store
@@ -33,6 +34,7 @@ from client_boq.models import (
 from client_boq.models import Estimate, EstimateSchedule
 from client_boq.review import run as review_run
 from client_boq.estimate import run as estimate_run
+from client_boq.estimate import workbook as estimate_workbook
 from pipeline.llm_client import demo_mode
 
 router = APIRouter(prefix="/client-boq", tags=["client_boq"])
@@ -269,15 +271,119 @@ def _run_estimate_job(job_id: str, set_id: str, margin_pct: float, schedule: Est
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 
 
+# --- estimate step 1: scope draft + its human gate (mirrors the review gate) ----------------------
+class ScopeRunRequest(BaseModel):
+    set_id: str
+
+
+class ScopeApproval(BaseModel):
+    set_id: str
+    amended_summary: str = ""      # optional human edit; becomes the approved scope of record
+    approved: bool = True
+
+
+class ScopeGateState(BaseModel):
+    set_id: str
+    scope_approved: bool
+    summary_of_record: str = ""
+
+
+def _scope_payload(set_id: str, scope) -> dict:
+    return {
+        "set_id": set_id,
+        "review_approved": True,
+        "scope_approved": scope.approved,
+        "summary_of_record": scope.summary_of_record(),
+        "scope": scope.draft.model_dump(),
+        "amended_summary": scope.amended_summary,
+    }
+
+
+def _scope_gate_or_409(set_id: str) -> None:
+    conn = store.get_conn()
+    try:
+        if not store.scope_is_approved(conn, set_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Estimate is gated: the estimate scope for this document set is not approved yet.",
+            )
+    finally:
+        conn.close()
+
+
+def _run_scope_job(job_id: str, set_id: str) -> None:
+    jobs.JOBS.update(job_id, status="running", stage="scoping")
+    try:
+        estimate_run.run_scope(set_id, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s))
+        conn = store.get_conn()
+        try:
+            scope = store.load_scope(conn, set_id)
+        finally:
+            conn.close()
+        jobs.JOBS.update(job_id, status="done", stage="scoping", result=_scope_payload(set_id, scope))
+    except Exception as exc:  # noqa: BLE001
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+@router.post("/estimate/scope", response_model=JobState)
+def post_estimate_scope(req: ScopeRunRequest) -> JobState:
+    """Estimate step 1 — draft the scope (s01). REFUSES until the review register is approved (the
+    review→estimate gate) — a 409 otherwise. DEMO runs inline; live runs as a background job."""
+    _gate_or_409(req.set_id)
+    if demo_mode():
+        estimate_run.run_scope(req.set_id)
+        conn = store.get_conn()
+        try:
+            scope = store.load_scope(conn, req.set_id)
+        finally:
+            conn.close()
+        return JobState(kind="scope", status="done", stage="scoping", result=_scope_payload(req.set_id, scope))
+    job_id = jobs.JOBS.create("scope")
+    jobs.POOL.submit(_run_scope_job, job_id, req.set_id)
+    return JobState(job_id=job_id, kind="scope", status="queued", stage="scoping")
+
+
+@router.post("/estimate/scope/approve", response_model=ScopeGateState)
+def post_estimate_scope_approve(req: ScopeApproval) -> ScopeGateState:
+    """The scope gate — the ONLY writer of scope-approved state. An optional ``amended_summary``
+    becomes the approved scope of record (the original draft is retained). Requires a scope draft to
+    exist first."""
+    conn = store.get_conn()
+    try:
+        scope = store.load_scope(conn, req.set_id)
+        if scope is None:
+            raise HTTPException(status_code=404, detail=f"No scope draft for set {req.set_id!r}; run /estimate/scope first.")
+        store.approve_scope(conn, req.set_id, req.approved, req.amended_summary)
+        scope = store.load_scope(conn, req.set_id)
+        return ScopeGateState(set_id=req.set_id, scope_approved=scope.approved,
+                              summary_of_record=scope.summary_of_record())
+    finally:
+        conn.close()
+
+
+@router.get("/estimate/scope/{set_id}")
+def get_estimate_scope(set_id: str) -> dict:
+    """The persisted scope draft + approval state."""
+    conn = store.get_conn()
+    try:
+        scope = store.load_scope(conn, set_id)
+    finally:
+        conn.close()
+    if scope is None:
+        raise HTTPException(status_code=404, detail=f"No scope draft for set {set_id!r}.")
+    return _scope_payload(set_id, scope)
+
+
 @router.post("/estimate/run", response_model=JobState)
 def post_estimate_run(req: EstimateRunRequest) -> JobState:
-    """Run the ESTIMATE deterministic spine (s02→s03→s04→s05 + totals/margin). REFUSES until the
-    review register is human-approved (the locked review→estimate gate) — a 409 otherwise.
+    """Run the ESTIMATE deterministic spine (s02→s03→s04→s05 + totals/margin). Two gates: the review
+    register must be approved AND the estimate scope must be approved — each a distinct 409.
 
     Live: requires ``margin_pct`` and a structured ``schedule``; runs as a background job (poll
     ``/estimate/status/{job_id}``). DEMO: loads the fixture schedule + fixture margin and runs inline
     (offline), returning the estimate."""
-    _gate_or_409(req.set_id)
+    _gate_or_409(req.set_id)          # first gate: review approved
+    _scope_gate_or_409(req.set_id)    # second gate: scope approved
     if demo_mode():
         estimate = estimate_run.run_estimate(
             req.set_id, estimate_run.DEMO_MARGIN_PCT, estimate_run.load_demo_schedule(),
@@ -317,3 +423,23 @@ def get_estimate(set_id: str) -> dict:
     if estimate is None:
         raise HTTPException(status_code=404, detail=f"No estimate for set {set_id!r}.")
     return _estimate_payload(estimate)
+
+
+@router.get("/estimate/{set_id}/workbook")
+def get_estimate_workbook(set_id: str) -> Response:
+    """The pricing workbook (.xlsx) generated deterministically from the persisted estimate — WBS
+    summary, Resources, one sheet per activity, Indirect Costs, and Flags. Every figure equals the
+    estimate exactly."""
+    conn = store.get_conn()
+    try:
+        estimate = store.load_estimate(conn, set_id)
+    finally:
+        conn.close()
+    if estimate is None:
+        raise HTTPException(status_code=404, detail=f"No estimate for set {set_id!r}.")
+    xlsx = estimate_workbook.build_workbook(estimate)
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="estimate_{set_id}.xlsx"'},
+    )

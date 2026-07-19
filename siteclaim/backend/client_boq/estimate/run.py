@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from client_boq import store
-from client_boq.estimate import money, s02_schedule, s03_cost_buildup, s04_indirects, s05_validate
+from client_boq.estimate import money, s01_scope_review, s02_schedule, s03_cost_buildup, s04_indirects, s05_validate
 from client_boq.rates import load_rates
-from client_boq.models import Estimate, EstimateSchedule, EstimateTotals
+from client_boq.models import ContextSummary, Estimate, EstimateSchedule, EstimateTotals, ScopeReviewResult
 from pipeline.workspace import Workspace
 
 ProgressCB = Callable[[str], None]
@@ -35,6 +35,30 @@ _DEMO_SCHEDULE_FIXTURE = (
 def load_demo_schedule() -> EstimateSchedule:
     """The DEMO pricing schedule (offline fixture)."""
     return EstimateSchedule.model_validate_json(_DEMO_SCHEDULE_FIXTURE.read_text(encoding="utf-8"))
+
+
+def run_scope(set_id: str, *, progress_cb: Optional[ProgressCB] = None) -> ScopeReviewResult:
+    """Estimate step 1: draft the scope (s01) from the persisted parsed docs + summary + approved
+    register, and persist the draft. Returns the draft. The caller has already checked the review
+    gate."""
+    if progress_cb:
+        progress_cb("scoping")
+    ws = Workspace()
+    conn = store.get_conn()
+    try:
+        parsed = store.load_parsed(conn, set_id)
+        register = store.load_register(conn, set_id)
+        if parsed is None or register is None:
+            raise ValueError(f"no reviewed document set for {set_id!r}; run and approve the review first")
+        summary = store.load_summary(conn, set_id) or ContextSummary()
+        draft = s01_scope_review.review_scope(parsed, summary, register)
+        store.save_scope_draft(conn, set_id, draft)
+        scope = store.load_scope(conn, set_id)
+        if scope is not None:
+            store.save_scope_artifact(ws, set_id, scope)
+        return draft
+    finally:
+        conn.close()
 
 
 def assemble_estimate(set_id: str, margin_pct: float, schedule: EstimateSchedule) -> Estimate:

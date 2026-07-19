@@ -112,12 +112,10 @@ def test_rates_loader_parses_csv() -> None:
 # The ESTIMATE stages remain stubs — they raise NotImplementedError (no accidental logic).
 # (All REVIEW stages s01–s08 are implemented and covered by their own tests.)
 # ---------------------------------------------------------------------------
-def test_estimate_ai_stages_are_stubs() -> None:
-    # The estimate AI-drafting stages are slice 2; the deterministic spine (s02–s05) is implemented
-    # and covered by its own tests.
-    from client_boq.estimate import s01_scope_review, s06_offer
+def test_estimate_offer_stage_is_stub() -> None:
+    # s06 (offer letter) is deferred pending the committed letter templates; everything else in the
+    # estimate workflow (s01 scope, s02–s05 spine) is implemented and covered by its own tests.
+    from client_boq.estimate import s06_offer
 
-    with pytest.raises(NotImplementedError):
-        s01_scope_review.review_scope(None)
     with pytest.raises(NotImplementedError):
         s06_offer.draft_offer(None, None)

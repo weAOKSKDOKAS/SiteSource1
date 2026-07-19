@@ -96,13 +96,18 @@ is fully independent (CSV rates only). See `siteclaim/docs/client_boq/how_it_fit
 **REVIEW workflow complete** (slices 1–2): s01→…→s08 fold into one register, gated by the
 human approve endpoint.
 
-**ESTIMATE deterministic spine implemented** (estimate slice 1): s02 (schedule
-normalisation) → s03 (cost build-up, qty×rate with productivity + rate traces) → s04
-(indirects: lump / per_week / pct_of_direct) → s05 (five validation flags) + totals and a
-margin readout (cost → price → margin; the human states `margin_pct`, no verdict). Gated on
-review approval; `/estimate/run`, `/estimate/{set_id}`. The estimate **AI-drafting** stages
-(s01 scope review, s06 offer letter) and the register→estimate context wiring remain stubs —
-estimate slice 2.
+**ESTIMATE workflow — two gated steps.** Step 1: `/estimate/scope` runs **s01** (AI scope
+draft + deterministic register→estimate wiring — confirmed departures injected as
+register-sourced assumptions, dismissed items never carried); `/estimate/scope/approve` is
+its human gate (optional `amended_summary` becomes the scope of record). Step 2:
+`/estimate/run` runs the deterministic spine **s02→s05** + totals/margin, gated on BOTH the
+review register AND the scope being approved (distinct 409s). Deliverable:
+`/estimate/{set_id}/workbook` — a deterministic openpyxl .xlsx (WBS · Resources · one sheet
+per activity · Indirect Costs · Flags) whose figures equal the persisted estimate exactly.
+
+**Deferred (pending committed letter templates):** s06 offer-letter draft and the
+`/estimate/{set_id}/letter` endpoint. s06 remains a stub; wire it to
+`docs/client_boq/templates/` once those exist.
 
 In DEMO the module writes a gitignored scratch DB, so an offline run never touches the
 committed `sitesource.db`.

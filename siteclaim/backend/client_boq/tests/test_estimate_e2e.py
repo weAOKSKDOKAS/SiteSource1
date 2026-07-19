@@ -30,16 +30,24 @@ def _run_review(client: TestClient) -> str:
     return resp.json()["result"]["set_id"]
 
 
+def _approve_review_scope(client: TestClient, set_id: str) -> None:
+    """Drive the two estimate gates: approve the review, draft the scope, approve the scope."""
+    assert client.post("/client-boq/review/approve",
+                       json={"set_id": set_id, "decisions": {}, "approved": True}).status_code == 200
+    assert client.post("/client-boq/estimate/scope", json={"set_id": set_id}).status_code == 200
+    assert client.post("/client-boq/estimate/scope/approve",
+                       json={"set_id": set_id, "approved": True}).status_code == 200
+
+
 def test_estimate_gated_then_runs_with_hand_checked_totals() -> None:
     client = _client()
     set_id = _run_review(client)
 
-    # Gated before approval.
+    # Gated before review approval.
     assert client.post("/client-boq/estimate/run", json={"set_id": set_id}).status_code == 409
 
-    # Approve the review → gate opens.
-    approve = client.post("/client-boq/review/approve", json={"set_id": set_id, "decisions": {}, "approved": True})
-    assert approve.status_code == 200 and approve.json()["review_approved"] is True
+    # Open both gates (review approve → scope draft → scope approve).
+    _approve_review_scope(client, set_id)
 
     # Run the estimate (DEMO inline).
     run = client.post("/client-boq/estimate/run", json={"set_id": set_id})
@@ -77,8 +85,10 @@ def test_estimate_demo_leaves_committed_db_byte_identical(monkeypatch) -> None:
 
     client = _client()
     set_id = _run_review(client)
-    client.post("/client-boq/review/approve", json={"set_id": set_id, "decisions": {}, "approved": True})
+    _approve_review_scope(client, set_id)
     assert client.post("/client-boq/estimate/run", json={"set_id": set_id}).status_code == 200
+    # The workbook endpoint (read-only) must not write the committed DB either.
+    assert client.get(f"/client-boq/estimate/{set_id}/workbook").status_code == 200
 
     assert hashlib.sha256(committed.read_bytes()).hexdigest() == before
     assert _demo_db_path().is_file()
