@@ -303,8 +303,41 @@ def test_floor_truncation_surfaces_a_per_section_error_not_a_total_failure(monke
 
     doc_text = "SECTION G\nG1 x\nG2 y\nSECTION K\nK1 z"
     scope = ingest_tender(_tender(), client=GAlwaysTruncatesClient(), doc_text=doc_text, on_error=errors.append)
-    assert [i.item_ref for i in scope.packages[0].sor_items] == ["K1"]  # K survived; G dropped, not fatal
-    assert errors and all("section G" in e for e in errors)             # G flagged by name, ingest did not raise
+    refs = {i.item_ref for i in scope.packages[0].sor_items}
+    assert refs == {"K1", "G1", "G2"}                       # K extracted; G recovered from the SoR text,
+    assert errors and all("section G" in e for e in errors)  # not silently dropped — and still flagged for review
+
+
+def test_recover_dropped_sor_rows_from_ocr_text():
+    # The completeness backstop: rows the OCR text carries but the LLM extraction dropped are added
+    # back deterministically (nested codes rebuilt, clause-ref prefixes like PB/GS/PS excluded), so
+    # a scanned schedule never silently loses a priced row. Additive, no dupes, no-op when complete.
+    from pipeline.stage_01_ingest.ingest import recover_dropped_sor_items
+    from schemas.models import ScopePackages, SorItem, TradeWorkPackage
+
+    doc_text = "\n".join([
+        "SECTION G : FIELD TESTING",
+        "G3 Set up equipment and carry out",
+        "(a) Vane shear test GS 7.70",
+        "(f) Inclination and bearing measurement",
+        "(i) Not exceeding 60 m",
+        "G7 Carry out Dynamic Probing test",
+        "G8 (not used)",
+        "PB 59",                      # a preamble clause-ref, NOT an item -> must be ignored
+        "PS 7.69.2A",                 # a spec clause-ref, NOT an item -> must be ignored
+    ])
+    # The LLM returned only G3(a) — everything else was dropped.
+    scope = ScopePackages(packages=[TradeWorkPackage(
+        trade="field_testing", scope_summary="G", sor_items=[SorItem(item_ref="G3(a)", section="G")])])
+    out = recover_dropped_sor_items(scope, doc_text)
+    refs = {i.item_ref for i in out.packages[0].sor_items}
+    assert {"G3", "G3(f)", "G3(f)(i)", "G7", "G8"} <= refs   # dropped rows (incl. nested) recovered
+    assert "G3(a)" in refs                                    # the extracted item is preserved
+    assert not any(r.startswith(("PB", "PS", "GS")) for r in refs)  # clause-refs never become items
+    assert len([i.item_ref for i in out.packages[0].sor_items]) == len(refs)  # no duplicates
+    # A second pass finds nothing missing -> no-op.
+    again = recover_dropped_sor_items(out, doc_text)
+    assert {i.item_ref for i in again.packages[0].sor_items} == refs
 
 
 def test_demo_path_returns_baked_packages_with_no_chunking():

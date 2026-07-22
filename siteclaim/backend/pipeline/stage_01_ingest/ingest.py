@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from pipeline.concurrency import run_calls
 from pipeline.llm_client import LLMClient
 from rules_engine.taxonomy import CANONICAL_TRADES, section_specialty, validate_scope
-from schemas.models import ScopePackages, SectionMeta, TenderPackage, TradeWorkPackage
+from schemas.models import ScopePackages, SectionMeta, SorItem, TenderPackage, TradeWorkPackage
 
 # A large Schedule of Rates (SR-01 is 58 pages, Sections A-T, hundreds of items) cannot be
 # extracted in one call — the JSON output exceeds max_tokens and truncates. So the text is
@@ -211,6 +211,157 @@ def annotate_sections(scope: ScopePackages, doc_text: str = "") -> ScopePackages
             for c in order
         ]
         packages.append(pkg.model_copy(update={"sor_items": items, "sections": sections}))
+    return scope.model_copy(update={"packages": packages})
+
+
+_RECOVER_MAIN = re.compile(r"^\s*(?:Item:\s*)?([A-Z]{1,2}\d+)\b[)\.|:\s]*(.*)$")
+_RECOVER_SUB = re.compile(r"^\s*(?:Item:\s*)?\(([a-z]{1,4})\)\s*[)\.|:\s]*(.*)$")
+_ROMAN = frozenset({"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"})
+
+
+def _ocr_item_inventory(doc_text: str) -> "dict[str, str]":
+    """Every SoR item code that appears at the START of a line in the (OCR/native) SoR text, mapped
+    to a short description — reconstructing nested codes (``G3`` -> ``G3(d)`` -> ``G3(d)(i)``) from a
+    running parent. Deterministic; skips ``SECTION …`` headers. This is the completeness ground truth
+    the LLM extraction is checked against — the OCR captures every ruled row even when the model
+    drops some."""
+    valid = _LETTERS | _TWO_LETTER_SECTIONS
+    inv: dict[str, str] = {}
+    main = ""       # e.g. "G7" — only set to a code whose section is a real SoR section
+    letter = ""     # e.g. "(a)" — the current alpha sub-item under `main`
+    for raw in (doc_text or "").splitlines():
+        line = raw.strip()
+        if not line or line[:1] == "=" or re.match(r"(?i)^(?:Item:\s*)?(?:section|part)\b", line):
+            continue
+        m = _RECOVER_MAIN.match(line)
+        if m and section_of(m.group(1)) in valid:
+            # A real item code (section A-Z / BA-BF). Excludes clause-ref prefixes that also look
+            # like codes — PB 145 (preamble), GS 7.72 / PS 7.34A (spec clauses), SR/… headers.
+            main, letter = m.group(1).upper(), ""
+            inv.setdefault(main, m.group(2).strip()[:80])
+            continue
+        s = _RECOVER_SUB.match(line)
+        if s and main:
+            token = s.group(1).lower()
+            is_roman = token in _ROMAN
+            if not (is_roman or len(token) == 1):
+                continue  # OCR noise like "(iti)" — not a clean alpha letter or roman numeral
+            if is_roman and letter:                   # nested roman: G3(d)(i)
+                code = f"{main}{letter}({token})"
+            else:                                     # alpha sub-item: G7(a); update running letter
+                letter = f"({token})"
+                code = f"{main}{letter}"
+            inv.setdefault(code, s.group(2).strip()[:80])
+    return inv
+
+
+def _norm_ref(ref: str) -> str:
+    """Canonical form of an item_ref for matching OCR inventory against extracted items —
+    upper-cased, whitespace removed (``g3 (d)(i)`` -> ``G3(D)(I)``)."""
+    return re.sub(r"\s+", "", (ref or "")).upper()
+
+
+def recover_dropped_sor_items(scope: ScopePackages, doc_text: str) -> ScopePackages:
+    """Deterministic completeness backstop (Layer 1): a scanned SoR is OCR'd row-for-row, but the
+    LLM structuring step sometimes DROPS ruled rows (observed: whole items G7-G10, G17 and sub-items
+    like G3(f) missing while the OCR clearly holds them). Any item code the OCR text carries that the
+    extracted scope lacks is added back as a :class:`SorItem` (code + OCR description), so no priced
+    row is silently lost. Additive only - never removes or renames an extracted item; a code already
+    present (in any package) is left untouched. Rows are added to the package that already owns the
+    most of that section's items, else the first package. No LLM, no DB.
+
+    Only fires when the SoR text actually leads lines with item codes (the OCR/native SoR shape); an
+    empty/absent ``doc_text`` (DEMO) is a no-op."""
+    inv = _ocr_item_inventory(doc_text)
+    if not inv:
+        return scope
+    have = {_norm_ref(it.item_ref) for p in scope.packages for it in p.sor_items}
+    missing = [(code, desc) for code, desc in inv.items() if _norm_ref(code) not in have]
+    if not missing:
+        return scope
+    packages = [p.model_copy(update={"sor_items": list(p.sor_items)}) for p in scope.packages]
+
+    def _home_for(sec: str):
+        best, best_n = None, -1
+        for p in packages:
+            n = sum(1 for it in p.sor_items if section_of(it.item_ref) == sec)
+            if n > best_n:
+                best, best_n = p, n
+        return best
+
+    recovered: list[str] = []
+    for code, desc in missing:
+        sec = section_of(code)
+        if not sec:
+            continue
+        home = _home_for(sec) or (packages[0] if packages else None)
+        if home is None:
+            continue
+        home.sor_items.append(SorItem(item_ref=code, description=(desc or None), section=sec))
+        recovered.append(code)
+    if recovered:
+        print(f"[ingest] recovered {len(recovered)} SoR rows the extractor dropped "
+              f"(from OCR): {', '.join(recovered[:30])}{' …' if len(recovered) > 30 else ''}")
+    return scope.model_copy(update={"packages": packages})
+
+
+def consolidate_fragmented_sections(scope: ScopePackages) -> ScopePackages:
+    """Deterministic Layer-1 repair: when one SoR SECTION's rows get scattered across several
+    trade packages (the LLM sometimes assigns a stray row a different trade — e.g. a "Flowmeter"
+    line in Section G tagged mechanical_plumbing, or Section H split between field_installations
+    and its parent ground_investigation), merge that section's items back into ONE package. The
+    section is the routable unit, so a section must live in exactly one package.
+
+    The target trade for a fragmented section is the section header's GI specialty
+    (``section_specialty`` — the same deterministic signal ``section_trade`` already uses) when it
+    names one AND a package with that trade already holds part of the section; otherwise the trade
+    holding the most of the section's items. A section that already sits in a single package is
+    left untouched, so a clean split (every demo/building tender) is unaffected. No LLM, no DB."""
+    from collections import Counter
+
+    packages = [p.model_copy(update={"sor_items": list(p.sor_items)}) for p in scope.packages]
+
+    def _sec(it) -> str:
+        return (getattr(it, "section", "") or "").strip().upper()
+
+    # Section header title from the rolled-up metadata (annotate_sections set these).
+    title_of: dict[str, str] = {}
+    for p in packages:
+        for s in p.sections:
+            if s.code and s.title and s.code not in title_of:
+                title_of[s.code] = s.title
+
+    # Which package index holds how many items of each section.
+    holders: dict[str, Counter] = {}
+    for i, p in enumerate(packages):
+        for code, n in Counter(_sec(it) for it in p.sor_items if _sec(it)).items():
+            holders.setdefault(code, Counter())[i] += n
+
+    for code, by_pkg in holders.items():
+        if len(by_pkg) < 2:
+            continue  # already in one package — nothing to merge, zero effect on a clean split
+        holder_trades = {packages[i].trade for i in by_pkg}
+        specialty = section_specialty(title_of.get(code, ""))
+        if specialty and specialty in holder_trades:
+            target_trade = specialty
+        else:
+            # the trade holding the most of this section's items (ties -> first seen)
+            target_idx = by_pkg.most_common(1)[0][0]
+            target_trade = packages[target_idx].trade
+        target = next(p for p in packages if p.trade == target_trade)
+        # Move every out-of-target item of this section into the target, preserving order.
+        moved: list = []
+        for p in packages:
+            if p.trade == target_trade:
+                continue
+            keep = [it for it in p.sor_items if _sec(it) != code]
+            moved += [it for it in p.sor_items if _sec(it) == code]
+            p.sor_items[:] = keep
+        if moved:
+            target.sor_items.extend(moved)
+
+    # Drop packages emptied by the moves; keep original order otherwise.
+    packages = [p for p in packages if p.sor_items]
     return scope.model_copy(update={"packages": packages})
 
 
@@ -535,6 +686,13 @@ def ingest_tender(
     if unmapped:
         # Surfaced, not dropped — a human reconciles these against the taxonomy.
         print(f"[ingest] unmapped trades (kept for review): {unmapped}")
+    # Completeness backstop: add back any SoR row the OCR captured but the LLM structuring dropped
+    # (a scanned schedule's ruled rows — G7-G10, G17, G3(f) … — must never be silently lost).
+    recovered = recover_dropped_sor_items(normalised, doc_text)
     # Tag each item with its SoR section and roll up the per-package section metadata (the
     # routable unit). doc_text supplies the header titles on the live path; demo has none.
-    return annotate_sections(normalised, doc_text)
+    annotated = annotate_sections(recovered, doc_text)
+    # Merge any section whose rows got scattered across trades back into one package (the section
+    # is the routable unit), then refresh the per-package section metadata from the moved items.
+    consolidated = consolidate_fragmented_sections(annotated)
+    return annotate_sections(consolidated, doc_text)
