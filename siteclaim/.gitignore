@@ -28,3 +28,5 @@ build/
 
 # Generated demo artifacts (mock outbox, Excel exports)
 backend/fixtures/out/
+gmail_token.json
+llm_calls.jsonl
