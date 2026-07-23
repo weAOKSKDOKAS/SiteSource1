@@ -276,7 +276,18 @@ def recover_dropped_sor_items(scope: ScopePackages, doc_text: str) -> ScopePacka
     if not inv:
         return scope
     have = {_norm_ref(it.item_ref) for p in scope.packages for it in p.sor_items}
-    missing = [(code, desc) for code, desc in inv.items() if _norm_ref(code) not in have]
+    # A code that is the PARENT of another code is a section/description header, not a priced row:
+    # a SoR header like "J5 Mobilise …" carries no rate — its children J5(a)/J5(b) do. Recovering a
+    # header would duplicate an already-extracted sub-item's row (the J5/J6/J8 doubling), so only
+    # LEAF codes (no child in the OCR inventory or the extracted set) are recovered.
+    universe = have | {_norm_ref(c) for c in inv}
+
+    def _is_header(norm_code: str) -> bool:
+        prefix = norm_code + "("
+        return any(d != norm_code and d.startswith(prefix) for d in universe)
+
+    missing = [(code, desc) for code, desc in inv.items()
+               if _norm_ref(code) not in have and not _is_header(_norm_ref(code))]
     if not missing:
         return scope
     packages = [p.model_copy(update={"sor_items": list(p.sor_items)}) for p in scope.packages]

@@ -331,7 +331,8 @@ def test_recover_dropped_sor_rows_from_ocr_text():
         trade="field_testing", scope_summary="G", sor_items=[SorItem(item_ref="G3(a)", section="G")])])
     out = recover_dropped_sor_items(scope, doc_text)
     refs = {i.item_ref for i in out.packages[0].sor_items}
-    assert {"G3", "G3(f)", "G3(f)(i)", "G7", "G8"} <= refs   # dropped rows (incl. nested) recovered
+    assert {"G3(f)(i)", "G7", "G8"} <= refs                  # dropped LEAF rows (incl. nested) recovered
+    assert "G3" not in refs and "G3(f)" not in refs          # headers (they have children) are NOT rows
     assert "G3(a)" in refs                                    # the extracted item is preserved
     assert not any(r.startswith(("PB", "PS", "GS")) for r in refs)  # clause-refs never become items
     assert len([i.item_ref for i in out.packages[0].sor_items]) == len(refs)  # no duplicates
