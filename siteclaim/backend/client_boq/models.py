@@ -1,0 +1,581 @@
+"""Typed contracts for the client_boq module (pydantic) + the module's own DB tables.
+
+Two things live here:
+
+1. **Pydantic schemas** — the plain-data handoffs between the review and estimate stages,
+   mirroring the main app's ``schemas/models.py`` discipline (a stage reads and writes typed
+   models, no shared mutable state). Every AI stage's ``target_model`` is one of these, so
+   ``llm_client.complete_json`` validates the model's JSON output against a strict schema (the
+   consistency mechanism, in place of a temperature knob).
+
+2. **The module's own SQLite tables** (``client_boq_*``) — created lazily with
+   ``CREATE TABLE IF NOT EXISTS`` from :func:`init_tables`, over a connection from the shared
+   ``db.store.get_connection``. Self-contained: ``db/schema.sql`` and ``db/seed.py`` are never
+   touched, and no existing table is altered.
+
+Decision-value discipline (the hard constraint): the AI proposes and drafts, never decides. That is
+enforced structurally here — the AI's stage-03 target model (:class:`DepartureProposalSet`) has NO
+status/verdict field at all, so the model *cannot* write a breach verdict. Deterministic rule code
+(``client_boq/rules.py``) and the human approve endpoint are the only writers of a departure's
+``status``.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+# A raw uploaded file as the module receives it, matching the main app's ingest tuple shape
+# ``(filename, content_type, bytes)`` so ``pipeline.documents.extract_document`` can be reused.
+RawUpload = tuple[str, Optional[str], bytes]
+
+
+# ---------------------------------------------------------------------------
+# Departure status vocabulary (single lifecycle field on a register line)
+# ---------------------------------------------------------------------------
+# Who writes each value:
+#   rule_flagged   — deterministic rule code (a numeric threshold breached)      [rules.py]
+#   candidate      — a qualitative AI-proposed match the human must judge         [s03]
+#   uncovered      — a clause that matched no criterion                           [s03]
+#   unresolved     — a criterion no clause resolved                               [s03]
+#   citation_failed— a cited clause not found / not supported in the documents    [s08]
+#   confirmed      — a human accepted the departure                               [approve endpoint ONLY]
+#   dismissed      — a human rejected the departure                               [approve endpoint ONLY]
+STATUS_RULE_FLAGGED = "rule_flagged"
+STATUS_CANDIDATE = "candidate"
+STATUS_UNCOVERED = "uncovered"
+STATUS_UNRESOLVED = "unresolved"
+STATUS_CITATION_FAILED = "citation_failed"
+STATUS_CONFIRMED = "confirmed"
+STATUS_DISMISSED = "dismissed"
+
+# The statuses a human approve decision may set — the ONLY verdict writer.
+HUMAN_VERDICTS = {STATUS_CONFIRMED, STATUS_DISMISSED}
+
+
+# ===========================================================================
+# Criteria library (input to REVIEW s03) — produced by criteria_loader.py
+# ===========================================================================
+class Criterion(BaseModel):
+    """One acceptable-terms row from ``review_criteria.md``. ``is_placeholder`` is True for the
+    empty ``OK-01`` extension row (no acceptable position yet) — loaded, never silently dropped."""
+
+    id: str
+    category_id: str
+    category: str
+    clause_area: str
+    acceptable_position: str = ""
+    why_it_matters: str = ""
+    red_flag: str = ""
+    is_placeholder: bool = False
+
+
+class ThresholdRule(BaseModel):
+    """A numerically-checkable red flag from the 'Deterministic threshold checks' table — the ONLY
+    rows the rule layer pre-flags. The rule raises the flag; the human still confirms the departure."""
+
+    id: str
+    rule: str
+    extract_field: str
+
+
+class CriteriaLibrary(BaseModel):
+    """The parsed criteria library. ``criteria`` are the populated acceptable-terms rows;
+    ``placeholders`` holds empty extension rows (OK-01); ``threshold_rules`` is the numeric subset."""
+
+    criteria: list[Criterion] = Field(default_factory=list)
+    placeholders: list[Criterion] = Field(default_factory=list)
+    threshold_rules: list[ThresholdRule] = Field(default_factory=list)
+
+    def category_ids(self) -> set[str]:
+        return {c.category_id for c in self.criteria}
+
+    def by_id(self, criterion_id: str) -> Optional[Criterion]:
+        for c in (*self.criteria, *self.placeholders):
+            if c.id == criterion_id:
+                return c
+        return None
+
+    def threshold_ids(self) -> set[str]:
+        return {t.id for t in self.threshold_rules}
+
+
+# ===========================================================================
+# Rates (input to ESTIMATE s03) — produced by rates.py
+# ===========================================================================
+class RateRow(BaseModel):
+    """One hand-editable rate from ``client_boq/data/rates.csv``."""
+
+    rate_id: str
+    category: str
+    code: str
+    description: str = ""
+    unit: str = ""
+    rate: float = 0.0
+    currency: str = ""
+    source: str = ""
+    notes: str = ""
+
+
+# ===========================================================================
+# REVIEW workflow handoffs
+# ===========================================================================
+class ClauseItem(BaseModel):
+    """One structured item read out of the document set — a contract clause or scope line.
+    ``clause_id`` is the stable identity s08 verifies citations against."""
+
+    clause_id: str = ""           # stable id, e.g. "9.9"
+    ref: str = ""                 # as printed (may equal clause_id), e.g. "Clause 9.9"
+    heading: str = ""
+    text: str = ""
+    source_doc: str = ""
+    page: Optional[int] = None
+
+
+class ParsedDocumentSet(BaseModel):
+    """REVIEW s01 output, and the shared parsed-document store the estimate reads too. Persisted at
+    ``artifacts/client_boq/parsed.json``."""
+
+    set_id: str = ""
+    name: str = ""
+    slug: str = ""
+    documents: list[str] = Field(default_factory=list)   # source filenames, in upload order
+    clauses: list[ClauseItem] = Field(default_factory=list)
+
+    def clause_index(self) -> dict[str, ClauseItem]:
+        """clause_id → clause, for the s08 citation lookup."""
+        return {c.clause_id: c for c in self.clauses if c.clause_id}
+
+
+class ContextSummary(BaseModel):
+    """REVIEW s02 — the structured commercial-risk summary from the review doc (AI draft, human-
+    reviewed). Draft only; no verdicts."""
+
+    summary: str = ""
+    scope_responsibilities: list[str] = Field(default_factory=list)   # scope affecting price
+    obligations: list[str] = Field(default_factory=list)              # testing/inspection/cert/permit
+    client_assumptions: list[str] = Field(default_factory=list)       # client assumptions/constraints
+    interfaces: list[str] = Field(default_factory=list)               # interfaces with other trades
+    clarifications: list[str] = Field(default_factory=list)           # items to clarify or exclude
+
+
+class DepartureProposal(BaseModel):
+    """REVIEW s03 **AI output item** — a proposal only. Deliberately carries NO status/verdict field,
+    so the model cannot write a decision value. The AI proposes the matched ``criterion_id`` (or ""
+    for a clause that matches nothing), extracts the threshold ``extracted_value`` where the criterion
+    is numeric, quotes the supporting ``cited_text``, and drafts ``amendment_proposal`` /
+    ``rationale`` / ``proposed_position``."""
+
+    clause_id: str = ""
+    criterion_id: str = ""            # "" means: this clause matched no criterion
+    extracted_value: str = ""         # the field named in the threshold table (numeric criteria)
+    cited_text: str = ""              # the quote the departure relies on (s08 containment-checks it)
+    amendment_proposal: str = ""      # draft
+    rationale: str = ""               # draft
+    proposed_position: str = ""       # draft
+
+
+class DepartureProposalSet(BaseModel):
+    """The wrapper the AI returns for s03 (fixture field ``departures``). One proposal per clause the
+    AI read; ``criterion_id == ""`` marks a clause that matched nothing (becomes ``uncovered``)."""
+
+    departures: list[DepartureProposal] = Field(default_factory=list)
+
+
+# Where a register line came from — so s04/s05/s06 findings live in the ONE register, tagged.
+SOURCE_CRITERIA = "criteria"           # s03 criteria match
+SOURCE_SCOPE_ALIGNMENT = "scope_alignment"  # s04
+SOURCE_PROGRAM = "program"             # s05
+SOURCE_CASHFLOW = "cashflow"           # s06 (verdict-needing findings only; the curve is a section)
+
+
+class DepartureItem(BaseModel):
+    """One assembled register line (the workflow's line-item record). ``status`` is set by rule code
+    (rule_flagged), s03/s04/s05 (candidate/uncovered/unresolved), s08 (citation_failed), or the human
+    approve endpoint (confirmed/dismissed) — never by the AI. ``source`` tags which check produced the
+    line. Negotiation columns start empty; ``register_status`` is the review-doc Open/Closed column."""
+
+    item: int = 0
+    clause: str = ""                  # cited clause_id ("" for an unresolved criterion / an input gap)
+    criterion_id: str = ""            # matched criterion ("" for an uncovered clause / s04-s06 finding)
+    category: str = ""
+    clause_area: str = ""
+    extracted_value: str = ""
+    cited_text: str = ""
+    amendment_proposal: str = ""
+    rationale: str = ""
+    proposed_position: str = ""
+    status: str = STATUS_CANDIDATE
+    source: str = SOURCE_CRITERIA     # criteria | scope_alignment | program | cashflow
+    kind: str = ""                    # finding sub-type for s04/s05/s06 (e.g. "precedence", "input_missing")
+    rule_ref: str = ""                # the rule id that fired (rule_flagged only)
+    citation_note: str = ""           # why a citation failed (s08)
+    client_response: str = ""         # negotiation (human)
+    contractor_response: str = ""     # negotiation (human)
+    register_status: str = "open"     # Open | Closed (the review-doc status column)
+
+
+class AlignedItem(BaseModel):
+    """A numeric criterion the rule resolved as COMPLIANT — no departure line, but surfaced in the
+    register's 'aligned' section with the value and why it passes (locked decision 2A), so a
+    resolved-and-fine criterion is never mistaken for unresolved and never silently dropped."""
+
+    criterion_id: str = ""
+    clause_area: str = ""
+    clause: str = ""
+    extracted_value: str = ""
+    why: str = ""
+
+
+class DepartureSet(BaseModel):
+    """REVIEW s03 final output. The wrapper field ``departures`` matches the locked decision; this is
+    the *computed* result (never loaded from the AI fixture — that is :class:`DepartureProposalSet`),
+    so it also carries ``aligned``: numeric criteria the rule resolved as compliant."""
+
+    departures: list[DepartureItem] = Field(default_factory=list)
+    aligned: list[AlignedItem] = Field(default_factory=list)
+
+
+class CashflowPoint(BaseModel):
+    period: str = ""                  # "M1", "M2", …
+    inflow: float = 0.0               # receipts that month
+    outflow: float = 0.0             # cost that month
+    net: float = 0.0
+    cumulative: float = 0.0
+
+
+class CashflowSection(BaseModel):
+    """REVIEW s06 output attached to the register as its own section (locked decision 3A) — a curve
+    plus findings, not line items. Verdict-needing commercial adjustments become tagged line items
+    (``source == cashflow``) instead."""
+
+    points: list[CashflowPoint] = Field(default_factory=list)
+    negative_periods: list[str] = Field(default_factory=list)
+    working_capital_peak: float = 0.0   # most-negative cumulative (the funding requirement)
+    findings: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class DepartureRegister(BaseModel):
+    """REVIEW s07 assembled register — the ONE decision surface (locked decision 3A), structured per
+    the review doc (header fields + line items). All checks fold in here: s03 criteria, s04 scope,
+    s05 program as tagged line ``items``; s06 cash flow as the ``cashflow`` section; compliant numeric
+    criteria as the ``aligned`` section. ``approved`` is the review→estimate gate (the DB table is the
+    source of truth); this object is also persisted to ``artifacts/client_boq/register.json``."""
+
+    set_id: str = ""
+    # Header fields (review doc):
+    project: str = ""
+    contract_type: str = ""
+    package: str = ""
+    subcontract_reference: str = ""
+    subcontractor_name: str = ""
+    submission_date: str = ""
+    # Body:
+    items: list[DepartureItem] = Field(default_factory=list)
+    aligned: list[AlignedItem] = Field(default_factory=list)
+    cashflow: Optional[CashflowSection] = None
+    approved: bool = False
+
+
+# --- slice-2 handoffs -------------------------------------------------------
+class ScopeAlignmentFinding(BaseModel):
+    """s04 AI-proposed scope finding. ``contract_ref``/``cited_text`` let it flow through s08 citation
+    verification like any line; ``priced`` records whether the AI thinks the item was priced."""
+
+    kind: str = ""                    # gap | inconsistency | silent_assumption | responsibility_creep
+    description: str = ""
+    contract_ref: str = ""
+    cited_text: str = ""
+    priced: Optional[bool] = None
+
+
+class ScopeAlignmentSet(BaseModel):
+    findings: list[ScopeAlignmentFinding] = Field(default_factory=list)
+
+
+class ProgramFinding(BaseModel):
+    """s05 AI-proposed program risk. Numeric fields (when the AI extracts them) feed the DETERMINISTIC
+    recompute — the AI never computes the exposure itself."""
+
+    kind: str = ""                    # duration | sequencing | access | mobilisation | milestone | ld_exposure
+    description: str = ""
+    contract_ref: str = ""
+    cited_text: str = ""
+    ld_rate_per_day: Optional[float] = None
+    program_days: Optional[float] = None
+    ld_cap_value: Optional[float] = None
+    scope_mobilisations: Optional[int] = None
+    program_mobilisations: Optional[int] = None
+    recomputed_value: str = ""        # set by the deterministic recompute, never by the AI
+
+
+class ProgramFindingSet(BaseModel):
+    findings: list[ProgramFinding] = Field(default_factory=list)
+
+
+class CitationCheck(BaseModel):
+    """REVIEW s08 — one register clause checked against the parsed source (deterministic lookup).
+    ``found`` False means the cited clause_id is absent; ``supported`` False means the cited_text is
+    not contained in the clause. Either failure marks the line ``citation_failed`` — kept visible."""
+
+    item: int = 0
+    clause: str = ""
+    found: bool = False
+    supported: bool = True
+    note: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.found and self.supported
+
+
+# ===========================================================================
+# ESTIMATE workflow handoffs (unchanged from scaffold — stages remain stubs)
+# ===========================================================================
+class ScopeReviewNote(BaseModel):
+    """One scope note. ``kind`` is one of inclusion | exclusion | ambiguity | conflict | assumption
+    (estimating doc step 1). ``source`` distinguishes the AI draft from deterministically-injected
+    register context (``register``)."""
+
+    kind: str = ""
+    text: str = ""
+    source: str = "draft"             # "draft" | "register"
+
+
+class ScopeReviewResult(BaseModel):
+    """ESTIMATE s01 output (AI draft + injected register context). ``summary`` is the scope statement;
+    it is what an ``amended_summary`` at the scope gate overrides. Draft only — no verdicts, no numbers."""
+
+    summary: str = ""
+    notes: list[ScopeReviewNote] = Field(default_factory=list)
+    clarifying_questions: list[str] = Field(default_factory=list)
+
+
+class EstimateScope(BaseModel):
+    """The persisted scope record for the estimate's first step + its human gate. ``amended_summary``
+    (when non-empty) is the approved scope of record and wins over the draft's ``summary``; the
+    original draft is retained. ``approved`` is the estimate's second gate (mirrors the review gate)."""
+
+    set_id: str = ""
+    draft: ScopeReviewResult = Field(default_factory=ScopeReviewResult)
+    amended_summary: str = ""
+    approved: bool = False
+
+    def summary_of_record(self) -> str:
+        return self.amended_summary.strip() or self.draft.summary
+
+
+# --- ESTIMATE input (the structured pricing schedule; request payload in live, fixture in DEMO) ---
+class ResourceLine(BaseModel):
+    """One priced resource within a direct activity. Either name a CSV rate via ``resource_ref`` OR
+    give an ``inline_rate``; ``productivity`` (output units per hour) converts a work quantity into
+    hours before the rate is applied (qty ÷ productivity = hours; hours × rate = amount)."""
+
+    description: str = ""
+    resource_ref: str = ""            # rate_id in rates.csv (blank when inline)
+    inline_rate: Optional[float] = None
+    qty: float = 0.0
+    unit: str = ""
+    productivity: Optional[float] = None
+
+
+class ScheduleItem(BaseModel):
+    """One schedule item. ``category`` is declared by the payload — 'direct' (priced from resource
+    lines) or 'indirect' (computed from a ``basis``). Any other value is left for s05 to flag as
+    ``unclassified_item`` (never guessed). Indirect bases: 'lump' (``amount``), 'per_week'
+    (``rate`` × schedule ``duration_weeks``), 'pct_of_direct' (``pct`` × direct subtotal)."""
+
+    item_id: str = ""                 # assigned by s02 when blank
+    description: str = ""
+    category: str = ""                # "direct" | "indirect" | (other → unclassified)
+    unit: str = ""
+    lines: list[ResourceLine] = Field(default_factory=list)   # direct items
+    basis: str = ""                   # indirect items: lump | per_week | pct_of_direct
+    amount: Optional[float] = None    # lump
+    rate: Optional[float] = None      # per_week rate
+    pct: Optional[float] = None       # pct_of_direct
+
+
+class EstimateSchedule(BaseModel):
+    """The structured pricing schedule. Quantities are given (no take-off in this slice).
+    ``duration_weeks`` feeds per_week indirects."""
+
+    duration_weeks: Optional[float] = None
+    items: list[ScheduleItem] = Field(default_factory=list)
+
+
+# --- ESTIMATE output (the priced estimate) ---
+class CostLine(BaseModel):
+    """One priced resource line with a full, hand-recomputable trace: the quantity, the rate and
+    where it came from (csv|inline|missing), any productivity conversion, and the amount."""
+
+    item_id: str = ""
+    description: str = ""
+    resource_ref: str = ""
+    qty: float = 0.0
+    unit: str = ""
+    productivity: Optional[float] = None
+    hours: Optional[float] = None     # qty ÷ productivity, when productivity is given
+    rate: float = 0.0
+    rate_source: str = ""             # "csv" | "inline" | "missing"
+    amount: float = 0.0
+
+
+class CostActivity(BaseModel):
+    item_id: str = ""
+    description: str = ""
+    category: str = "direct"
+    unit: str = ""
+    lines: list[CostLine] = Field(default_factory=list)
+    activity_total: float = 0.0
+
+
+class IndirectLine(BaseModel):
+    item_id: str = ""
+    label: str = ""
+    basis: str = ""                   # lump | per_week | pct_of_direct
+    detail: str = ""                  # how it was computed (hand-checkable)
+    amount: float = 0.0
+
+
+class EstimateFlag(BaseModel):
+    """A rule-raised flag on the estimate — surfaced for the human, never blocking, never a verdict."""
+
+    kind: str = ""                    # missing_rate | zero_or_negative_qty | empty_activity | rate_outlier | unclassified_item
+    item_id: str = ""
+    message: str = ""
+
+
+class EstimateTotals(BaseModel):
+    total_direct: float = 0.0
+    total_indirect: float = 0.0
+    total_cost: float = 0.0
+    margin_pct: float = 0.0
+    price: float = 0.0
+    margin_amount: float = 0.0        # price − total_cost (readout only; no profitable/not verdict)
+
+
+class Estimate(BaseModel):
+    """The full priced estimate persisted to the tables + ``artifacts/client_boq/estimate.json``."""
+
+    set_id: str = ""
+    duration_weeks: Optional[float] = None
+    activities: list[CostActivity] = Field(default_factory=list)   # direct
+    indirects: list[IndirectLine] = Field(default_factory=list)
+    unclassified: list[ScheduleItem] = Field(default_factory=list)  # items with a bad category (flagged)
+    flags: list[EstimateFlag] = Field(default_factory=list)
+    totals: EstimateTotals = Field(default_factory=EstimateTotals)
+
+
+class LetterMeta(BaseModel):
+    """The offer-letter header fields — CODE-INJECTED from the run request, never AI-written. Sensible
+    demo defaults so a letter renders without every field supplied."""
+
+    company_name: str = "SiteSource Contracting Ltd"
+    company_address: str = "Unit 1, Example Industrial Building, Kwun Tong, Hong Kong"
+    contact_name: str = "The Estimator"
+    contact_number: str = "+852 0000 0000"
+    project: str = ""            # defaults to the document set name
+    client_name: str = "the Client"
+    date: str = ""               # as supplied; blank renders a placeholder (kept deterministic for tests)
+    ref: str = ""                # defaults to the project
+    validity_days: int = 90
+
+
+class LetterDraft(BaseModel):
+    """The AI-DRAFTED parts of the offer letter (the only parts a model writes). Seeded from the
+    approved scope. Everything else — price, header fields, the pricing-schedule table, and the
+    confirmed-departure Appendix A bullets — is injected by code."""
+
+    intro: str = ""
+    inclusions: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+    additional_conditions: list[str] = Field(default_factory=list)  # AI Appendix-A conditions from the scope
+
+
+class LetterAppendixItem(BaseModel):
+    text: str = ""
+    source: str = "draft"        # "register" (confirmed departure, verbatim) | "draft" (AI condition)
+
+
+class PricingScheduleRow(BaseModel):
+    item_id: str = ""
+    description: str = ""
+    total: float = 0.0
+
+
+class LetterOfOffer(BaseModel):
+    """The assembled offer letter (a DRAFT for human editing; nothing sends it). Carries the
+    structured pieces plus the rendered ``markdown``. ``price``/``price_str`` and the
+    ``pricing_schedule`` are injected from the persisted estimate; ``appendix`` is the confirmed
+    departures (source ``register``, verbatim) followed by AI conditions (source ``draft``)."""
+
+    set_id: str = ""
+    meta: LetterMeta = Field(default_factory=LetterMeta)
+    intro: str = ""                                              # AI
+    price: float = 0.0                                          # injected
+    price_str: str = ""                                        # injected, formatted
+    inclusions: list[str] = Field(default_factory=list)         # AI
+    exclusions: list[str] = Field(default_factory=list)         # AI
+    pricing_schedule: list[PricingScheduleRow] = Field(default_factory=list)  # injected
+    appendix: list[LetterAppendixItem] = Field(default_factory=list)
+    markdown: str = ""                                          # the assembled letter
+
+
+# ===========================================================================
+# The module's own DB tables — lazy, self-contained (see module docstring)
+# ===========================================================================
+_DDL = [
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_document_sets (
+        set_id       TEXT PRIMARY KEY,
+        name         TEXT NOT NULL,
+        slug         TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'ingested',  -- ingested | reviewed | estimated
+        parsed_json  TEXT NOT NULL DEFAULT '{}',
+        summary_json TEXT NOT NULL DEFAULT '{}',
+        created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_review_registers (
+        set_id        TEXT PRIMARY KEY,
+        register_json TEXT NOT NULL DEFAULT '{}',
+        approved      INTEGER NOT NULL DEFAULT 0,  -- the review->estimate gate (0/1)
+        approved_at   TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_estimates (
+        set_id        TEXT PRIMARY KEY,
+        estimate_json TEXT NOT NULL DEFAULT '{}',
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_estimate_scope (
+        set_id          TEXT PRIMARY KEY,
+        scope_json      TEXT NOT NULL DEFAULT '{}',   -- the s01 draft (ScopeReviewResult)
+        amended_summary TEXT NOT NULL DEFAULT '',      -- human-edited scope of record (wins when set)
+        approved        INTEGER NOT NULL DEFAULT 0,    -- the scope gate (0/1) — second estimate gate
+        approved_at     TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_letters (
+        set_id      TEXT PRIMARY KEY,
+        letter_json TEXT NOT NULL DEFAULT '{}'         -- the assembled LetterOfOffer (draft)
+    )
+    """,
+]
+
+
+def init_tables(conn: sqlite3.Connection) -> None:
+    """Create the ``client_boq_*`` tables if absent (idempotent). Deterministic infra, not workflow
+    logic. Call once per connection before touching the module's tables."""
+    for stmt in _DDL:
+        conn.execute(stmt)
+    conn.commit()

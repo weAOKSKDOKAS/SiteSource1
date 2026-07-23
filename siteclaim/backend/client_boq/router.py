@@ -1,0 +1,470 @@
+"""HTTP surface for the client_boq module — mounted under ``/client-boq``.
+
+The ONE thing ``api.py`` imports from the module: a single ``include_router``. Everything the review
+workflow exposes lives here — the heavy review run (background job in live, inline offline in DEMO),
+the status poll, the register read, the human-gate approve endpoint (the ONLY writer of a
+confirmed/dismissed verdict), and the **review→estimate gate check** that refuses the estimate until
+the review register is approved.
+
+Slice 1 implements the review workflow (s01→s02→s03→s07→s08); the estimate handler stays gated +
+scaffold.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from client_boq import jobs, store
+from client_boq.models import (
+    HUMAN_VERDICTS,
+    STATUS_CANDIDATE,
+    STATUS_CITATION_FAILED,
+    STATUS_CONFIRMED,
+    STATUS_DISMISSED,
+    STATUS_RULE_FLAGGED,
+    STATUS_UNCOVERED,
+    STATUS_UNRESOLVED,
+    DepartureRegister,
+    RawUpload,
+)
+from client_boq.models import Estimate, EstimateSchedule, LetterMeta
+from client_boq.review import run as review_run
+from client_boq.estimate import run as estimate_run
+from client_boq.estimate import workbook as estimate_workbook
+from pipeline.llm_client import demo_mode
+
+router = APIRouter(prefix="/client-boq", tags=["client_boq"])
+
+
+# ---------------------------------------------------------------------------
+# Response shapes
+# ---------------------------------------------------------------------------
+class GateState(BaseModel):
+    set_id: str
+    review_approved: bool
+
+
+class JobState(BaseModel):
+    job_id: str | None = None
+    kind: str = "review"
+    status: str = "queued"           # queued | running | done | error
+    stage: str = ""
+    error: str | None = None
+    result: dict | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+def _status_counts(register: DepartureRegister) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in register.items:
+        counts[item.status] = counts.get(item.status, 0) + 1
+    return counts
+
+
+# Presentation order for the actionable line list (locked decision 1A: actionable first).
+_ACTIONABLE_ORDER = {
+    STATUS_RULE_FLAGGED: 0, STATUS_CITATION_FAILED: 1, STATUS_CANDIDATE: 2,
+    STATUS_UNCOVERED: 3, STATUS_CONFIRMED: 4, STATUS_DISMISSED: 5,
+}
+
+
+def _result_payload(register: DepartureRegister) -> dict:
+    """The review run's result envelope. Presents the one register (locked decisions 1A/2A/3A):
+    actionable line items first, the unresolved criteria as one grouped section, the aligned section,
+    and the cash-flow section. ``items`` keeps the full canonical list (stable item numbers the approve
+    endpoint references)."""
+    items = register.items
+    actionable = sorted(
+        (i for i in items if i.status != STATUS_UNRESOLVED),
+        key=lambda i: (_ACTIONABLE_ORDER.get(i.status, 9), i.item),
+    )
+    unresolved = [i for i in items if i.status == STATUS_UNRESOLVED]
+    return {
+        "set_id": register.set_id,
+        "slice": review_run.SLICE,
+        "status_counts": _status_counts(register),
+        "review_approved": register.approved,
+        "register": {
+            "set_id": register.set_id,
+            "project": register.project,
+            "package": register.package,
+            "line_items": [i.model_dump() for i in actionable],
+            "unresolved": {
+                "count": len(unresolved),
+                "criteria": [
+                    {"item": i.item, "criterion_id": i.criterion_id, "clause_area": i.clause_area}
+                    for i in unresolved
+                ],
+            },
+            "aligned": [a.model_dump() for a in register.aligned],
+            "cashflow": register.cashflow.model_dump() if register.cashflow else None,
+            "items": [i.model_dump() for i in items],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# REVIEW — run (job in live, inline in DEMO), status, register
+# ---------------------------------------------------------------------------
+def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str) -> None:
+    """Background worker: run the review and record progress/result/error on the job."""
+    jobs.JOBS.update(job_id, status="running", stage="ingesting")
+    try:
+        register = review_run.run_review(
+            uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+        )
+        jobs.JOBS.update(job_id, status="done", stage="verifying", result=_result_payload(register))
+    except Exception as exc:  # noqa: BLE001 — any stage failure becomes a job error, not a crash
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+@router.post("/review/run", response_model=JobState)
+def post_review_run(
+    files: Optional[list[UploadFile]] = File(None),
+    project_name: str = Form(""),
+) -> JobState:
+    """Run REVIEW (s01→s02→s03→s07→s08) over an uploaded document set. Live: kick off a background job
+    and poll ``/review/status/{job_id}``. DEMO: run inline and return the register offline (no job, no
+    network) — the fixtures drive a full register. s04–s06 are skipped (slice 1); the result names
+    them in ``slice2_pending``."""
+    uploads: list[RawUpload] = [
+        (f.filename or "document", f.content_type, f.file.read()) for f in (files or [])
+    ]
+    if demo_mode():
+        register = review_run.run_review(uploads, project_name)
+        return JobState(status="done", stage="verifying", result=_result_payload(register))
+
+    job_id = jobs.JOBS.create("review")
+    jobs.POOL.submit(_run_review_job, job_id, uploads, project_name)
+    return JobState(job_id=job_id, status="queued", stage="uploading")
+
+
+@router.get("/review/status/{job_id}", response_model=JobState)
+def get_review_status(job_id: str) -> JobState:
+    """Poll a client_boq background job. Returns the result only when ``status == done``."""
+    job = jobs.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
+    return JobState(
+        job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
+        error=job.error or None, result=job.result if job.status == "done" else None,
+        warnings=list(job.warnings),
+    )
+
+
+@router.get("/review/register/{set_id}")
+def get_review_register(set_id: str) -> dict:
+    """The persisted departure register for a document set (from the tables — the source of truth)."""
+    conn = store.get_conn()
+    try:
+        register = store.load_register(conn, set_id)
+    finally:
+        conn.close()
+    if register is None:
+        raise HTTPException(status_code=404, detail=f"No review register for set {set_id!r}.")
+    return _result_payload(register)
+
+
+# ---------------------------------------------------------------------------
+# REVIEW — the human gate (the ONLY writer of confirmed/dismissed + the gate flag)
+# ---------------------------------------------------------------------------
+class ReviewApproval(BaseModel):
+    set_id: str
+    # item number -> "confirmed" | "dismissed". The only place a verdict is written.
+    decisions: dict[int, str] = Field(default_factory=dict)
+    approved: bool = True  # open the review→estimate gate
+
+
+@router.post("/review/approve", response_model=GateState)
+def post_review_approve(req: ReviewApproval) -> GateState:
+    """The human gate. Records each per-line verdict (confirmed/dismissed) — no other endpoint or
+    stage may write these — and sets the review→estimate gate flag. A citation_failed line cannot be
+    confirmed until re-reviewed (its citation is untrustworthy)."""
+    bad = {v for v in req.decisions.values() if v not in HUMAN_VERDICTS}
+    if bad:
+        raise HTTPException(status_code=422, detail=f"decisions must be one of {sorted(HUMAN_VERDICTS)}; got {sorted(bad)}")
+
+    conn = store.get_conn()
+    try:
+        register = store.load_register(conn, req.set_id)
+        if register is None:
+            raise HTTPException(status_code=404, detail=f"No review register for set {req.set_id!r}.")
+        for item in register.items:
+            verdict = req.decisions.get(item.item)
+            if verdict is None:
+                continue
+            if verdict == "confirmed" and item.status == STATUS_CITATION_FAILED:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Item {item.item} has a failed citation and cannot be confirmed until re-reviewed.",
+                )
+            item.status = verdict
+            item.register_status = "closed"
+        store.save_register(conn, register)
+        store.set_review_approved(conn, req.set_id, req.approved)
+        return GateState(set_id=req.set_id, review_approved=store.review_is_approved(conn, req.set_id))
+    finally:
+        conn.close()
+
+
+@router.get("/gate/{set_id}", response_model=GateState)
+def get_gate(set_id: str) -> GateState:
+    """The current review→estimate gate state for a document set."""
+    conn = store.get_conn()
+    try:
+        return GateState(set_id=set_id, review_approved=store.review_is_approved(conn, set_id))
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# ESTIMATE — gated on review approval (workflow itself is a later slice)
+# ---------------------------------------------------------------------------
+class EstimateRunRequest(BaseModel):
+    set_id: str
+    margin_pct: float | None = None                 # required in live (the human states it); DEMO uses the fixture margin
+    schedule: EstimateSchedule | None = None        # required in live; DEMO uses the fixture schedule
+    letter: LetterMeta | None = None                # offer-letter header fields (code-injected); defaults applied
+
+
+def _flag_counts(estimate: Estimate) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for f in estimate.flags:
+        counts[f.kind] = counts.get(f.kind, 0) + 1
+    return counts
+
+
+def _estimate_payload(estimate: Estimate) -> dict:
+    """The estimate envelope — totals + margin readout, a flag breakdown, and the full estimate
+    (activities with per-line cost traces, indirects, flags)."""
+    return {
+        "set_id": estimate.set_id,
+        "totals": estimate.totals.model_dump(),
+        "flag_counts": _flag_counts(estimate),
+        "estimate": estimate.model_dump(),
+    }
+
+
+def _gate_or_409(set_id: str) -> None:
+    conn = store.get_conn()
+    try:
+        if not store.review_is_approved(conn, set_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Estimate is gated: the review register for this document set is not approved yet.",
+            )
+    finally:
+        conn.close()
+
+
+def _run_estimate_job(job_id: str, set_id: str, margin_pct: float, schedule: EstimateSchedule,
+                      letter: LetterMeta | None) -> None:
+    jobs.JOBS.update(job_id, status="running", stage="costing")
+    try:
+        estimate = estimate_run.run_estimate(
+            set_id, margin_pct, schedule, letter_meta=letter,
+            progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+        )
+        jobs.JOBS.update(job_id, status="done", stage="persisting", result=_estimate_payload(estimate))
+    except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+# --- estimate step 1: scope draft + its human gate (mirrors the review gate) ----------------------
+class ScopeRunRequest(BaseModel):
+    set_id: str
+
+
+class ScopeApproval(BaseModel):
+    set_id: str
+    amended_summary: str = ""      # optional human edit; becomes the approved scope of record
+    approved: bool = True
+
+
+class ScopeGateState(BaseModel):
+    set_id: str
+    scope_approved: bool
+    summary_of_record: str = ""
+
+
+def _scope_payload(set_id: str, scope) -> dict:
+    return {
+        "set_id": set_id,
+        "review_approved": True,
+        "scope_approved": scope.approved,
+        "summary_of_record": scope.summary_of_record(),
+        "scope": scope.draft.model_dump(),
+        "amended_summary": scope.amended_summary,
+    }
+
+
+def _scope_gate_or_409(set_id: str) -> None:
+    conn = store.get_conn()
+    try:
+        if not store.scope_is_approved(conn, set_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Estimate is gated: the estimate scope for this document set is not approved yet.",
+            )
+    finally:
+        conn.close()
+
+
+def _run_scope_job(job_id: str, set_id: str) -> None:
+    jobs.JOBS.update(job_id, status="running", stage="scoping")
+    try:
+        estimate_run.run_scope(set_id, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s))
+        conn = store.get_conn()
+        try:
+            scope = store.load_scope(conn, set_id)
+        finally:
+            conn.close()
+        jobs.JOBS.update(job_id, status="done", stage="scoping", result=_scope_payload(set_id, scope))
+    except Exception as exc:  # noqa: BLE001
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+@router.post("/estimate/scope", response_model=JobState)
+def post_estimate_scope(req: ScopeRunRequest) -> JobState:
+    """Estimate step 1 — draft the scope (s01). REFUSES until the review register is approved (the
+    review→estimate gate) — a 409 otherwise. DEMO runs inline; live runs as a background job."""
+    _gate_or_409(req.set_id)
+    if demo_mode():
+        estimate_run.run_scope(req.set_id)
+        conn = store.get_conn()
+        try:
+            scope = store.load_scope(conn, req.set_id)
+        finally:
+            conn.close()
+        return JobState(kind="scope", status="done", stage="scoping", result=_scope_payload(req.set_id, scope))
+    job_id = jobs.JOBS.create("scope")
+    jobs.POOL.submit(_run_scope_job, job_id, req.set_id)
+    return JobState(job_id=job_id, kind="scope", status="queued", stage="scoping")
+
+
+@router.post("/estimate/scope/approve", response_model=ScopeGateState)
+def post_estimate_scope_approve(req: ScopeApproval) -> ScopeGateState:
+    """The scope gate — the ONLY writer of scope-approved state. An optional ``amended_summary``
+    becomes the approved scope of record (the original draft is retained). Requires a scope draft to
+    exist first."""
+    conn = store.get_conn()
+    try:
+        scope = store.load_scope(conn, req.set_id)
+        if scope is None:
+            raise HTTPException(status_code=404, detail=f"No scope draft for set {req.set_id!r}; run /estimate/scope first.")
+        store.approve_scope(conn, req.set_id, req.approved, req.amended_summary)
+        scope = store.load_scope(conn, req.set_id)
+        return ScopeGateState(set_id=req.set_id, scope_approved=scope.approved,
+                              summary_of_record=scope.summary_of_record())
+    finally:
+        conn.close()
+
+
+@router.get("/estimate/scope/{set_id}")
+def get_estimate_scope(set_id: str) -> dict:
+    """The persisted scope draft + approval state."""
+    conn = store.get_conn()
+    try:
+        scope = store.load_scope(conn, set_id)
+    finally:
+        conn.close()
+    if scope is None:
+        raise HTTPException(status_code=404, detail=f"No scope draft for set {set_id!r}.")
+    return _scope_payload(set_id, scope)
+
+
+@router.post("/estimate/run", response_model=JobState)
+def post_estimate_run(req: EstimateRunRequest) -> JobState:
+    """Run the ESTIMATE deterministic spine (s02→s03→s04→s05 + totals/margin). Two gates: the review
+    register must be approved AND the estimate scope must be approved — each a distinct 409.
+
+    Live: requires ``margin_pct`` and a structured ``schedule``; runs as a background job (poll
+    ``/estimate/status/{job_id}``). DEMO: loads the fixture schedule + fixture margin and runs inline
+    (offline), returning the estimate."""
+    _gate_or_409(req.set_id)          # first gate: review approved
+    _scope_gate_or_409(req.set_id)    # second gate: scope approved
+    if demo_mode():
+        estimate = estimate_run.run_estimate(
+            req.set_id, estimate_run.DEMO_MARGIN_PCT, estimate_run.load_demo_schedule(),
+            letter_meta=req.letter,
+        )
+        return JobState(kind="estimate", status="done", stage="persisting",
+                        result=_estimate_payload(estimate))
+
+    if req.schedule is None or req.margin_pct is None:
+        raise HTTPException(status_code=422, detail="margin_pct and schedule are required for a live estimate run.")
+    job_id = jobs.JOBS.create("estimate")
+    jobs.POOL.submit(_run_estimate_job, job_id, req.set_id, req.margin_pct, req.schedule, req.letter)
+    return JobState(job_id=job_id, kind="estimate", status="queued", stage="costing")
+
+
+@router.get("/estimate/status/{job_id}", response_model=JobState)
+def get_estimate_status(job_id: str) -> JobState:
+    """Poll a background estimate job (same in-package job store as review)."""
+    job = jobs.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
+    return JobState(
+        job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
+        error=job.error or None, result=job.result if job.status == "done" else None,
+        warnings=list(job.warnings),
+    )
+
+
+@router.get("/estimate/{set_id}")
+def get_estimate(set_id: str) -> dict:
+    """The persisted estimate for a document set: activities with per-line cost traces, indirects,
+    flags, totals, and the margin readout."""
+    conn = store.get_conn()
+    try:
+        estimate = store.load_estimate(conn, set_id)
+    finally:
+        conn.close()
+    if estimate is None:
+        raise HTTPException(status_code=404, detail=f"No estimate for set {set_id!r}.")
+    return _estimate_payload(estimate)
+
+
+@router.get("/estimate/{set_id}/workbook")
+def get_estimate_workbook(set_id: str) -> Response:
+    """The pricing workbook (.xlsx) generated deterministically from the persisted estimate — WBS
+    summary, Resources, one sheet per activity, Indirect Costs, and Flags. Every figure equals the
+    estimate exactly."""
+    conn = store.get_conn()
+    try:
+        estimate = store.load_estimate(conn, set_id)
+    finally:
+        conn.close()
+    if estimate is None:
+        raise HTTPException(status_code=404, detail=f"No estimate for set {set_id!r}.")
+    xlsx = estimate_workbook.build_workbook(estimate)
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="estimate_{set_id}.xlsx"'},
+    )
+
+
+@router.get("/estimate/{set_id}/letter")
+def get_estimate_letter(set_id: str) -> dict:
+    """The offer-letter DRAFT for a document set — the rendered markdown plus its structured pieces
+    (price, inclusions/exclusions, pricing schedule, and Appendix A bullets with their source tags).
+    A draft for human editing; nothing sends it."""
+    conn = store.get_conn()
+    try:
+        letter = store.load_letter(conn, set_id)
+    finally:
+        conn.close()
+    if letter is None:
+        raise HTTPException(status_code=404, detail=f"No offer letter for set {set_id!r}; run the estimate first.")
+    return {
+        "set_id": set_id,
+        "price": letter.price,
+        "price_str": letter.price_str,
+        "markdown": letter.markdown,
+        "letter": letter.model_dump(),
+    }

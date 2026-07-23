@@ -95,6 +95,7 @@ Forward-only, typed handoffs. Each stage folder has a `CONTEXT.md`
 | `backend/references/rubrics/` | Trade taxonomy, leveling rules, risk-scoring rules. |
 | `backend/fixtures/` | Serialised stage objects for DEMO_MODE / tests. |
 | `backend/api.py` | Thin FastAPI driver (one POST per stage + Excel download). |
+| `backend/client_boq/` | **client→BOQ** module (REVIEW then ESTIMATE) — a separate capability beside the procurement pipeline. Self-contained, mounted at `/client-boq`. Start at `backend/client_boq/CONTEXT.md`; reference docs in `docs/client_boq/` (see `how_it_fits.md`). |
 | `frontend/` | React + TypeScript + Vite + Tailwind five-step wizard. |
 | `eval/` | Left in place from SiteClaim; not part of this build. |
 
