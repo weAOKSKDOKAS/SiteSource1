@@ -47,7 +47,9 @@ import type {
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
 
-async function handle<T>(res: Response): Promise<T> {
+// Exported so the self-contained client_boq module (src/clientboq/api.ts) reuses one
+// transport — same base URL, same FastAPI {detail} unwrapping — without duplicating it.
+export async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -61,11 +63,11 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-function get<T>(path: string): Promise<T> {
+export function get<T>(path: string): Promise<T> {
   return fetch(BASE + path).then((r) => handle<T>(r));
 }
 
-function post<T>(path: string, body: unknown): Promise<T> {
+export function post<T>(path: string, body: unknown): Promise<T> {
   return fetch(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

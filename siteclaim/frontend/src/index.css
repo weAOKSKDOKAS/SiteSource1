@@ -54,6 +54,26 @@
   /* Uppercase eyebrow / label tracking (0.1em) and display heading tracking (-0.02em). */
   --tracking-eyebrow: 0.1em;
   --tracking-display: -0.02em;
+
+  /* Easing. The built-in CSS curves are too weak to read as intentional: ease-in in
+     particular delays the first frames — exactly when the eye is watching — so an
+     interface using it feels slower than the same duration eased out. These are the
+     two curves this app uses; nothing here should ease in. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);   /* entering, exiting, press feedback */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); /* moving/morphing on screen */
+}
+
+/* Press feedback. Any pressable surface confirms it heard the pointer, within the
+   100–160ms window where the response still reads as instant. Transform only — it skips
+   layout and paint — and only for a fine pointer, since a touch tap has no hover to
+   disambiguate it. */
+@media (hover: hover) and (pointer: fine) {
+  .pressable {
+    transition: transform 160ms var(--ease-out);
+  }
+  .pressable:active:not(:disabled) {
+    transform: scale(0.97);
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -67,6 +87,12 @@
 }
 .bg-brand-violet {
   background-image: linear-gradient(150deg, #1f6feb, #6e56cf);
+}
+/* A disabled primary CTA must LOOK disabled. These gradients are plain classes rather than
+   Tailwind utilities, so `disabled:bg-none` cannot outrank them and the accent fill paints
+   straight over the muted disabled background colour. Drop the gradient here instead. */
+.bg-brand-violet:disabled {
+  background-image: none;
 }
 .text-brand-violet {
   background-image: linear-gradient(150deg, #1f6feb, #6e56cf);

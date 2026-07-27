@@ -57,8 +57,10 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 export function Button({ variant = "primary", loading, children, className, disabled, ...rest }: ButtonProps) {
+  // `pressable` adds the scale-down on :active (index.css) — the button confirming it heard
+  // the press. Transform only, fine pointers only, and the reduced-motion guard settles it.
   const base =
-    "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright focus-visible:ring-offset-2 disabled:cursor-not-allowed";
+    "pressable inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright focus-visible:ring-offset-2 disabled:cursor-not-allowed";
   const variants = {
     // Primary CTA: the brand→violet accent gradient + brand glow (the prototype's emphasis).
     primary:

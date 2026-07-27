@@ -78,6 +78,7 @@ only) · **Gate** = human approval.
 | `jobs.py` | In-package background-job store + pool (replicates the procurement ingest pattern). |
 | `review/`, `estimate/` | The stage stubs. |
 | `tests/` | Scaffold tests (imports, router mounts, loaders parse, stubs raise). |
+| `../../frontend/src/clientboq/` | The module's UI — the "Tender → BOQ" tab. Self-contained like this package: its own types, its own `/client-boq` client, and a page that owns its state. Start at `ClientBoqPage.tsx`. |
 
 DEMO fixtures for the AI stages live under `backend/fixtures/cases/client_boq/` (so
 `llm_client.complete_json(demo_fixture=...)` resolves them unchanged).
@@ -113,6 +114,11 @@ drafts** only the intro and the inclusion/exclusion bullets + additional conditi
 the approved scope. It is a draft — nothing sends it.
 
 The whole client_boq workflow (review + estimate) is now implemented — no stubs remain.
+
+**Frontend — complete.** The "Tender → BOQ" tab (`frontend/src/clientboq/`) drives the workflow end to
+end: document set → departure register (the decision surface, with every line's provenance on its left
+edge) → register gate → scope → scope gate → cost build-up → workbook and offer letter. It reads
+`GET /client-boq/rates` (added for the pricing editor) and nothing else new.
 
 In DEMO the module writes a gitignored scratch DB, so an offline run never touches the
 committed `sitesource.db`.

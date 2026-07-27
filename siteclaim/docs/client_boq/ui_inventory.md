@@ -1,9 +1,17 @@
 # Frontend UI Inventory — for designing client_boq screens
 
-**Purpose.** The `client_boq` review→estimate workflow has **no frontend today** (it is API-only). This
-document inventories the *existing* SiteSource frontend so a designer who has never seen the code can
-propose new client_boq screens that fit the established system. Everything below is grounded in real
-files under `siteclaim/frontend/src/`. It describes what *is*, not what *should be*.
+> **Status update — the frontend now exists.** The client_boq screens were built from this
+> inventory and live in `siteclaim/frontend/src/clientboq/` (page: `ClientBoqPage.tsx`, tab:
+> "Tender → BOQ"). The insertion points named in §1 and §5 have been taken, and the fragilities
+> in §6 were handled rather than copied: the page owns its own state (§6.5), the rate book is
+> read over a new `GET /client-boq/rates` so the pricing editor can name a rate, and money is
+> formatted as HK$ in-app while the offer letter renders exactly as the backend composes it
+> (§6.2). Fonts (§6.1) are still not loaded, and navigation is still state-only (§6.4). The rest
+> of this document remains an accurate description of the surrounding system.
+
+**Purpose.** This document inventories the *existing* SiteSource frontend so a designer who has never
+seen the code can propose new client_boq screens that fit the established system. Everything below is
+grounded in real files under `siteclaim/frontend/src/`. It describes what *is*, not what *should be*.
 
 Stack (verified): **React 18 + TypeScript + Vite 6 + Tailwind CSS v4**, single-page app, no router
 library (navigation is React state). Build: `npm run build` (`tsc --noEmit && vite build`) — verified

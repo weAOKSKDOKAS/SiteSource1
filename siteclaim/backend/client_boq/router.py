@@ -31,7 +31,8 @@ from client_boq.models import (
     DepartureRegister,
     RawUpload,
 )
-from client_boq.models import Estimate, EstimateSchedule, LetterMeta
+from client_boq.models import Estimate, EstimateSchedule, LetterMeta, RateRow
+from client_boq import rates as rates_loader
 from client_boq.review import run as review_run
 from client_boq.estimate import run as estimate_run
 from client_boq.estimate import workbook as estimate_workbook
@@ -219,6 +220,17 @@ def get_gate(set_id: str) -> GateState:
         return GateState(set_id=set_id, review_approved=store.review_is_approved(conn, set_id))
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# The rate book — read-only, so the pricing UI can name a rate instead of asking the
+# estimator to recall a rate_id. Same loader the cost build-up reads (the DB-swap seam);
+# no rate is ever written here.
+# ---------------------------------------------------------------------------
+@router.get("/rates", response_model=list[RateRow])
+def get_rates() -> list[RateRow]:
+    """Every row of ``client_boq/data/rates.csv``, in file order."""
+    return rates_loader.load_rates()
 
 
 # ---------------------------------------------------------------------------
