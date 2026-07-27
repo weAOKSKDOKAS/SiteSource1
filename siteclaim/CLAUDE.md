@@ -2,6 +2,13 @@
 
 > Re-read this file first to orient. It is the map; the folders are the
 > architecture. Coordination lives in the filesystem, not in a framework.
+>
+> **Read `../REPO_MAP.md` alongside this file.** The architecture below is
+> current; the **Status section at the bottom is not** — it stops at the Phase
+> 0–10 demo and predates the unified engine, the demo/live split, and
+> `client_boq/`. `REPO_MAP.md` carries the current state, the delta against the
+> archived `SiteSource` snapshot repo, and a list of stale docs (including the
+> firm counts quoted below, which are ~10× out of date).
 
 ## What SiteSource is
 
