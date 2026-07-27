@@ -21,14 +21,11 @@ const GATE_HINT: Record<number, string> = {
 // --- Chrome ----------------------------------------------------------------
 // The routing gate lives INSIDE the Sourcing wizard (step 2) — there is no standalone
 // Routing tab; the confirmed decision persists in the wizard's App-level state.
-export type TopView = "wizard" | "client_boq" | "estimator" | "benchmark" | "database" | "projects";
+export type TopView = "wizard" | "estimator" | "benchmark" | "database" | "projects";
 
 // The app shell sections. Each track flips its `enabled` flag on as its phase lands.
-// "Tender → BOQ" sits next to Sourcing because both start from a tender landing on the desk;
-// the arrow in the label is the section's whole shape — a set of documents in, a priced offer out.
 const NAV: { view: TopView; label: string; enabled: boolean; soon?: string }[] = [
   { view: "wizard", label: "Sourcing", enabled: true },
-  { view: "client_boq", label: "Tender → BOQ", enabled: true },
   { view: "estimator", label: "Estimator", enabled: true },
   { view: "benchmark", label: "Benchmark", enabled: true },
   { view: "projects", label: "Projects", enabled: true },

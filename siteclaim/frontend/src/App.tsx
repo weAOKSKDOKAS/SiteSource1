@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { BenchmarkPage } from "./BenchmarkPage";
-import { ClientBoqPage } from "./clientboq/ClientBoqPage";
 import { DatabasePage } from "./DatabasePage";
 import { EstimatorPage } from "./EstimatorPage";
 import { ProjectsPage } from "./ProjectsPage";
@@ -512,21 +511,14 @@ export default function App() {
 
   // Every top view shares one shell so the non-blocking ingest indicator (rendered once, below)
   // shows on all of them and never remounts as the operator navigates while a tender extracts.
-  const sideView =
-    view === "estimator" ||
-    view === "benchmark" ||
-    view === "database" ||
-    view === "projects" ||
-    view === "client_boq";
+  const sideView = view === "estimator" || view === "benchmark" || view === "database" || view === "projects";
 
   return (
     <div className="min-h-screen">
       <Header demoMode={demoMode} view={view} onNavigate={setView} />
       <main className="mx-auto max-w-6xl px-5 py-8">
         {sideView ? (
-          view === "client_boq" ? (
-            <ClientBoqPage demoMode={demoMode} />
-          ) : view === "estimator" ? (
+          view === "estimator" ? (
             <EstimatorPage />
           ) : view === "benchmark" ? (
             <BenchmarkPage />
