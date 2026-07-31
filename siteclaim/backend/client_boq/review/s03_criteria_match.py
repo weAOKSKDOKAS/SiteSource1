@@ -35,6 +35,7 @@ from client_boq.models import (
     ParsedDocumentSet,
 )
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/review_criteria_match.json"
 
@@ -67,7 +68,7 @@ def _build_prompt(parsed: ParsedDocumentSet, library: CriteriaLibrary) -> str:
 
 def _propose(parsed: ParsedDocumentSet, summary: ContextSummary, library: CriteriaLibrary) -> DepartureProposalSet:
     """The AI proposal pass (offline in DEMO). Proposals only — no status."""
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     if demo_mode():
         return client.complete_json(
             system=_SYSTEM, user="propose departures", target_model=DepartureProposalSet,

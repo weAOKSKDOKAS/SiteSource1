@@ -31,12 +31,29 @@ def rates_path() -> Path:
 
 
 def load_rates(path: Optional[Path] = None) -> list[RateRow]:
-    """Parse the rates CSV into :class:`RateRow` objects.
+    """The estimate's rate book.
 
-    Raises ``FileNotFoundError`` when the CSV is missing (a misconfigured path fails loudly). A row
-    with a non-numeric ``rate`` raises ``ValueError`` naming the ``rate_id`` — a bad rate must never
-    silently become 0. This is the seam a future DB-backed source replaces.
+    **The seam has been swapped**: with no explicit ``path`` this now returns the DB-backed book
+    (``rates_store``, seeded once from this CSV), exactly as this docstring always promised — the
+    same list of :class:`RateRow` from a different reader, with nothing downstream changed. An
+    explicit ``path`` still parses that CSV directly (tests, ad-hoc books).
+
+    CSV parse errors keep their old contract: missing file raises ``FileNotFoundError``; a row
+    with a non-numeric ``rate`` raises ``ValueError`` naming the ``rate_id`` — a bad rate must
+    never silently become 0.
     """
+    if path is None:
+        from client_boq import rates_store, store  # here, not at module top: store imports us for the seed
+        conn = store.get_conn()
+        try:
+            return rates_store.load(conn)
+        finally:
+            conn.close()
+    return load_rates_csv(path)
+
+
+def load_rates_csv(path: Optional[Path] = None) -> list[RateRow]:
+    """The raw CSV parse — the seed reader. ``rates_store`` calls this once to fill its table."""
     csv_path = path or _RATES_PATH
     if not csv_path.is_file():
         raise FileNotFoundError(

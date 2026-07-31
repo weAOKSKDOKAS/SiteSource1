@@ -107,30 +107,110 @@ def load_set(conn: sqlite3.Connection, set_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def list_sets(conn: sqlite3.Connection) -> list[dict]:
-    """Every document set, newest first, with its part count and all three gate states.
+def _register_verdict_counts(register_blob: Optional[str]) -> tuple[int, int]:
+    """(undecided, citation_failed) from a stored register JSON blob, without validating the
+    whole model — the same economy as the price pluck below. Undecided = a line still waiting
+    on a human verdict; a citation_failed line is counted separately because it cannot be
+    confirmed (the approve endpoint 409s) and is therefore what BLOCKS, not what waits."""
+    if not register_blob or register_blob == "{}":
+        return 0, 0
+    try:
+        items = json.loads(register_blob).get("items") or []
+    except (ValueError, AttributeError):
+        return 0, 0
+    undecided = failed = 0
+    for it in items:
+        status = (it or {}).get("status", "")
+        if status == models.STATUS_CITATION_FAILED:
+            failed += 1
+        elif status not in models.HUMAN_VERDICTS:
+            undecided += 1
+    return undecided, failed
+
+
+def _blocked(row: dict, meta: dict) -> bool:
+    """Whether anything is stopping this tender moving — the desk's 'Blocked' filter.
+
+    The definition must agree with what the gates actually refuse, or the filter lies:
+    an unapproved manifest (nothing can run), a failed citation (cannot be confirmed),
+    an unaccepted AI fallback (the freeze gate 409s), or an RFI still open past the
+    query cut-off (the client can no longer be asked).
+    """
+    if not row["gates"]["manifest"] and row["parts"] == 0:
+        return True  # uploaded but the split is not approved — the first gate is shut
+    if row["counts"]["citation_failed"] > 0:
+        return True
+    if row["counts"]["unaccepted_fallbacks"] > 0:
+        return True
+    cutoff = meta.get("query_cutoff") or ""
+    if row["counts"]["open_rfis"] > 0 and cutoff:
+        from datetime import date
+        try:
+            if date.fromisoformat(cutoff) < date.today():
+                return True
+        except ValueError:
+            pass  # an unparseable cut-off never silently blocks
+    return False
+
+
+_META_FIELDS = (
+    "owner_id", "client", "package", "archived", "outcome",
+    "close_date", "close_date_status", "close_date_clause", "close_date_page",
+    "close_date_part_id", "close_date_quote", "close_date_confirmed_by",
+    "query_cutoff", "last_touched_by", "last_touched_at",
+)
+
+_META_DEFAULTS = {
+    "owner_id": "", "client": "", "package": "", "archived": False, "outcome": "live",
+    "close_date": "", "close_date_status": "reading", "close_date_clause": "",
+    "close_date_page": None, "close_date_part_id": "", "close_date_quote": "",
+    "close_date_confirmed_by": "", "query_cutoff": "", "last_touched_by": "",
+    "last_touched_at": None,
+}
+
+
+def list_sets(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict]:
+    """Every document set, newest first, with its part count, gate states, desk metadata and
+    the counts the home screen's cards and filters need.
 
     One query for the whole list: a dashboard needs to show where each tender has got to, and
-    N+1 gate lookups for that is wasteful. The three booleans are the workflow position —
-    manifest approved means it is split, review approved means it is priced-ready, scope
-    approved means the estimate can run.
+    N+1 gate lookups for that is wasteful. The register-derived counts are computed here rather
+    than client-side because the register blob only exists server-side — and the 'blocked'
+    boolean must agree with what the gates refuse, which only this layer knows.
+
+    Archived tenders leave the shelf by default (the shelf is only what still needs work) but
+    stay reachable with ``include_archived=True`` — a lost tender's register is the best
+    reference for the next bid to the same client.
     """
+    marks = ",".join("?" for _ in models.RFI_OPEN)
     rows = conn.execute(
-        """
+        f"""
         SELECT s.set_id, s.name, s.slug, s.status, s.created_at,
                (SELECT COUNT(*) FROM client_boq_parts p WHERE p.set_id = s.set_id) AS parts,
                COALESCE(m.approved, 0) AS manifest_approved,
                COALESCE(m.tier, 0)     AS tier,
                COALESCE(r.approved, 0) AS review_approved,
+               r.register_json          AS register_json,
                COALESCE(sc.approved, 0) AS scope_approved,
-               e.estimate_json          AS estimate_json
+               e.estimate_json          AS estimate_json,
+               (l.set_id IS NOT NULL)   AS has_letter,
+               (SELECT COUNT(*) FROM client_boq_scope_items si
+                 WHERE si.set_id = s.set_id AND si.is_fallback = 1 AND si.accepted = 0
+               ) AS unaccepted_fallbacks,
+               (SELECT COUNT(*) FROM client_boq_rfi_items q
+                 WHERE q.set_id = s.set_id AND q.status IN ({marks})
+               ) AS open_rfis,
+               {", ".join(f"mt.{f}" for f in _META_FIELDS)}
         FROM client_boq_document_sets s
         LEFT JOIN client_boq_manifests        m  ON m.set_id  = s.set_id
         LEFT JOIN client_boq_review_registers r  ON r.set_id  = s.set_id
         LEFT JOIN client_boq_estimate_scope   sc ON sc.set_id = s.set_id
         LEFT JOIN client_boq_estimates        e  ON e.set_id  = s.set_id
+        LEFT JOIN client_boq_letters          l  ON l.set_id  = s.set_id
+        LEFT JOIN client_boq_set_meta         mt ON mt.set_id = s.set_id
         ORDER BY s.created_at DESC, s.set_id
-        """
+        """,
+        tuple(sorted(models.RFI_OPEN)),
     ).fetchall()
 
     out: list[dict] = []
@@ -144,7 +224,12 @@ def list_sets(conn: sqlite3.Connection) -> list[dict]:
                 price = (json.loads(blob).get("totals") or {}).get("price")
             except (ValueError, AttributeError):
                 price = None
-        out.append({
+        undecided, citation_failed = _register_verdict_counts(row["register_json"])
+        meta = {f: (row[f] if row[f] is not None else _META_DEFAULTS[f]) for f in _META_FIELDS}
+        meta["archived"] = bool(meta["archived"])
+        if not include_archived and meta["archived"]:
+            continue
+        entry = {
             "set_id": row["set_id"],
             "name": row["name"],
             "slug": row["slug"],
@@ -158,7 +243,17 @@ def list_sets(conn: sqlite3.Connection) -> list[dict]:
                 "scope": bool(row["scope_approved"]),
             },
             "price": price,
-        })
+            "has_letter": bool(row["has_letter"]),
+            "meta": meta,
+            "counts": {
+                "undecided": undecided,
+                "citation_failed": citation_failed,
+                "unaccepted_fallbacks": int(row["unaccepted_fallbacks"]),
+                "open_rfis": int(row["open_rfis"]),
+            },
+        }
+        entry["blocked"] = _blocked(entry, meta)
+        out.append(entry)
     return out
 
 
@@ -180,6 +275,124 @@ def load_summary(conn: sqlite3.Connection, set_id: str) -> Optional[ContextSumma
     if not row or not row["summary_json"] or row["summary_json"] == "{}":
         return None
     return ContextSummary.model_validate_json(row["summary_json"])
+
+
+# ---------------------------------------------------------------------------
+# The tender desk — team, per-set metadata, touch tracking
+# ---------------------------------------------------------------------------
+def list_team(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict]:
+    """Every team member, oldest first (a stable roster order)."""
+    where = "" if include_archived else "WHERE archived = 0"
+    rows = conn.execute(
+        f"SELECT member_id, name, initials, colour, role, archived, created_at "
+        f"FROM client_boq_team_members {where} ORDER BY created_at, member_id"
+    ).fetchall()
+    return [{**dict(row), "archived": bool(row["archived"])} for row in rows]
+
+
+def upsert_team_member(conn: sqlite3.Connection, *, member_id: str, name: str,
+                       initials: str = "", colour: str = "", role: str = "",
+                       archived: bool = False) -> None:
+    """Create or update one member. Archiving keeps the row — the name is stamped on historical
+    verdicts and ownership, so a member is never deleted."""
+    conn.execute(
+        """
+        INSERT INTO client_boq_team_members (member_id, name, initials, colour, role, archived)
+        VALUES (:member_id, :name, :initials, :colour, :role, :archived)
+        ON CONFLICT(member_id) DO UPDATE SET
+            name = excluded.name, initials = excluded.initials, colour = excluded.colour,
+            role = excluded.role, archived = excluded.archived
+        """,
+        {"member_id": member_id, "name": name, "initials": initials, "colour": colour,
+         "role": role, "archived": int(archived)},
+    )
+    conn.commit()
+
+
+def load_set_meta(conn: sqlite3.Connection, set_id: str) -> dict:
+    """The desk metadata for one set. Always returns a full dict — a set with no meta row yet
+    reads as the defaults (owner unknown, close date still ``reading``), never as an error."""
+    row = conn.execute(
+        f"SELECT {', '.join(_META_FIELDS)} FROM client_boq_set_meta WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    if row is None:
+        return dict(_META_DEFAULTS)
+    meta = {f: (row[f] if row[f] is not None else _META_DEFAULTS[f]) for f in _META_FIELDS}
+    meta["archived"] = bool(meta["archived"])
+    return meta
+
+
+def upsert_set_meta(conn: sqlite3.Connection, set_id: str, **fields) -> dict:
+    """Update named metadata fields for a set, creating the row if absent. Only the fields
+    passed change; everything else keeps its stored value. Returns the merged result."""
+    unknown = set(fields) - set(_META_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown set_meta fields: {sorted(unknown)}")
+    current = load_set_meta(conn, set_id)
+    merged = {**current, **fields}
+    merged["archived"] = int(bool(merged["archived"]))
+    conn.execute(
+        f"""
+        INSERT INTO client_boq_set_meta (set_id, {', '.join(_META_FIELDS)})
+        VALUES (:set_id, {', '.join(':' + f for f in _META_FIELDS)})
+        ON CONFLICT(set_id) DO UPDATE SET
+            {', '.join(f'{f} = excluded.{f}' for f in _META_FIELDS)}
+        """,
+        {"set_id": set_id, **merged},
+    )
+    conn.commit()
+    merged["archived"] = bool(merged["archived"])
+    return merged
+
+
+def touch_set(conn: sqlite3.Connection, set_id: str, actor: str) -> None:
+    """Stamp who last worked this tender and when — the desk card's footer. Cheap by design
+    (called from every mutating route); an empty actor still moves the clock, because the work
+    happened even if nobody said who they were."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_set_meta (set_id, last_touched_by, last_touched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(set_id) DO UPDATE SET
+            last_touched_by = excluded.last_touched_by,
+            last_touched_at = excluded.last_touched_at
+        """,
+        (set_id, actor, now),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# App-wide settings (key/value)
+# ---------------------------------------------------------------------------
+def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
+    row = conn.execute("SELECT value FROM client_boq_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str, actor: str = "") -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_settings (key, value, updated_by, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value, updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        """,
+        (key, value, actor, now),
+    )
+    conn.commit()
+
+
+def list_settings(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT key, value, updated_by, updated_at FROM client_boq_settings ORDER BY key"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

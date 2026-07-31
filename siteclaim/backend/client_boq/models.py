@@ -521,6 +521,10 @@ class DepartureItem(BaseModel):
     client_response: str = ""         # negotiation (human)
     contractor_response: str = ""     # negotiation (human)
     register_status: str = "open"     # Open | Closed (the review-doc status column)
+    decided_by: str = ""              # team member who recorded the verdict ("" = pre-team data).
+    #                                   Additive and backward-compatible: stored register JSON
+    #                                   without the field validates to "". What makes a
+    #                                   "CONFIRMED BY R. LAM" chip honest rather than decorative.
 
 
 class AlignedItem(BaseModel):
@@ -1106,6 +1110,110 @@ _DDL = [
         pages       TEXT NOT NULL DEFAULT '',          -- as the addendum prints it, e.g. "PS7/45"
         description TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (set_id, change_id)
+    )
+    """,
+    # ---- The tender desk (home screen) tables -----------------------------
+    # The team. Named profiles, deliberately without passwords: there is no auth anywhere in
+    # this app (CLAUDE.md trap 6), so a password field here would be security theatre. What the
+    # table honestly provides is ATTRIBUTION — who owns a tender, who recorded a verdict — the
+    # same reason scope items carry a badge. Members archive rather than delete, because their
+    # name is stamped on historical verdicts.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_team_members (
+        member_id  TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        initials   TEXT NOT NULL DEFAULT '',
+        colour     TEXT NOT NULL DEFAULT '',           -- avatar bg, from the fixed cb palette
+        role       TEXT NOT NULL DEFAULT '',
+        archived   INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
+    # Desk metadata for a set — a 1:1 SIBLING of client_boq_document_sets, the same shape as
+    # manifests/registers/estimates, so no ALTER-TABLE migration is ever needed on a long-lived
+    # database. The close date is A FINDING, not a form field: it is read from the Conditions
+    # of Tender with a citation (clause/page/part/quote), a failed read says so, and only a
+    # human confirmation ('confirmed') is allowed to overwrite what was measured.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_set_meta (
+        set_id                  TEXT PRIMARY KEY,
+        owner_id                TEXT NOT NULL DEFAULT '',
+        client                  TEXT NOT NULL DEFAULT '',
+        package                 TEXT NOT NULL DEFAULT '',
+        archived                INTEGER NOT NULL DEFAULT 0,
+        outcome                 TEXT NOT NULL DEFAULT 'live',  -- live|submitted|won|lost
+        close_date              TEXT NOT NULL DEFAULT '',      -- ISO date, or ''
+        close_date_status       TEXT NOT NULL DEFAULT 'reading', -- reading|found|not_found|confirmed
+        close_date_clause       TEXT NOT NULL DEFAULT '',      -- citation: clause as printed
+        close_date_page         INTEGER,                        -- citation: measured page
+        close_date_part_id      TEXT NOT NULL DEFAULT '',      -- citation: which part
+        close_date_quote        TEXT NOT NULL DEFAULT '',      -- the clause's own words
+        close_date_confirmed_by TEXT NOT NULL DEFAULT '',
+        query_cutoff            TEXT NOT NULL DEFAULT '',      -- ISO; the RFI deadline, same rules
+        last_touched_by         TEXT NOT NULL DEFAULT '',
+        last_touched_at         TEXT
+    )
+    """,
+    # The criteria library, editable. Seeded ONCE from docs/client_boq/review_criteria.md (see
+    # criteria_store.py); thereafter the DB is the source of truth. Criteria disable rather
+    # than delete — a past register may reference the id, and a referenced criterion must stay
+    # resolvable forever.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_criteria (
+        id                  TEXT PRIMARY KEY,
+        category_id         TEXT NOT NULL DEFAULT '',
+        category            TEXT NOT NULL DEFAULT '',
+        clause_area         TEXT NOT NULL DEFAULT '',
+        acceptable_position TEXT NOT NULL DEFAULT '',
+        why_it_matters      TEXT NOT NULL DEFAULT '',
+        red_flag            TEXT NOT NULL DEFAULT '',
+        is_placeholder      INTEGER NOT NULL DEFAULT 0,
+        enabled             INTEGER NOT NULL DEFAULT 1,
+        sort_order          INTEGER NOT NULL DEFAULT 0,
+        updated_by          TEXT NOT NULL DEFAULT '',
+        updated_at          TEXT
+    )
+    """,
+    # Threshold rules ride along read-only: their extract_field is wired into rules.py, so rule
+    # text a user could edit but code would not obey must not be editable (it would be a lie).
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_threshold_rules (
+        id            TEXT PRIMARY KEY,
+        rule          TEXT NOT NULL DEFAULT '',
+        extract_field TEXT NOT NULL DEFAULT '',
+        enabled       INTEGER NOT NULL DEFAULT 1
+    )
+    """,
+    # The rate library — the DB source rates.py declared itself the seam for. Seeded once from
+    # data/rates.csv (first-wins, mirroring rate_index); thereafter the DB is the source of
+    # truth. Rates archive rather than delete: an archived rate referenced by an old estimate
+    # honestly resolves as missing_rate on a re-run instead of silently pricing at a rate
+    # nobody stands behind.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_rates (
+        rate_id     TEXT PRIMARY KEY,
+        category    TEXT NOT NULL DEFAULT '',
+        code        TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        unit        TEXT NOT NULL DEFAULT '',
+        rate        REAL NOT NULL DEFAULT 0,
+        currency    TEXT NOT NULL DEFAULT '',
+        source      TEXT NOT NULL DEFAULT '',
+        notes       TEXT NOT NULL DEFAULT '',
+        archived    INTEGER NOT NULL DEFAULT 0,
+        updated_by  TEXT NOT NULL DEFAULT '',
+        updated_at  TEXT
+    )
+    """,
+    # App-wide settings (key/value). Written only by /settings; read by client_boq/llm.py when
+    # constructing an LLM client. Deliberately NOT os.environ mutation: the job pool runs
+    # stages on threads, and a process-global mutable env is a race nobody can see in a test.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL DEFAULT '',
+        updated_by TEXT NOT NULL DEFAULT '',
+        updated_at TEXT
     )
     """,
 ]

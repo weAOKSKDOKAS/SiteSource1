@@ -25,6 +25,7 @@ from client_boq.models import (
     ScopeReviewResult,
 )
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/estimate_scope_review.json"
 
@@ -36,7 +37,7 @@ _SYSTEM = (
 
 
 def _draft(parsed: ParsedDocumentSet, summary: ContextSummary) -> ScopeReviewResult:
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     if demo_mode():
         return client.complete_json(
             system=_SYSTEM, user="draft the scope review", target_model=ScopeReviewResult,

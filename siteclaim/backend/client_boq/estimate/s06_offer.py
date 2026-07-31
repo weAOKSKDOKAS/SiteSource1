@@ -32,6 +32,7 @@ from client_boq.models import (
     PricingScheduleRow,
 )
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/estimate_offer.json"
 
@@ -44,7 +45,7 @@ _SYSTEM = (
 
 
 def _draft(scope: EstimateScope) -> LetterDraft:
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     if demo_mode():
         return client.complete_json(
             system=_SYSTEM, user="draft the letter prose", target_model=LetterDraft,

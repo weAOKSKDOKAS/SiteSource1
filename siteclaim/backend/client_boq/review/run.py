@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from client_boq import criteria_loader, store
+from client_boq import criteria_store, store
 from client_boq.models import DepartureRegister, RawUpload
 from client_boq.review import (
     s01_ingest,
@@ -111,7 +111,10 @@ def run_review(
 
         # s03 — propose matches, then deterministic threshold rules.
         step("matching")
-        library = criteria_loader.load_criteria()
+        # The DB-backed library (seeded from the markdown on first access). enabled_only:
+        # a criterion someone disabled stops being checked in FUTURE reviews, while past
+        # registers still resolve it through the full list.
+        library = criteria_store.load(conn, enabled_only=True)
         departures = s03_criteria_match.match_criteria(parsed, summary, library)
 
         # s04 — scope alignment (AI propose + deterministic precedence + input gaps).

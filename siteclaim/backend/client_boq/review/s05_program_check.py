@@ -29,6 +29,7 @@ from client_boq.models import (
     ProgramFindingSet,
 )
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/review_program_check.json"
 
@@ -51,7 +52,7 @@ def _has_program(parsed: ParsedDocumentSet) -> bool:
 
 
 def _propose(parsed: ParsedDocumentSet, summary: ContextSummary) -> ProgramFindingSet:
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     if demo_mode():
         return client.complete_json(
             system=_SYSTEM, user="propose program risks", target_model=ProgramFindingSet,

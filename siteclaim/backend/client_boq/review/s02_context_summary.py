@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from client_boq.models import ContextSummary, ParsedDocumentSet
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/review_context_summary.json"
 
@@ -35,7 +36,7 @@ _INSTRUCTION = (
 
 def summarise_context(parsed: ParsedDocumentSet) -> ContextSummary:
     """Draft the structured commercial-risk summary from the parsed document set. Draft only."""
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     if demo_mode():
         return client.complete_json(
             system=_SYSTEM, user=_INSTRUCTION, target_model=ContextSummary,

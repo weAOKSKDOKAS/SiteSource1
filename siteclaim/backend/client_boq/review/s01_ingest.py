@@ -32,6 +32,7 @@ from typing import Optional
 from client_boq.models import ClauseItem, ParsedDocumentSet, PartSpec, RawUpload
 from pipeline.documents import extract_document
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 from pipeline.workspace import Workspace
 
 DEMO_FIXTURE = "cases/client_boq/review_ingest.json"
@@ -102,7 +103,7 @@ def ingest_from_parts(
     """
     from client_boq.ingest import pdfops  # local import: keeps the review path light
 
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     clauses: list[ClauseItem] = []
     doc_names: list[str] = []
 
@@ -139,7 +140,7 @@ def ingest_review_documents(
     Live: save each original to the Workspace, extract its text, then one AI structuring pass. DEMO:
     return the fixture parse offline. Set identity/persistence are the caller's job.
     """
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     if demo_mode():
         # Offline: the fixture is the structured parse. No file read, no network.
         return client.complete_json(

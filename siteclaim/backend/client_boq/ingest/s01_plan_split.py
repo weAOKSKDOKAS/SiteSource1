@@ -17,6 +17,7 @@ from __future__ import annotations
 from client_boq.ingest import pdfops
 from client_boq.models import PART_CATEGORIES, InspectReport, PlannedSplit, SplitManifest
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/ingest_plan_split.json"
 
@@ -104,7 +105,7 @@ def plan_split(report: InspectReport, set_id: str = "") -> SplitManifest:
     page count, the deterministic draft is kept and the reason is recorded on the manifest
     for the human at the gate to see.
     """
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     draft = report.draft.model_copy(deep=True)
     draft.set_id = set_id
 

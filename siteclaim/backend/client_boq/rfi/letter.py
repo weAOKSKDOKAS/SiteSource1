@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from client_boq.models import RFIItem, RFILetterDraft
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/rfi_letter.json"
 
@@ -36,7 +37,7 @@ Context for the letter:
 def _cover(project: str, ref: str, count: int) -> RFILetterDraft:
     """The covering prose. Falls back to a plain, correct wrapper if the model is unavailable —
     a query letter must still go out on the day the cut-off falls."""
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     try:
         if demo_mode():
             return client.complete_json(

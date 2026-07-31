@@ -31,6 +31,7 @@ from client_boq.models import (
     ScopeAlignmentSet,
 )
 from pipeline.llm_client import LLMClient, demo_mode
+from client_boq.llm import make_client
 
 DEMO_FIXTURE = "cases/client_boq/review_scope_align.json"
 
@@ -51,7 +52,7 @@ _PRECEDENCE_MARKERS = ("order of precedence", "priority of documents", "document
 
 
 def _propose(parsed: ParsedDocumentSet, summary: ContextSummary) -> ScopeAlignmentSet:
-    client = LLMClient()
+    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
     if demo_mode():
         return client.complete_json(
             system=_SYSTEM, user="propose scope findings", target_model=ScopeAlignmentSet,

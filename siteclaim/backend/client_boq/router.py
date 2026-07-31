@@ -18,11 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from client_boq import criteria_loader, jobs, models, store
+from client_boq import criteria_loader, criteria_store, jobs, models, store
 from client_boq.models import (
     HUMAN_VERDICTS,
     STATUS_CANDIDATE,
@@ -58,6 +58,13 @@ router = APIRouter(prefix="/client-boq", tags=["client_boq"])
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# Who is doing this? Named profiles, not auth: the header names a team member so ownership and
+# verdicts can be attributed, and an absent or unknown value degrades to "" rather than 401 —
+# there is no security boundary here to enforce (CLAUDE.md trap 6), only honesty about who acted.
+def _actor(x_cboq_actor: str = Header(default="", alias="X-CBOQ-Actor")) -> str:
+    return (x_cboq_actor or "").strip()[:64]
 
 
 # ---------------------------------------------------------------------------
@@ -254,22 +261,41 @@ def _parts_payload(set_id: str, rows) -> dict:
     }
 
 
-def _run_ingest_job(job_id: str, uploads: list[RawUpload], project_name: str) -> None:
+def _run_ingest_job(job_id: str, uploads: list[RawUpload], project_name: str, actor: str = "") -> None:
     jobs.JOBS.update(job_id, status="running", stage="reading")
     try:
         manifest = ingest_run.run_inspect(
             uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
         )
+        _stamp_new_set(manifest.set_id, actor)
         jobs.JOBS.update(job_id, status="done", stage="awaiting-approval",
                          result=_manifest_payload(manifest))
     except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 
 
+def _stamp_new_set(set_id: str, actor: str) -> None:
+    """Desk metadata for a set that just entered the app: the uploader owns it (they can hand it
+    off on the card), and the close date is honestly ``reading`` until the interpreter has been
+    given a chance to quote the deadline clause."""
+    conn = store.get_conn()
+    try:
+        current = store.load_set_meta(conn, set_id)
+        fields: dict = {}
+        if not current["owner_id"] and actor:
+            fields["owner_id"] = actor
+        if fields or current["close_date_status"] == "reading":
+            store.upsert_set_meta(conn, set_id, **fields)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+
+
 @router.post("/ingest/upload", response_model=JobState)
 def post_ingest_upload(
     files: Optional[list[UploadFile]] = File(None),
     project_name: str = Form(""),
+    actor: str = Depends(_actor),
 ) -> JobState:
     """Upload a tender and get back a DRAFT split manifest for review.
 
@@ -287,10 +313,11 @@ def post_ingest_upload(
             manifest = ingest_run.run_inspect(uploads, project_name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _stamp_new_set(manifest.set_id, actor)
         return JobState(kind="ingest", status="done", stage="awaiting-approval",
                         result=_manifest_payload(manifest))
     job_id = jobs.JOBS.create("ingest")
-    jobs.POOL.submit(_run_ingest_job, job_id, uploads, project_name)
+    jobs.POOL.submit(_run_ingest_job, job_id, uploads, project_name, actor)
     return JobState(job_id=job_id, kind="ingest", status="queued", stage="uploading")
 
 
@@ -324,7 +351,7 @@ class ManifestApproval(BaseModel):
 
 
 @router.post("/ingest/manifest/approve", response_model=ManifestGateState)
-def post_ingest_manifest_approve(req: ManifestApproval) -> ManifestGateState:
+def post_ingest_manifest_approve(req: ManifestApproval, actor: str = Depends(_actor)) -> ManifestGateState:
     """The manifest gate — the ONLY writer of the ingest approval flag, and the first gate of
     the workflow. An edited ``parts`` list replaces the draft and is validated against the
     real page count before it is stored: a split that does not fit the document is refused
@@ -354,6 +381,7 @@ def post_ingest_manifest_approve(req: ManifestApproval) -> ManifestGateState:
             manifest = edited
             store.save_manifest(conn, manifest)
         store.approve_manifest(conn, req.set_id, req.approved)
+        store.touch_set(conn, req.set_id, actor)
         return ManifestGateState(
             set_id=req.set_id,
             manifest_approved=store.manifest_is_approved(conn, req.set_id),
@@ -375,13 +403,18 @@ def _manifest_gate_or_409(set_id: str) -> None:
         conn.close()
 
 
-def _run_split_job(job_id: str, set_id: str) -> None:
+def _run_split_job(job_id: str, set_id: str, actor: str = "") -> None:
     jobs.JOBS.update(job_id, status="running", stage="splitting")
     try:
         ingest_run.run_split(set_id, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s))
         conn = store.get_conn()
         try:
             rows = store.load_parts(conn, set_id)
+            # The freshly interpreted parts may quote the submission-deadline clause; turn the
+            # quote into the desk's close date (or an honest not_found) while it is hot.
+            from client_boq.ingest import close_date as close_date_mod
+            close_date_mod.derive(conn, set_id)
+            store.touch_set(conn, set_id, actor)
         finally:
             conn.close()
         jobs.JOBS.update(job_id, status="done", stage="ingested",
@@ -395,7 +428,7 @@ class SplitRequest(BaseModel):
 
 
 @router.post("/ingest/split", response_model=JobState)
-def post_ingest_split(req: SplitRequest) -> JobState:
+def post_ingest_split(req: SplitRequest, actor: str = Depends(_actor)) -> JobState:
     """Cut the approved manifest into parts and interpret each one. REFUSES until the manifest
     is approved (a 409). The cut costs no model calls, so editing the manifest and re-splitting
     is free — only the per-part interpretation is paid for again."""
@@ -405,12 +438,16 @@ def post_ingest_split(req: SplitRequest) -> JobState:
         conn = store.get_conn()
         try:
             rows = store.load_parts(conn, req.set_id)
+            # The parts now carry whatever deadline clause the interpreter quoted; read it.
+            from client_boq.ingest import close_date as close_date_mod
+            close_date_mod.derive(conn, req.set_id)
+            store.touch_set(conn, req.set_id, actor)
         finally:
             conn.close()
         return JobState(kind="ingest", status="done", stage="ingested",
                         done=len(rows), total=len(rows), result=_parts_payload(req.set_id, rows))
     job_id = jobs.JOBS.create("ingest")
-    jobs.POOL.submit(_run_split_job, job_id, req.set_id)
+    jobs.POOL.submit(_run_split_job, job_id, req.set_id, actor)
     return JobState(job_id=job_id, kind="ingest", status="queued", stage="splitting")
 
 
@@ -471,7 +508,7 @@ class ChangeApproval(BaseModel):
 
 
 @router.post("/ingest/changes/approve")
-def post_ingest_changes_approve(req: ChangeApproval) -> dict:
+def post_ingest_changes_approve(req: ChangeApproval, actor: str = Depends(_actor)) -> dict:
     """The change-mapping gate — the only thing that creates a new revision.
 
     Each approved replacement becomes a NEW revision of its part. Nothing is overwritten: the
@@ -484,6 +521,11 @@ def post_ingest_changes_approve(req: ChangeApproval) -> dict:
         applied, reopened, overtaken = ingest_run.apply_document(req.set_id, req.doc_id, pairs)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    conn = store.get_conn()
+    try:
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
     notes = [f"{len(applied)} part(s) moved to a new revision."]
     if reopened:
         notes.append(f"{len(reopened)} register line(s) were reopened for re-review.")
@@ -587,39 +629,420 @@ def get_revisions_as_at(set_id: str, seq: int) -> dict:
 
 @router.get("/criteria")
 def get_criteria() -> dict:
-    """The acceptable-terms library, as parsed from ``review_criteria.md``.
+    """The acceptable-terms library — DB-backed, seeded once from ``review_criteria.md``.
 
     The register stores only a ``criterion_id`` (``PS-01``) plus the clause area, which on screen
     reads as a code nobody can decode. The two fields that make a finding self-explanatory —
-    what position we accept, and what the red flag is — live only in this file. Exposing it lets
+    what position we accept, and what the red flag is — live in this library. Exposing it lets
     the register show *what we accept* beside *what the contract says*, which is the difference
     between a reviewer understanding a line and guessing at it.
+
+    The payload shape is unchanged from the file-served version, plus ``rows`` — every criterion
+    with its editing metadata (``enabled``, ``updated_by``) for the Criteria screen. ``criteria``
+    still lists every populated row including disabled ones, because past registers reference
+    ids and no referenced criterion is ever silently dropped; only future REVIEW RUNS skip
+    disabled rows.
     """
+    conn = store.get_conn()
     try:
-        library = criteria_loader.load_criteria()
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try:
+            library = criteria_store.load(conn)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        rows = criteria_store.load_rows(conn)
+    finally:
+        conn.close()
     return {
         "count": len(library.criteria),
         "criteria": [c.model_dump() for c in library.criteria],
         "placeholders": [c.model_dump() for c in library.placeholders],
         "thresholds": [r.model_dump() for r in library.threshold_rules],
+        "rows": rows,
     }
 
 
-@router.get("/sets")
-def get_sets() -> dict:
-    """Every document set, newest first, with its part count and all three gate states.
+class CriterionEdit(BaseModel):
+    """Send what changed. The id is in the path (update) or derived (create)."""
+    category_id: str | None = None
+    clause_area: str | None = None
+    acceptable_position: str | None = None
+    why_it_matters: str | None = None
+    red_flag: str | None = None
+    enabled: bool | None = None
 
-    The workflow position of each tender in one call: `gates.manifest` means it is split,
-    `gates.review` means the register is signed off, `gates.scope` means the estimate can run.
+
+@router.post("/criteria")
+def post_criterion(req: CriterionEdit, actor: str = Depends(_actor)) -> dict:
+    """Add a criterion. The id derives from the category (``PS-06`` after ``PS-05``) — numbers
+    are never reused, because an id may be stamped on a historical register."""
+    if not req.category_id or req.category_id not in criteria_loader._CATEGORY_PREFIX.values():
+        raise HTTPException(
+            status_code=422,
+            detail=f"category_id must be one of {sorted(criteria_loader._CATEGORY_PREFIX.values())}",
+        )
+    if not (req.clause_area or "").strip():
+        raise HTTPException(status_code=422, detail="A criterion needs a clause area.")
+    category = next(k for k, v in criteria_loader._CATEGORY_PREFIX.items() if v == req.category_id)
+    conn = store.get_conn()
+    try:
+        new_id = criteria_store.next_id(conn, req.category_id)
+        row = criteria_store.upsert(
+            conn, id=new_id, actor=actor,
+            category_id=req.category_id, category=category,
+            clause_area=req.clause_area or "",
+            acceptable_position=req.acceptable_position or "",
+            why_it_matters=req.why_it_matters or "",
+            red_flag=req.red_flag or "",
+            sort_order=9000,  # new rows go to the end of their category listing
+        )
+    finally:
+        conn.close()
+    return {"criterion": row}
+
+
+@router.post("/criteria/{criterion_id}")
+def post_criterion_update(criterion_id: str, req: CriterionEdit, actor: str = Depends(_actor)) -> dict:
+    """Edit or disable one criterion. Editing stamps who; disabling keeps the row — future
+    reviews stop checking it, past registers keep resolving it."""
+    conn = store.get_conn()
+    try:
+        existing = criteria_store.get(conn, criterion_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"No criterion {criterion_id!r}.")
+        fields = {k: v for k, v in req.model_dump().items() if v is not None and k != "category_id"}
+        if not fields:
+            raise HTTPException(status_code=422, detail="Nothing to change.")
+        row = criteria_store.upsert(conn, id=criterion_id, actor=actor, **fields)
+    finally:
+        conn.close()
+    return {"criterion": row}
+
+
+# ---------------------------------------------------------------------------
+# The rate library (Pricing & rates)
+# ---------------------------------------------------------------------------
+class RateEdit(BaseModel):
+    """Send what changed. The id is in the path (update) or required here (create)."""
+    rate_id: str = ""
+    category: str | None = None
+    code: str | None = None
+    description: str | None = None
+    unit: str | None = None
+    rate: float | None = None
+    currency: str | None = None
+    notes: str | None = None
+
+
+@router.get("/rates")
+def get_rates() -> dict:
+    """The rate book — DB-backed, seeded once from ``data/rates.csv``.
+
+    ``rows`` carries editing metadata (``archived``, ``updated_by``); ``seed_duplicates`` names
+    any ids the CSV repeated (first-wins was applied), so a cleaned-up seed is visible rather
+    than silent. This is the book ``/estimate/run`` prices from.
+    """
+    from client_boq import rates as rates_mod, rates_store
+    conn = store.get_conn()
+    try:
+        duplicates = rates_store.seed_if_empty(conn)
+        rows = rates_store.load_rows(conn)
+    finally:
+        conn.close()
+    return {
+        "count": sum(1 for r in rows if not r["archived"]),
+        "rows": rows,
+        "categories": sorted(rates_mod.KNOWN_CATEGORIES),
+        "seed_duplicates": sorted(duplicates),
+    }
+
+
+@router.post("/rates")
+def post_rate(req: RateEdit, actor: str = Depends(_actor)) -> dict:
+    """Add a rate. The id is the caller's (rate ids are meaningful codes like ``LAB-CONC``,
+    not sequence numbers); an id already in the book is refused — edit it instead."""
+    from client_boq import rates_store
+    rate_id = req.rate_id.strip().upper()
+    if not rate_id:
+        raise HTTPException(status_code=422, detail="A rate needs a rate_id (e.g. LAB-CONC).")
+    if req.rate is None:
+        raise HTTPException(status_code=422, detail="A rate needs a numeric rate.")
+    conn = store.get_conn()
+    try:
+        if rates_store.get(conn, rate_id) is not None:
+            raise HTTPException(status_code=409, detail=f"Rate {rate_id!r} already exists; edit it instead.")
+        fields = {k: v for k, v in req.model_dump().items() if v is not None and k != "rate_id"}
+        fields.setdefault("source", "user")
+        row = rates_store.upsert(conn, rate_id=rate_id, actor=actor, **fields)
+    finally:
+        conn.close()
+    return {"rate": row}
+
+
+@router.post("/rates/{rate_id}")
+def post_rate_update(rate_id: str, req: RateEdit, actor: str = Depends(_actor)) -> dict:
+    """Edit one rate. Editing stamps who and marks the source ``user`` — a number someone
+    changed by hand must never still claim to be the seed's."""
+    from client_boq import rates_store
+    conn = store.get_conn()
+    try:
+        if rates_store.get(conn, rate_id) is None:
+            raise HTTPException(status_code=404, detail=f"No rate {rate_id!r}.")
+        fields = {k: v for k, v in req.model_dump().items() if v is not None and k != "rate_id"}
+        if not fields:
+            raise HTTPException(status_code=422, detail="Nothing to change.")
+        fields["source"] = "user"
+        row = rates_store.upsert(conn, rate_id=rate_id, actor=actor, **fields)
+    finally:
+        conn.close()
+    return {"rate": row}
+
+
+@router.delete("/rates/{rate_id}")
+def delete_rate(rate_id: str, actor: str = Depends(_actor)) -> dict:
+    """Archive a rate — never a delete. An estimate that referenced it will resolve it as
+    ``missing_rate`` on a re-run: honestly absent and flagged, rather than priced at a number
+    nobody stands behind any more."""
+    from client_boq import rates_store
+    conn = store.get_conn()
+    try:
+        if rates_store.get(conn, rate_id) is None:
+            raise HTTPException(status_code=404, detail=f"No rate {rate_id!r}.")
+        row = rates_store.upsert(conn, rate_id=rate_id, actor=actor, archived=True)
+    finally:
+        conn.close()
+    return {
+        "rate": row,
+        "note": (f"{rate_id} is archived, not deleted. Any schedule line still referencing it "
+                 f"will price at 0 with a missing_rate flag on the next estimate run."),
+    }
+
+
+# ---------------------------------------------------------------------------
+# App-wide settings — the AI model
+# ---------------------------------------------------------------------------
+class LLMSettings(BaseModel):
+    provider: str = ""          # "" = auto (env routing) | anthropic | deepseek
+    model_anthropic: str = ""   # "" = the env/code default
+    model_deepseek: str = ""
+
+
+@router.get("/settings")
+def get_settings() -> dict:
+    """The app-wide LLM settings, plus what they actually mean at call time.
+
+    ``effective`` reports the residual truths the stored values cannot override: page images
+    always go to Anthropic vision (DeepSeek rejects image input), and an empty value means the
+    environment's default, not "off".
+    """
+    from client_boq import llm as llm_mod
+    from pipeline.llm_client import ANTHROPIC_MODEL, DEFAULT_DEEPSEEK_MODEL
+    import os
+    cfg = llm_mod.current_settings()
+    conn = store.get_conn()
+    try:
+        rows = store.list_settings(conn)
+    finally:
+        conn.close()
+    return {
+        **cfg,
+        "providers": [p for p in llm_mod.PROVIDERS if p],
+        "effective": {
+            "text_provider": cfg["provider"] or (
+                "deepseek" if os.getenv("DEEPSEEK_API_KEY", "").strip() else "anthropic"),
+            "vision_provider": "anthropic",   # always — DeepSeek rejects image input
+            "model_anthropic": cfg["model_anthropic"] or os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
+            "model_deepseek": cfg["model_deepseek"] or os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL),
+        },
+        "rows": rows,
+    }
+
+
+@router.post("/settings")
+def post_settings(req: LLMSettings, actor: str = Depends(_actor)) -> dict:
+    """Set the app-wide model choice. Applies to every client_boq AI stage from the next run —
+    stages construct their client per run, so nothing needs restarting. Procurement is not
+    affected: this setting is read only by ``client_boq/llm.py``."""
+    from client_boq import llm as llm_mod
+    if req.provider not in llm_mod.PROVIDERS:
+        raise HTTPException(status_code=422,
+                            detail=f"provider must be one of {[p or 'auto' for p in llm_mod.PROVIDERS]}")
+    conn = store.get_conn()
+    try:
+        store.set_setting(conn, llm_mod.SETTING_PROVIDER, req.provider, actor)
+        store.set_setting(conn, llm_mod.SETTING_MODEL_ANTHROPIC, req.model_anthropic.strip(), actor)
+        store.set_setting(conn, llm_mod.SETTING_MODEL_DEEPSEEK, req.model_deepseek.strip(), actor)
+    finally:
+        conn.close()
+    return get_settings()
+
+
+@router.get("/sets")
+def get_sets(include_archived: bool = False) -> dict:
+    """Every document set, newest first, with gate states, desk metadata and the counts the
+    home screen needs (undecided verdicts, failed citations, unaccepted fallbacks, open RFIs,
+    and the derived ``blocked`` flag).
+
+    Archived tenders leave the shelf by default — the shelf is only what still needs work —
+    and come back with ``?include_archived=true`` for the Archived screen.
     """
     conn = store.get_conn()
     try:
-        sets = store.list_sets(conn)
+        sets = store.list_sets(conn, include_archived=include_archived)
+        for entry in sets:
+            _backfill_close_date(conn, entry)
     finally:
         conn.close()
     return {"count": len(sets), "sets": sets}
+
+
+def _backfill_close_date(conn, entry: dict) -> None:
+    """Lazily derive the close date for a set still marked ``reading`` that has parts on disk —
+    covers sets ingested before this feature existed. Idempotent; never touches ``confirmed``."""
+    from client_boq.ingest import close_date as close_date_mod
+    if entry["meta"]["close_date_status"] != "reading" or entry["parts"] == 0:
+        return
+    meta = close_date_mod.derive(conn, entry["set_id"])
+    if meta is not None:
+        entry["meta"].update(meta)
+
+
+# ---------------------------------------------------------------------------
+# The team, and a tender's desk metadata
+# ---------------------------------------------------------------------------
+class TeamMember(BaseModel):
+    member_id: str = ""
+    name: str
+    initials: str = ""
+    colour: str = ""
+    role: str = ""
+    archived: bool = False
+
+
+@router.get("/team")
+def get_team(include_archived: bool = False) -> dict:
+    """The roster. Named profiles, not accounts — see the module boundary note on ``_actor``."""
+    conn = store.get_conn()
+    try:
+        members = store.list_team(conn, include_archived=include_archived)
+    finally:
+        conn.close()
+    return {"count": len(members), "members": members}
+
+
+@router.post("/team")
+def post_team(member: TeamMember) -> dict:
+    """Add a member. The id derives from the name; initials derive when not given."""
+    from pipeline.workspace import tender_slug
+    member_id = member.member_id or tender_slug(member.name)
+    if not member.name.strip():
+        raise HTTPException(status_code=422, detail="A member needs a name.")
+    initials = member.initials or "".join(w[0] for w in member.name.split()[:2]).upper()
+    conn = store.get_conn()
+    try:
+        store.upsert_team_member(
+            conn, member_id=member_id, name=member.name.strip(), initials=initials,
+            colour=member.colour, role=member.role, archived=member.archived,
+        )
+        members = store.list_team(conn, include_archived=True)
+    finally:
+        conn.close()
+    added = next(m for m in members if m["member_id"] == member_id)
+    return {"member": added}
+
+
+@router.post("/team/{member_id}")
+def post_team_update(member_id: str, member: TeamMember) -> dict:
+    """Update or archive a member. Archiving keeps the row — their name is stamped on history."""
+    conn = store.get_conn()
+    try:
+        existing = {m["member_id"]: m for m in store.list_team(conn, include_archived=True)}
+        if member_id not in existing:
+            raise HTTPException(status_code=404, detail=f"No team member {member_id!r}.")
+        store.upsert_team_member(
+            conn, member_id=member_id, name=member.name.strip() or existing[member_id]["name"],
+            initials=member.initials or existing[member_id]["initials"],
+            colour=member.colour or existing[member_id]["colour"],
+            role=member.role, archived=member.archived,
+        )
+        members = store.list_team(conn, include_archived=True)
+    finally:
+        conn.close()
+    return {"member": next(m for m in members if m["member_id"] == member_id)}
+
+
+class SetMetaUpdate(BaseModel):
+    """Editable desk fields only. The close-date FINDING fields (status/citation/quote) are
+    deliberately absent — they are written by derivation or by the confirm endpoint, never as
+    plain form fields (a measurement outranks a form)."""
+    owner_id: str | None = None
+    client: str | None = None
+    package: str | None = None
+    archived: bool | None = None
+    outcome: str | None = None    # live | submitted | won | lost
+
+
+@router.post("/sets/{set_id}/meta")
+def post_set_meta(set_id: str, req: SetMetaUpdate, actor: str = Depends(_actor)) -> dict:
+    """Update a tender's desk metadata. An outcome other than ``live`` implies archived — a
+    submitted, won or lost tender leaves the shelf, because the shelf is only unfinished work."""
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    if "outcome" in fields:
+        if fields["outcome"] not in ("live", "submitted", "won", "lost"):
+            raise HTTPException(status_code=422, detail="outcome must be live|submitted|won|lost")
+        if fields["outcome"] != "live":
+            fields["archived"] = True
+    conn = store.get_conn()
+    try:
+        if store.load_set(conn, set_id) is None:
+            raise HTTPException(status_code=404, detail=f"No document set {set_id!r}.")
+        meta = store.upsert_set_meta(conn, set_id, **fields)
+        store.touch_set(conn, set_id, actor)
+        meta = store.load_set_meta(conn, set_id)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "meta": meta}
+
+
+class CloseDateConfirmation(BaseModel):
+    date: str          # ISO YYYY-MM-DD
+    query_cutoff: str = ""   # optional; same format
+
+
+@router.post("/sets/{set_id}/close-date")
+def post_close_date(set_id: str, req: CloseDateConfirmation, actor: str = Depends(_actor)) -> dict:
+    """A person confirms the close date by hand — the ONLY writer of a typed date.
+
+    This is the other half of treating the date as a finding: when the machine read fails (or in
+    DEMO, where reading the fixture would be a lie), the card says ``DATE NOT FOUND — CONFIRM IT``
+    and the person who read the clause types what it says. ``confirmed`` outranks any later
+    re-derivation, and the confirmation records who made it.
+    """
+    from datetime import date as date_type
+    try:
+        date_type.fromisoformat(req.date)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Not an ISO date (YYYY-MM-DD): {req.date!r}") from exc
+    fields = {
+        "close_date": req.date,
+        "close_date_status": "confirmed",
+        "close_date_confirmed_by": actor,
+    }
+    if req.query_cutoff:
+        try:
+            date_type.fromisoformat(req.query_cutoff)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"Not an ISO date: {req.query_cutoff!r}") from exc
+        fields["query_cutoff"] = req.query_cutoff
+    conn = store.get_conn()
+    try:
+        if store.load_set(conn, set_id) is None:
+            raise HTTPException(status_code=404, detail=f"No document set {set_id!r}.")
+        store.upsert_set_meta(conn, set_id, **fields)
+        store.touch_set(conn, set_id, actor)
+        meta = store.load_set_meta(conn, set_id)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "meta": meta}
 
 
 @router.get("/ingest/parts/{set_id}/{part_id}")
@@ -769,7 +1192,7 @@ def get_part_search(set_id: str, part_id: str, q: str = "") -> dict:
 
 
 @router.post("/ingest/parts/{set_id}/{part_id}/reinterpret")
-def post_part_reinterpret(set_id: str, part_id: str) -> dict:
+def post_part_reinterpret(set_id: str, part_id: str, actor: str = Depends(_actor)) -> dict:
     """Read one part again and rewrite its context card — the manifest screen's ``⟳``.
 
     The retry for a part that came back unread: interpretation is where the vision fallback
@@ -785,6 +1208,11 @@ def post_part_reinterpret(set_id: str, part_id: str) -> dict:
         context = ingest_run.run_reinterpret(set_id, part_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    conn = store.get_conn()
+    try:
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
     return {
         "set_id": set_id,
         "part_id": part_id,
@@ -804,7 +1232,7 @@ class ContextEdit(BaseModel):
 
 
 @router.post("/ingest/parts/{set_id}/{part_id}/context")
-def post_part_context(set_id: str, part_id: str, req: ContextEdit) -> dict:
+def post_part_context(set_id: str, part_id: str, req: ContextEdit, actor: str = Depends(_actor)) -> dict:
     """Correct one part's context card.
 
     The model reads a part and writes a card; that card is a proposal like everything else the
@@ -832,6 +1260,7 @@ def post_part_context(set_id: str, part_id: str, req: ContextEdit) -> dict:
             raise HTTPException(status_code=422, detail="Nothing to change.")
         edited = context.model_copy(update={**changes, "badge": models.BADGE_USER})
         store.save_part_context(conn, set_id, part_id, edited)
+        store.touch_set(conn, set_id, actor)
     finally:
         conn.close()
 
@@ -988,7 +1417,7 @@ class ReviewApproval(BaseModel):
 
 
 @router.post("/review/approve", response_model=GateState)
-def post_review_approve(req: ReviewApproval) -> GateState:
+def post_review_approve(req: ReviewApproval, actor: str = Depends(_actor)) -> GateState:
     """The human gate. Records each per-line verdict and sets the review→estimate gate flag — no
     other endpoint or stage may write either.
 
@@ -1027,6 +1456,9 @@ def post_review_approve(req: ReviewApproval) -> GateState:
                     detail=f"Item {item.item} has a failed citation and cannot be confirmed until re-reviewed.",
                 )
             item.status = verdict
+            # Who recorded it — the difference between a "CONFIRMED BY R. LAM" chip that means
+            # something and one that decorates. "" when nobody identified themselves.
+            item.decided_by = actor
             if verdict == STATUS_QUERY:
                 # The line stays open: the question is asked, not answered.
                 item.register_status = "open"
@@ -1049,6 +1481,7 @@ def post_review_approve(req: ReviewApproval) -> GateState:
                 item.register_status = "closed"
         store.save_register(conn, register)
         store.set_review_approved(conn, req.set_id, req.approved)
+        store.touch_set(conn, req.set_id, actor)
         return GateState(
             set_id=req.set_id,
             review_approved=store.review_is_approved(conn, req.set_id),
@@ -1088,7 +1521,7 @@ class RFIRequest(BaseModel):
 
 
 @router.post("/rfi")
-def post_rfi(req: RFIRequest) -> dict:
+def post_rfi(req: RFIRequest, actor: str = Depends(_actor)) -> dict:
     """Raise a question for the client.
 
     ``origin`` records where it came from. ``pricing`` matters as much as ``register``: many real
@@ -1108,6 +1541,7 @@ def post_rfi(req: RFIRequest) -> dict:
             origin=req.origin, register_item=req.register_item, part_id=req.part_id,
             clause=req.clause, page=req.page, question=req.question, context=req.context,
         ))
+        store.touch_set(conn, req.set_id, actor)
         return {"set_id": req.set_id, "rfi": item.model_dump(),
                 "open_queries": store.open_rfi_count(conn, req.set_id)}
     finally:
@@ -1146,7 +1580,7 @@ def get_rfis(set_id: str) -> dict:
 
 
 @router.delete("/rfi/{set_id}/{rfi_id}")
-def delete_rfi(set_id: str, rfi_id: str) -> dict:
+def delete_rfi(set_id: str, rfi_id: str, actor: str = Depends(_actor)) -> dict:
     """Take a draft question out of the build it is queued in.
 
     A withdrawal, not a deletion — the question stays on the record with a ``withdrawn`` status,
@@ -1167,6 +1601,7 @@ def delete_rfi(set_id: str, rfi_id: str) -> dict:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if item is None:
             raise HTTPException(status_code=404, detail=f"No query {rfi_id!r} on set {set_id!r}.")
+        store.touch_set(conn, set_id, actor)
         return {"set_id": set_id, "rfi": item.model_dump(),
                 "open_queries": store.open_rfi_count(conn, set_id)}
     finally:
@@ -1401,7 +1836,7 @@ def post_estimate_scope(req: ScopeRunRequest) -> JobState:
 
 
 @router.post("/estimate/scope/approve", response_model=ScopeGateState)
-def post_estimate_scope_approve(req: ScopeApproval) -> ScopeGateState:
+def post_estimate_scope_approve(req: ScopeApproval, actor: str = Depends(_actor)) -> ScopeGateState:
     """The scope gate — the ONLY writer of scope-approved state. An optional ``amended_summary``
     becomes the approved scope of record (the original draft is retained). Requires a scope draft to
     exist first.
@@ -1435,6 +1870,7 @@ def post_estimate_scope_approve(req: ScopeApproval) -> ScopeGateState:
                     ),
                 )
         store.approve_scope(conn, req.set_id, req.approved, req.amended_summary)
+        store.touch_set(conn, req.set_id, actor)
         scope = store.load_scope(conn, req.set_id)
         return ScopeGateState(set_id=req.set_id, scope_approved=scope.approved,
                               summary_of_record=scope.summary_of_record())
@@ -1574,7 +2010,7 @@ class ScopeMapRequest(BaseModel):
 
 
 @router.post("/estimate/scope/map")
-def post_scope_map(req: ScopeMapRequest) -> dict:
+def post_scope_map(req: ScopeMapRequest, actor: str = Depends(_actor)) -> dict:
     """Map one source into the scope of record.
 
     The badge is decided here and it is not cosmetic: a line seeded from draft prose is ``ai``,
@@ -1611,6 +2047,7 @@ def post_scope_map(req: ScopeMapRequest) -> dict:
             text=text,
             source_ref=req.source_ref,
         ), now=_now())
+        store.touch_set(conn, req.set_id, actor)
         return {"item": item.model_dump(), **_scope_items_payload(conn, req.set_id)}
     finally:
         conn.close()
@@ -1627,7 +2064,7 @@ class ScopeItemUpdate(BaseModel):
 
 
 @router.post("/estimate/scope/item")
-def post_scope_item(req: ScopeItemUpdate) -> dict:
+def post_scope_item(req: ScopeItemUpdate, actor: str = Depends(_actor)) -> dict:
     """Edit, accept, or take ownership of one scope line.
 
     **Editing always stamps it ``user``.** You edited it, you own it — there is no state in which
@@ -1669,13 +2106,14 @@ def post_scope_item(req: ScopeItemUpdate) -> dict:
         item = store.save_scope_item(
             conn, req.set_id, existing.model_copy(update=update), now=_now()
         )
+        store.touch_set(conn, req.set_id, actor)
         return {"item": item.model_dump(), **_scope_items_payload(conn, req.set_id)}
     finally:
         conn.close()
 
 
 @router.delete("/estimate/scope/item/{set_id}/{item_id}")
-def delete_scope_item(set_id: str, item_id: str) -> dict:
+def delete_scope_item(set_id: str, item_id: str, actor: str = Depends(_actor)) -> dict:
     """Unmap a scope line. The source returns to the rail, with nothing lost — sources are
     derived, so un-mapping is genuinely reversible."""
     conn = store.get_conn()
@@ -1684,6 +2122,7 @@ def delete_scope_item(set_id: str, item_id: str) -> dict:
             raise HTTPException(
                 status_code=404, detail=f"No scope line {item_id!r} on set {set_id!r}.",
             )
+        store.touch_set(conn, set_id, actor)
         return _scope_items_payload(conn, set_id)
     finally:
         conn.close()
