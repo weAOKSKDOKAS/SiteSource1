@@ -5,6 +5,20 @@ extraction reuses ``pipeline.documents.extract_document`` (pymupdf + Tesseract);
 structures the extracted text into typed clauses with **stable clause ids** and page/locus
 references — the identities s08 later verifies citations against. Reading, not deciding.
 
+Two ways in:
+
+* **From an ingested set** (the normal path once a tender has been through ``/ingest``): walk
+  the approved parts, read each part's own pages, and structure them a part at a time. Each
+  clause then carries the part it came from, so a citation points at a page range rather than
+  a filename.
+* **From raw uploads** (a single small document with nothing to split): the original path,
+  unchanged.
+
+The part-at-a-time path exists because the raw path cannot survive a real tender binder. It
+concatenated every document into one prompt against an 8,000-token output ceiling, and
+``extract_document`` silently stops at page 200 — so a 411-page binder lost half its pages and
+then truncated. Splitting first turns one impossible call into a dozen ordinary ones.
+
 DEMO stays fully offline: ``complete_json`` short-circuits to the fixture ``ParsedDocumentSet`` and
 no extraction/network runs (the fixture already *is* a structured parse). The caller (``run.py``)
 assigns the set identity and persists the result; this stage only produces the parse.
@@ -12,14 +26,19 @@ assigns the set identity and persists the result; this stage only produces the p
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
-from client_boq.models import ParsedDocumentSet, RawUpload
+from client_boq.models import ClauseItem, ParsedDocumentSet, PartSpec, RawUpload
 from pipeline.documents import extract_document
 from pipeline.llm_client import LLMClient, demo_mode
 from pipeline.workspace import Workspace
 
 DEMO_FIXTURE = "cases/client_boq/review_ingest.json"
+
+# One part's text is still too big for one call when the part is a 100-page appendix set, so
+# chunk it. Mirrors the procurement ingest's MAX_CHUNK_CHARS, which exists for the same reason.
+MAX_CHUNK_CHARS = 12000
 
 _SYSTEM = (
     "You are a construction contract analyst. You read tender/contract documents and structure them "
@@ -36,6 +55,80 @@ _INSTRUCTION = (
     "distinct clauses, and do not drop any. Return {\"clauses\": [...]} plus the document names.\n\n"
     "=== DOCUMENTS ===\n"
 )
+
+
+def _chunk(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
+    """Split on page boundaries so a clause is never cut in half mid-sentence.
+
+    ``extract_document`` and ``pdfops.page_text`` both prefix each page with ``[page N]``, which
+    gives a natural, content-independent seam to break on.
+    """
+    if len(text) <= max_chars:
+        return [text] if text.strip() else []
+    chunks: list[str] = []
+    current = ""
+    for block in text.split("\n\n[page "):
+        piece = block if not chunks and not current else "\n\n[page " + block
+        if current and len(current) + len(piece) > max_chars:
+            chunks.append(current)
+            current = piece
+        else:
+            current += piece
+    if current.strip():
+        chunks.append(current)
+    return chunks
+
+
+def _structure(client: LLMClient, body: str, label: str) -> list[ClauseItem]:
+    """One structuring call. A chunk that fails is reported and skipped, never fatal — losing
+    one chunk of one part must not lose the whole document set."""
+    try:
+        parsed = client.complete_json(
+            system=_SYSTEM, user=_INSTRUCTION + body, target_model=ParsedDocumentSet,
+            purpose=f"client_boq-review-ingest-{label}",
+        )
+    except Exception:  # noqa: BLE001 — a failed chunk is a gap, not a crash
+        return []
+    return list(parsed.clauses)
+
+
+def ingest_from_parts(
+    parts: list[tuple[PartSpec, str]], project_name: str = "",
+) -> ParsedDocumentSet:
+    """Structure an already-split set, one part at a time.
+
+    ``parts`` pairs each part with the path of its cut PDF. Reading the part's own file means
+    the 200-page extraction cap applies per part instead of per binder, so nothing is dropped.
+    """
+    from client_boq.ingest import pdfops  # local import: keeps the review path light
+
+    client = LLMClient()
+    clauses: list[ClauseItem] = []
+    doc_names: list[str] = []
+
+    for part, pdf_path in parts:
+        source = part.source_doc or pdf_path
+        if source not in doc_names:
+            doc_names.append(source)
+        path = Path(pdf_path)
+        if not pdf_path or not path.is_file():
+            continue
+        data = path.read_bytes()
+        text = pdfops.page_text(data, 1, part.page_count())
+        if not text.strip():
+            continue  # a scanned part contributes no clauses; ingest already flagged it
+        for index, chunk in enumerate(_chunk(text), start=1):
+            body = (
+                f"=== {source} — part {part.n:02d} {part.title} "
+                f"(source pages {part.start}-{part.end}) ===\n{chunk}"
+            )
+            for clause in _structure(client, body, f"{part.part_id}-{index}"):
+                clause.part_id = part.part_id
+                if not clause.source_doc:
+                    clause.source_doc = source
+                clauses.append(clause)
+
+    return ParsedDocumentSet(name=project_name, documents=doc_names, clauses=clauses)
 
 
 def ingest_review_documents(

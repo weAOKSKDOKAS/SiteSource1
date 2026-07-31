@@ -118,7 +118,14 @@ def _render(letter: LetterOfOffer) -> str:
         "**Exclusions**",
         "Please note the following exclusions concerning the offer:",
         _bullets(letter.exclusions),
-        "Additional conditions that apply to our offer are included in Appendix A.",
+        # The offer is made SUBJECT TO the attachments, and names them, rather than restating
+        # their contents. One source of truth per point: a departure that appears both here and
+        # on the Departure Schedule can be edited in one place and not the other, and the two
+        # then disagree on a document that goes to a client.
+        ("Our offer is made subject to the accompanying **Departure Schedule** and **Letter of "
+         "Qualifications**, which set out the contract terms we have not accepted as drafted and "
+         "the assumptions on which this price is based. Both form part of this offer. The "
+         "principal conditions are summarised in Appendix A below."),
         (f"This quotation is valid for {m.validity_days} days. Thank you for the opportunity to provide "
          f"a quotation for you. If you have any questions, please don't hesitate to call me on "
          f"{m.contact_number}."),

@@ -26,6 +26,7 @@ from client_boq.review import (
     s07_register,
     s08_citation_verify,
 )
+from pipeline.llm_client import demo_mode
 from pipeline.workspace import Workspace, tender_slug
 
 DEFAULT_REVIEW_NAME = "Client document set"
@@ -34,10 +35,41 @@ SLICE = "2"  # s01→s02→s03→s04→s05→s06→s07→s08 (the full review)
 ProgressCB = Callable[[str], None]
 
 
+def _set_name(set_id: str) -> str:
+    """The project name an ingested set was created under (its Workspace directory key)."""
+    conn = store.get_conn()
+    try:
+        row = conn.execute(
+            "SELECT name FROM client_boq_document_sets WHERE set_id = ?", (set_id,)
+        ).fetchone()
+        return (row["name"] if row else "") or ""
+    finally:
+        conn.close()
+
+
+def _ingested_parts(set_id: str):
+    """The approved, split parts of a set — or an empty list when it never went through ingest."""
+    if not set_id:
+        return []
+    conn = store.get_conn()
+    try:
+        if not store.manifest_is_approved(conn, set_id):
+            return []
+        return [(spec, path) for spec, path, _ctx in store.load_parts(conn, set_id) if path]
+    finally:
+        conn.close()
+
+
 def run_review(
-    uploads: list[RawUpload], project_name: str = "", *, progress_cb: Optional[ProgressCB] = None,
+    uploads: list[RawUpload], project_name: str = "", *, set_id: str = "",
+    progress_cb: Optional[ProgressCB] = None,
 ) -> DepartureRegister:
-    """Run the review end to end and persist it. Returns the assembled, citation-checked register."""
+    """Run the review end to end and persist it. Returns the assembled, citation-checked register.
+
+    Give it a ``set_id`` to review a set that has already been through ingest: the review then
+    reads the approved parts, a part at a time, and every clause carries the part it came from.
+    Give it ``uploads`` to review loose documents directly, as before.
+    """
 
     def step(stage: str) -> None:
         if progress_cb:
@@ -47,9 +79,18 @@ def run_review(
 
     # s01 — parse the document set, then stamp the stable identity onto it.
     step("ingesting")
-    parsed = s01_ingest.ingest_review_documents(uploads, project_name, workspace=ws)
+    parts = _ingested_parts(set_id)
+    if parts and not demo_mode():
+        parsed = s01_ingest.ingest_from_parts(parts, project_name)
+    else:
+        parsed = s01_ingest.ingest_review_documents(uploads, project_name, workspace=ws)
     final_name = (project_name or parsed.name or DEFAULT_REVIEW_NAME).strip() or DEFAULT_REVIEW_NAME
     slug = tender_slug(final_name)
+    if set_id:
+        # Reviewing an ingested set: keep ITS identity, or the register would attach to a second,
+        # parallel set and the manifest, parts and register would drift apart.
+        slug = set_id
+        final_name = _set_name(set_id) or final_name
     parsed = parsed.model_copy(update={"set_id": slug, "name": final_name, "slug": slug})
 
     conn = store.get_conn()
@@ -98,6 +139,13 @@ def run_review(
         # s08 — deterministic citation guard over ALL line items (mutates failed lines).
         step("verifying")
         s08_citation_verify.verify_citations(register, parsed)
+
+        # ...and the physical half: look for each quotation in the document it cites, so the page
+        # on a register line is measured rather than claimed. Only possible once a set has been
+        # split into parts; a set reviewed from loose uploads simply skips it.
+        if parts:
+            step("locating")
+            s08_citation_verify.locate_citations(register, parsed, parts)
 
         # Persist the register to both homes; the tables copy is authoritative for the gate.
         store.save_register(conn, register)

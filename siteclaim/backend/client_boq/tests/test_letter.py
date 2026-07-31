@@ -50,7 +50,9 @@ def test_template_section_order_preserved() -> None:
         "excluding GST",                               # price line
         "**Inclusions**",
         "**Exclusions**",
-        "Additional conditions that apply to our offer are included in Appendix A.",
+        # The offer is made SUBJECT TO the two attachments and names them, rather than restating
+        # their contents — one source of truth per departure.
+        "subject to the accompanying **Departure Schedule** and **Letter of Qualifications**",
         "This quotation is valid for 90 days",         # injected validity
         "**Pricing Schedule**",
         "**Detailed Scope Breakdown**",

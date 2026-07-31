@@ -1,0 +1,13 @@
+{
+  "ref": "Tender Addendum No. 1",
+  "notes": "The addendum ships replacement pages for two documents. Its own remarks column states the descriptions are neither exhaustive nor guaranteed to be accurate, so the replacement pages have been treated as the authority and the table below is reproduced only as printed.",
+  "changes": [
+    {"document": "Bill of Quantities", "pages": "Bill No. 2", "description": "Item 2.2 split into 2.2a and 2.2b so the different classes of moving rig are priced separately."},
+    {"document": "Bill of Quantities", "pages": "Bill No. 6", "description": "Quantities of items 6.4 to 6.6 updated, covering instrument recording and reporting."},
+    {"document": "Particular Specification", "pages": "PS7/45", "description": "Clause 7.279C(2) updated: requirements for the automatic groundwater monitoring device, including handover."}
+  ],
+  "mappings": [
+    {"filename": "boq-rev1.pdf", "part_id": "03-ctap", "kind": "replace-pages", "reason": "Same bill structure and heading as the priced document currently held as part 03."},
+    {"filename": "spec-rev1.pdf", "part_id": "06-spec", "kind": "replace-pages", "reason": "Carries the Particular Specification clause numbering held as part 06."}
+  ]
+}

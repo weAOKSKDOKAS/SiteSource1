@@ -14,6 +14,7 @@ lazily on first use via ``models.init_tables``.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -27,7 +28,12 @@ from client_boq.models import (
     EstimateScope,
     LetterOfOffer,
     ParsedDocumentSet,
+    PartContext,
+    PartSpec,
+    RFIBatch,
+    RFIItem,
     ScopeReviewResult,
+    SplitManifest,
 )
 from db import store as db_store
 from pipeline.llm_client import demo_mode
@@ -86,6 +92,74 @@ def upsert_document_set(
          "parsed": parsed_json, "summary": summary_json},
     )
     conn.commit()
+
+
+def load_set(conn: sqlite3.Connection, set_id: str) -> Optional[dict]:
+    """The document set's own row (name, slug, status, created_at), or None.
+
+    The ``name`` matters beyond display: it is the key ``Workspace`` slugifies to find the
+    tender's directory, so anything reading artifacts off disk needs it rather than the set_id.
+    """
+    row = conn.execute(
+        "SELECT set_id, name, slug, status, created_at FROM client_boq_document_sets WHERE set_id = ?",
+        (set_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_sets(conn: sqlite3.Connection) -> list[dict]:
+    """Every document set, newest first, with its part count and all three gate states.
+
+    One query for the whole list: a dashboard needs to show where each tender has got to, and
+    N+1 gate lookups for that is wasteful. The three booleans are the workflow position —
+    manifest approved means it is split, review approved means it is priced-ready, scope
+    approved means the estimate can run.
+    """
+    rows = conn.execute(
+        """
+        SELECT s.set_id, s.name, s.slug, s.status, s.created_at,
+               (SELECT COUNT(*) FROM client_boq_parts p WHERE p.set_id = s.set_id) AS parts,
+               COALESCE(m.approved, 0) AS manifest_approved,
+               COALESCE(m.tier, 0)     AS tier,
+               COALESCE(r.approved, 0) AS review_approved,
+               COALESCE(sc.approved, 0) AS scope_approved,
+               e.estimate_json          AS estimate_json
+        FROM client_boq_document_sets s
+        LEFT JOIN client_boq_manifests        m  ON m.set_id  = s.set_id
+        LEFT JOIN client_boq_review_registers r  ON r.set_id  = s.set_id
+        LEFT JOIN client_boq_estimate_scope   sc ON sc.set_id = s.set_id
+        LEFT JOIN client_boq_estimates        e  ON e.set_id  = s.set_id
+        ORDER BY s.created_at DESC, s.set_id
+        """
+    ).fetchall()
+
+    out: list[dict] = []
+    for row in rows:
+        # Pull just the headline price out of the estimate blob rather than validating the whole
+        # model: a list view needs one number, not the full cost build-up.
+        price = None
+        blob = row["estimate_json"]
+        if blob and blob != "{}":
+            try:
+                price = (json.loads(blob).get("totals") or {}).get("price")
+            except (ValueError, AttributeError):
+                price = None
+        out.append({
+            "set_id": row["set_id"],
+            "name": row["name"],
+            "slug": row["slug"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "parts": row["parts"],
+            "tier": row["tier"],
+            "gates": {
+                "manifest": bool(row["manifest_approved"]),
+                "review": bool(row["review_approved"]),
+                "scope": bool(row["scope_approved"]),
+            },
+            "price": price,
+        })
+    return out
 
 
 def load_parsed(conn: sqlite3.Connection, set_id: str) -> Optional[ParsedDocumentSet]:
@@ -166,12 +240,521 @@ def set_review_approved(conn: sqlite3.Connection, set_id: str, approved: bool) -
 
 
 # ---------------------------------------------------------------------------
+# INGEST — the split manifest and its gate (the FIRST gate of the workflow)
+# ---------------------------------------------------------------------------
+def save_manifest(conn: sqlite3.Connection, manifest: SplitManifest) -> None:
+    """Persist a split manifest, preserving its approval flag. Re-inspecting or re-planning a
+    document never silently re-opens or closes the gate — only ``approve_manifest`` moves it,
+    exactly as ``save_register`` treats the review gate."""
+    conn.execute(
+        """
+        INSERT INTO client_boq_manifests (set_id, manifest_json, tier)
+        VALUES (:set_id, :json, :tier)
+        ON CONFLICT(set_id) DO UPDATE SET
+            manifest_json = excluded.manifest_json,
+            tier = excluded.tier
+        """,
+        {"set_id": manifest.set_id, "json": manifest.model_dump_json(), "tier": manifest.tier},
+    )
+    conn.commit()
+
+
+def load_manifest(conn: sqlite3.Connection, set_id: str) -> Optional[SplitManifest]:
+    """The persisted manifest for ``set_id``, or None. The stored ``approved`` column wins over
+    the JSON blob, so the gate is always read from the authoritative flag."""
+    row = conn.execute(
+        "SELECT manifest_json, approved FROM client_boq_manifests WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    if not row or not row["manifest_json"] or row["manifest_json"] == "{}":
+        return None
+    manifest = SplitManifest.model_validate_json(row["manifest_json"])
+    manifest.approved = bool(row["approved"])
+    return manifest
+
+
+def manifest_is_approved(conn: sqlite3.Connection, set_id: str) -> bool:
+    """True when the split manifest for ``set_id`` is human-approved — the ingest gate."""
+    row = conn.execute(
+        "SELECT approved FROM client_boq_manifests WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    return bool(row and row["approved"])
+
+
+def approve_manifest(conn: sqlite3.Connection, set_id: str, approved: bool) -> None:
+    """Record the human decision on the manifest — the ONLY writer of the ingest gate flag."""
+    conn.execute(
+        """
+        INSERT INTO client_boq_manifests (set_id, approved, approved_at)
+        VALUES (?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END)
+        ON CONFLICT(set_id) DO UPDATE SET
+            approved = excluded.approved,
+            approved_at = excluded.approved_at
+        """,
+        (set_id, 1 if approved else 0, 1 if approved else 0),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# INGEST — the split parts and their interpreted context
+# ---------------------------------------------------------------------------
+def upsert_document(conn: sqlite3.Connection, set_id: str, *, doc_id: str, filename: str,
+                    kind: str = models.DOC_BASE, ref: str = "", note: str = "") -> int:
+    """Record a file entering the set and return its arrival sequence.
+
+    ``seq`` orders the history and is what "the tender as at Addendum 1" is replayed against.
+    Re-recording the same ``doc_id`` keeps its original position, so re-splitting a document
+    never reshuffles the timeline.
+    """
+    row = conn.execute(
+        "SELECT seq FROM client_boq_documents WHERE set_id = ? AND doc_id = ?", (set_id, doc_id)
+    ).fetchone()
+    if row is not None:
+        seq = int(row["seq"])
+        conn.execute(
+            "UPDATE client_boq_documents SET filename = ?, kind = ?, ref = ?, note = ? "
+            "WHERE set_id = ? AND doc_id = ?",
+            (filename, kind, ref, note, set_id, doc_id),
+        )
+    else:
+        nxt = conn.execute(
+            "SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM client_boq_documents WHERE set_id = ?",
+            (set_id,),
+        ).fetchone()
+        seq = int(nxt["n"])
+        conn.execute(
+            "INSERT INTO client_boq_documents (set_id, doc_id, filename, kind, ref, seq, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (set_id, doc_id, filename, kind, ref, seq, note),
+        )
+    conn.commit()
+    return seq
+
+
+def list_documents(conn: sqlite3.Connection, set_id: str) -> list[dict]:
+    """Every document that entered the set, in arrival order. These are the history's tabs."""
+    rows = conn.execute(
+        "SELECT doc_id, filename, kind, ref, seq, received_at, note "
+        "FROM client_boq_documents WHERE set_id = ? ORDER BY seq",
+        (set_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_parts(conn: sqlite3.Connection, set_id: str, parts: list[PartSpec],
+               pdf_paths: Optional[dict[str, str]] = None, *,
+               doc_id: str = "doc-0", rev: int = 0) -> None:
+    """Write a revision of every part in ``parts``.
+
+    Two different operations share this, and the difference matters:
+
+    * **Re-splitting the same document** (the manifest was edited) writes over the SAME ``rev``.
+      A manifest edit is a better reading of one document, not a new document, and re-split churn
+      would fill the history with noise. Parts that no longer exist in the manifest are dropped,
+      or the review would read a page range that was cut away.
+    * **A new document** (a correction or an addendum) is written at a HIGHER ``rev``, leaving
+      every earlier revision untouched. Nothing is ever destroyed — Rev 0 survives Rev 1.
+    """
+    paths = pdf_paths or {}
+    keep = {part.part_id for part in parts}
+
+    if rev == 0:
+        # Re-cut of the original document: parts dropped from the manifest go, with their history.
+        placeholders = ",".join("?" for _ in keep) or "''"
+        conn.execute(
+            f"DELETE FROM client_boq_parts WHERE set_id = ? AND part_id NOT IN ({placeholders})",
+            (set_id, *keep),
+        )
+        conn.execute(
+            f"DELETE FROM client_boq_part_revisions WHERE set_id = ? AND part_id NOT IN ({placeholders})",
+            (set_id, *keep),
+        )
+
+    for part in parts:
+        conn.execute(
+            """
+            INSERT INTO client_boq_parts (set_id, part_id, n, abbr, slug, title, category)
+            VALUES (:set_id, :part_id, :n, :abbr, :slug, :title, :category)
+            ON CONFLICT(set_id, part_id) DO UPDATE SET
+                n = excluded.n, abbr = excluded.abbr, slug = excluded.slug,
+                title = excluded.title, category = excluded.category
+            """,
+            {"set_id": set_id, "part_id": part.part_id, "n": part.n, "abbr": part.abbr,
+             "slug": part.slug, "title": part.title, "category": part.category},
+        )
+        conn.execute(
+            """
+            INSERT INTO client_boq_part_revisions
+                (set_id, part_id, rev, doc_id, start_page, end_page, scanned, source_doc, pdf_path)
+            VALUES (:set_id, :part_id, :rev, :doc_id, :start, :end, :scanned, :source_doc, :pdf_path)
+            ON CONFLICT(set_id, part_id, rev) DO UPDATE SET
+                doc_id = excluded.doc_id, start_page = excluded.start_page,
+                end_page = excluded.end_page, scanned = excluded.scanned,
+                source_doc = excluded.source_doc, pdf_path = excluded.pdf_path
+            """,
+            {"set_id": set_id, "part_id": part.part_id, "rev": rev, "doc_id": doc_id,
+             "start": part.start, "end": part.end, "scanned": 1 if part.scanned else 0,
+             "source_doc": part.source_doc, "pdf_path": paths.get(part.part_id, "")},
+        )
+    conn.commit()
+
+
+def save_part_context(conn: sqlite3.Connection, set_id: str, part_id: str,
+                      context: PartContext, *, rev: Optional[int] = None) -> None:
+    """Attach one part revision's interpreted context. Per-part so a failure to interpret ONE
+    part is a flagged card, never a failed job (the module's no-silent-drops invariant).
+
+    Defaults to the operative revision, since that is the one just cut.
+    """
+    if rev is None:
+        row = conn.execute(
+            "SELECT MAX(rev) AS r FROM client_boq_part_revisions WHERE set_id = ? AND part_id = ?",
+            (set_id, part_id),
+        ).fetchone()
+        rev = int(row["r"]) if row and row["r"] is not None else 0
+    conn.execute(
+        "UPDATE client_boq_part_revisions SET context_json = ? "
+        "WHERE set_id = ? AND part_id = ? AND rev = ?",
+        (context.model_dump_json(), set_id, part_id, rev),
+    )
+    conn.commit()
+
+
+def _rows_to_parts(rows) -> list[tuple[PartSpec, str, PartContext]]:
+    out: list[tuple[PartSpec, str, PartContext]] = []
+    for row in rows:
+        spec = PartSpec(
+            n=row["n"], abbr=row["abbr"], slug=row["slug"], title=row["title"],
+            start=row["start_page"], end=row["end_page"], category=row["category"],
+            scanned=bool(row["scanned"]), source_doc=row["source_doc"], rev=row["rev"],
+        )
+        blob = row["context_json"]
+        context = (
+            PartContext.model_validate_json(blob) if blob and blob != "{}"
+            else PartContext(part_id=row["part_id"], title=row["title"], category=row["category"])
+        )
+        out.append((spec, row["pdf_path"] or "", context))
+    return out
+
+
+def load_parts(conn: sqlite3.Connection, set_id: str) -> list[tuple[PartSpec, str, PartContext]]:
+    """The OPERATIVE view: every part in document order, at its latest revision.
+
+    This is the only thing the review and the estimate ever read. A superseded revision is kept
+    for history and comparison but never priced — you bid the current documents, not an
+    amended-away one. The operative revision is derived as the highest ``rev`` rather than stored
+    as a flag, so it cannot drift out of step with the rows.
+    """
+    rows = conn.execute(
+        """
+        SELECT p.part_id, p.n, p.abbr, p.slug, p.title, p.category,
+               r.rev, r.start_page, r.end_page, r.scanned, r.source_doc, r.pdf_path, r.context_json
+        FROM client_boq_parts p
+        JOIN client_boq_part_revisions r
+          ON r.set_id = p.set_id AND r.part_id = p.part_id
+         AND r.rev = (SELECT MAX(r2.rev) FROM client_boq_part_revisions r2
+                      WHERE r2.set_id = p.set_id AND r2.part_id = p.part_id)
+        WHERE p.set_id = ?
+        ORDER BY p.n
+        """,
+        (set_id,),
+    ).fetchall()
+    return _rows_to_parts(rows)
+
+
+def load_parts_as_at(conn: sqlite3.Connection, set_id: str, seq: int
+                     ) -> list[tuple[PartSpec, str, PartContext]]:
+    """The set as it stood after the document at arrival position ``seq`` — a history tab.
+
+    Reconstructed rather than stored: each part's latest revision introduced at or before that
+    point. Representing this by duplicating every part per event would mean storing the 154
+    unchanged documents of a real tender once per addendum.
+    """
+    rows = conn.execute(
+        """
+        SELECT p.part_id, p.n, p.abbr, p.slug, p.title, p.category,
+               r.rev, r.start_page, r.end_page, r.scanned, r.source_doc, r.pdf_path, r.context_json
+        FROM client_boq_parts p
+        JOIN client_boq_part_revisions r
+          ON r.set_id = p.set_id AND r.part_id = p.part_id
+         AND r.rev = (
+             SELECT MAX(r2.rev) FROM client_boq_part_revisions r2
+             JOIN client_boq_documents d2 ON d2.set_id = r2.set_id AND d2.doc_id = r2.doc_id
+             WHERE r2.set_id = p.set_id AND r2.part_id = p.part_id AND d2.seq <= :seq
+         )
+        WHERE p.set_id = :set_id
+        ORDER BY p.n
+        """,
+        {"set_id": set_id, "seq": seq},
+    ).fetchall()
+    return _rows_to_parts(rows)
+
+
+# ---------------------------------------------------------------------------
+# RFIs — the conversation with the client
+# ---------------------------------------------------------------------------
+def _rfi_from_row(row) -> RFIItem:
+    return RFIItem(
+        rfi_id=row["rfi_id"], number=row["number"], origin=row["origin"],
+        register_item=row["register_item"], part_id=row["part_id"], clause=row["clause"],
+        page=row["page"], question=row["question"], context=row["context"],
+        status=row["status"], batch_id=row["batch_id"], answer=row["answer"],
+        answered_by=row["answered_by"], raised_at=row["raised_at"],
+        answered_at=row["answered_at"],
+    )
+
+
+def save_rfi(conn: sqlite3.Connection, set_id: str, item: RFIItem) -> RFIItem:
+    """Raise or update one question. Returns it with its id assigned."""
+    if not item.rfi_id:
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM client_boq_rfi_items WHERE set_id = ?", (set_id,)
+        ).fetchone()["n"]
+        item = item.model_copy(update={"rfi_id": f"rfi-{count + 1:03d}"})
+    conn.execute(
+        """
+        INSERT INTO client_boq_rfi_items
+            (set_id, rfi_id, number, origin, register_item, part_id, clause, page, question,
+             context, status, batch_id, answer, answered_by, answered_at)
+        VALUES (:set_id, :rfi_id, :number, :origin, :register_item, :part_id, :clause, :page,
+                :question, :context, :status, :batch_id, :answer, :answered_by, :answered_at)
+        ON CONFLICT(set_id, rfi_id) DO UPDATE SET
+            number = excluded.number, origin = excluded.origin,
+            register_item = excluded.register_item, part_id = excluded.part_id,
+            clause = excluded.clause, page = excluded.page, question = excluded.question,
+            context = excluded.context, status = excluded.status, batch_id = excluded.batch_id,
+            answer = excluded.answer, answered_by = excluded.answered_by,
+            answered_at = excluded.answered_at
+        """,
+        {"set_id": set_id, **item.model_dump(exclude={"raised_at"})},
+    )
+    conn.commit()
+    return item
+
+
+def load_rfis(conn: sqlite3.Connection, set_id: str) -> list[RFIItem]:
+    """Every question raised on this set, oldest first."""
+    rows = conn.execute(
+        "SELECT * FROM client_boq_rfi_items WHERE set_id = ? ORDER BY raised_at, rfi_id",
+        (set_id,),
+    ).fetchall()
+    return [_rfi_from_row(row) for row in rows]
+
+
+def open_rfi_count(conn: sqlite3.Connection, set_id: str) -> int:
+    """How many questions are still waiting on the client.
+
+    This is the number the freeze gate has to see reach zero — by an answer or by a stated
+    assumption — and the number a UI must keep visible, since queries deliberately do not block
+    review approval.
+    """
+    marks = ",".join("?" for _ in models.RFI_OPEN)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM client_boq_rfi_items WHERE set_id = ? AND status IN ({marks})",
+        (set_id, *sorted(models.RFI_OPEN)),
+    ).fetchone()
+    return int(row["n"])
+
+
+def withdraw_rfi(conn: sqlite3.Connection, set_id: str, rfi_id: str) -> Optional[RFIItem]:
+    """Take a question out of the build it is queued in. Returns the withdrawn item, or None.
+
+    A status change, not a delete — nothing in this module is ever destroyed, and "we asked and
+    then thought better of it" is part of the record. The question also stops counting as open,
+    which is right: we are no longer waiting on the client for it.
+
+    Refuses once the question has been sent. At that point the client has it, and pretending
+    otherwise on our side would put the register out of step with what actually went out; the
+    honest route for a sent question is an answer or an overtaking amendment.
+    """
+    row = conn.execute(
+        "SELECT * FROM client_boq_rfi_items WHERE set_id = ? AND rfi_id = ?", (set_id, rfi_id)
+    ).fetchone()
+    if row is None:
+        return None
+    item = _rfi_from_row(row)
+    if item.status != models.RFI_DRAFT:
+        raise ValueError(
+            f"Question {rfi_id} is {item.status}, not a draft — it cannot be withdrawn from a "
+            f"build it has already left."
+        )
+    conn.execute(
+        "UPDATE client_boq_rfi_items SET status = ?, batch_id = '' WHERE set_id = ? AND rfi_id = ?",
+        (models.RFI_WITHDRAWN, set_id, rfi_id),
+    )
+    conn.commit()
+    return item.model_copy(update={"status": models.RFI_WITHDRAWN, "batch_id": ""})
+
+
+def save_rfi_batch(conn: sqlite3.Connection, set_id: str, batch: RFIBatch) -> None:
+    conn.execute(
+        """
+        INSERT INTO client_boq_rfi_batches (set_id, batch_id, ref, sent_at, letter_md)
+        VALUES (:set_id, :batch_id, :ref, :sent_at, :letter_md)
+        ON CONFLICT(set_id, batch_id) DO UPDATE SET
+            ref = excluded.ref, sent_at = excluded.sent_at, letter_md = excluded.letter_md
+        """,
+        {"set_id": set_id, "batch_id": batch.batch_id, "ref": batch.ref,
+         "sent_at": batch.sent_at, "letter_md": batch.letter_md},
+    )
+    conn.commit()
+
+
+def load_rfi_batches(conn: sqlite3.Connection, set_id: str) -> list[RFIBatch]:
+    rows = conn.execute(
+        "SELECT batch_id, ref, sent_at, letter_md FROM client_boq_rfi_batches "
+        "WHERE set_id = ? ORDER BY batch_id",
+        (set_id,),
+    ).fetchall()
+    items = load_rfis(conn, set_id)
+    out = []
+    for row in rows:
+        out.append(RFIBatch(
+            batch_id=row["batch_id"], ref=row["ref"], sent_at=row["sent_at"],
+            letter_md=row["letter_md"],
+            items=[i for i in items if i.batch_id == row["batch_id"]],
+        ))
+    return out
+
+
+def overtake_rfis_for_parts(conn: sqlite3.Connection, set_id: str,
+                            part_ids: list[str], doc_ref: str) -> list[str]:
+    """Close open questions whose part has just been amended.
+
+    An addendum that rewrites the clause you asked about has answered you, whether or not anyone
+    wrote back. Leaving the question open would have you chasing a reply that is never coming, and
+    would keep a stale item in the count the freeze gate reads.
+    """
+    if not part_ids:
+        return []
+    marks = ",".join("?" for _ in models.RFI_OPEN)
+    parts = ",".join("?" for _ in part_ids)
+    rows = conn.execute(
+        f"SELECT rfi_id FROM client_boq_rfi_items WHERE set_id = ? AND status IN ({marks}) "
+        f"AND part_id IN ({parts})",
+        (set_id, *sorted(models.RFI_OPEN), *part_ids),
+    ).fetchall()
+    ids = [row["rfi_id"] for row in rows]
+    for rfi_id in ids:
+        conn.execute(
+            "UPDATE client_boq_rfi_items SET status = ?, answered_by = ?, "
+            "answered_at = datetime('now'), answer = ? WHERE set_id = ? AND rfi_id = ?",
+            (models.RFI_OVERTAKEN, doc_ref,
+             f"Overtaken by {doc_ref}, which amended the document this question was about.",
+             set_id, rfi_id),
+        )
+    conn.commit()
+    return ids
+
+
+def reopen_verdicts_for_parts(set_id: str, part_ids: list[str]) -> list[int]:
+    """Clear human verdicts on register lines whose underlying part was just revised.
+
+    A verdict is an approval of specific wording. When an addendum rewrites that wording the
+    approval no longer means anything, and letting it stand is how a departure schedule built on
+    superseded text reaches a client. So the line goes back to ``candidate``, keeps its citation
+    note explaining why, and must be decided again.
+
+    Nothing is lost: the previous verdict is recorded in the note, and the old revision remains
+    readable. The review gate flag is deliberately NOT cleared — reopening lines is a prompt to
+    re-review, not a silent rollback of the whole sign-off, and the reopened lines are visible.
+    """
+    if not part_ids:
+        return []
+    conn = get_conn()
+    try:
+        register = load_register(conn, set_id)
+        if register is None:
+            return []
+        affected = set(part_ids)
+        reopened: list[int] = []
+        for item in register.items:
+            if item.status not in models.HUMAN_VERDICTS:
+                continue
+            clause = getattr(item, "part_id", "") or _part_for_clause(conn, set_id, item.clause)
+            if clause not in affected:
+                continue
+            was = item.status
+            item.status = models.STATUS_CANDIDATE
+            item.register_status = "open"
+            item.citation_note = (
+                f"Reopened: the clause this line cites was amended after it was marked {was!r}. "
+                f"Re-review against the current revision."
+            )
+            reopened.append(item.item)
+        if reopened:
+            save_register(conn, register)
+        return reopened
+    finally:
+        conn.close()
+
+
+def _part_for_clause(conn: sqlite3.Connection, set_id: str, clause_id: str) -> str:
+    """Which part a cited clause came from, via the persisted parse."""
+    if not clause_id:
+        return ""
+    parsed = load_parsed(conn, set_id)
+    if parsed is None:
+        return ""
+    clause = parsed.clause_index().get(clause_id)
+    return getattr(clause, "part_id", "") if clause is not None else ""
+
+
+def load_part_revisions(conn: sqlite3.Connection, set_id: str, part_id: str) -> list[dict]:
+    """Every revision of one part, oldest first, with the document and cause that introduced it.
+
+    The cause is the introducing document's kind, never stored twice: an acknowledgement letter
+    must list the client's addenda and not our own corrections, and one source of truth for that
+    distinction is safer than two.
+    """
+    rows = conn.execute(
+        """
+        SELECT r.rev, r.doc_id, r.start_page, r.end_page, r.scanned, r.source_doc, r.pdf_path,
+               r.context_json, r.created_at,
+               COALESCE(d.kind, 'base') AS cause, COALESCE(d.ref, '') AS doc_ref,
+               COALESCE(d.filename, '') AS doc_filename, COALESCE(d.seq, 0) AS seq
+        FROM client_boq_part_revisions r
+        LEFT JOIN client_boq_documents d ON d.set_id = r.set_id AND d.doc_id = r.doc_id
+        WHERE r.set_id = ? AND r.part_id = ?
+        ORDER BY r.rev
+        """,
+        (set_id, part_id),
+    ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["scanned"] = bool(item["scanned"])
+        blob = item.pop("context_json", "") or ""
+        item["readable"] = True
+        if blob and blob != "{}":
+            try:
+                item["readable"] = bool(json.loads(blob).get("readable", True))
+            except ValueError:
+                pass
+        out.append(item)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Workspace artifacts (the readable file copies)
 # ---------------------------------------------------------------------------
 def _client_boq_dir(ws: Workspace, tender_id: str):
     path = ws.artifacts_dir(tender_id, create=True) / "client_boq"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def parts_dir(ws: Workspace, tender_id: str):
+    """Where the cut part PDFs and their context cards are materialised."""
+    path = _client_boq_dir(ws, tender_id) / "parts"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def save_manifest_artifact(ws: Workspace, tender_id: str, manifest: SplitManifest) -> None:
+    (_client_boq_dir(ws, tender_id) / "split-manifest.json").write_text(
+        manifest.model_dump_json(indent=2), encoding="utf-8"
+    )
 
 
 def save_parsed_artifact(ws: Workspace, tender_id: str, parsed: ParsedDocumentSet) -> None:
@@ -273,6 +856,78 @@ def approve_scope(conn: sqlite3.Connection, set_id: str, approved: bool, amended
         {"set_id": set_id, "amended": amended_summary.strip(), "approved": 1 if approved else 0},
     )
     conn.commit()
+
+
+# --- the scope of record, item by item (the freeze gate) --------------------
+def _scope_item_from_row(row) -> models.ScopeItem:
+    return models.ScopeItem(
+        item_id=row["item_id"], section=row["section"], title=row["title"], badge=row["badge"],
+        is_fallback=bool(row["is_fallback"]), accepted=bool(row["accepted"]),
+        text=row["text"], source_ref=row["source_ref"], updated_at=row["updated_at"] or "",
+    )
+
+
+def load_scope_items(conn: sqlite3.Connection, set_id: str) -> list[models.ScopeItem]:
+    """Every line of the scope of record, in section order then insertion order."""
+    # CASE branches are space-separated, not comma-separated. The section names are module
+    # constants, never user input, so interpolating them is safe.
+    order = " ".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(models.SCOPE_SECTIONS))
+    rows = conn.execute(
+        f"SELECT * FROM client_boq_scope_items WHERE set_id = ? "
+        f"ORDER BY CASE section {order} ELSE 99 END, item_id",
+        (set_id,),
+    ).fetchall()
+    return [_scope_item_from_row(r) for r in rows]
+
+
+def save_scope_item(conn: sqlite3.Connection, set_id: str, item: models.ScopeItem,
+                    *, now: str = "") -> models.ScopeItem:
+    """Insert or update one scope line. Assigns an id on first save."""
+    if not item.item_id:
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM client_boq_scope_items WHERE set_id = ?", (set_id,)
+        ).fetchone()["n"]
+        item = item.model_copy(update={"item_id": f"scope-{count + 1:03d}"})
+    item = item.model_copy(update={"updated_at": now or item.updated_at})
+    conn.execute(
+        """
+        INSERT INTO client_boq_scope_items
+            (set_id, item_id, section, title, badge, is_fallback, accepted, text, source_ref,
+             updated_at)
+        VALUES (:set_id, :item_id, :section, :title, :badge, :is_fallback, :accepted, :text,
+                :source_ref, :updated_at)
+        ON CONFLICT(set_id, item_id) DO UPDATE SET
+            section = excluded.section, title = excluded.title, badge = excluded.badge,
+            is_fallback = excluded.is_fallback, accepted = excluded.accepted,
+            text = excluded.text, source_ref = excluded.source_ref,
+            updated_at = excluded.updated_at
+        """,
+        {"set_id": set_id, **item.model_dump()},
+    )
+    conn.commit()
+    return item
+
+
+def delete_scope_item(conn: sqlite3.Connection, set_id: str, item_id: str) -> bool:
+    """Unmap a line. The only true delete in this module, and it is safe for one reason: the
+    source it came from is derived, so removing the line simply returns the source to the rail
+    with nothing lost. A line written by hand is genuinely discarded, which is what unmapping a
+    thing you typed means."""
+    cur = conn.execute(
+        "DELETE FROM client_boq_scope_items WHERE set_id = ? AND item_id = ?", (set_id, item_id)
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def unaccepted_fallbacks(conn: sqlite3.Connection, set_id: str) -> list[models.ScopeItem]:
+    """Fallbacks nobody has accepted — the freeze gate's blocking set.
+
+    These are the lines where a machine's guess is standing in for an answer the client never
+    gave. Approving over one would put that guess behind a price with nothing recording that a
+    person ever agreed to it, which is the single thing the authorship rule exists to prevent.
+    """
+    return [i for i in load_scope_items(conn, set_id) if i.is_fallback and not i.accepted]
 
 
 def save_scope_artifact(ws: Workspace, tender_id: str, scope: EstimateScope) -> None:

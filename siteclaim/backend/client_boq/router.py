@@ -12,32 +12,52 @@ scaffold.
 
 from __future__ import annotations
 
+import io
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from client_boq import jobs, store
+from client_boq import criteria_loader, jobs, models, store
 from client_boq.models import (
     HUMAN_VERDICTS,
     STATUS_CANDIDATE,
     STATUS_CITATION_FAILED,
     STATUS_CONFIRMED,
     STATUS_DISMISSED,
+    STATUS_QUERY,
     STATUS_RULE_FLAGGED,
     STATUS_UNCOVERED,
     STATUS_UNRESOLVED,
     DepartureRegister,
+    PartSpec,
     RawUpload,
+    RFIBatch,
+    RFIItem,
+    SplitManifest,
 )
+from client_boq import outputs
+from client_boq.outputs import departure_schedule, qualifications
+from client_boq.rfi import letter as rfi_letter
 from client_boq.models import Estimate, EstimateSchedule, LetterMeta
+from client_boq.ingest import history_workbook, pdfops, s02_interpret
+from client_boq.ingest import run as ingest_run
 from client_boq.review import run as review_run
+from client_boq.review import s08_citation_verify
 from client_boq.estimate import run as estimate_run
 from client_boq.estimate import workbook as estimate_workbook
 from pipeline.llm_client import demo_mode
+from pipeline.workspace import Workspace
 
 router = APIRouter(prefix="/client-boq", tags=["client_boq"])
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +66,10 @@ router = APIRouter(prefix="/client-boq", tags=["client_boq"])
 class GateState(BaseModel):
     set_id: str
     review_approved: bool
+    # Queries deliberately do not block approval, so the count has to travel with the gate state:
+    # an open question that stops being visible is the one real risk of the non-blocking choice.
+    queries_raised: list[str] = Field(default_factory=list)
+    open_queries: int = 0
 
 
 class JobState(BaseModel):
@@ -56,6 +80,24 @@ class JobState(BaseModel):
     error: str | None = None
     result: dict | None = None
     warnings: list[str] = Field(default_factory=list)
+    done: int = 0                    # per-part progress (ingest); 0/0 when not applicable
+    total: int = 0
+
+
+class ManifestGateState(BaseModel):
+    set_id: str
+    manifest_approved: bool
+    parts: int = 0
+    tier: int = 0
+
+
+def _job_state(job_id: str, job) -> JobState:
+    """One shape for every poll endpoint, so all three workflows report progress alike."""
+    return JobState(
+        job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
+        error=job.error or None, result=job.result if job.status == "done" else None,
+        warnings=list(job.warnings), done=job.done, total=job.total,
+    )
 
 
 def _status_counts(register: DepartureRegister) -> dict[str, int]:
@@ -70,6 +112,51 @@ _ACTIONABLE_ORDER = {
     STATUS_RULE_FLAGGED: 0, STATUS_CITATION_FAILED: 1, STATUS_CANDIDATE: 2,
     STATUS_UNCOVERED: 3, STATUS_CONFIRMED: 4, STATUS_DISMISSED: 5,
 }
+
+
+def _parse_mismatch(conn, set_id: str) -> Optional[dict]:
+    """Whether the register describes a DIFFERENT document from the one that was uploaded.
+
+    Deterministic, and it exists because of a real and thoroughly confusing failure. In DEMO the
+    review parse is a fixture about a fictional subcontract, so every finding cites a clause of a
+    document that is not on screen and no quotation can ever be located. The screen looked broken
+    when it was working exactly as designed.
+
+    Comparison is on filenames the two sides independently record: the parse's ``documents`` versus
+    the source documents the ingest actually cut. Disjoint means they are about different papers.
+
+    Returns None when they correspond — so in LIVE this should never fire, and if it ever does,
+    something genuinely is wrong.
+    """
+    parsed = store.load_parsed(conn, set_id)
+    if parsed is None or not parsed.documents:
+        return None
+    rows = store.load_parts(conn, set_id)
+    held = {(spec.source_doc or "").strip().lower() for spec, _p, _c in rows}
+    manifest = store.load_manifest(conn, set_id)
+    if manifest is not None and manifest.source_doc:
+        held.add(manifest.source_doc.strip().lower())
+    held.discard("")
+    if not held:
+        return None  # nothing split, so there is nothing to disagree with
+
+    reviewed = {d.strip().lower() for d in parsed.documents if d.strip()}
+    if reviewed & held:
+        return None
+
+    return {
+        "reviewed": sorted(parsed.documents),
+        "uploaded": sorted(d for d in held),
+        "note": (
+            "The findings below describe "
+            + ", ".join(sorted(parsed.documents))
+            + ", not the document set that was uploaded ("
+            + ", ".join(sorted(held))
+            + "). Nothing here can be located in your upload, so no quotation is highlighted. "
+            "This is what an offline DEMO run looks like: the review stage returned its bundled "
+            "sample instead of reading your files. Run this tender in LIVE mode to review it."
+        ),
+    }
 
 
 def _result_payload(register: DepartureRegister) -> dict:
@@ -108,14 +195,721 @@ def _result_payload(register: DepartureRegister) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# INGEST — the front door: inspect + plan, the manifest gate, then split + interpret
+# ---------------------------------------------------------------------------
+def _manifest_payload(manifest: SplitManifest) -> dict:
+    """The manifest envelope. The parts list IS the edit surface: the operator changes page
+    ranges, titles and categories here and re-splits, which costs no model calls.
+
+    ``coverage`` stays an int for compatibility (it is the covered page count, and callers
+    depend on that); ``coverage_detail`` carries where the split actually breaks, from the same
+    function the gate's own validation uses — so the manifest screen's gaps/overlaps count can
+    never disagree with what the gate would refuse on.
+    """
+    return {
+        "set_id": manifest.set_id,
+        "source_doc": manifest.source_doc,
+        "pages": manifest.pages,
+        "tier": manifest.tier,
+        "tier_reason": manifest.tier_reason,
+        "approved": manifest.approved,
+        "coverage": manifest.coverage(),
+        "coverage_detail": pdfops.coverage(manifest, manifest.pages),
+        # ``part_id`` is a computed property, so ``model_dump`` drops it — and it is the identity
+        # every other endpoint keys on. Adding it here rather than letting a client re-derive the
+        # zero-pad-plus-abbreviation rule, which is exactly the sort of duplicated identity rule
+        # that drifts. Sending it back in an edited manifest is harmless: it is not a field.
+        "parts": [{**p.model_dump(), "part_id": p.part_id} for p in manifest.parts],
+    }
+
+
+def _parts_payload(set_id: str, rows) -> dict:
+    # Conditions that change how the tender must be BID, gathered from wherever they were found.
+    # Surfaced on the set rather than buried in one part's card: a rule saying qualifications may
+    # disqualify changes how the whole review should be run, and it has to be seen on day one
+    # rather than discovered at submission when the query cut-off has passed.
+    flags = [
+        {**flag.model_dump(), "part_id": spec.part_id, "source_doc": spec.source_doc}
+        for spec, _path, ctx in rows
+        for flag in ctx.strategy_flags
+    ]
+    return {
+        "set_id": set_id,
+        "count": len(rows),
+        "unreadable": sum(1 for _spec, _path, ctx in rows if not ctx.readable),
+        "strategy_flags": flags,
+        "penalises_qualifications": any(
+            f["kind"] == models.RULE_QUALIFICATIONS_PENALISED for f in flags
+        ),
+        "parts": [
+            {
+                "part_id": spec.part_id, "n": spec.n, "abbr": spec.abbr, "title": spec.title,
+                "category": spec.category, "pages": f"{spec.start}-{spec.end}",
+                "page_count": spec.page_count(), "scanned": spec.scanned,
+                "source_doc": spec.source_doc, "readable": ctx.readable,
+                "summary": ctx.summary,
+            }
+            for spec, _path, ctx in rows
+        ],
+    }
+
+
+def _run_ingest_job(job_id: str, uploads: list[RawUpload], project_name: str) -> None:
+    jobs.JOBS.update(job_id, status="running", stage="reading")
+    try:
+        manifest = ingest_run.run_inspect(
+            uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+        )
+        jobs.JOBS.update(job_id, status="done", stage="awaiting-approval",
+                         result=_manifest_payload(manifest))
+    except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+@router.post("/ingest/upload", response_model=JobState)
+def post_ingest_upload(
+    files: Optional[list[UploadFile]] = File(None),
+    project_name: str = Form(""),
+) -> JobState:
+    """Upload a tender and get back a DRAFT split manifest for review.
+
+    Nothing is cut here and no review runs: this reads the document's own structure, asks the
+    planner to refine it, and stops at the manifest so a human can correct the boundaries
+    before anything expensive happens. Approve it at ``/ingest/manifest/approve``, then
+    ``/ingest/split``."""
+    uploads: list[RawUpload] = [
+        (f.filename or "document", f.content_type, f.file.read()) for f in (files or [])
+    ]
+    if not uploads:
+        raise HTTPException(status_code=422, detail="Upload at least one PDF tender document.")
+    if demo_mode():
+        try:
+            manifest = ingest_run.run_inspect(uploads, project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JobState(kind="ingest", status="done", stage="awaiting-approval",
+                        result=_manifest_payload(manifest))
+    job_id = jobs.JOBS.create("ingest")
+    jobs.POOL.submit(_run_ingest_job, job_id, uploads, project_name)
+    return JobState(job_id=job_id, kind="ingest", status="queued", stage="uploading")
+
+
+@router.get("/ingest/status/{job_id}", response_model=JobState)
+def get_ingest_status(job_id: str) -> JobState:
+    """Poll an ingest job (same in-package job store as review and estimate)."""
+    job = jobs.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
+    return _job_state(job_id, job)
+
+
+@router.get("/ingest/manifest/{set_id}")
+def get_ingest_manifest(set_id: str) -> dict:
+    """The persisted split manifest, its confidence tier, and its approval state."""
+    conn = store.get_conn()
+    try:
+        manifest = store.load_manifest(conn, set_id)
+    finally:
+        conn.close()
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"No split manifest for set {set_id!r}.")
+    return _manifest_payload(manifest)
+
+
+class ManifestApproval(BaseModel):
+    set_id: str
+    # The human's edited part list. Omit it to approve the manifest as drafted.
+    parts: list[PartSpec] | None = None
+    approved: bool = True
+
+
+@router.post("/ingest/manifest/approve", response_model=ManifestGateState)
+def post_ingest_manifest_approve(req: ManifestApproval) -> ManifestGateState:
+    """The manifest gate — the ONLY writer of the ingest approval flag, and the first gate of
+    the workflow. An edited ``parts`` list replaces the draft and is validated against the
+    real page count before it is stored: a split that does not fit the document is refused
+    here rather than discovered halfway through a review."""
+    conn = store.get_conn()
+    try:
+        manifest = store.load_manifest(conn, req.set_id)
+        if manifest is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No split manifest for set {req.set_id!r}; run /ingest/upload first.",
+            )
+        if req.parts is not None:
+            if not req.parts:
+                raise HTTPException(status_code=422, detail="A manifest needs at least one part.")
+            edited = manifest.model_copy(update={"parts": list(req.parts)})
+            for index, part in enumerate(edited.parts, start=1):
+                part.n = index
+                if not part.source_doc:
+                    part.source_doc = manifest.source_doc
+            errors, _warnings = pdfops.validate(edited, manifest.pages)
+            if errors:
+                raise HTTPException(status_code=422, detail="; ".join(errors))
+            # Re-stamp the measured text-layer facts onto the human's new boundaries. Whether a
+            # page is a scan is a measurement, not an editorial choice.
+            pdfops.mark_scanned(edited.parts, manifest.scanned_pages)
+            manifest = edited
+            store.save_manifest(conn, manifest)
+        store.approve_manifest(conn, req.set_id, req.approved)
+        return ManifestGateState(
+            set_id=req.set_id,
+            manifest_approved=store.manifest_is_approved(conn, req.set_id),
+            parts=len(manifest.parts), tier=manifest.tier,
+        )
+    finally:
+        conn.close()
+
+
+def _manifest_gate_or_409(set_id: str) -> None:
+    conn = store.get_conn()
+    try:
+        if not store.manifest_is_approved(conn, set_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Ingest is gated: the split manifest for this document set is not approved yet.",
+            )
+    finally:
+        conn.close()
+
+
+def _run_split_job(job_id: str, set_id: str) -> None:
+    jobs.JOBS.update(job_id, status="running", stage="splitting")
+    try:
+        ingest_run.run_split(set_id, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s))
+        conn = store.get_conn()
+        try:
+            rows = store.load_parts(conn, set_id)
+        finally:
+            conn.close()
+        jobs.JOBS.update(job_id, status="done", stage="ingested",
+                         done=len(rows), total=len(rows), result=_parts_payload(set_id, rows))
+    except Exception as exc:  # noqa: BLE001
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+class SplitRequest(BaseModel):
+    set_id: str
+
+
+@router.post("/ingest/split", response_model=JobState)
+def post_ingest_split(req: SplitRequest) -> JobState:
+    """Cut the approved manifest into parts and interpret each one. REFUSES until the manifest
+    is approved (a 409). The cut costs no model calls, so editing the manifest and re-splitting
+    is free — only the per-part interpretation is paid for again."""
+    _manifest_gate_or_409(req.set_id)
+    if demo_mode():
+        ingest_run.run_split(req.set_id)
+        conn = store.get_conn()
+        try:
+            rows = store.load_parts(conn, req.set_id)
+        finally:
+            conn.close()
+        return JobState(kind="ingest", status="done", stage="ingested",
+                        done=len(rows), total=len(rows), result=_parts_payload(req.set_id, rows))
+    job_id = jobs.JOBS.create("ingest")
+    jobs.POOL.submit(_run_split_job, job_id, req.set_id)
+    return JobState(job_id=job_id, kind="ingest", status="queued", stage="splitting")
+
+
+@router.get("/ingest/parts/{set_id}")
+def get_ingest_parts(set_id: str) -> dict:
+    """Every part of a split set, in document order, with its interpreted one-line summary."""
+    conn = store.get_conn()
+    try:
+        rows = store.load_parts(conn, set_id)
+    finally:
+        conn.close()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No split parts for set {set_id!r}.")
+    return _parts_payload(set_id, rows)
+
+
+# ---------------------------------------------------------------------------
+# INGEST — revisions: addenda, corrections, clarifications, and the history
+# ---------------------------------------------------------------------------
+@router.post("/ingest/document")
+def post_ingest_document(
+    set_id: str = Form(...),
+    kind: str = Form("addendum"),
+    ref: str = Form(""),
+    files: Optional[list[UploadFile]] = File(None),
+) -> dict:
+    """Take in a further document against a set already ingested: an **addendum** (the client
+    amended the contract), a **correction** (we are replacing a document we uploaded wrong), or a
+    **clarification** (the client answered a question and changed nothing).
+
+    Commits nothing. It proposes which held parts the replacements supersede and stops at the
+    change-mapping gate — superseding the wrong document is quiet and expensive, and a person can
+    spot it in seconds. A clarification is recorded and goes no further, because both reference
+    tenders state clarifications are expressly non-contractual.
+    """
+    uploads: list[RawUpload] = [
+        (f.filename or "document", f.content_type, f.file.read()) for f in (files or [])
+    ]
+    if not uploads:
+        raise HTTPException(status_code=422, detail="Upload at least one PDF.")
+    try:
+        return ingest_run.receive_document(set_id, uploads, kind=kind, ref=ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class ChangeMapping(BaseModel):
+    filename: str
+    part_id: str
+
+
+class ChangeApproval(BaseModel):
+    set_id: str
+    doc_id: str
+    # The human's confirmed mapping of replacement file -> part it supersedes. Files left out
+    # are simply not applied, which is the correct outcome for one nobody could place.
+    mappings: list[ChangeMapping] = Field(default_factory=list)
+
+
+@router.post("/ingest/changes/approve")
+def post_ingest_changes_approve(req: ChangeApproval) -> dict:
+    """The change-mapping gate — the only thing that creates a new revision.
+
+    Each approved replacement becomes a NEW revision of its part. Nothing is overwritten: the
+    previous revision stays readable and comparable. Register lines whose clauses came from a
+    revised part have their verdicts reopened and flagged, because an approval of wording that
+    has since been rewritten is exactly the stale sign-off this gate exists to prevent.
+    """
+    pairs = [(m.filename, m.part_id) for m in req.mappings if m.filename and m.part_id]
+    try:
+        applied, reopened, overtaken = ingest_run.apply_document(req.set_id, req.doc_id, pairs)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    notes = [f"{len(applied)} part(s) moved to a new revision."]
+    if reopened:
+        notes.append(f"{len(reopened)} register line(s) were reopened for re-review.")
+    if overtaken:
+        notes.append(f"{len(overtaken)} open query/queries were overtaken by this document.")
+    return {
+        "set_id": req.set_id,
+        "doc_id": req.doc_id,
+        "revised": [{"part_id": p.part_id, "rev": p.rev, "title": p.title} for p in applied],
+        "reopened_register_items": reopened,
+        "overtaken_queries": overtaken,
+        "note": " ".join(notes),
+    }
+
+
+@router.get("/revisions/{set_id}")
+def get_revisions(set_id: str) -> dict:
+    """The set's document history and every part's revision state.
+
+    ``documents`` are the history's tabs, in arrival order. ``parts`` gives each part's operative
+    revision, so it is visible at a glance which few documents an addendum actually touched.
+    """
+    conn = store.get_conn()
+    try:
+        record = store.load_set(conn, set_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"No document set {set_id!r}.")
+        documents = store.list_documents(conn, set_id)
+        rows = store.load_parts(conn, set_id)
+        revisions = {
+            spec.part_id: store.load_part_revisions(conn, set_id, spec.part_id)
+            for spec, _p, _c in rows
+        }
+    finally:
+        conn.close()
+    return {
+        "set_id": set_id,
+        "documents": documents,
+        "parts": [
+            {
+                "part_id": spec.part_id, "n": spec.n, "title": spec.title,
+                "category": spec.category, "operative_rev": spec.rev,
+                "revisions": revisions.get(spec.part_id, []),
+            }
+            for spec, _p, _c in rows
+        ],
+        "amended": [spec.part_id for spec, _p, _c in rows if spec.rev > 0],
+    }
+
+
+@router.get("/revisions/{set_id}/workbook")
+def get_revisions_workbook(set_id: str) -> Response:
+    """The revision history as an .xlsx: a summary sheet, one worksheet per document event
+    showing the tender as it stood at that point, and the declared-changes table.
+
+    Doubles as the evidence behind the addendum-acknowledgement returnable, which must state
+    which revision of each document was priced — and which lists the client's addenda only,
+    never our own corrections.
+    """
+    conn = store.get_conn()
+    try:
+        record = store.load_set(conn, set_id)
+    finally:
+        conn.close()
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No document set {set_id!r}.")
+    xlsx = history_workbook.build_history_workbook(set_id)
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="revisions_{set_id}.xlsx"'},
+    )
+
+
+@router.get("/revisions/{set_id}/as-at/{seq}")
+def get_revisions_as_at(set_id: str, seq: int) -> dict:
+    """The set as it stood after the document at arrival position ``seq`` — one history tab.
+
+    Reconstructed from the revisions rather than stored as a snapshot: each part's latest
+    revision introduced at or before that point.
+    """
+    conn = store.get_conn()
+    try:
+        documents = store.list_documents(conn, set_id)
+        rows = store.load_parts_as_at(conn, set_id, seq)
+    finally:
+        conn.close()
+    if not documents:
+        raise HTTPException(status_code=404, detail=f"No document set {set_id!r}.")
+    at = next((d for d in documents if d["seq"] == seq), None)
+    return {
+        "set_id": set_id,
+        "as_at": at,
+        "parts": [
+            {"part_id": spec.part_id, "n": spec.n, "title": spec.title, "rev": spec.rev,
+             "pages": f"{spec.start}-{spec.end}", "source_doc": spec.source_doc}
+            for spec, _p, _c in rows
+        ],
+    }
+
+
+@router.get("/criteria")
+def get_criteria() -> dict:
+    """The acceptable-terms library, as parsed from ``review_criteria.md``.
+
+    The register stores only a ``criterion_id`` (``PS-01``) plus the clause area, which on screen
+    reads as a code nobody can decode. The two fields that make a finding self-explanatory —
+    what position we accept, and what the red flag is — live only in this file. Exposing it lets
+    the register show *what we accept* beside *what the contract says*, which is the difference
+    between a reviewer understanding a line and guessing at it.
+    """
+    try:
+        library = criteria_loader.load_criteria()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "count": len(library.criteria),
+        "criteria": [c.model_dump() for c in library.criteria],
+        "placeholders": [c.model_dump() for c in library.placeholders],
+        "thresholds": [r.model_dump() for r in library.threshold_rules],
+    }
+
+
+@router.get("/sets")
+def get_sets() -> dict:
+    """Every document set, newest first, with its part count and all three gate states.
+
+    The workflow position of each tender in one call: `gates.manifest` means it is split,
+    `gates.review` means the register is signed off, `gates.scope` means the estimate can run.
+    """
+    conn = store.get_conn()
+    try:
+        sets = store.list_sets(conn)
+    finally:
+        conn.close()
+    return {"count": len(sets), "sets": sets}
+
+
+@router.get("/ingest/parts/{set_id}/{part_id}")
+def get_ingest_part(set_id: str, part_id: str) -> dict:
+    """One part: its page range in the source, its interpreted context card, and where its
+    cut PDF was materialised."""
+    conn = store.get_conn()
+    try:
+        rows = store.load_parts(conn, set_id)
+    finally:
+        conn.close()
+    for spec, path, context in rows:
+        if spec.part_id == part_id:
+            return {
+                "set_id": set_id, "part": spec.model_dump(), "pdf_path": path,
+                "context": context.model_dump(),
+                "card": s02_interpret.card_markdown(spec, context, spec.source_doc),
+            }
+    raise HTTPException(status_code=404, detail=f"No part {part_id!r} in set {set_id!r}.")
+
+
+# --- the document pane: show a page, and look things up on it ---------------
+def _part_or_404(set_id: str, part_id: str) -> tuple[PartSpec, bytes]:
+    """One part's spec and the bytes of its cut PDF.
+
+    Kept separate from :func:`get_ingest_part` because the viewer needs the file itself, not a
+    path: the path is a server-side detail and reading it here is the only place that happens.
+    """
+    conn = store.get_conn()
+    try:
+        rows = store.load_parts(conn, set_id)
+    finally:
+        conn.close()
+    for spec, path, _context in rows:
+        if spec.part_id != part_id:
+            continue
+        if not path:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Part {part_id!r} has not been cut yet; run /ingest/split first.",
+            )
+        try:
+            return spec, Path(path).read_bytes()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=410,
+                detail=f"The PDF for part {part_id!r} is no longer on disk ({path}).",
+            ) from exc
+    raise HTTPException(status_code=404, detail=f"No part {part_id!r} in set {set_id!r}.")
+
+
+@router.get("/ingest/parts/{set_id}/{part_id}/page/{page}.png")
+def get_part_page_image(set_id: str, part_id: str, page: int,
+                        dpi: int = pdfops.DEFAULT_RENDER_DPI) -> Response:
+    """One page of a part, rendered to PNG for the document pane.
+
+    ``page`` is a **source-document** page number, because that is the number everything else in
+    this module speaks: manifest ranges, citation pages and highlight rectangles are all in the
+    binder's numbering. Asking the viewer to convert would mean two page-number conventions in one
+    screen, which is how a highlight ends up on the wrong page.
+
+    A scanned part renders like any other — seeing a page and searching it are different questions.
+    """
+    spec, data = _part_or_404(set_id, part_id)
+    if not (spec.start <= page <= spec.end):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Page {page} is outside part {part_id!r} (pages {spec.start}-{spec.end}).",
+        )
+    image = pdfops.render_page(data, page - spec.start + 1, dpi)
+    if image is None:
+        raise HTTPException(status_code=404, detail=f"Page {page} could not be rendered.")
+    # Immutable content: a part's pages only change when a revision replaces the part, and that
+    # writes a new part row rather than editing this one.
+    return Response(content=image, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=86400"})
+
+
+class LocateRequest(BaseModel):
+    quote: str
+
+
+@router.post("/ingest/parts/{set_id}/{part_id}/locate")
+def post_part_locate(set_id: str, part_id: str, req: LocateRequest) -> dict:
+    """Where a quoted claim actually sits in this part — "show me" on a context card.
+
+    Same three verdicts as a register citation, because the question is the same one and inventing
+    a second vocabulary for it would be worse than reusing this one:
+
+    * ``located`` — found; the page is measured and rectangles come back;
+    * ``unverifiable`` — the part has no text layer, so we could not look;
+    * ``not_located`` — searchable, and the words are not on these pages.
+
+    That third verdict earns its keep here. A DEMO fixture broadcasts the same strategy flags onto
+    every part of a set, and locating them shows plainly that only one part actually contains
+    them — which is exactly the sort of thing a card should not be allowed to assert unchallenged.
+
+    Only use this for QUOTATIONS. A summary or an obligation is a paraphrase; asking where a
+    paraphrase "is" has no honest answer, and the search endpoint is the right tool for those.
+    """
+    spec, data = _part_or_404(set_id, part_id)
+    quote = (req.quote or "").strip()
+    if not quote:
+        raise HTTPException(status_code=422, detail="Nothing to locate.")
+
+    if not pdfops.has_text_layer(data):
+        return {
+            "verdict": models.UNVERIFIABLE, "page": None, "highlights": [],
+            "note": f"{part_id} has no text layer, so this could not be checked against the page.",
+        }
+    found = pdfops.locate(data, quote, page_offset=spec.start - 1)
+    if found is None:
+        return {
+            "verdict": models.NOT_LOCATED, "page": None, "highlights": [],
+            "note": (
+                f"These words are not on pages {spec.start}-{spec.end}. The card may be quoting "
+                f"another part of the set, or paraphrasing rather than quoting."
+            ),
+        }
+    return {
+        "verdict": models.LOCATED, "page": found["page"], "match": found["match"],
+        "highlights": found["highlights"], "note": "",
+    }
+
+
+@router.get("/ingest/parts/{set_id}/{part_id}/search")
+def get_part_search(set_id: str, part_id: str, q: str = "") -> dict:
+    """Find text in one part — the document pane's search field.
+
+    Returns the same page + fractional-rectangle shape as the citation highlights, so the pane
+    draws both through one path. ``searchable`` is the honest half: an image-only part returns no
+    hits because it could not be looked at, which is a different thing from having none.
+    """
+    spec, data = _part_or_404(set_id, part_id)
+    query = (q or "").strip()
+    searchable = pdfops.has_text_layer(data)
+    hits = pdfops.search(data, query, page_offset=spec.start - 1) if (query and searchable) else []
+    return {
+        "set_id": set_id, "part_id": part_id, "query": query,
+        "searchable": searchable,
+        "pages": f"{spec.start}-{spec.end}",
+        "count": len(hits),
+        "hits": hits,
+        "note": "" if searchable else
+                "This part has no text layer, so it cannot be searched — only read by eye.",
+    }
+
+
+@router.post("/ingest/parts/{set_id}/{part_id}/reinterpret")
+def post_part_reinterpret(set_id: str, part_id: str) -> dict:
+    """Read one part again and rewrite its context card — the manifest screen's ``⟳``.
+
+    The retry for a part that came back unread: interpretation is where the vision fallback
+    lives, so this is the second attempt at a scan. Its own endpoint rather than "re-split the
+    set", which would re-interpret every part to fix one.
+
+    Nothing about the split changes — page bounds, the cut PDF and the revision are untouched,
+    because none of them is what failed. And the honest outcome is preserved: a part vision
+    still cannot read comes back `readable: false` with a note, never a plausible summary of
+    pages nobody has seen.
+    """
+    try:
+        context = ingest_run.run_reinterpret(set_id, part_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "set_id": set_id,
+        "part_id": part_id,
+        "readable": context.readable,
+        "context": context.model_dump(),
+    }
+
+
+class ContextEdit(BaseModel):
+    """A human's correction of one part's context card. Every field optional — send what changed."""
+
+    summary: str | None = None
+    key_points: list[str] | None = None
+    obligations: list[str] | None = None
+    commercial_flags: list[str] | None = None
+    notes: str | None = None
+
+
+@router.post("/ingest/parts/{set_id}/{part_id}/context")
+def post_part_context(set_id: str, part_id: str, req: ContextEdit) -> dict:
+    """Correct one part's context card.
+
+    The model reads a part and writes a card; that card is a proposal like everything else the
+    model produces, and until now it was the only proposal with no way to disagree with it. This
+    is that way.
+
+    **Saving stamps the card ``user``** — the same rule as a scope line, for the same reason: a
+    model's reading and a person's correction of it must never be mistakable for one another.
+    Re-interpreting the part puts ``ai`` back, because that genuinely is a fresh machine reading.
+
+    ``readable`` is NOT editable. Whether a page carries a text layer is a measurement, and the
+    module's standing rule is that a measurement is not clearable by an opinion — the same reason
+    ``mark_scanned`` is re-applied after the planner and after a manifest edit.
+    """
+    conn = store.get_conn()
+    try:
+        rows = store.load_parts(conn, set_id)
+        match = next(((s, p, c) for s, p, c in rows if s.part_id == part_id), None)
+        if match is None:
+            raise HTTPException(status_code=404, detail=f"No part {part_id!r} in set {set_id!r}.")
+        spec, path, context = match
+
+        changes = {k: v for k, v in req.model_dump().items() if v is not None}
+        if not changes:
+            raise HTTPException(status_code=422, detail="Nothing to change.")
+        edited = context.model_copy(update={**changes, "badge": models.BADGE_USER})
+        store.save_part_context(conn, set_id, part_id, edited)
+    finally:
+        conn.close()
+
+    # Keep the card on disk in step, or the downloaded ZIP would carry the machine's reading of a
+    # part the app now shows as corrected. Same path `run_reinterpret` uses.
+    if path:
+        try:
+            Path(path).with_name("context.md").write_text(
+                s02_interpret.card_markdown(spec, edited, spec.source_doc), encoding="utf-8",
+            )
+        except OSError:
+            pass  # the stored context is the source of truth; the card is a convenience copy
+
+    return {"set_id": set_id, "part_id": part_id, "context": edited.model_dump()}
+
+
+@router.get("/ingest/{set_id}/download")
+def get_ingest_download(set_id: str, include_source: bool = False) -> Response:
+    """Download the split as a folder tree: one folder per part, each holding the cut PDF and
+    its interpreted context card, plus the manifest and a README part table.
+
+    This is the deliverable a user uploads a 400-page binder to get. The tree already exists on
+    disk after a split; this packages it. Pass ``include_source=true`` to bundle the original
+    uploads too — off by default, since it roughly doubles the size of something the user
+    already has.
+    """
+    conn = store.get_conn()
+    try:
+        record = store.load_set(conn, set_id)
+        manifest = store.load_manifest(conn, set_id)
+        rows = store.load_parts(conn, set_id)
+    finally:
+        conn.close()
+    if record is None or not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No split parts for set {set_id!r}; run the ingest and split first.",
+        )
+
+    ws = Workspace()
+    name = record["name"]
+    parts_root = store.parts_dir(ws, name)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        if manifest is not None:
+            archive.writestr("README.md", ingest_run.split_readme(manifest))
+            archive.writestr("split-manifest.json", manifest.model_dump_json(indent=2))
+        # Walk the materialised tree so the archive mirrors the on-disk folder-per-part layout
+        # exactly, rather than reconstructing a second opinion of what the split looks like.
+        for path in sorted(parts_root.rglob("*")):
+            if path.is_file():
+                archive.write(path, arcname=str(path.relative_to(parts_root)).replace("\\", "/"))
+        if include_source:
+            docs = ws.docs_dir(name)
+            if docs.is_dir():
+                for path in sorted(docs.iterdir()):
+                    if path.is_file():
+                        archive.write(path, arcname=f"source/{path.name}")
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{set_id}-split.zip"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # REVIEW — run (job in live, inline in DEMO), status, register
 # ---------------------------------------------------------------------------
-def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str) -> None:
+def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str,
+                    set_id: str = "") -> None:
     """Background worker: run the review and record progress/result/error on the job."""
     jobs.JOBS.update(job_id, status="running", stage="ingesting")
     try:
         register = review_run.run_review(
-            uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+            uploads, project_name, set_id=set_id,
+            progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
         )
         jobs.JOBS.update(job_id, status="done", stage="verifying", result=_result_payload(register))
     except Exception as exc:  # noqa: BLE001 — any stage failure becomes a job error, not a crash
@@ -126,20 +920,30 @@ def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str) ->
 def post_review_run(
     files: Optional[list[UploadFile]] = File(None),
     project_name: str = Form(""),
+    set_id: str = Form(""),
 ) -> JobState:
-    """Run REVIEW (s01→s02→s03→s07→s08) over an uploaded document set. Live: kick off a background job
-    and poll ``/review/status/{job_id}``. DEMO: run inline and return the register offline (no job, no
-    network) — the fixtures drive a full register. s04–s06 are skipped (slice 1); the result names
-    them in ``slice2_pending``."""
+    """Run REVIEW (s01→…→s08) over a document set. Live: kick off a background job and poll
+    ``/review/status/{job_id}``. DEMO: run inline and return the register offline (no job, no
+    network) — the fixtures drive a full register.
+
+    Two ways to name the documents:
+
+    * ``set_id`` of a set already through ``/ingest`` — the review reads its approved parts one
+      at a time, and each clause carries the part it came from. Refuses with a 409 if that set's
+      split manifest has not been approved.
+    * ``files`` — loose documents reviewed directly, for a single document with nothing to split.
+    """
     uploads: list[RawUpload] = [
         (f.filename or "document", f.content_type, f.file.read()) for f in (files or [])
     ]
+    if set_id:
+        _manifest_gate_or_409(set_id)
     if demo_mode():
-        register = review_run.run_review(uploads, project_name)
+        register = review_run.run_review(uploads, project_name, set_id=set_id)
         return JobState(status="done", stage="verifying", result=_result_payload(register))
 
     job_id = jobs.JOBS.create("review")
-    jobs.POOL.submit(_run_review_job, job_id, uploads, project_name)
+    jobs.POOL.submit(_run_review_job, job_id, uploads, project_name, set_id)
     return JobState(job_id=job_id, status="queued", stage="uploading")
 
 
@@ -149,11 +953,7 @@ def get_review_status(job_id: str) -> JobState:
     job = jobs.JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
-    return JobState(
-        job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
-        error=job.error or None, result=job.result if job.status == "done" else None,
-        warnings=list(job.warnings),
-    )
+    return _job_state(job_id, job)
 
 
 @router.get("/review/register/{set_id}")
@@ -162,11 +962,12 @@ def get_review_register(set_id: str) -> dict:
     conn = store.get_conn()
     try:
         register = store.load_register(conn, set_id)
+        mismatch = _parse_mismatch(conn, set_id) if register is not None else None
     finally:
         conn.close()
     if register is None:
         raise HTTPException(status_code=404, detail=f"No review register for set {set_id!r}.")
-    return _result_payload(register)
+    return {**_result_payload(register), "parse_mismatch": mismatch}
 
 
 # ---------------------------------------------------------------------------
@@ -174,16 +975,31 @@ def get_review_register(set_id: str) -> dict:
 # ---------------------------------------------------------------------------
 class ReviewApproval(BaseModel):
     set_id: str
-    # item number -> "confirmed" | "dismissed". The only place a verdict is written.
+    # item number -> "confirmed" | "dismissed" | "query". The only place a verdict is written.
     decisions: dict[int, str] = Field(default_factory=dict)
+    # item number -> what we will negotiate instead. Written to ``contractor_response``.
+    #
+    # This exists because dismissing a clause is rarely the end of it: "we accept it as drafted"
+    # and "we will not press this as a departure, but we will ask for X" are different positions,
+    # and only the second one has anything to send. Without this the second position had nowhere
+    # to live — the column was on the model and nothing wrote it.
+    negotiations: dict[int, str] = Field(default_factory=dict)
     approved: bool = True  # open the review→estimate gate
 
 
 @router.post("/review/approve", response_model=GateState)
 def post_review_approve(req: ReviewApproval) -> GateState:
-    """The human gate. Records each per-line verdict (confirmed/dismissed) — no other endpoint or
-    stage may write these — and sets the review→estimate gate flag. A citation_failed line cannot be
-    confirmed until re-reviewed (its citation is untrustworthy)."""
+    """The human gate. Records each per-line verdict and sets the review→estimate gate flag — no
+    other endpoint or stage may write either.
+
+    Three verdicts: ``confirmed`` (we press this departure), ``dismissed`` (we accept the clause),
+    and ``query`` (we are asking the client). A queried line stays **open** and raises an RFI, and
+    it deliberately does not block approval — the submission deadline does not move because the
+    client has not replied, so the forcing function is the freeze gate rather than this one.
+
+    A citation_failed line cannot be confirmed until re-reviewed (its citation is untrustworthy),
+    though it may perfectly well be queried — asking about it is often the right response.
+    """
     bad = {v for v in req.decisions.values() if v not in HUMAN_VERDICTS}
     if bad:
         raise HTTPException(status_code=422, detail=f"decisions must be one of {sorted(HUMAN_VERDICTS)}; got {sorted(bad)}")
@@ -193,32 +1009,270 @@ def post_review_approve(req: ReviewApproval) -> GateState:
         register = store.load_register(conn, req.set_id)
         if register is None:
             raise HTTPException(status_code=404, detail=f"No review register for set {req.set_id!r}.")
+        parsed = store.load_parsed(conn, req.set_id)
+        clause_index = parsed.clause_index() if parsed is not None else {}
+        raised: list[str] = []
         for item in register.items:
+            # Negotiation text is recorded independently of a verdict, so that editing what you
+            # will ask for does not require re-deciding the line — and so that unqueueing the
+            # question from an RFI batch leaves the draft text where it was.
+            if item.item in req.negotiations:
+                item.contractor_response = req.negotiations[item.item]
             verdict = req.decisions.get(item.item)
             if verdict is None:
                 continue
-            if verdict == "confirmed" and item.status == STATUS_CITATION_FAILED:
+            if verdict == STATUS_CONFIRMED and item.status == STATUS_CITATION_FAILED:
                 raise HTTPException(
                     status_code=409,
                     detail=f"Item {item.item} has a failed citation and cannot be confirmed until re-reviewed.",
                 )
             item.status = verdict
-            item.register_status = "closed"
+            if verdict == STATUS_QUERY:
+                # The line stays open: the question is asked, not answered.
+                item.register_status = "open"
+                clause = clause_index.get(item.clause)
+                rfi = store.save_rfi(conn, req.set_id, RFIItem(
+                    origin=models.RFI_FROM_REGISTER,
+                    register_item=item.item,
+                    part_id=getattr(clause, "part_id", "") if clause else "",
+                    clause=item.clause,
+                    page=getattr(clause, "page", None) if clause else None,
+                    # The human's own words first. `contractor_response` is what they typed into
+                    # "what you will negotiate instead"; the fallbacks are the model's phrasing,
+                    # which is a reasonable starting point but not what someone chose to ask.
+                    question=(item.contractor_response or item.amendment_proposal
+                              or item.proposed_position or item.rationale),
+                    context=item.cited_text,
+                ))
+                raised.append(rfi.rfi_id)
+            else:
+                item.register_status = "closed"
         store.save_register(conn, register)
         store.set_review_approved(conn, req.set_id, req.approved)
-        return GateState(set_id=req.set_id, review_approved=store.review_is_approved(conn, req.set_id))
+        return GateState(
+            set_id=req.set_id,
+            review_approved=store.review_is_approved(conn, req.set_id),
+            queries_raised=raised,
+            open_queries=store.open_rfi_count(conn, req.set_id),
+        )
     finally:
         conn.close()
 
 
 @router.get("/gate/{set_id}", response_model=GateState)
 def get_gate(set_id: str) -> GateState:
-    """The current review→estimate gate state for a document set."""
+    """The current review→estimate gate state for a document set, with the open-query count."""
     conn = store.get_conn()
     try:
-        return GateState(set_id=set_id, review_approved=store.review_is_approved(conn, set_id))
+        return GateState(
+            set_id=set_id,
+            review_approved=store.review_is_approved(conn, set_id),
+            open_queries=store.open_rfi_count(conn, set_id),
+        )
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# RFI — raise questions, batch them into a letter, record what comes back
+# ---------------------------------------------------------------------------
+class RFIRequest(BaseModel):
+    set_id: str
+    question: str
+    origin: str = "manual"          # register | pricing | manual
+    register_item: int | None = None
+    part_id: str = ""
+    clause: str = ""
+    page: int | None = None
+    context: str = ""
+
+
+@router.post("/rfi")
+def post_rfi(req: RFIRequest) -> dict:
+    """Raise a question for the client.
+
+    ``origin`` records where it came from. ``pricing`` matters as much as ``register``: many real
+    questions surface only when someone tries to put a number on something, long after the
+    contract review finished.
+    """
+    if req.origin not in models.RFI_ORIGINS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"origin must be one of {sorted(models.RFI_ORIGINS)}; got {req.origin!r}",
+        )
+    if not req.question.strip():
+        raise HTTPException(status_code=422, detail="A query needs a question.")
+    conn = store.get_conn()
+    try:
+        item = store.save_rfi(conn, req.set_id, RFIItem(
+            origin=req.origin, register_item=req.register_item, part_id=req.part_id,
+            clause=req.clause, page=req.page, question=req.question, context=req.context,
+        ))
+        return {"set_id": req.set_id, "rfi": item.model_dump(),
+                "open_queries": store.open_rfi_count(conn, req.set_id)}
+    finally:
+        conn.close()
+
+
+@router.get("/rfi/{set_id}")
+def get_rfis(set_id: str) -> dict:
+    """Every question on this set, its status, and the batches they were sent in.
+
+    ``open`` is the count the freeze gate must see reach zero, and the one a UI should keep in
+    front of the user — a queried line does not block pricing, so nothing else makes it visible.
+    """
+    conn = store.get_conn()
+    try:
+        items = store.load_rfis(conn, set_id)
+        batches = store.load_rfi_batches(conn, set_id)
+        open_count = store.open_rfi_count(conn, set_id)
+    finally:
+        conn.close()
+    by_status: dict[str, int] = {}
+    for item in items:
+        by_status[item.status] = by_status.get(item.status, 0) + 1
+    return {
+        "set_id": set_id,
+        "count": len(items),
+        "open": open_count,
+        "by_status": by_status,
+        "items": [item.model_dump() for item in items],
+        "batches": [
+            {"batch_id": b.batch_id, "ref": b.ref, "sent_at": b.sent_at,
+             "items": [i.rfi_id for i in b.items]}
+            for b in batches
+        ],
+    }
+
+
+@router.delete("/rfi/{set_id}/{rfi_id}")
+def delete_rfi(set_id: str, rfi_id: str) -> dict:
+    """Take a draft question out of the build it is queued in.
+
+    A withdrawal, not a deletion — the question stays on the record with a ``withdrawn`` status,
+    because "we asked and then thought better of it" is part of how a tender was run. It stops
+    counting as open, which is correct: nobody is waiting on the client for it any more.
+
+    The draft text it came from is untouched. It lives on the register line
+    (``contractor_response``), not on the question, which is exactly why unqueueing can keep it.
+
+    A question that has already been sent cannot be withdrawn here — the client has it, and the
+    honest routes from there are an answer or an overtaking amendment.
+    """
+    conn = store.get_conn()
+    try:
+        try:
+            item = store.withdraw_rfi(conn, set_id, rfi_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"No query {rfi_id!r} on set {set_id!r}.")
+        return {"set_id": set_id, "rfi": item.model_dump(),
+                "open_queries": store.open_rfi_count(conn, set_id)}
+    finally:
+        conn.close()
+
+
+class RFIBatchRequest(BaseModel):
+    set_id: str
+    ref: str = ""                       # e.g. "Technical Query No. 1"
+    rfi_ids: list[str] = Field(default_factory=list)   # empty = every draft question
+
+
+@router.post("/rfi/batch")
+def post_rfi_batch(req: RFIBatchRequest) -> dict:
+    """Assemble the drafted questions into one numbered letter and mark them sent.
+
+    Batched because that is how tender queries actually go out — one numbered letter per round,
+    as the reference package's TC1 and TC2 show — and because a client answering ten scattered
+    emails answers them inconsistently.
+
+    Nothing is transmitted: the letter is a draft for a human to send.
+    """
+    conn = store.get_conn()
+    try:
+        record = store.load_set(conn, req.set_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"No document set {req.set_id!r}.")
+        items = store.load_rfis(conn, req.set_id)
+        # Named ids when given, otherwise every question still sitting in draft.
+        chosen = [
+            i for i in items
+            if (i.rfi_id in req.rfi_ids if req.rfi_ids else i.status == models.RFI_DRAFT)
+        ]
+        if not chosen:
+            raise HTTPException(status_code=422, detail="No draft queries to send.")
+
+        existing = store.load_rfi_batches(conn, req.set_id)
+        batch_id = f"batch-{len(existing) + 1:02d}"
+        ref = req.ref or f"Technical Query No. {len(existing) + 1}"
+        for number, item in enumerate(chosen, start=1):
+            item.number = number
+            item.batch_id = batch_id
+            item.status = models.RFI_SENT
+            store.save_rfi(conn, req.set_id, item)
+
+        letter = rfi_letter.render_letter(record["name"], ref, chosen)
+        store.save_rfi_batch(conn, req.set_id, RFIBatch(
+            batch_id=batch_id, ref=ref, sent_at=_now(), letter_md=letter,
+        ))
+        return {
+            "set_id": req.set_id, "batch_id": batch_id, "ref": ref,
+            "count": len(chosen), "markdown": letter,
+            "open_queries": store.open_rfi_count(conn, req.set_id),
+        }
+    finally:
+        conn.close()
+
+
+class RFIAnswer(BaseModel):
+    set_id: str
+    rfi_id: str
+    answer: str
+    answered_by: str = ""               # the document that carried it, e.g. "Tender Addendum No.1"
+
+
+@router.post("/rfi/answer")
+def post_rfi_answer(req: RFIAnswer) -> dict:
+    """Record the client's reply to one question.
+
+    Recording an answer does not by itself change any document. If the reply arrived as an
+    addendum, that addendum goes through ``/ingest/document`` and the change-mapping gate like any
+    other — an answer is information, a revision is a commitment, and they are not the same act.
+    """
+    conn = store.get_conn()
+    try:
+        items = {i.rfi_id: i for i in store.load_rfis(conn, req.set_id)}
+        item = items.get(req.rfi_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"No query {req.rfi_id!r} on this set.")
+        item.answer = req.answer
+        item.answered_by = req.answered_by
+        item.status = models.RFI_ANSWERED
+        item.answered_at = _now()
+        store.save_rfi(conn, req.set_id, item)
+        return {"set_id": req.set_id, "rfi": item.model_dump(),
+                "open_queries": store.open_rfi_count(conn, req.set_id)}
+    finally:
+        conn.close()
+
+
+@router.get("/rfi/{set_id}/batch/{batch_id}")
+def get_rfi_batch(set_id: str, batch_id: str) -> dict:
+    """One sent batch: its letter and the questions it carried."""
+    conn = store.get_conn()
+    try:
+        batches = {b.batch_id: b for b in store.load_rfi_batches(conn, set_id)}
+    finally:
+        conn.close()
+    batch = batches.get(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail=f"No batch {batch_id!r} on set {set_id!r}.")
+    return {
+        "set_id": set_id, "batch_id": batch.batch_id, "ref": batch.ref,
+        "sent_at": batch.sent_at, "markdown": batch.letter_md,
+        "items": [i.model_dump() for i in batch.items],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +1404,36 @@ def post_estimate_scope(req: ScopeRunRequest) -> JobState:
 def post_estimate_scope_approve(req: ScopeApproval) -> ScopeGateState:
     """The scope gate — the ONLY writer of scope-approved state. An optional ``amended_summary``
     becomes the approved scope of record (the original draft is retained). Requires a scope draft to
-    exist first."""
+    exist first.
+
+    **The freeze gate.** Approving refuses while any pre-filled fallback is still unaccepted.
+    That is the whole reason this gate exists: an unanswered query has to become an answer or a
+    stated priced assumption before a number can be committed, and a fallback nobody accepted is
+    neither — it is a machine's guess standing where a decision should be. The UI disables the
+    button and names the lines, so this 409 is the backstop rather than the normal path.
+
+    An open query does NOT block, and never did (locked decision 8). What blocks is pricing on a
+    guess without recording that anyone agreed to it.
+    """
     conn = store.get_conn()
     try:
         scope = store.load_scope(conn, req.set_id)
         if scope is None:
             raise HTTPException(status_code=404, detail=f"No scope draft for set {req.set_id!r}; run /estimate/scope first.")
+        if req.approved:
+            pending = store.unaccepted_fallbacks(conn, req.set_id)
+            if pending:
+                names = ", ".join(i.title or i.item_id for i in pending)
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{len(pending)} pre-filled fallback"
+                        f"{'s are' if len(pending) != 1 else ' is'} still unaccepted: {names}. "
+                        f"Each has to become an answer or an assumption you accept before the "
+                        f"scope can be frozen — otherwise the price rests on a suggestion nobody "
+                        f"agreed to."
+                    ),
+                )
         store.approve_scope(conn, req.set_id, req.approved, req.amended_summary)
         scope = store.load_scope(conn, req.set_id)
         return ScopeGateState(set_id=req.set_id, scope_approved=scope.approved,
@@ -375,6 +1453,240 @@ def get_estimate_scope(set_id: str) -> dict:
     if scope is None:
         raise HTTPException(status_code=404, detail=f"No scope draft for set {set_id!r}.")
     return _scope_payload(set_id, scope)
+
+
+# ---------------------------------------------------------------------------
+# The scope of record, item by item — the FREEZE gate
+# ---------------------------------------------------------------------------
+def _seed_text(scope, keywords: tuple[str, ...]) -> str:
+    """A line of the s01 draft that plausibly covers this source, or "".
+
+    Only ever a starting point, and it arrives badged ``ai`` precisely because it is one. When
+    nothing matches, the line starts empty and badged ``user`` — which is the honest outcome:
+    there was no draft prose, so the words will be the person's own.
+    """
+    if scope is None:
+        return ""
+    for note in scope.draft.notes:
+        text = (note.text or "").lower()
+        if any(k in text for k in keywords if len(k) > 4):
+            return note.text
+    return ""
+
+
+def _scope_sources(conn, set_id: str) -> list[dict]:
+    """Everything the scope could be built from, and whether it already has been.
+
+    Derived on every read, never stored. The register, the open questions and the change log are
+    each already the authority on their own contents; a stored copy here would go stale the
+    moment a verdict changed or an answer arrived, and the scope would then be built on a
+    snapshot nobody took deliberately.
+    """
+    mapped = {i.source_ref for i in store.load_scope_items(conn, set_id) if i.source_ref}
+    scope = store.load_scope(conn, set_id)
+    out: list[dict] = []
+
+    # 1. Confirmed departures — the positions the register decided we ARE pressing.
+    register = store.load_register(conn, set_id)
+    for item in (register.items if register else []):
+        if item.status != STATUS_CONFIRMED:
+            continue
+        ref = f"{models.SOURCE_DEPARTURE}:{item.item}"
+        label = item.proposed_position or item.rationale
+        out.append({
+            "source_ref": ref, "group": models.SOURCE_DEPARTURE,
+            "label": label[:180],
+            "meta": f"item {item.item}" + (f" · cl. {item.clause}" if item.clause else ""),
+            "section": models.SCOPE_QUALIFICATIONS,
+            # Confirmed departures already carry the words we intend to send.
+            "text": item.proposed_position or item.amendment_proposal or item.rationale,
+            "mapped": ref in mapped,
+        })
+
+    # 2. Open questions — each one has to become an answer or a stated assumption HERE.
+    for rfi in store.load_rfis(conn, set_id):
+        if not rfi.is_open():
+            continue
+        ref = f"{models.SOURCE_RFI}:{rfi.rfi_id}"
+        out.append({
+            "source_ref": ref, "group": models.SOURCE_RFI,
+            "label": rfi.question[:180],
+            "meta": f"{rfi.rfi_id} · {rfi.status}" + (f" · cl. {rfi.clause}" if rfi.clause else ""),
+            "section": models.SCOPE_FALLBACKS,
+            "text": _seed_text(scope, tuple(rfi.question.lower().split())),
+            "mapped": ref in mapped,
+        })
+
+    # 3. Amendments — what an addendum changed that the price has to reflect.
+    for doc in store.list_documents(conn, set_id):
+        if doc["kind"] == models.DOC_BASE or not doc["applied"]:
+            continue
+        ref = f"{models.SOURCE_ADDENDUM}:{doc['doc_id']}"
+        out.append({
+            "source_ref": ref, "group": models.SOURCE_ADDENDUM,
+            "label": doc["ref"] or doc["filename"],
+            "meta": f"{doc['kind']} · {(doc['received_at'] or '')[:10]}",
+            "section": models.SCOPE_LOGISTICS,
+            "text": "",
+            "mapped": ref in mapped,
+        })
+    return out
+
+
+def _scope_items_payload(conn, set_id: str) -> dict:
+    items = store.load_scope_items(conn, set_id)
+    pending = [i for i in items if i.is_fallback and not i.accepted]
+    return {
+        "set_id": set_id,
+        "items": [i.model_dump() for i in items],
+        "baseline": sum(1 for i in items if not i.is_fallback),
+        "fallbacks_active": len(pending),
+        "blocking": [
+            {"item_id": i.item_id, "title": i.title or i.text[:80]} for i in pending
+        ],
+    }
+
+
+@router.get("/estimate/scope/{set_id}/sources")
+def get_scope_sources(set_id: str) -> dict:
+    """What the scope of record could be built from: confirmed departures, open questions, and
+    applied amendments — each with whether it has been mapped in yet.
+
+    Nothing walks into the scope on its own. A source stays on this list until a person maps it,
+    because the whole point of the gate is that somebody chose every line that ends up in the
+    offer letter.
+    """
+    conn = store.get_conn()
+    try:
+        return {
+            "set_id": set_id,
+            "sources": _scope_sources(conn, set_id),
+            **{k: v for k, v in _scope_items_payload(conn, set_id).items() if k != "set_id"},
+        }
+    finally:
+        conn.close()
+
+
+class ScopeMapRequest(BaseModel):
+    set_id: str
+    source_ref: str
+    section: str = ""     # defaults to the source's natural section
+
+
+@router.post("/estimate/scope/map")
+def post_scope_map(req: ScopeMapRequest) -> dict:
+    """Map one source into the scope of record.
+
+    The badge is decided here and it is not cosmetic: a line seeded from draft prose is ``ai``,
+    and a line that starts empty is ``user`` — because there is no model text in it to own. An
+    open question maps as a **fallback**, which is what makes it show up at the gate until
+    someone accepts or rewrites it.
+    """
+    conn = store.get_conn()
+    try:
+        sources = {s["source_ref"]: s for s in _scope_sources(conn, req.set_id)}
+        source = sources.get(req.source_ref)
+        if source is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{req.source_ref!r} is not a scope source for set {req.set_id!r}.",
+            )
+        if source["mapped"]:
+            raise HTTPException(
+                status_code=409, detail=f"{req.source_ref!r} is already in the scope.",
+            )
+        section = req.section or source["section"]
+        if section not in models.SCOPE_SECTIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"section must be one of {list(models.SCOPE_SECTIONS)}; got {section!r}",
+            )
+        text = source["text"]
+        item = store.save_scope_item(conn, req.set_id, models.ScopeItem(
+            section=section,
+            title=source["label"][:120],
+            badge=models.BADGE_AI if text else models.BADGE_USER,
+            is_fallback=source["group"] == models.SOURCE_RFI,
+            accepted=False,
+            text=text,
+            source_ref=req.source_ref,
+        ), now=_now())
+        return {"item": item.model_dump(), **_scope_items_payload(conn, req.set_id)}
+    finally:
+        conn.close()
+
+
+class ScopeItemUpdate(BaseModel):
+    set_id: str
+    item_id: str
+    text: str | None = None
+    section: str | None = None
+    title: str | None = None
+    accept: bool | None = None       # accept a pre-filled fallback as the priced assumption
+    convert_to_user: bool = False    # take ownership of the words without changing them
+
+
+@router.post("/estimate/scope/item")
+def post_scope_item(req: ScopeItemUpdate) -> dict:
+    """Edit, accept, or take ownership of one scope line.
+
+    **Editing always stamps it ``user``.** You edited it, you own it — there is no state in which
+    a person's words are attributed to a model, and no state in which a model's words silently
+    become a person's.
+
+    Accepting a fallback is the freeze gate doing its work: an unanswered query stops being a
+    machine's guess and becomes a priced assumption somebody stands behind. The words may still
+    be the model's — the badge stays ``ai`` — but the decision to price on them is now recorded.
+    """
+    conn = store.get_conn()
+    try:
+        existing = next(
+            (i for i in store.load_scope_items(conn, req.set_id) if i.item_id == req.item_id), None
+        )
+        if existing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No scope line {req.item_id!r} on set {req.set_id!r}.",
+            )
+        update: dict = {}
+        if req.text is not None and req.text != existing.text:
+            update["text"] = req.text
+            update["badge"] = models.BADGE_USER   # edited, therefore owned
+        if req.title is not None:
+            update["title"] = req.title
+        if req.section is not None:
+            if req.section not in models.SCOPE_SECTIONS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"section must be one of {list(models.SCOPE_SECTIONS)}",
+                )
+            update["section"] = req.section
+        if req.accept is not None:
+            update["accepted"] = req.accept
+        if req.convert_to_user:
+            update["badge"] = models.BADGE_USER
+
+        item = store.save_scope_item(
+            conn, req.set_id, existing.model_copy(update=update), now=_now()
+        )
+        return {"item": item.model_dump(), **_scope_items_payload(conn, req.set_id)}
+    finally:
+        conn.close()
+
+
+@router.delete("/estimate/scope/item/{set_id}/{item_id}")
+def delete_scope_item(set_id: str, item_id: str) -> dict:
+    """Unmap a scope line. The source returns to the rail, with nothing lost — sources are
+    derived, so un-mapping is genuinely reversible."""
+    conn = store.get_conn()
+    try:
+        if not store.delete_scope_item(conn, set_id, item_id):
+            raise HTTPException(
+                status_code=404, detail=f"No scope line {item_id!r} on set {set_id!r}.",
+            )
+        return _scope_items_payload(conn, set_id)
+    finally:
+        conn.close()
 
 
 @router.post("/estimate/run", response_model=JobState)
@@ -408,11 +1720,7 @@ def get_estimate_status(job_id: str) -> JobState:
     job = jobs.JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
-    return JobState(
-        job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
-        error=job.error or None, result=job.result if job.status == "done" else None,
-        warnings=list(job.warnings),
-    )
+    return _job_state(job_id, job)
 
 
 @router.get("/estimate/{set_id}")
@@ -447,6 +1755,120 @@ def get_estimate_workbook(set_id: str) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="estimate_{set_id}.xlsx"'},
     )
+
+
+def _audience_or_422(audience: str) -> str:
+    if audience not in outputs.AUDIENCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"audience must be one of {sorted(outputs.AUDIENCES)}; got {audience!r}",
+        )
+    return audience
+
+
+@router.get("/review/{set_id}/citations")
+def get_citations(set_id: str) -> dict:
+    """Where each cited quotation physically sits in the document.
+
+    Three verdicts, deliberately: ``located`` (page measured, with highlight rectangles as
+    fractions of the page so a viewer can overlay them at any zoom), ``unverifiable`` (the part
+    has no text layer, so we could not look — not the citation's fault), and ``not_located``
+    (searchable, corroborated by neighbouring citations that WERE found, still missing — most
+    likely a paraphrase rather than a quotation).
+    """
+    conn = store.get_conn()
+    try:
+        register = store.load_register(conn, set_id)
+        parsed = store.load_parsed(conn, set_id)
+        parts = [(spec, path) for spec, path, _ctx in store.load_parts(conn, set_id) if path]
+    finally:
+        conn.close()
+    if register is None or parsed is None:
+        raise HTTPException(status_code=404, detail=f"No reviewed register for set {set_id!r}.")
+    if not parts:
+        raise HTTPException(
+            status_code=409,
+            detail="This set has no split parts, so there is no document to search. Ingest it first.",
+        )
+
+    # strict=False: reporting only. The verdicts were already applied during the review; a read
+    # of them must not quietly re-mark the register.
+    checked = [i for i in register.items
+               if i.status != models.STATUS_UNRESOLVED and i.clause]
+    locations = s08_citation_verify.locate_citations(register, parsed, parts, strict=False)
+    counts: dict[str, int] = {}
+    for location in locations:
+        counts[location.verdict] = counts.get(location.verdict, 0) + 1
+    return {
+        "set_id": set_id,
+        "checked": len(locations),
+        "by_verdict": counts,
+        "citations": [
+            {"item": item.item, "clause": item.clause, "cited_text": item.cited_text,
+             **location.model_dump()}
+            for item, location in zip(checked, locations)
+        ],
+    }
+
+
+@router.get("/review/{set_id}/departure-schedule")
+def get_departure_schedule(
+    set_id: str, audience: str = "internal", format: str = "md",
+) -> Response:
+    """The Departure Schedule: every contract term we are not accepting as drafted.
+
+    Deterministic — each row traces to a register line a human decided at the gate. Confirmed
+    departures and still-open queries are listed; a line whose citation could not be verified is
+    **withheld** and reported separately, because asking a client to amend a clause we cannot
+    locate is worse than saying nothing.
+
+    ``audience`` defaults to **internal**. Both reference tenders warn that qualifying a tender
+    may cause it to be disqualified, so the submission version is opt-in and carries that warning
+    quoted from the tender's own conditions.
+    """
+    _audience_or_422(audience)
+    conn = store.get_conn()
+    try:
+        exists = store.load_register(conn, set_id) is not None
+    finally:
+        conn.close()
+    if not exists:
+        raise HTTPException(status_code=404, detail=f"No review register for set {set_id!r}.")
+
+    if format == "xlsx":
+        return Response(
+            content=departure_schedule.render_xlsx(set_id, audience),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":
+                     f'attachment; filename="departures_{set_id}_{audience}.xlsx"'},
+        )
+    if format != "md":
+        raise HTTPException(status_code=422, detail="format must be 'md' or 'xlsx'.")
+    return Response(content=departure_schedule.render_markdown(set_id, audience),
+                    media_type="text/markdown; charset=utf-8")
+
+
+@router.get("/estimate/{set_id}/qualifications")
+def get_qualifications(set_id: str, audience: str = "internal") -> Response:
+    """The Letter of Qualifications: the assumptions the price depends on.
+
+    Assembled from confirmed departures, still-open queries (an unanswered question is a priced
+    assumption whether or not anyone writes it down), and the approved scope of record. Every line
+    carries its source in the internal version.
+
+    Distinct from the Departure Schedule by design: that document is about contract TERMS, this
+    one is about SCOPE and price. Internal by default, for the same reason.
+    """
+    _audience_or_422(audience)
+    conn = store.get_conn()
+    try:
+        exists = store.load_set(conn, set_id) is not None
+    finally:
+        conn.close()
+    if not exists:
+        raise HTTPException(status_code=404, detail=f"No document set {set_id!r}.")
+    return Response(content=qualifications.render_markdown(set_id, audience),
+                    media_type="text/markdown; charset=utf-8")
 
 
 @router.get("/estimate/{set_id}/letter")

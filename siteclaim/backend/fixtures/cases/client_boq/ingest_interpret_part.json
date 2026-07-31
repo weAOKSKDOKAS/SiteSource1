@@ -1,0 +1,47 @@
+{
+  "part_id": "03-ctap",
+  "title": "Appendices A to G to Conditions of Tender",
+  "category": "bid-forms",
+  "readable": true,
+  "summary": "This part holds the forms the tenderer actually fills in and returns, together with the rules the employer will use to mark them. It is the pricing and evaluation half of the bidding instructions: the Form of Tender that carries the offer, the Fee Proposal schedules that carry the money, and the criteria the two-envelope assessment scores.",
+  "key_points": [
+    "Two-envelope submission: a technical proposal and a separate sealed fee proposal.",
+    "Assessment weighting is 60 per cent technical and 40 per cent fee.",
+    "The Fee Proposal is a lump sum broken down by stage, not a remeasured bill of quantities.",
+    "Payment follows a stage schedule tied to the deliverables listed in the Assignment Brief.",
+    "The Form of Tender must be signed by a person authorised to bind the tendering company."
+  ],
+  "obligations": [
+    "Return every appendix listed, complete and signed, or the tender may be set aside.",
+    "Price every stage in the Fee Proposal; unpriced stages are treated as included.",
+    "Hold the tender open for the validity period stated on the Form of Tender.",
+    "Declare any conflict of interest on the form provided."
+  ],
+  "commercial_flags": [
+    "The fee is a lump sum, so scope growth is the contractor's risk unless a variation is agreed.",
+    "The 40 per cent fee weighting means price is scored, not simply passed or failed.",
+    "Stage payments mean cash flow depends on deliverable acceptance, not elapsed time."
+  ],
+  "feeds": ["05-ab", "08-moa"],
+  "strategy_flags": [
+    {
+      "kind": "qualifications-penalised",
+      "clause": "4.26",
+      "page": 8,
+      "quote": "Any qualification of tender or of the tender documents may cause the tender to be disqualified."
+    },
+    {
+      "kind": "no-alterations",
+      "clause": "4.27",
+      "page": 8,
+      "quote": "No unauthorized alteration or erasure to the text of the tender documents will be permitted. Any tender containing such alteration or erasure may not be considered."
+    },
+    {
+      "kind": "two-envelope",
+      "clause": "Appendix E",
+      "page": 84,
+      "quote": "The technical proposal and the fee proposal shall be submitted in separately sealed envelopes."
+    }
+  ],
+  "notes": "The evaluation criteria table in Appendix E is the authority for how the fee is scored; read it with the Fee Proposal schedule rather than on its own."
+}
