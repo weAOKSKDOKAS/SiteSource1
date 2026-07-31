@@ -1,0 +1,199 @@
+/* ---------------------------------------------------------------------------
+   client_boq design tokens — the tender-review product (#/tender).
+
+   A SECOND palette in this app, deliberately. Procurement runs on Atlas (cool navy +
+   blue, in index.css); client_boq runs on the document-desk palette from the design
+   handoff (warm paper + brass + navy). They are two products sharing a chassis, not one
+   product with two skins, and the handoff states every hex below is final.
+
+   Every token is prefixed `cb-` because the names collide otherwise: Atlas already owns
+   `--color-paper` at a cool #eef2f7 where this palette wants a warm #FAF9F6. Prefixing
+   means `bg-cb-paper` and `bg-paper` can sit in one build without either being wrong.
+
+   THE ONE RULE THAT IS NOT DECORATION — the authorship triad:
+       navy  #1E3A52  a deterministic rule wrote this
+       brass #BD9A5F  a model proposed this
+       red   #C25539  a check on this failed
+   It carries meaning no other cue replaces. If this palette is ever remapped onto a host
+   design system, these three survive the remap.
+
+   Source: workspace-tendering/design_handoff_client_boq/README.md ("Design tokens").
+--------------------------------------------------------------------------- */
+@theme {
+  /* --- ink / navy ------------------------------------------------------- */
+  --color-cb-ink: #0c1a28;          /* app bar, dark buttons, active RFI header */
+  --color-cb-ink-text: #112233;     /* primary text */
+  --color-cb-ink-active: #18324a;   /* folded rail toggle background */
+  --color-cb-navy: #1e3a52;         /* AUTHORSHIP: rules engine */
+  --color-cb-navy-line: #20364a;    /* sent-panel header, borders on dark */
+  --color-cb-body: #2c3a48;         /* body / clause text */
+  --color-cb-blue: #2f6e8a;         /* AUTHORSHIP: uncovered clause · addenda */
+  --color-cb-muted: #61707e;        /* secondary text */
+  --color-cb-faint: #8a97a3;        /* labels, faint meta */
+  --color-cb-dim: #9fb4c6;          /* dim text on dark surfaces */
+  --color-cb-disabled: #b4c6d6;     /* disabled control text */
+  --color-cb-track: #dce4ea;        /* chart track */
+  --color-cb-info-fill: #e4ebf2;    /* TEXT scan badge fill */
+  --color-cb-info: #eef3f8;         /* info tint, selected rail fill */
+
+  /* --- paper ------------------------------------------------------------ */
+  --color-cb-desk: #eae6dc;         /* the desk behind everything */
+  --color-cb-panel: #f3f1eb;        /* panels, step strip, decided rows */
+  --color-cb-surface: #faf9f6;      /* card + rail surface */
+  --color-cb-warm: #fffdf7;         /* warm input, fallback card */
+  --color-cb-page: #ffffff;         /* a rendered document page */
+  --color-cb-border: #e3ded3;
+  --color-cb-divider: #f0ede5;      /* hairline between list rows */
+  --color-cb-border-strong: #cec7b8;
+
+  /* --- brass ------------------------------------------------------------ */
+  --color-cb-brass: #bd9a5f;        /* AUTHORSHIP: the model · primary accent */
+  --color-cb-amber: #c28a2e;        /* negotiated · vision-OCR · warning */
+  --color-cb-brass-line: #dcc79a;
+  --color-cb-brass-tint: #f0e2c8;   /* accent tint AND the page highlight fill */
+  --color-cb-selected: #f8f0df;     /* selected row / card */
+  --color-cb-negotiated: #f6ebd0;   /* dismissed-to-negotiate row */
+  --color-cb-brass-text: #856636;
+  --color-cb-brass-text-light: #9e7c45;
+  --color-cb-on-brass: #221a0c;     /* text on a brass fill */
+
+  /* --- semantics -------------------------------------------------------- */
+  --color-cb-ok: #3c8a63;
+  --color-cb-ok-dark: #235740;
+  --color-cb-ok-tint: #deebe2;
+  --color-cb-bad: #c25539;          /* AUTHORSHIP: citation failed */
+  --color-cb-bad-dark: #8a3826;
+  --color-cb-bad-mid: #a8432b;
+  --color-cb-bad-tint: #f4e1d9;
+
+  /* --- type ------------------------------------------------------------- */
+  /* Roles, not preferences. Serif carries the argument, sans carries the interface,
+     mono carries anything a machine produced or that must be compared digit by digit.
+     Mixing them blurs who said what, which is the one thing this product must not do. */
+  --font-cb-sans: "Libre Franklin", ui-sans-serif, system-ui, sans-serif;
+  --font-cb-serif: "Source Serif 4", ui-serif, Georgia, serif;
+  --font-cb-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --tracking-cb-label: 0.12em;      /* the all-caps mono section labels */
+  --tracking-cb-chip: 0.1em;
+
+  /* --- shape ------------------------------------------------------------ */
+  --radius-cb-mark: 2px;            /* a highlight over the page */
+  --radius-cb-chip: 3px;
+  --radius-cb-btn: 4px;
+  --radius-cb-card: 6px;
+  --radius-cb-pill: 20px;
+
+  --shadow-cb-card: 0 2px 10px rgba(12, 26, 40, 0.08);
+  --shadow-cb-page: 0 2px 8px rgba(12, 26, 40, 0.1);
+  --shadow-cb-ring: 0 0 0 2px #bd9a5f;
+}
+
+/* ---------------------------------------------------------------------------
+   Motion. The handoff asks for 120–160ms on colour and 200ms on expansions; these are
+   the curves and durations that make that feel deliberate rather than merely fast.
+
+   Two rules worth stating because they look like oversights:
+   * register rows do NOT animate on selection. A reviewer clicks through seventeen of
+     them; at that frequency motion reads as lag. Colour only.
+   * nothing staggers. This is a dense desk tool — crisp and quiet, not playful.
+--------------------------------------------------------------------------- */
+[data-app="cboq"] {
+  /* Stronger than the CSS built-ins, which are too weak to read as intentional. */
+  --cb-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --cb-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --cb-press: 160ms;   /* button press feedback */
+  --cb-tint: 120ms;    /* colour / fill changes */
+  --cb-expand: 200ms;  /* negotiation box, card expansions */
+  --cb-pane: 220ms;    /* rail fold */
+
+  background: var(--color-cb-desk);
+  color: var(--color-cb-ink-text);
+  font-family: var(--font-cb-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Any pressable element. Instant physical feedback — the interface heard you. */
+[data-app="cboq"] .cb-press {
+  transition: transform var(--cb-press) var(--cb-ease-out),
+              background-color var(--cb-tint) ease,
+              border-color var(--cb-tint) ease,
+              color var(--cb-tint) ease;
+}
+[data-app="cboq"] .cb-press:active:not(:disabled) {
+  transform: scale(0.97);
+}
+[data-app="cboq"] .cb-press:disabled {
+  cursor: not-allowed;
+}
+
+/* Selection and hover on list rows: colour moves, geometry does not. */
+[data-app="cboq"] .cb-row {
+  transition: background-color var(--cb-tint) ease, border-color var(--cb-tint) ease;
+}
+
+/* Hover is gated: a touch device fires it on tap, which reads as a stuck state. */
+@media (hover: hover) and (pointer: fine) {
+  [data-app="cboq"] .cb-row:hover {
+    background-color: #fdfcf8;
+  }
+  [data-app="cboq"] .cb-icon-btn:hover {
+    border-color: var(--color-cb-brass);
+  }
+}
+
+/* An expansion that must not jump the layout: 0fr -> 1fr animates the row itself, so the
+   content below slides rather than teleports, and no height has to be measured first. */
+[data-app="cboq"] .cb-expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--cb-expand) var(--cb-ease-out),
+              opacity var(--cb-expand) var(--cb-ease-out);
+  opacity: 0;
+}
+[data-app="cboq"] .cb-expand[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+[data-app="cboq"] .cb-expand > * {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Focus is visible and brass — this is a keyboard-heavy review tool. */
+[data-app="cboq"] :focus-visible {
+  outline: 2px solid var(--color-cb-brass);
+  outline-offset: 1px;
+  border-radius: var(--radius-cb-btn);
+}
+
+/* Reduced motion means gentler, not none: colour and opacity still explain state, but
+   nothing moves. */
+@media (prefers-reduced-motion: reduce) {
+  [data-app="cboq"] .cb-press:active:not(:disabled) {
+    transform: none;
+  }
+  [data-app="cboq"] .cb-expand {
+    transition-duration: 0.01ms;
+  }
+  [data-app="cboq"] * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* Arriving at a cited page from a register row. Without this, scrolling to a page that is
+   already highlighted gives no signal that anything happened — the pulse is the "here" that
+   the scroll alone cannot say. One shot, never looping: this fires on a deliberate click. */
+@keyframes cbFlash {
+  0%   { box-shadow: 0 0 0 2px var(--color-cb-brass), 0 0 0 10px rgba(189, 154, 95, 0.35); }
+  100% { box-shadow: 0 0 0 2px var(--color-cb-brass), 0 0 0 0 rgba(189, 154, 95, 0); }
+}
+
+/* The greeked page body — unquoted paragraphs in the document pane are bars, not text, so
+   the eye goes to the one passage that is real. */
+[data-app="cboq"] .cb-greek {
+  height: 6px;
+  background: var(--color-cb-desk);
+  border-radius: 1px;
+}
