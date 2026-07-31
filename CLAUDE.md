@@ -16,8 +16,8 @@ chassis but almost no business logic:
 | Direction | Contractor sources work **out** to subcontractors | Client's contract comes **in** to the contractor |
 | Flow | tender → split by trade → shortlist firms → email enquiries → level bids → award | binder → split into parts (**ingest**) → departure register (**review**) → cost estimate + workbook + offer letter (**estimate**) |
 | Code | `siteclaim/backend/pipeline/`, `db/`, `rules_engine/` | `siteclaim/backend/client_boq/` |
-| API | ~58 endpoints at root (`/ingest`, `/shortlist`, …) | 46 endpoints under `/client-boq/*` |
-| Frontend | Yes — 5 tabs, a 5-step wizard, **Atlas** palette | Yes — Documents · Register · Scope at `#/tender`, **paper/brass** palette. Price and Offer are not designed yet. |
+| API | ~58 endpoints at root (`/ingest`, `/shortlist`, …) | 59 endpoints under `/client-boq/*` |
+| Frontend | Yes — 5 tabs, a 5-step wizard, **Atlas** palette | Yes — a **tender desk** home (multi-tender shelf, team profiles) + Documents · Register · Scope per tender, all hash-routed under `#/tender`, **paper/brass** palette. Criteria / Rates / AI-model / Team screens exist; Price and Offer are not designed yet. |
 
 The governing principle in both: **the LLM reads, structures, proposes and drafts; deterministic code
 and human gates decide.** No price, verdict, or risk flag is ever written by a model.
@@ -107,7 +107,12 @@ Rough size (non-test): procurement backend ~14.9k lines Python · client_boq ~3.
 This boundary was a design constraint, is enforced by the code layout, and should be preserved.
 
 **client_boq REUSES (by import, never modifies):**
-- `pipeline.llm_client` — `LLMClient().complete_json(system=, user=, target_model=, demo_fixture=, purpose=)`
+- `pipeline.llm_client` — `LLMClient().complete_json(system=, user=, target_model=, demo_fixture=, purpose=)`.
+  **One documented additive exception** (2026-07-31, for the app-wide model setting): `_route` now
+  honours an EXPLICITLY constructed provider for text calls (`LLMClient(provider=...)`). Every
+  procurement site constructs bare `LLMClient()` and routes from env exactly as before — verified
+  by `pipeline/tests` — and client_boq applies its setting via `client_boq/llm.py::make_client()`,
+  never by mutating env (the job pool runs on threads; a mutable process env is a race).
 - `pipeline.documents.extract_document(data, content_type, table_aware=)` — PDF text + page images
 - `db.store.get_connection()` — the shared SQLite connection (honours `SITESOURCE_DB`)
 - `pipeline.workspace.Workspace` / `tender_slug` — per-tender file storage
@@ -117,8 +122,9 @@ This boundary was a design constraint, is enforced by the code layout, and shoul
   client_boq sends no email at all.
 - Procurement pipeline stages, `rules_engine/`, `routing/`, `benchmark/`, `pipeline/estimate/`
   (note: that last one is the *procurement* estimator — a different thing from `client_boq/estimate/`).
-- `db/schema.sql` and `db/seed.py`. client_boq owns 4 tables it creates lazily itself with
-  `CREATE TABLE IF NOT EXISTS client_boq_*` (see `client_boq/models.py`).
+- `db/schema.sql` and `db/seed.py`. client_boq owns 19 tables it creates lazily itself with
+  `CREATE TABLE IF NOT EXISTS client_boq_*` (see `client_boq/models.py`) — the workflow tables
+  plus the desk's team/meta/criteria/rates/settings tables.
 
 ---
 
@@ -167,9 +173,12 @@ to cite. The pre-ingest path still works for a single loose document with nothin
 `uncovered`, bad citations → `citation_failed`, all kept visible); every AI call passes a `demo_fixture`
 so DEMO is fully offline; heavy work runs as sync `def` on the in-package pool (`jobs.py`).
 
-Key files: `router.py` (46 endpoints) · `models.py` (schemas + table DDL) · `rules.py` (the 8 numeric
-threshold rules + precedence + LD math) · `store.py` (persistence + gates) · `criteria_loader.py`
-(parses the criteria markdown) · `rates.py` + `data/rates.csv` (the future-DB seam) ·
+Key files: `router.py` (59 endpoints) · `models.py` (schemas + table DDL) · `rules.py` (the 8 numeric
+threshold rules + precedence + LD math) · `store.py` (persistence + gates) · `criteria_store.py`
+(the editable criteria library — DB-backed, seeded once from the markdown via `criteria_loader.py`) ·
+`rates_store.py` (the editable rate book — the DB source `rates.py` declared itself the seam for) ·
+`llm.py` (`make_client()` — where the app-wide model setting is applied) ·
+`ingest/close_date.py` (the close date as a finding: conservative parse of the AI-quoted clause) ·
 `ingest/pdfops.py` (pure PDF structure ops — outline walk, text-coverage scan, the confidence
 ladder, manifest validation, page slicing; no model, no network).
 
@@ -227,8 +236,8 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ### Tests
 ```bash
-cd siteclaim/backend && python -m pytest -q          # 931 passed, 5 skipped
-python -m pytest client_boq/tests/ -q                # 205 passed
+cd siteclaim/backend && python -m pytest -q          # 994 passed, 5 skipped
+python -m pytest client_boq/tests/ -q                # 320 passed
 ```
 
 On Windows use the `py` launcher to build the venv (`py -3.14 -m venv .venv` inside
@@ -320,7 +329,9 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
 
 - Develop on **`from-client-to-tender-BOQ`**; **PR #4** is already open for it
   (`https://github.com/weAOKSKDOKAS/SiteSource1/pull/4`) — pushing updates it, don't open another.
-- Keep the client_boq footprint outside its own directory at **2 files** (`api.py` mount, `CLAUDE.md` row).
-- Run the full suite before committing; it should stay at **931 passed / 5 skipped** or better.
+- Keep the client_boq footprint outside its own directory minimal: `api.py` (the mount), the
+  documented additive `pipeline/llm_client.py` change (§4), `frontend/src/main.tsx` (the hash
+  branch), `frontend/src/index.css` (the token import), and the docs.
+- Run the full suite before committing; it should stay at **994 passed / 5 skipped** or better.
   (The 5 skips are `requires_tesseract` — see trap 1b. An older figure of 678/8 predates the
   client_boq module and is no longer the bar.)

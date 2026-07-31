@@ -15,8 +15,8 @@ subcontractors; `client_boq` takes the client's contract *in* and walks it to a 
 | Direction | contractor → subcontractors | client → contractor |
 | Flow | tender → split by trade → shortlist → enquiries → level → award | binder → **ingest** → departure register (**review**) → scope freeze → cost estimate, workbook, offer letter (**estimate**) |
 | Code | `backend/pipeline/`, `db/`, `rules_engine/` | `backend/client_boq/` |
-| API | ~58 routes at the root | **46 routes** under `/client-boq/*` |
-| Frontend | 5-tab wizard, Atlas palette | Documents · Register · Scope at `#/tender`, paper/brass palette |
+| API | ~58 routes at the root | **59 routes** under `/client-boq/*` |
+| Frontend | 5-tab wizard, Atlas palette | a **tender desk** home (multi-tender shelf, team profiles, criteria/rates/model screens) + Documents · Register · Scope per tender, hash-routed under `#/tender`, paper/brass palette |
 
 The governing principle is the same in both, and every design decision below follows from it:
 
@@ -36,7 +36,7 @@ cite — which is what makes the register auditable at all.
 
 ---
 
-## 3. The change, in four passes
+## 3. The change, in six passes
 
 Read in this order; each pass assumes the one before it.
 
@@ -194,11 +194,71 @@ export async function runJob(start, poll, onProgress) {
 
 A progress strip finally uses the `done` / `total` fields the `Job` model has always carried.
 
+### Pass 5 — Series D: the tender desk, and managing the library
+
+The app opened into ONE tender chosen by a `<select>`. An extended design handoff (Frame 00 + a
+nav sidebar) turned the entry point into a **desk**, and three capabilities the user asked for rode
+along that the handoff lists as undesigned or does not contain at all: editing the criteria,
+editing the costing data, and choosing the AI model.
+
+- **The hash is the router.** `#/tender` is the desk, `#/tender/s/{set}/{tab}` one tender,
+  `#/tender/criteria|rates|team|settings` the management screens. The browser's own history powers
+  the app bar's ← / →; a reload lands where you were. Still no router dependency.
+- **The close date is a FINDING, not a form field.** Ingest already quotes the submission-deadline
+  clause verbatim with clause + page; `ingest/close_date.py` parses that quote **deterministically**
+  and conservatively — `14 August 2026` parses, `04/05/2026` **refuses**, two dates refuse. A refusal
+  is not an error: the card shows `DATE NOT FOUND — CONFIRM IT` and a person types what the clause
+  says, stamped with their name. **DEMO always lands on not_found** — the fixtures describe the
+  sample tender, and a fixture date labelled "read from your upload" would be fabrication.
+- **`blocked` is computed where the gates live.** The shelf's filter and the card's blocking
+  sentence derive from counts `list_sets` computes server-side, because that filter must never
+  disagree with what the 409s refuse. The sentence is composed client-side; "in progress" appears
+  nowhere.
+- **Named profiles, no passwords.** No auth exists in this app and a password box would be
+  security theatre. What the team table honestly buys is attribution: `X-CBOQ-Actor` rides every
+  mutating request, `DepartureItem` gained `decided_by`, and "CONFIRMED BY R. LAM" finally has a
+  name behind it. Members archive rather than delete — their name is on history.
+- **Criteria moved to the DB, markdown as a one-time seed**; **the rate book became the DB source
+  `rates.py` had promised**; **one app-wide model setting**. See §6.
+
+### Pass 6 — Series L: the layout, the missing PDF, and joining the two products
+
+Five complaints after using the desk. Two shared a cause no amount of CSS-reading would find.
+
+- **The app slid off the screen.** `PageView` used `el.scrollIntoView({behavior, block})`. That
+  omits `inline`, which **defaults to `"nearest"`**, and `scrollIntoView` scrolls *every* scrollable
+  ancestor — including the app root, which is `overflow-hidden` and so has no scrollbar to scroll
+  back with. Opening Documents seeds a page, the scroll fires, and the bar and left rail leave the
+  viewport permanently. Now it scrolls the pane's own scroller by hand.
+- **The PDF pane had no floor.** `DOC_MIN = 160` lived only inside the divider's arithmetic; the
+  pane was `flex-1 min-w-0`, whose real floor is 0px, and nothing ever re-measured — `clampMiddle`
+  was called from exactly one place, inside the drag handler. A width persisted on a wide monitor
+  was re-applied verbatim on a narrow window forever. `DOC_MIN` is now **480** (a 460px page at
+  100% fits with no sideways scrolling) and applied as a real CSS `min-width`.
+- **The panes ran off the right edge.** With that floor the row's minimum is
+  `244 + 14 + 320 + 480 = 1058`, plus the 206px sidebar — a **1264px viewport**. The handoff said
+  what should give ("the rail folds, then the third pane becomes a tab") and nothing implemented
+  it. `fitPanes` now runs on mount and every resize, giving up capacity in that order and stopping
+  at the first step that fits. Automatic folds reverse themselves; a deliberate one does not.
+- **Three more defects in the same arithmetic**: only the 9px divider was counted (never the 5px
+  one), the full rail width was reserved while the 44px folded strip was on screen, and the
+  collapse test ignored drag direction — so **dragging left to enlarge the PDF could collapse it**.
+- **Register highlights.** The pane now opens on a part (`partId` started `null` and was only ever
+  set by a citation that LOCATED, which in DEMO never happens); selecting a row moves to the
+  clause's part even when the citation is unverifiable, so the document is readable with the banner
+  explaining why nothing is marked; a selected row with a quotation gains **"Show me on the page"**,
+  the same locate control Documents has. A search no longer *replaces* citation marks, and the
+  first click after a part change now scrolls (the page-element map was cleared on the way IN,
+  wiping refs the new part had registered in the same commit).
+- **Two products, one click.** The SiteSource logo is a menu (Procurement · Review tender), the
+  desk has a Procurement button, and because both set the hash they push history — so Back moves
+  between the products in both directions.
+
 ---
 
-## 4. API surface — 35 → 46 routes
+## 4. API surface — 35 → 59 routes
 
-Eleven new endpoints, all under `/client-boq/*`.
+Twenty-four new endpoints, all under `/client-boq/*`. The first eleven came with the UI:
 
 | Route | Why it exists |
 |---|---|
@@ -214,30 +274,46 @@ Eleven new endpoints, all under `/client-boq/*`.
 | `POST /estimate/scope/item` | edit / accept a fallback / take ownership |
 | `DELETE /estimate/scope/item/{set}/{item}` | remove a mapped line |
 
+Thirteen more came with the tender desk:
+
+| Route | Why it exists |
+|---|---|
+| `GET/POST /team` · `POST /team/{id}` | named profiles — attribution, deliberately not auth |
+| `POST /sets/{id}/meta` | owner · client · package · archive · outcome |
+| `POST /sets/{id}/close-date` | the ONLY writer of a hand-typed date, when the parser honestly refused |
+| `POST /criteria` · `POST /criteria/{id}` | edit the library; **disable, never delete** |
+| `GET/POST /rates` · `POST /rates/{id}` · `DELETE /rates/{id}` | the rate book; **archive → `missing_rate`**, never a stale price |
+| `GET/POST /settings` | the app-wide AI model choice |
+
 **Modified behaviour:** `ReviewApproval` gained `negotiations: dict[int, str]`;
 `/estimate/scope/approve` now 409s while any AI fallback is unaccepted; `_manifest_payload` gained
-`coverage_detail` and an explicit `part_id`.
+`coverage_detail` and an explicit `part_id`; `GET /sets` gained `meta`, `counts`, `blocked`,
+`has_letter` and `?include_archived`; `DepartureItem` gained `decided_by`.
 
 ## 5. Frontend
 
-New directory `siteclaim/frontend/src/client_boq/` — 11 files, ~5,300 lines:
+New directory `siteclaim/frontend/src/client_boq/` — **~8,250 lines**:
 
-| File | Lines | |
+| Area | Lines | |
 |---|---|---|
-| `tabs/Register.tsx` | 1058 | frames 02/03 + the criterion block and mismatch banner |
-| `tabs/Documents.tsx` | 904 | frame 01 + editable cards + prove-a-quote |
-| `tabs/Scope.tsx` | 536 | frame 07 — the freeze gate |
-| `PageView.tsx` | 503 | continuous scroll, typed zoom, lazy pages |
-| `types.ts` | 434 | the payload contracts |
-| `chrome.tsx` | 412 | app bar, step strip, resizable panes |
+| `tabs/` | 2651 | Documents · Register · Scope, the three worked screens |
+| `screens/` | 934 | Criteria library · Pricing & rates · AI model · Team · NotDesigned |
+| `PageView.tsx` | ~540 | continuous scroll, typed zoom, lazy pages, the 480px floor |
+| `home/` | 513 | the desk: shelf, folder cards, drop tile, summary strip |
+| `chrome.tsx` | ~540 | global bar, step strip, `usePanes` + `fitPanes` |
+| `types.ts` | ~530 | the payload contracts |
 | `panels.tsx` | 388 | frames 04, 05, 06 |
-| `ui.tsx` | 310 | primitives + **the authorship derivation** |
-| `api.ts` | 283 | fetch layer + `runJob` / `pollJob` |
-| `App.tsx` | 290 | tab state, job progress, criteria fetch |
+| `api.ts` | ~360 | fetch layer, the actor header, `runJob` / `pollJob` |
+| `App.tsx` | ~610 | hash-routed surface switch, drop-upload, profile picker |
+| `ui.tsx` | ~355 | primitives + **the authorship derivation** + avatars |
+| `nav/` | 268 | the sidebar and the route parser |
 | `tokens.css` | 199 | the paper/brass `@theme` |
+| `search/`, `profile/` | 274 | Ctrl-K search, the who-are-you picker |
 
-**Only two existing frontend files are touched.** `main.tsx` branches on `location.hash` (six lines,
-no router dependency) and `index.css` imports the token file.
+**Three existing frontend files are touched.** `main.tsx` branches on `location.hash` (six lines,
+no router dependency), `index.css` imports the token file, and `components.tsx` gains the
+SiteSource logo menu — the one change on the procurement side, and the only way between the two
+products without typing a URL.
 
 ---
 
@@ -304,6 +380,47 @@ unaccepted fallback would put a machine's guess behind a price with nothing reco
 agreed to it, which the same frame's own rule forbids ("a machine's number must not be able to look
 priced").
 
+**The close date is read, parsed and refused — never guessed.** The model quotes the deadline
+clause verbatim with clause + page (checkable against the rendered page, like any citation); code
+parses the quote. The parser is deliberately conservative: `04/05/2026` **refuses**, because
+day-first and month-first disagree and a deadline has no safe default, and two distinct dates
+refuse because choosing one is an interpretation. A refusal routes to a person, who types what the
+clause says and is recorded doing it. DEMO never claims to have read anything.
+
+**Criteria moved to the DB; the markdown is a one-time seed.** `review_criteria.md` promised "a
+contractor edits rows without any code change", and that promise predates a UI. Editing through a
+screen needs disable-without-delete (a past register may reference the id forever), authorship, and
+write-safety — none of which a markdown round-trip gives you without silently reformatting a
+hand-maintained file. `criteria_store.load()` returns the identical `CriteriaLibrary`, so the review
+stage switched in one line. **Threshold rules are read-only**: their `extract_field` is wired into
+`rules.py`, and rule text a person can edit but code does not obey would be a lie on the screen.
+
+**The rate book is the DB source `rates.py` had already promised.** Its header comment has said
+since v1 that a future company-DB source "only has to return the same list from a different reader
+— nothing downstream reads the CSV directly". `rates_store` is that reader; the CSV seeds it
+first-wins (mirroring `rate_index`), and no consumer changed. Rates **archive**, never delete: an
+archived rate referenced by an old estimate resolves `missing_rate` on a re-run — honestly absent
+and flagged, rather than priced at a number nobody stands behind.
+
+**The model setting needed one additive change to the shared chassis, and it is the only one.**
+`LLMClient._route` ignored the constructed provider entirely, so an explicit `provider=` was a
+placebo whenever `DEEPSEEK_API_KEY` existed. It now honours an explicitly passed provider for text
+calls — images still force Anthropic, which is a physical constraint (DeepSeek rejects image input).
+Every procurement site constructs a bare `LLMClient()` and routes exactly as before; the pipeline
+tests assert it. Rejected: mutating `os.environ`, which is a race under the job pool's threads.
+
+**`scrollIntoView` scrolls every ancestor, and that broke the whole app.** Omitting `inline` defaults
+it to `"nearest"`; the app root is `overflow-hidden`, which is still a scroll container but has no
+scrollbar to scroll back with, so bringing a page into view dragged the chrome permanently
+off-screen. Panes now scroll their own scroller by hand. Worth knowing before adding any
+`scrollIntoView` anywhere in this app.
+
+**A floor that lives only in arithmetic is not a floor.** `DOC_MIN` was respected by the divider's
+drag handler and by nothing else, so the document pane's real minimum was 0px and a stale persisted
+width made the PDF vanish while still mounted and still fetching images. It is now a CSS
+`min-width` as well, and `fitPanes` re-measures on mount and on resize — the layout can no longer
+be wider than the window.
+
 **A `@theme` block only generates utilities if it reaches the ROOT stylesheet.** A `@theme`
 imported from a `.tsx` is inert — Tailwind v4 emits nothing and the page renders unstyled with no
 error. Every client_boq token is `cb-` prefixed because the names genuinely collide: Atlas owns
@@ -320,21 +437,24 @@ by digit. Mixing them blurs who said what, which is the one thing this product m
 client_boq is a bolt-on. It imports *from* the procurement chassis and the procurement side has
 **zero** knowledge of it.
 
-**Reuses by import, never modifies:** `pipeline.llm_client`, `pipeline.documents.extract_document`,
-`db.store.get_connection`, `pipeline.workspace.Workspace`.
+**Reuses by import:** `pipeline.llm_client`, `pipeline.documents.extract_document`,
+`db.store.get_connection`, `pipeline.workspace.Workspace` — with **one documented additive
+exception** in `llm_client._route` (see §6), which is procurement-neutral and tested as such.
 
 **Never touches:** the Gmail path (client_boq sends no email at all), procurement pipeline stages,
 `rules_engine/`, `routing/`, `benchmark/`, `pipeline/estimate/` (a *different* estimator — do not
 cross-wire), `db/schema.sql`, `db/seed.py`.
 
-**Existing files modified — four in total:**
+**Existing files modified — six in total:**
 
 | File | The entire change |
 |---|---|
 | `backend/api.py` | 2 lines: one import + `app.include_router(client_boq_router)` |
+| `backend/pipeline/llm_client.py` | +12/−4: `_provider_arg`, honoured by `_route` for text calls |
 | `siteclaim/CLAUDE.md` | 1 row in the "where everything lives" table |
 | `frontend/src/main.tsx` | the `#/tender` hash branch |
 | `frontend/src/index.css` | one `@import` of the token file |
+| `frontend/src/components.tsx` | the SiteSource logo product menu |
 
 Procurement's five tabs and every Atlas token still resolve — verified by grepping the built CSS for
 both families, and by loading `localhost:5173` unchanged.
@@ -344,15 +464,17 @@ both families, and by loading `localhost:5173` unchanged.
 ## 8. Testing
 
 ```
-python -m pytest -q                    931 passed, 5 skipped   (from 879/5)
-python -m pytest client_boq/tests/ -q  205 passed
+python -m pytest -q                    994 passed, 5 skipped   (from 879/5)
+python -m pytest client_boq/tests/ -q  320 passed
 tsc --noEmit && vite build             clean
 ```
 
 The 5 skips are `requires_tesseract` and are the expected green state — see trap 1b.
 
-New test files in this work: `test_part_viewer.py` (17), `test_context_and_criteria.py` (14),
-`test_scope_freeze.py` (12), `test_register_negotiation.py` (9).
+New test files: `test_part_viewer.py` (17), `test_context_and_criteria.py` (14),
+`test_scope_freeze.py` (12), `test_register_negotiation.py` (9), `test_team_and_meta.py`,
+`test_close_date.py`, `test_criteria_store.py`, `test_rates_store.py`, `test_settings_llm.py`
+(63 between them).
 
 ### Verified against the real 411-page tender, not a synthetic fixture
 
@@ -398,6 +520,35 @@ ALL OK
 The `locate` result is worth reading twice: the strategy flag **claims printed page 8** and is
 **measured on binder page 12**, and the same quote on `04-sct` returns `not_located` rather than
 scrolling somewhere plausible. That gap is the entire argument for measuring rather than trusting.
+**The tender desk, walked against the DEMO backend** (`walk_desk.py`, 18 checks, verbatim):
+
+```
+PASS [1] a card carries meta, counts and blocked   counts {undecided 25, citation_failed 1, open_rfis 39}
+PASS [1] DEMO never claims to have read the date
+PASS [2] a member joins with derived initials      rebecca-lam
+PASS [2] ownership and client land on the card
+PASS [2] the touch is attributed
+PASS [3] confirmation stamps who
+PASS [3] a non-ISO date is refused
+PASS [4] rows carry editing metadata
+PASS [4] an edit stamps the editor
+PASS [4] a disabled criterion stays resolvable
+PASS [5] the book serves with categories
+PASS [5] an edit disowns the seed
+PASS [5] archiving states its consequence
+PASS [6] the setting round-trips
+PASS [6] vision is always anthropic and the payload says so
+PASS [6] a provider the app cannot honour is refused
+PASS [7] CONFIRMED BY has a name behind it
+PASS [8] a won tender leaves the shelf but stays on the record
+ALL OK
+```
+
+**The layout, verified by screenshot rather than by assertion.** Headless Chrome at **1152 / 1280 /
+1366** against a clean DEMO backend: nothing past either edge at any width, the rail auto-folding to
+its count strip at the two narrow ones, the document pane holding its 480px floor, and the real CIC
+Invitation Letter rendering in the pane on both the Documents and Register tabs. The Register used
+to open on "Select a part to read it here" and now opens on a document.
 
 ---
 
@@ -409,10 +560,13 @@ scrolling somewhere plausible. That gap is the entire argument for measuring rat
 | **No WAS/NOW clause diff (frame 06)** | `ChangeEntry` carries the addendum's own advisory change table and **no old or new clause text**, so there is nothing to diff. The panel says so instead of drawing an invented one. (The real ND/2025/04 addendum states its own change table is "neither exhaustive nor guaranteed to be accurate" anyway.) |
 | **No manifest page-bound editing** | the endpoint accepts an edited parts list; the control that produces one is not built, so the button is disabled with a tooltip saying so. |
 | **No verdict clearing** | no endpoint clears a recorded verdict, so `Undo` explains that rather than pretending. Re-running the review is the honest reset. |
-| **Mobile** | designed for ≥1280 px. Below that the rail folds, then the document pane becomes a tab. |
+| **Mobile** | designed for ≥1280 px. Below that the rail folds and then the document pane collapses — implemented and verified at 1152, but a phone is out of scope. |
 | **The LIVE model path has still never been run end to end** | DEMO and LIVE are a real code fork on `demo_mode()`. Green tests prove the deterministic engine and the data contracts and prove **nothing** about the live model path. Needs `ANTHROPIC_API_KEY` in `backend/.env` — see `running_live.md`. |
 | **No auth, CORS `allow_origins=["*"]`** | fine locally, unsafe published. |
 | **Jobs live in an in-process dict; artifacts on local disk** | a restart drops in-flight jobs. Nothing is in durable storage. |
+| **Presence (live viewers)** | the avatar stack of who else has a tender open is not built. Faking it would be worse than omitting it; it needs a heartbeat endpoint. |
+| **Letter templates · Standard positions · Clients · Audit log** | sidebar entry points exist and open a screen that says the screen is not designed. Every fact an audit log would show is already recorded (who, what, when) — it is the reading-back that is missing. |
+| **The logo menu's open-on-click** | verified by type-check and build, not by a click: headless Chrome cannot click, and adding Playwright for one assertion was not worth the dependency. |
 
 ---
 
@@ -429,7 +583,7 @@ procurement-only committed database.
   which recovers the data but not the bytes.
 - **Fully resolved**: once the working copy was wired to this remote,
   `git checkout -- siteclaim/backend/db/sitesource.db` restored it. The file in this PR is
-  byte-identical to `381397a` (blob `822bfbd`), and the suite is green against it — 931 passed,
+  byte-identical to `381397a` (blob `822bfbd`), and the suite is green against it — 994 passed,
   5 skipped.
 - Written up as **`CLAUDE.md` trap 3b**: always set `DEMO_MODE=true` before any ad-hoc script that
   opens the store; if it happens again, `git checkout --` that one path.
@@ -445,7 +599,7 @@ cd siteclaim\backend
 py -3.14 -m venv .venv                 # a bare `python` is the MS Store stub
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m pytest -q                    # 931 passed, 5 skipped
+python -m pytest -q                    # 994 passed, 5 skipped
 $env:DEMO_MODE="true"; python -m uvicorn api:app --port 8000
 ```
 
@@ -482,22 +636,26 @@ cd siteclaim\frontend; npm install; npm run dev
 
 ## 12. Docs added
 
-`docs/client_boq/`: `build_backlog.md` (Series T, U and R with the reasoning behind each),
-`ui_build.md` (the full UI write-up incl. §6b, the revision), `running_live.md` (LIVE setup, and
-why it matters), `citation_locating.md`, `client_boq_layer_mapping.md`, `review_criteria.md`,
-`how_it_fits.md`, `ui_inventory.md`, `estimating_process.md`,
-`reviewing_a_construction_contract_with_ai.md`, `templates/`.
+`docs/client_boq/`: `build_backlog.md` (Series T, U, R, D and L, with the reasoning behind each),
+`ui_build.md` (the full UI write-up — §6b the first revision, §9 the tender desk, §10 the layout),
+`running_live.md` (LIVE setup, and why it matters), `citation_locating.md`,
+`client_boq_layer_mapping.md`, `review_criteria.md`, `how_it_fits.md`, `ui_inventory.md`,
+`estimating_process.md`, `reviewing_a_construction_contract_with_ai.md`, `templates/`.
 
-Root `CLAUDE.md` gained traps 3b and a rewritten trap 4 (two products, two palettes); `README.md`
-carries the current counts and the DEMO_MODE warning.
+Root `CLAUDE.md` gained trap 3b, a rewritten trap 4 (two products, two palettes), the documented
+`llm_client` exception in §4, and current counts; `README.md` carries the counts, the desk
+endpoints and the DEMO_MODE warning.
 
 ## 13. Checklist
 
-- [x] Full suite green — 931 passed, 5 skipped
+- [x] Full suite green — **994 passed, 5 skipped**
 - [x] `tsc --noEmit && vite build` clean
 - [x] Procurement untouched and verified at `localhost:5173`
-- [x] client_boq footprint outside its own directory held to 4 files
+- [x] client_boq footprint outside its own directory held to 6 files, one of them the documented
+      additive `llm_client._route` change
 - [x] Every AI call passes a `demo_fixture`; DEMO opens no socket
 - [x] Verified end to end against the real 411-page tender
+- [x] Layout verified by screenshot at 1152 / 1280 / 1366 — nothing past either edge
 - [x] `db/sitesource.db` byte-identical to `381397a` — see §10
 - [ ] **LIVE mode run end to end** — needs an `ANTHROPIC_API_KEY`; see §9 and `running_live.md`
+- [ ] The logo menu's open-on-click — needs one human click; see §9

@@ -8,8 +8,8 @@ logic.
 | Direction | contractor sources work **out** to subcontractors | the client's contract comes **in** to the contractor |
 | Flow | tender → split by trade → shortlist firms → email enquiries → level bids → award | binder → **ingest** → departure register (**review**) → cost estimate, workbook and offer letter (**estimate**) |
 | Code | `siteclaim/backend/pipeline/`, `db/`, `rules_engine/` | `siteclaim/backend/client_boq/` |
-| API | ~58 endpoints at the root | 46 endpoints under `/client-boq/*` |
-| Frontend | yes, a 5-tab wizard | yes — Documents · Register · Scope, at `#/tender` |
+| API | ~58 endpoints at the root | 59 endpoints under `/client-boq/*` |
+| Frontend | yes, a 5-tab wizard | yes — a tender-desk home + Documents · Register · Scope, at `#/tender` |
 
 The governing principle in both: **the LLM reads, structures, proposes and drafts;
 deterministic code and human gates decide.** No price, verdict, risk flag, or document
@@ -29,7 +29,7 @@ py -3.14 -m venv .venv                 # scripts\start_backend.bat looks for it 
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-python -m pytest -q                    # 931 passed, 5 skipped
+python -m pytest -q                    # 994 passed, 5 skipped
 $env:DEMO_MODE="true"; python -m uvicorn api:app --port 8000
 ```
 
@@ -100,6 +100,14 @@ GET  /client-boq/estimate/{id}/qualifications     -> the assumptions the price r
 GET  /client-boq/revisions/{id}[/workbook]        -> the document history, and its .xlsx
 GET  /client-boq/ingest/parts/{id}/{part}/page/{n}.png  -> a rendered page, for the viewer
 GET  /client-boq/ingest/parts/{id}/{part}/search?q=     -> find text, with the same rectangles
+
+# The tender desk (the home screen) and its management surfaces:
+GET/POST /client-boq/team           -> named profiles (attribution, deliberately not auth)
+POST /client-boq/sets/{id}/meta     -> owner / client / package / archive / outcome
+POST /client-boq/sets/{id}/close-date -> a person confirms the date the parser refused to guess
+GET/POST /client-boq/criteria[/{id}]  -> the editable criteria library (disable, never delete)
+GET/POST /client-boq/rates[/{id}]     -> the editable rate book (archive -> missing_rate, honest)
+GET/POST /client-boq/settings         -> the app-wide AI model choice
 ```
 
 Every gate refuses with a distinct 409 until it is passed. That is deliberate: the point of

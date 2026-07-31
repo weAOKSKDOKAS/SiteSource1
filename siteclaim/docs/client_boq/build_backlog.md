@@ -63,6 +63,44 @@ the UI as far as the scope gate.
 complaints are addressed and LIVE mode works — it could not have before, because no tab polled its
 background job. See `ui_build.md` §6b and `running_live.md`.
 
+## Series D — the tender desk (home), and the management screens
+
+From the extended handoff (`workspace-tendering/client register screen wireframe home page/` —
+Frame 00 plus the nav sidebar), plus three capabilities the user asked for that the handoff lists
+as undesigned or does not contain at all: editing the criteria, editing the costing data, and
+choosing the AI model. Decisions taken 2026-07-31: named profiles without passwords; the
+Criteria/Rates screens designed here following the handoff's own rules; one app-wide model
+setting; the close date built honestly (LIVE reads it with a citation, DEMO admits it cannot).
+
+| # | Stage | Split | Status |
+|---|---|---|---|
+| D1 | Team + set metadata + the home counts (`blocked` agrees with the gates) | BE | `[x]` done 2026-07-31 |
+| D2 | The close date as a FINDING — AI-quoted clause + deterministic parse + confirm-by-hand | BE | `[x]` done 2026-07-31 |
+| D3 | Hash routing, nav sidebar, global bar, the shelf, drop-anywhere upload, profile picker | FE | `[x]` done 2026-07-31 |
+| D4 | Criteria library: DB-backed (markdown as one-time seed), editable, disable-not-delete | BE + FE | `[x]` done 2026-07-31 |
+| D5 | Rate book: the DB source `rates.py` declared itself the seam for; archive-not-delete | BE + FE | `[x]` done 2026-07-31 |
+| D6 | App-wide model setting + `make_client()` + the one additive `llm_client.py` change | BE + FE | `[x]` done 2026-07-31 |
+
+**After D1–D6:** 59 routes, 994 tests passing (63 new), 6 new tables. The app opens on the desk;
+the browser's own history is the router. Sidebar items without screens (Letter templates, Standard
+positions, Clients, Audit log) open and say so, per the no-padlock rule. Full write-up:
+`ui_build.md` §9.
+
+## Series L — the layout, the missing PDF, and joining the two products
+
+Five complaints after using the desk. Two shared a root cause nobody would guess from the symptom,
+and one floor turned out to have been specified but never enforced. Full write-up: `ui_build.md` §10.
+
+| # | Stage | Split | Status |
+|---|---|---|---|
+| L1 | Contain the layout: scroller-local scrolling, `min-w-0`/`overflow-hidden`, a real 480px PDF floor, refit on mount + resize, and the handoff's fold-then-collapse degradation order | FE | `[x]` done 2026-07-31 |
+| L2 | Make the PDF reliably visible: seed the Register's part, fit-on-open | FE | `[x]` done 2026-07-31 |
+| L3 | Register highlights: show the part even when unverifiable, "show me on the page", first-click scroll fix, search no longer hides citation marks | FE | `[x]` done 2026-07-31 |
+| L4 | Navigate between the products by click: the SiteSource logo menu, a Procurement button on the desk, Back working both ways | FE | `[x]` done 2026-07-31 |
+
+**After L1–L4:** no backend change at all; verified by screenshot at 1152 / 1280 / 1366 against a
+clean DEMO backend. `DOC_MIN` 160 → **480**.
+
 ---
 
 ## T1 — Return the split as downloadable folders `[x] DONE 2026-07-30`

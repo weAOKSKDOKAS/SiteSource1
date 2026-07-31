@@ -308,3 +308,133 @@ open afterwards, because the query never blocked — the unowned guess did.
 
 **Suite.** 916 passed, 5 skipped (from 879/5). `tsc --noEmit && vite build` clean. Committed
 `sitesource.db` byte-identical throughout.
+
+
+## 9. The tender desk (Series D, 2026-07-31)
+
+The app used to open into one tender chosen by a `<select>`. The extended handoff (`client
+register screen wireframe home page/`, Frame 00 + the nav sidebar) turned the entry point into a
+**desk**: a shelf of folders, one per live tender, worked by a small team. Three user requests
+rode along that the handoff itself lists as undesigned or does not contain: editing the criteria,
+editing the costing data, and choosing the AI model.
+
+**The hash is the router.** `#/tender` is the desk, `#/tender/s/{set}/{tab}` one tender,
+`#/tender/criteria|rates|team|settings` the management screens. The browser's own history powers
+the app bar's ← / → (an index stamped into `history.state` lets → honestly dim), and a reload
+lands where you were. Still no router dependency.
+
+**The close date is a finding, not a form field.** The interpreter already quotes the
+submission-deadline clause verbatim with clause + page (`RULE_SUBMISSION_DEADLINE`); a
+deliberately conservative parser (`ingest/close_date.py`) turns the quote into ISO — `14 August
+2026` parses, `04/05/2026` refuses, two dates refuse. A refusal is not an error: the card shows
+`DATE NOT FOUND — CONFIRM IT` and a person types what the clause says, stamped with their name.
+The card's provenance line is the rule made visible: `READ FROM COT cl.4 · p.14` (clickable — it
+opens that page), `CONFIRMED BY HAND`, or `READING THE DATE…`. **DEMO always lands on
+not_found**: the interpret fixtures describe the sample tender, and a fixture date labelled as
+read from this upload would be trap 9 all over again.
+
+**`blocked` is computed where the gates live.** The shelf's Blocked filter and the card's
+blocking sentence derive from counts `list_sets` computes server-side — undecided verdicts,
+failed citations, unaccepted fallbacks, open RFIs past the query cut-off — because the one thing
+that filter must never do is disagree with what the 409s refuse. The sentence itself is composed
+client-side from the counts; the word "in progress" appears nowhere.
+
+**Named profiles, no passwords.** There is no auth in this app, and a password box would be
+security theatre. What the team table honestly provides is attribution: the uploader owns the
+tender, `X-CBOQ-Actor` rides every mutating request, verdicts gain `decided_by` (additive on
+`DepartureItem`, backward-compatible with stored registers), and "CONFIRMED BY R. LAM" finally
+has a name behind it. Members archive rather than delete — their name is stamped on history.
+
+**Criteria moved to the DB; the markdown is the seed.** Editing needs disable-without-delete (a
+past register may reference the id forever), authorship, and write-safety; round-tripping a
+hand-maintained markdown file has none of those. `criteria_store.load()` returns the identical
+`CriteriaLibrary`, so the review stage switched in one line and `GET /criteria` kept its shape.
+Threshold rules ride along **read-only**: their `extract_field` is wired into `rules.py`, and
+rule text a person can edit but code does not obey would be a lie on the screen.
+
+**The rate book is the DB source `rates.py` promised.** Its header comment has said since v1
+that a future DB source "only has to return the same list from a different reader — nothing
+downstream reads the CSV directly". `rates_store` is that reader; the CSV seeds first-wins
+(mirroring `rate_index`), and nothing downstream changed. Rates archive rather than delete: an
+archived rate referenced by an old estimate resolves `missing_rate` on a re-run — honestly
+absent and flagged, never a stale price.
+
+**One model setting, applied at construction.** `client_boq/llm.py::make_client()` reads the
+settings row per stage run and passes `provider=`/`model=` explicitly; the 12 stage call sites
+switched from bare `LLMClient()`. The chassis needed one additive change — `_route` honours an
+explicitly constructed provider for text calls — because env routing would otherwise override
+the setting whenever `DEEPSEEK_API_KEY` exists. Procurement constructs bare clients and routes
+exactly as before (proven in `pipeline/tests`). Two residual truths the screen states: page
+images always go to Anthropic vision (DeepSeek rejects them), and DEMO calls no model at all.
+
+**Numbers.** 59 routes (from 46), 994 tests (from 931; 63 new across
+`test_team_and_meta` / `test_close_date` / `test_criteria_store` / `test_rates_store` /
+`test_settings_llm`), 6 new tables, `tsc && vite build` clean, committed DB byte-identical.
+The desk walk (`walk_desk.py`) exercised every capability against the DEMO backend end to end.
+
+
+## 10. The layout, the missing PDF, and joining the two products (Series L, 2026-07-31)
+
+Five complaints. Two of them shared a cause that no amount of staring at CSS would have found, and
+one "limit" turned out never to have been enforced at all.
+
+**The app slid sideways off the screen.** `PageView` brought a page into view with
+`el.scrollIntoView({behavior, block})`. That call omits `inline`, which defaults to `"nearest"`,
+and `scrollIntoView` scrolls **every scrollable ancestor** — including the app root, which is
+`overflow-hidden` and therefore has no scrollbar to scroll back with. Opening the Documents tab
+seeds a page, the scroll fires, and the whole bar and left rail leave the screen for good. Fixed by
+scrolling the pane's own scroller by hand:
+`root.scrollTo({ top: el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop })`,
+plus `min-w-0` and `overflow-hidden` on the three-pane rows so nothing else can try it either.
+
+**The PDF pane's floor did not exist.** `DOC_MIN = 160` lived only inside the divider's arithmetic;
+the pane itself was `flex-1 min-w-0`, whose true floor is 0px. A middle-column width persisted on a
+wide monitor was re-applied verbatim on a narrow window — `clampMiddle` was called from exactly one
+place, inside `dragMiddle`, so nothing ever re-measured — and the pane was squeezed to nothing while
+still mounted and still fetching page images. `DOC_MIN` is now **480** (a 460px page at 100% fits
+with no sideways scrolling) and it is applied as a real CSS `min-width`.
+
+**The panes ran off the right-hand edge.** With that floor the row's own minimum is
+`244 + 14 + 320 + 480 = 1058`, plus the 206px sidebar — a **1264px viewport**. Below that something
+has to give, and the handoff said what ("below 1280 the rail folds, then the third pane becomes a
+tab") but nothing implemented it. `fitPanes` now runs on mount and on every resize and gives up
+capacity in that order, stopping at the first step that fits. Automatic folds undo themselves when
+the window grows; a fold the user performed by hand does not.
+
+Three smaller defects in the same arithmetic, all real: only the 9px divider was counted (never the
+5px one beside the rail); the full rail width was reserved even while the 44px folded strip was on
+screen; and the collapse test ignored drag direction, so dragging LEFT to **enlarge** the PDF could
+collapse it.
+
+**"Why can't I see the PDF" had a second cause on the Register.** `partId` started `null` and was
+only ever set by a citation that LOCATED — which in DEMO never happens, because the register
+describes a different document. The clause viewer therefore sat on "Select a part to read it here"
+forever. It now opens on the first part, exactly as Documents does.
+
+**Highlighting in the Register.** Three fixes. Selecting a row now moves the pane to the clause's
+part even when the citation is unverifiable — the document is on screen to read and the banner says
+why nothing is marked, which is different from an empty pane that explains nothing. A selected row
+with a quotation gains **"Show me on the page"**, the same `locate` control Documents has, with the
+same three verdicts. And a search no longer *replaces* the citation's marks: typing in the search
+box used to hide the very quotation being checked.
+
+There was also a first-click bug worth recording. The `[partId]` effect cleared the page-element map
+on the way IN, wiping refs the new part had already registered in the same commit, so the first
+scroll-to-page after a part change silently did nothing — the first citation click landed on page 1.
+Clearing in the effect's cleanup (i.e. against the part being left) fixes it.
+
+**Two products, one click.** `main.tsx` has always branched on the hash and nothing ever wrote it.
+The SiteSource logo is now a menu (Procurement · Review tender, current one ticked), the desk's
+sidebar has a Procurement button under "+ New tender" and on its collapsed rail, and because both
+navigations are hash assignments they push history — so the browser's Back moves between the
+products in both directions. The desk's own ← needed one fix: arriving from procurement mounts the
+app fresh at history index 0, so it now falls back to `window.history.length > 1`.
+
+**Verified by screenshot**, not by assertion, against a clean DEMO backend at 1152 / 1280 / 1366:
+nothing past either edge, the rail auto-folding at 1152, and the real CIC Invitation Letter
+rendering in the pane on both tabs.
+
+> A note for whoever hits this next: a long-running dev backend was returning **500 on every page
+> render** while every other route worked, including routes added the same day. The same code in a
+> freshly started process rendered every page fine. If the pane says a page could not be rendered,
+> restart the backend before debugging the frontend.
