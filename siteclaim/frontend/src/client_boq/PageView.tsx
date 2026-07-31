@@ -13,6 +13,7 @@
 
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { DOC_MIN } from "./chrome";
 import type { Highlight, PartRow, SearchHit } from "./types";
 import { Chip, cx } from "./ui";
 
@@ -92,23 +93,36 @@ export function PageView({
 
   // A new part invalidates the last part's search — leaving hits up would show results for a
   // document that is no longer on screen.
+  //
+  // The clear happens in the CLEANUP, i.e. against the part we are leaving. Clearing on the way in
+  // wiped the map that the new part's ref callbacks had already filled in the same commit, so the
+  // first scroll-to-page after a part change found nothing and silently did nothing — which is why
+  // the first citation click landed on page 1 instead of the cited page.
   useEffect(() => {
     setQuery("");
     setHits(null);
     setSearchNote("");
     setSearchable(true);
-    pageEls.current.clear();
     scroller.current?.scrollTo({ top: 0 });
+    return () => {
+      pageEls.current.clear();
+    };
   }, [partId]);
 
   // --- scroll to a requested page ------------------------------------------
   const scrollToPage = useCallback((target: number, why: "jump" | "cite") => {
+    const root = scroller.current;
     const el = pageEls.current.get(target);
-    if (!el) return;
+    if (!root || !el) return;
     // Suppress the observer briefly, or the pages flying past on the way there would each
     // overwrite the indicator and fight the scroll.
     suppressScrollSync.current = true;
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Scroll THIS pane, by hand. `el.scrollIntoView()` defaults to `inline: "nearest"` and walks
+    // every scrollable ancestor — including the app root, which is `overflow-hidden` and therefore
+    // has no scrollbar to scroll back with. That is what dragged the whole app bar and the left
+    // rail off the left edge whenever a page was brought into view.
+    const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
+    root.scrollTo({ top, behavior: "smooth" });
     setVisible(target);
     if (why === "cite") {
       setFlash(target);
@@ -184,13 +198,15 @@ export function PageView({
     };
   }, [query, partId, setId, scrollToPage]);
 
-  // Search hits win while a query is active — the pane is showing the search, so it shows the
-  // search's marks.
+  // Both sets of marks show. A search used to REPLACE the citation's highlight, so typing in the
+  // search box made the very quotation you were checking disappear off the page — the two answer
+  // different questions ("where does this claim sit" vs "where does this word appear") and a
+  // reader needs both at once.
   const marksFor = useCallback(
-    (n: number): Highlight[] =>
-      query.trim()
-        ? (hits ?? []).filter((h) => h.page === n).flatMap((h) => h.highlights)
-        : highlights.filter((h) => h.page === n),
+    (n: number): Highlight[] => [
+      ...highlights.filter((h) => h.page === n),
+      ...(query.trim() ? (hits ?? []).filter((h) => h.page === n).flatMap((h) => h.highlights) : []),
+    ],
     [query, hits, highlights],
   );
 
@@ -217,8 +233,24 @@ export function PageView({
     setZoomText(String(next));
   }, []);
 
+  // Fit ONCE when a part opens, and only when the page would not otherwise fit. After that the
+  // zoom is the user's: typing 155% and then dragging the divider must not silently rewrite it.
+  const fittedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root || !partId || fittedFor.current === partId) return;
+    fittedFor.current = partId;
+    if (widthPx > root.clientWidth - 40) fitWidth();
+  }, [partId, widthPx, fitWidth]);
+
   return (
-    <div className={cx("flex min-w-0 flex-1 flex-col bg-cb-panel", className)}>
+    // `minWidth: DOC_MIN` is the floor made real. It used to exist only inside the divider's
+    // arithmetic, which meant any mistake there — or a middle width persisted on a wider screen —
+    // squeezed this pane to 0px and the PDF vanished with nothing on screen to explain it.
+    <div
+      style={{ minWidth: DOC_MIN }}
+      className={cx("flex min-w-0 flex-1 flex-col overflow-hidden bg-cb-panel", className)}
+    >
       {/* --- toolbar --- */}
       <div className="flex flex-none flex-wrap items-center gap-2 border-b border-cb-border bg-cb-surface px-3 py-2">
         <select

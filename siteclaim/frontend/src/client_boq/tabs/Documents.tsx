@@ -5,7 +5,7 @@
 // bar and the gaps/overlaps chip are the loudest things on the screen: they are the evidence the
 // approval rests on, and a gap has to be *visible* rather than merely reported in a number.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
@@ -96,12 +96,16 @@ export function DocumentsTab({
   onRefresh,
   onError,
   onProgress,
+  initialTarget,
 }: {
   data: SetData;
   railOpen: boolean;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
   onProgress?: (job: JobState | null) => void;
+  /** A deep link from outside the tab — e.g. the desk card's READ FROM COT citation. Opens
+   *  that part at that measured page. */
+  initialTarget?: { partId: string; page: number } | null;
 }) {
   const parts = data.parts?.parts ?? [];
   const manifest = data.manifest;
@@ -113,12 +117,22 @@ export function DocumentsTab({
   const [editingCard, setEditingCard] = useState<string | null>(null);
   const [locations, setLocations] = useState<Record<string, LocateResult>>({});
   const [highlights, setHighlights] = useState<Highlight[]>([]);
-  const panes = usePanes("documents", 244, 560);
+  const panes = usePanes("documents", 244, 560, railOpen);
   const [sortByPage, setSortByPage] = useState(true);
 
-  // Selecting a part shows its first page — never a page from the part before it.
+  // A deep link (the desk card's READ FROM COT) held in a ref, so the first-page effect below
+  // can honour its page instead of resetting the freshly selected part to page 1.
+  const pendingTarget = useRef<{ partId: string; page: number } | null>(null);
+
+  // Selecting a part shows its first page — never a page from the part before it — UNLESS the
+  // selection came from a deep link that names its own measured page.
   useEffect(() => {
     if (!selected) return;
+    if (pendingTarget.current?.partId === selected) {
+      setPage(pendingTarget.current.page);
+      pendingTarget.current = null;
+      return;
+    }
     const part = parts.find((p) => p.part_id === selected);
     if (part) setPage(parseInt(part.pages.split("-")[0], 10));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,6 +143,19 @@ export function DocumentsTab({
     if (!selected || !parts.some((p) => p.part_id === selected)) setSelected(parts[0].part_id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.parts]);
+
+  useEffect(() => {
+    if (!initialTarget || !parts.some((p) => p.part_id === initialTarget.partId)) return;
+    pendingTarget.current = initialTarget;
+    if (selected === initialTarget.partId) {
+      // Already on the part — the selection effect will not fire; jump directly.
+      setPage(initialTarget.page);
+      pendingTarget.current = null;
+    } else {
+      setSelected(initialTarget.partId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTarget]);
 
   // The full context card per part — the list payload only carries the summary line.
   useEffect(() => {
@@ -277,9 +304,9 @@ export function DocumentsTab({
   const tier = TIER_LABEL[manifest.tier] ?? TIER_LABEL[4];
 
   return (
-    <div ref={panes.container} className="flex min-h-0 flex-1">
+    <div ref={panes.container} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {/* ---------------- pane 1 — parts ---------------- */}
-      {railOpen ? (
+      {panes.railOpen ? (
         <Rail width={panes.railWidth} onResize={panes.dragRail}>
           <div className="flex flex-col gap-2 border-b border-cb-border p-3">
             <div className="truncate font-cb-sans text-[12px] font-semibold text-cb-ink-text">

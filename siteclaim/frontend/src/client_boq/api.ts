@@ -5,16 +5,20 @@
 import type {
   CitationsResponse,
   CriteriaResponse,
+  CriterionRow,
   DocumentRow,
   Highlight,
   GateState,
   JobState,
+  LLMSettingsResponse,
   ManifestGateState,
   Manifest,
   PartContext,
   PartDetail,
   PartSpec,
   PartsResponse,
+  RateRowFull,
+  RatesResponse,
   RegisterResponse,
   RevisionRow,
   RFIBatchRow,
@@ -27,11 +31,32 @@ import type {
   ScopeSection,
   ScopeSourcesResponse,
   SearchResponse,
+  SetMeta,
   SetRow,
+  TeamMember,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
 const ROOT = `${BASE}/client-boq`;
+
+// --- who is acting ----------------------------------------------------------
+// Named profiles, not auth: the header names a team member so ownership, verdicts and edits
+// carry attribution. Set once by the profile picker; every mutating helper below sends it.
+// An empty value is honest ("nobody said who they were"), never an error.
+let currentActor = "";
+try {
+  currentActor = JSON.parse(window.localStorage.getItem("cboq.currentUser") ?? '""') as string;
+} catch {
+  currentActor = "";
+}
+
+export function setActor(memberId: string): void {
+  currentActor = memberId;
+}
+
+function actorHeaders(): Record<string, string> {
+  return currentActor ? { "X-CBOQ-Actor": currentActor } : {};
+}
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -54,12 +79,12 @@ const get = <T>(path: string): Promise<T> => fetch(ROOT + path).then((r) => hand
 const post = <T>(path: string, body: unknown): Promise<T> =>
   fetch(ROOT + path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
     body: JSON.stringify(body),
   }).then((r) => handle<T>(r));
 
 const del = <T>(path: string): Promise<T> =>
-  fetch(ROOT + path, { method: "DELETE" }).then((r) => handle<T>(r));
+  fetch(ROOT + path, { method: "DELETE", headers: actorHeaders() }).then((r) => handle<T>(r));
 
 /** Is this backend in DEMO mode? Drives the app-bar chip, which is not decoration: it means
  *  uploaded files were not read and every finding on screen came from a fixture. */
@@ -68,19 +93,89 @@ export const health = (): Promise<{ status: string; demo_mode: boolean }> =>
 
 export const api = {
   // --- sets ----------------------------------------------------------------
-  sets: () => get<{ count: number; sets: SetRow[] }>("/sets"),
+  sets: (includeArchived = false) =>
+    get<{ count: number; sets: SetRow[] }>(
+      includeArchived ? "/sets?include_archived=true" : "/sets",
+    ),
   /** The acceptable-terms library. Lets a register row say what `PS-01` actually means. */
   criteria: () => get<CriteriaResponse>("/criteria"),
   gate: (setId: string) => get<GateState>(`/gate/${setId}`),
+
+  // --- the tender desk ------------------------------------------------------
+  team: (includeArchived = false) =>
+    get<{ count: number; members: TeamMember[] }>(
+      includeArchived ? "/team?include_archived=true" : "/team",
+    ),
+  addTeamMember: (member: { name: string; initials?: string; colour?: string; role?: string }) =>
+    post<{ member: TeamMember }>("/team", member),
+  updateTeamMember: (memberId: string, member: Partial<TeamMember> & { name: string }) =>
+    post<{ member: TeamMember }>(`/team/${memberId}`, member),
+  /** Desk fields only. The close-date finding is deliberately not writable here. */
+  setMeta: (
+    setId: string,
+    patch: { owner_id?: string; client?: string; package?: string; archived?: boolean; outcome?: string },
+  ) => post<{ set_id: string; meta: SetMeta }>(`/sets/${setId}/meta`, patch),
+  /** A person confirms the close date by hand — the only writer of a typed date. */
+  confirmCloseDate: (setId: string, date: string, queryCutoff = "") =>
+    post<{ set_id: string; meta: SetMeta }>(`/sets/${setId}/close-date`, {
+      date,
+      query_cutoff: queryCutoff,
+    }),
+
+  // --- criteria & rates editing ---------------------------------------------
+  addCriterion: (body: {
+    category_id: string;
+    clause_area: string;
+    acceptable_position?: string;
+    why_it_matters?: string;
+    red_flag?: string;
+  }) => post<{ criterion: CriterionRow }>("/criteria", body),
+  updateCriterion: (
+    id: string,
+    patch: {
+      clause_area?: string;
+      acceptable_position?: string;
+      why_it_matters?: string;
+      red_flag?: string;
+      enabled?: boolean;
+    },
+  ) => post<{ criterion: CriterionRow }>(`/criteria/${id}`, patch),
+  rates: () => get<RatesResponse>("/rates"),
+  addRate: (body: {
+    rate_id: string;
+    category?: string;
+    description?: string;
+    unit?: string;
+    rate: number;
+    currency?: string;
+    notes?: string;
+  }) => post<{ rate: RateRowFull }>("/rates", body),
+  updateRate: (
+    rateId: string,
+    patch: { category?: string; description?: string; unit?: string; rate?: number; currency?: string; notes?: string },
+  ) => post<{ rate: RateRowFull }>(`/rates/${rateId}`, patch),
+  /** Archive, never delete — the response's note states the missing_rate consequence. */
+  archiveRate: (rateId: string) => del<{ rate: RateRowFull; note: string }>(`/rates/${rateId}`),
+
+  // --- app-wide settings (the AI model) -------------------------------------
+  settings: () => get<LLMSettingsResponse>("/settings"),
+  saveSettings: (body: { provider: string; model_anthropic?: string; model_deepseek?: string }) =>
+    post<LLMSettingsResponse>("/settings", {
+      model_anthropic: "",
+      model_deepseek: "",
+      ...body,
+    }),
 
   // --- ingest & the manifest gate ------------------------------------------
   upload(files: File[], projectName: string): Promise<JobState> {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
     form.append("project_name", projectName);
-    return fetch(`${ROOT}/ingest/upload`, { method: "POST", body: form }).then((r) =>
-      handle<JobState>(r),
-    );
+    return fetch(`${ROOT}/ingest/upload`, {
+      method: "POST",
+      body: form,
+      headers: actorHeaders(),
+    }).then((r) => handle<JobState>(r));
   },
   ingestStatus: (jobId: string) => get<JobState>(`/ingest/status/${jobId}`),
   manifest: (setId: string) => get<Manifest>(`/ingest/manifest/${setId}`),

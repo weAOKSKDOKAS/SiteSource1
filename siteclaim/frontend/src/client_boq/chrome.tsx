@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { GateStates, SetRow } from "./types";
+import type { GateStates } from "./types";
 import { Chip, cx } from "./ui";
 
 // ---------------------------------------------------------------------------
@@ -118,50 +118,134 @@ export function StepStrip({
 }
 
 // ---------------------------------------------------------------------------
-// App bar
+// The global app bar — the same five nav controls on every screen, home and tender alike
 // ---------------------------------------------------------------------------
-export function AppBar({
-  projectName,
-  setId,
-  demoMode,
-  sets,
-  railOpen,
-  onToggleRail,
-  onReopen,
+/** Track our own position in the hash history, so → can honestly dim when there is nowhere to
+ *  go. Each new entry gets an index stamped into history.state; back/forward restores it. */
+export function useHashHistory(): { canBack: boolean; canForward: boolean } {
+  const [idx, setIdx] = useState<number>(() => {
+    const state = window.history.state as { cbIdx?: number } | null;
+    if (state?.cbIdx == null) window.history.replaceState({ cbIdx: 0 }, "");
+    return (window.history.state as { cbIdx?: number })?.cbIdx ?? 0;
+  });
+  const [max, setMax] = useState(idx);
+  useEffect(() => {
+    const onChange = () => {
+      let state = window.history.state as { cbIdx?: number } | null;
+      if (state?.cbIdx == null) {
+        // A pushed entry (new navigation) has no stamp yet — it sits one past wherever we were.
+        window.history.replaceState({ cbIdx: idx + 1 }, "");
+        state = window.history.state as { cbIdx?: number };
+      }
+      const next = state?.cbIdx ?? 0;
+      setIdx(next);
+      setMax((m) => Math.max(m, next));
+    };
+    window.addEventListener("popstate", onChange);
+    window.addEventListener("hashchange", onChange);
+    return () => {
+      window.removeEventListener("popstate", onChange);
+      window.removeEventListener("hashchange", onChange);
+    };
+  }, [idx]);
+  return { canBack: idx > 0, canForward: idx < max };
+}
+
+function BarButton({
+  onClick,
+  title,
+  active,
+  disabled,
+  children,
 }: {
-  projectName: string;
-  setId: string;
-  demoMode: boolean;
-  sets: SetRow[];
-  railOpen: boolean;
-  onToggleRail: () => void;
-  onReopen: (setId: string) => void;
+  onClick: () => void;
+  title: string;
+  active?: boolean;
+  disabled?: boolean;
+  children: ReactNode;
 }) {
   return (
-    <header className="flex flex-none items-center gap-[13px] bg-cb-ink px-[18px] py-[11px] text-cb-info">
-      <button
-        type="button"
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      className={cx(
+        "cb-press flex h-6 w-[27px] flex-none items-center justify-center rounded-cb-btn border font-cb-mono text-[12px]",
+        active
+          ? "border-cb-brass bg-cb-ink-active text-cb-brass"
+          : "border-cb-navy-line text-cb-dim",
+        disabled && "cursor-not-allowed opacity-40",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function GlobalBar({
+  navOpen,
+  onToggleNav,
+  railOpen,
+  onToggleRail,
+  railEnabled,
+  onSearch,
+  title,
+  meta,
+  demoMode,
+  right,
+}: {
+  navOpen: boolean;
+  onToggleNav: () => void;
+  /** The current tab's own rail — a separate control from ☰. Disabled off tender screens,
+   *  where there is nothing to toggle. */
+  railOpen: boolean;
+  onToggleRail: () => void;
+  railEnabled: boolean;
+  onSearch: () => void;
+  title: string;
+  /** The mono chip beside the title (set_id on a tender, nothing on home). */
+  meta?: string;
+  demoMode: boolean;
+  /** The right edge: avatar stack + deadline on a tender, the signed-in user on home. */
+  right?: ReactNode;
+}) {
+  const { canBack: cbBack, canForward } = useHashHistory();
+  // Arriving from procurement (the logo menu sets the hash) mounts this app fresh at index 0, so
+  // our own counter says "nowhere to go back to" while the procurement page sits right behind us.
+  // The browser's own history length is the honest tiebreak.
+  const canBack = cbBack || window.history.length > 1;
+  return (
+    <header className="flex flex-none items-center gap-2 bg-cb-ink px-4 py-[9px] text-cb-info">
+      <BarButton onClick={onToggleNav} title="Navigation sidebar" active={!navOpen}>
+        ☰
+      </BarButton>
+      <BarButton
         onClick={onToggleRail}
-        title={railOpen ? "Fold the rail" : "Unfold the rail"}
-        aria-pressed={!railOpen}
-        className={cx(
-          "cb-press flex h-[22px] w-[26px] flex-none flex-col items-center justify-center gap-[3px] rounded-cb-btn border",
-          railOpen ? "border-cb-navy-line" : "border-cb-brass bg-cb-ink-active",
-        )}
+        title={railEnabled ? "This tab's side panel" : "No side panel on this screen"}
+        active={railEnabled && !railOpen}
+        disabled={!railEnabled}
       >
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            className={cx("h-[1.5px] w-3", railOpen ? "bg-cb-info" : "bg-cb-brass")}
-          />
-        ))}
-      </button>
+        ▯
+      </BarButton>
+      <BarButton onClick={onSearch} title="Search (Ctrl-K)">
+        ⌕
+      </BarButton>
+      <BarButton onClick={() => window.history.back()} title="Back" disabled={!canBack}>
+        ←
+      </BarButton>
+      <BarButton onClick={() => window.history.forward()} title="Forward" disabled={!canForward}>
+        →
+      </BarButton>
 
-      <span className="flex-none font-cb-sans text-[12.5px] font-semibold">{projectName}</span>
+      <span className="mx-1 h-[18px] w-px flex-none bg-cb-navy-line" />
 
-      <span className="flex-none whitespace-nowrap rounded-cb-chip border border-cb-navy-line px-[7px] py-[3px] font-cb-mono text-[10px] font-medium text-cb-dim">
-        set_id · {setId}
-      </span>
+      <span className="flex-none truncate font-cb-sans text-[12.5px] font-semibold">{title}</span>
+      {meta && (
+        <span className="flex-none whitespace-nowrap rounded-cb-chip border border-cb-navy-line px-[7px] py-[3px] font-cb-mono text-[10px] font-medium text-cb-dim">
+          {meta}
+        </span>
+      )}
 
       {/* Not decoration. DEMO means the uploaded files were never read and every finding on
           screen came from a fixture — the one fact that changes how to read the whole app. */}
@@ -174,20 +258,7 @@ export function AppBar({
         </Chip>
       )}
 
-      <label className="ml-auto flex flex-none items-center gap-2">
-        <span className="sr-only">Reopen a set</span>
-        <select
-          value={setId}
-          onChange={(e) => onReopen(e.target.value)}
-          className="cb-press max-w-[220px] truncate rounded-cb-chip border border-cb-navy-line bg-transparent px-2 py-1 font-cb-sans text-[10.5px] text-cb-dim"
-        >
-          {sets.map((s) => (
-            <option key={s.set_id} value={s.set_id} className="text-cb-ink-text">
-              {s.name} · {s.parts} parts
-            </option>
-          ))}
-        </select>
-      </label>
+      <span className="ml-auto flex flex-none items-center gap-2">{right}</span>
     </header>
   );
 }
@@ -288,10 +359,25 @@ export function Rail({
 
 export const RAIL_MIN = 180;
 export const RAIL_MAX = 420;
+export const RAIL_FOLDED = 44;   // the count strip RailFolded renders at
 
-/** How narrow the document pane may get before it is worth collapsing entirely. Half the old
- *  ~320px floor, which is what the user asked for; below it a page is unreadable anyway. */
-export const DOC_MIN = 160;
+/** How narrow the document pane may get before it is worth collapsing entirely.
+ *
+ *  480px is not a taste call: `PageView.BASE_PAGE_PX` is 460, so a page at 100% zoom fits inside
+ *  480 with no sideways scrolling at all. Below that you are scrolling a page rather than reading
+ *  one, and the honest move is the tab.
+ *
+ *  This number is ALSO applied as a real CSS `min-width` on the pane. It used to live only inside
+ *  the arithmetic below, which meant a stale persisted middle width squeezed the pane to literally
+ *  0px and the PDF silently vanished. */
+export const DOC_MIN = 480;
+
+/** The middle column's own floor. Narrower than this and the register table is unusable. */
+export const MID_MIN = 320;
+
+/** Both dividers: the subtle 5px one beside the rail and the 9px one beside the document pane.
+ *  The old arithmetic counted only the 9 and was therefore 5px optimistic everywhere. */
+export const DIVIDERS = 14;
 
 /** Clamp a middle-column width against the space actually available.
  *
@@ -300,10 +386,60 @@ export const DOC_MIN = 160;
  *  container means the divider always travels as far as the layout genuinely allows. */
 export function clampMiddle(
   next: number,
-  { container, rail, min = 320 }: { container: number; rail: number; min?: number },
+  { container, rail, min = MID_MIN }: { container: number; rail: number; min?: number },
 ): number {
-  const room = Math.max(min, container - rail - 9 /* divider */ - DOC_MIN);
+  const room = Math.max(min, container - rail - DIVIDERS - DOC_MIN);
   return Math.max(min, Math.min(room, next));
+}
+
+/** What the three panes should be, given the width there actually is.
+ *
+ *  This is the piece that was missing entirely: nothing ever re-measured, so a layout persisted on
+ *  a wide monitor was re-applied verbatim on a narrow window and simply ran off the right-hand
+ *  edge — where the app root's `overflow-hidden` then CLIPPED it, putting the far pane out of
+ *  reach rather than merely out of sight.
+ *
+ *  Capacity is given up in a stated order, stopping at the first step that fits. It is the design
+ *  handoff's own order ("below 1280 the rail folds, then the third pane becomes a tab"), which had
+ *  been written down and never built:
+ *
+ *    1. the middle column shrinks toward MID_MIN
+ *    2. the rail folds to its 44px count strip
+ *    3. the document pane collapses to its tab
+ *
+ *  Steps 2 and 3 are automatic AND reversible — widening the window undoes them — but they never
+ *  override a fold the user performed deliberately, which is what the `userFolded` flags carry.
+ */
+export function fitPanes(
+  container: number,
+  current: { rail: number; mid: number; railOpen: boolean; docCollapsed: boolean },
+  userFolded: { rail: boolean; doc: boolean },
+): { mid: number; foldRail: boolean; collapseDoc: boolean } {
+  const railWidth = current.railOpen ? current.rail : RAIL_FOLDED;
+
+  // Step 1 — can it fit by shrinking the middle column alone?
+  const roomForMid = container - railWidth - DIVIDERS - DOC_MIN;
+  if (roomForMid >= MID_MIN) {
+    return {
+      mid: Math.max(MID_MIN, Math.min(roomForMid, current.mid)),
+      // There is room; undo an automatic fold, but leave a deliberate one alone.
+      foldRail: userFolded.rail ? !current.railOpen : false,
+      collapseDoc: userFolded.doc ? current.docCollapsed : false,
+    };
+  }
+
+  // Step 2 — fold the rail and try again.
+  const roomFolded = container - RAIL_FOLDED - DIVIDERS - DOC_MIN;
+  if (roomFolded >= MID_MIN) {
+    return {
+      mid: Math.max(MID_MIN, Math.min(roomFolded, current.mid)),
+      foldRail: true,
+      collapseDoc: userFolded.doc ? current.docCollapsed : false,
+    };
+  }
+
+  // Step 3 — the document pane becomes a tab; the middle column takes what is left.
+  return { mid: MID_MIN, foldRail: true, collapseDoc: true };
 }
 
 /** The document pane, folded away to a strip you click to bring back. The design specified this
@@ -355,11 +491,49 @@ export function RailFolded({ lines }: { lines: { value: string; label: string }[
  *  derived from the container so the divider always travels as far as the layout allows, and
  *  dragging past the document pane's floor collapses it instead of jamming.
  */
-export function usePanes(tab: string, railInitial: number, midInitial: number) {
+export function usePanes(
+  tab: string,
+  railInitial: number,
+  midInitial: number,
+  /** Whether the tab is rendering its full rail or the 44px count strip. The arithmetic used to
+   *  ignore this and reserve the full rail width even while the folded strip was on screen,
+   *  which stopped the divider ~200px short of where it could actually travel. */
+  railOpen = true,
+) {
   const [railWidth, setRailWidth] = usePersisted(`${tab}.rail`, railInitial);
   const [midWidth, setMidWidth] = usePersisted(`${tab}.mid`, midInitial);
   const [docCollapsed, setDocCollapsed] = usePersisted(`${tab}.docCollapsed`, false);
+  /** Did a PERSON fold these, or did the window? An automatic fold must undo itself when the
+   *  room comes back; a deliberate one must not. */
+  const [userFoldedDoc, setUserFoldedDoc] = usePersisted(`${tab}.docUserSet`, false);
+  const [autoFoldRail, setAutoFoldRail] = useState(false);
   const container = useRef<HTMLDivElement | null>(null);
+
+  const effectiveRailOpen = railOpen && !autoFoldRail;
+  const renderedRail = effectiveRailOpen ? railWidth : RAIL_FOLDED;
+
+  // --- refit whenever the space changes ------------------------------------
+  // The whole point: on mount and on every resize, not only while dragging.
+  useEffect(() => {
+    const el = container.current;
+    if (!el) return;
+    const apply = () => {
+      const width = el.clientWidth;
+      if (!width) return;
+      const next = fitPanes(
+        width,
+        { rail: railWidth, mid: midWidth, railOpen, docCollapsed },
+        { rail: false, doc: userFoldedDoc },
+      );
+      if (next.mid !== midWidth) setMidWidth(next.mid);
+      if (next.foldRail !== autoFoldRail) setAutoFoldRail(next.foldRail);
+      if (next.collapseDoc !== docCollapsed) setDocCollapsed(next.collapseDoc);
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [railWidth, midWidth, railOpen, docCollapsed, userFoldedDoc, autoFoldRail, setMidWidth, setDocCollapsed]);
 
   const dragRail = useCallback(
     (dx: number) => setRailWidth(Math.max(RAIL_MIN, Math.min(RAIL_MAX, railWidth + dx))),
@@ -370,15 +544,18 @@ export function usePanes(tab: string, railInitial: number, midInitial: number) {
     (dx: number) => {
       const width = container.current?.clientWidth ?? window.innerWidth;
       const wanted = midWidth + dx;
-      const room = width - railWidth - 9 - DOC_MIN;
-      // Dragging decisively past the floor collapses the pane rather than jamming against it.
-      if (wanted > room + 60) {
+      const room = width - renderedRail - DIVIDERS - DOC_MIN;
+      // Dragging decisively PAST the floor collapses the pane rather than jamming against it.
+      // `dx > 0` matters: without it, a middle width that is already over-wide collapses the pane
+      // even on a leftward drag — i.e. dragging to ENLARGE the PDF made it disappear.
+      if (dx > 0 && wanted > room + 60) {
+        setUserFoldedDoc(true);
         setDocCollapsed(true);
         return;
       }
-      setMidWidth(clampMiddle(wanted, { container: width, rail: railWidth }));
+      setMidWidth(clampMiddle(wanted, { container: width, rail: renderedRail }));
     },
-    [midWidth, railWidth, setMidWidth, setDocCollapsed],
+    [midWidth, renderedRail, setMidWidth, setDocCollapsed, setUserFoldedDoc],
   );
 
   return {
@@ -386,9 +563,14 @@ export function usePanes(tab: string, railInitial: number, midInitial: number) {
     railWidth,
     midWidth,
     docCollapsed,
+    /** False when the window folded the rail for lack of room, even if the user wants it open. */
+    railOpen: effectiveRailOpen,
     dragRail,
     dragMiddle,
-    openDoc: () => setDocCollapsed(false),
+    openDoc: () => {
+      setUserFoldedDoc(false);
+      setDocCollapsed(false);
+    },
   };
 }
 

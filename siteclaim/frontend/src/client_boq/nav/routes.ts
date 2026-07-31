@@ -1,0 +1,59 @@
+// Hash routing for the tender desk. The browser's history IS the router: every surface is a
+// hash, so ← / → in the app bar are history.back()/forward() and survive a reload for free.
+// Still no router dependency — the app has one branch point and a parse function.
+//
+//   #/tender                      the desk (home)
+//   #/tender/archived             submitted / won / lost — off the shelf, on the record
+//   #/tender/awaiting             tenders with open queries
+//   #/tender/criteria|rates|team|settings     the management screens
+//   #/tender/letters|positions|clients|audit  entry points without screens yet
+//   #/tender/s/{setId}/{tab}      one tender, one tab
+
+import type { TabId } from "../chrome";
+
+export type ShelfFilter = "desk" | "archived" | "awaiting";
+export type ScreenId = "criteria" | "rates" | "team" | "settings";
+export type NotDesignedId = "letters" | "positions" | "clients" | "audit";
+
+export type Surface =
+  | { kind: "home"; shelf: ShelfFilter }
+  | { kind: "screen"; screen: ScreenId }
+  | { kind: "notdesigned"; screen: NotDesignedId }
+  | { kind: "set"; setId: string; tab: TabId };
+
+const SCREENS: ScreenId[] = ["criteria", "rates", "team", "settings"];
+const NOT_DESIGNED: NotDesignedId[] = ["letters", "positions", "clients", "audit"];
+const TAB_IDS: TabId[] = ["documents", "register", "scope", "price", "offer"];
+
+export function parseHash(hash: string): Surface {
+  const parts = hash.replace(/^#\/tender\/?/, "").split("/").filter(Boolean);
+  if (!parts.length) return { kind: "home", shelf: "desk" };
+  if (parts[0] === "archived") return { kind: "home", shelf: "archived" };
+  if (parts[0] === "awaiting") return { kind: "home", shelf: "awaiting" };
+  if ((SCREENS as string[]).includes(parts[0]))
+    return { kind: "screen", screen: parts[0] as ScreenId };
+  if ((NOT_DESIGNED as string[]).includes(parts[0]))
+    return { kind: "notdesigned", screen: parts[0] as NotDesignedId };
+  if (parts[0] === "s" && parts[1]) {
+    const tab = (TAB_IDS as string[]).includes(parts[2] ?? "") ? (parts[2] as TabId) : "documents";
+    return { kind: "set", setId: decodeURIComponent(parts[1]), tab };
+  }
+  return { kind: "home", shelf: "desk" };
+}
+
+export function hashFor(surface: Surface): string {
+  switch (surface.kind) {
+    case "home":
+      return surface.shelf === "desk" ? "#/tender" : `#/tender/${surface.shelf}`;
+    case "screen":
+    case "notdesigned":
+      return `#/tender/${surface.screen}`;
+    case "set":
+      return `#/tender/s/${encodeURIComponent(surface.setId)}/${surface.tab}`;
+  }
+}
+
+/** Navigate by pushing a hash — the browser records it, so Back works. */
+export function go(surface: Surface): void {
+  window.location.hash = hashFor(surface);
+}

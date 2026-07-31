@@ -23,6 +23,7 @@ import type {
   DocumentRow,
   Highlight,
   JobState,
+  LocationVerdict,
   RFIItem,
   RegisterSource,
 } from "../types";
@@ -74,6 +75,11 @@ export function RegisterTab({
   const [selected, setSelected] = useState<number | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
   const [page, setPage] = useState<number | null>(null);
+  /** The result of a "show me on the page" run, and its verdict — separate from the precomputed
+   *  citation highlights so proving one row never rewrites what the citation pass measured. */
+  const [located, setLocated] = useState<Highlight[]>([]);
+  const [locating, setLocating] = useState<LocationVerdict | "pending" | null>(null);
+  const [locateNote, setLocateNote] = useState("");
   const [filterCheck, setFilterCheck] = useState<RegisterSource | null>(null);
   const [filterAuthor, setFilterAuthor] = useState<Author | null>(null);
   const [undecidedOnly, setUndecidedOnly] = useState(false);
@@ -84,7 +90,7 @@ export function RegisterTab({
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [criteriaRows, setCriteriaRows] = useState<Criterion[]>([]);
   const [busy, setBusy] = useState(false);
-  const panes = usePanes("register", 224, 520);
+  const panes = usePanes("register", 224, 520, railOpen);
 
   // The acceptable-terms library, so a row can say what `PS-01` actually means. Loaded once per
   // set; it is a small static file behind the endpoint.
@@ -130,6 +136,24 @@ export function RegisterTab({
     return map;
   }, [data.citations]);
 
+  // Open on a document rather than "Select a part to read it here." A clause viewer with
+  // nothing in it was the commonest reason the PDF looked broken: the Register only ever set a
+  // part when a citation LOCATED, which in DEMO never happens.
+  useEffect(() => {
+    const parts = data.parts?.parts ?? [];
+    if (!parts.length) return;
+    if (!partId || !parts.some((p) => p.part_id === partId)) setPartId(parts[0].part_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.parts]);
+
+  // A new selection invalidates the last row's locate result — leaving it up would attach one
+  // row's proof to another row's claim.
+  useEffect(() => {
+    setLocated([]);
+    setLocating(null);
+    setLocateNote("");
+  }, [selected]);
+
   const rfiFor = useMemo(() => {
     const map = new Map<number, RFIItem>();
     rfis.forEach((r) => {
@@ -170,8 +194,12 @@ export function RegisterTab({
     return out;
   }, [items, filterCheck, filterAuthor, undecidedOnly, sort]);
 
-  /** Selecting a row shows its clause. When the finding cites nothing, the pane stays exactly
-   *  where it is — the design's rule, and the honest one: never guess a page. */
+  /** Selecting a row shows its clause.
+   *
+   *  Two levels, and the difference between them is the whole point. A LOCATED citation moves the
+   *  pane to the measured page and the highlight draws — that is proof. Anything else moves the
+   *  pane to the part the clause belongs to and draws nothing: the document is on screen to read,
+   *  and the banner says why no mark is on it. Never a guessed page. */
   function selectRow(item: DepartureItem) {
     setSelected(item.item);
     const citation = byItem.get(item.item);
@@ -183,7 +211,58 @@ export function RegisterTab({
       if (part) {
         setPartId(part.part_id);
         setPage(citation.page);
+        return;
       }
+    }
+    // Unverifiable / not located / no citation at all: show the part, not a page.
+    const part = partForClause(item.clause);
+    if (part) {
+      setPartId(part);
+      setPage(null);
+    }
+  }
+
+  /** Which part a clause id belongs to, from the parts' own page ranges via the citation, else
+   *  from the clause prefix the part ids carry. Best-effort by design: a miss leaves the pane
+   *  alone rather than opening an arbitrary document. */
+  function partForClause(clause: string): string | null {
+    if (!clause) return null;
+    const parts = data.parts?.parts ?? [];
+    const citation = [...byItem.values()].find((c) => c.clause === clause && c.page != null);
+    if (citation?.page != null) {
+      const hit = parts.find((p) => {
+        const [s, e] = p.pages.split("-").map(Number);
+        return citation.page! >= s && citation.page! <= e;
+      });
+      if (hit) return hit.part_id;
+    }
+    return null;
+  }
+
+  /** Prove a selected row's quotation against the page — the same control the Documents tab has,
+   *  and the same three verdicts. This is what makes the Register's highlight demandable rather
+   *  than only ever precomputed: in LIVE it draws the mark, and in DEMO it reports honestly that
+   *  fixture text is not in this binder instead of leaving the pane blank and unexplained. */
+  async function locateSelected(item: DepartureItem) {
+    const quote = item.cited_text?.trim();
+    if (!quote) return;
+    const target = partId ?? partForClause(item.clause) ?? (data.parts?.parts ?? [])[0]?.part_id;
+    if (!target) return;
+    setLocating("pending");
+    try {
+      const r = await api.locateQuote(data.setId, target, quote);
+      setLocating(r.verdict);
+      setLocateNote(r.note);
+      if (r.verdict === "located" && r.page != null) {
+        setPartId(target);
+        setLocated(r.highlights);
+        setPage(r.page);
+      } else {
+        setLocated([]);
+      }
+    } catch (e: unknown) {
+      setLocating(null);
+      onError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -326,13 +405,15 @@ export function RegisterTab({
 
   const selectedItem = shown.find((i) => i.item === selected) ?? null;
   const citation = selected != null ? byItem.get(selected) : undefined;
-  const highlights: Highlight[] = citation?.highlights ?? [];
+  // The citation pass's measured marks, plus whatever a "show me on the page" run proved.
+  // Both are evidence; neither overwrites the other.
+  const highlights: Highlight[] = [...(citation?.highlights ?? []), ...located];
   const mismatch = data.register?.parse_mismatch ?? null;
 
   return (
-    <div ref={panes.container} className="flex min-h-0 flex-1">
+    <div ref={panes.container} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {/* ---------------- pane 1 — rail ---------------- */}
-      {railOpen ? (
+      {panes.railOpen ? (
         <Rail width={panes.railWidth} onResize={panes.dragRail}>
           <RailBlock title="CHECKS">
             {[...counts.entries()].map(([check, authors]) => {
@@ -559,6 +640,9 @@ export function RegisterTab({
               draft={drafts[item.item] ?? ""}
               busy={busy}
               onSelect={() => selectRow(item)}
+                  onLocate={() => void locateSelected(item)}
+                  locating={selected === item.item ? locating : null}
+                  locateNote={locateNote}
               onDecide={(v) => decide(item, v)}
               onUndo={() => undo(item)}
               onToggleNegotiate={() =>
@@ -807,6 +891,9 @@ function RegisterRow({
   onSaveNegotiation,
   onQueueRfi,
   onUnqueueRfi,
+  onLocate,
+  locating,
+  locateNote,
 }: {
   item: DepartureItem;
   /** The acceptable-terms row this finding was measured against, when it resolves. */
@@ -825,6 +912,11 @@ function RegisterRow({
   onSaveNegotiation: () => void;
   onQueueRfi: () => void;
   onUnqueueRfi: () => void;
+  /** Prove this row's quotation against the page — only offered on the selected row, and only
+   *  when there is a quotation to prove. */
+  onLocate: () => void;
+  locating: LocationVerdict | "pending" | null;
+  locateNote: string;
 }) {
   const author = authorOf(item);
   const failed = item.status === "citation_failed" || citation?.verdict === "not_located";
@@ -866,6 +958,40 @@ function RegisterRow({
           </span>
         )}
       </div>
+
+      {/* 1b — PROVE IT. The clause reference above is what the parse CLAIMS; this measures it
+             against the rendered page. Only on the selected row (it is a request to the server)
+             and only when there is a quotation to look for. */}
+      {selected && item.cited_text?.trim() && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onLocate();
+            }}
+            disabled={locating === "pending"}
+            className="cb-press rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-2 py-[3px] font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text disabled:opacity-60"
+          >
+            {locating === "pending" ? "LOOKING…" : "SHOW ME ON THE PAGE"}
+          </button>
+          {locating && locating !== "pending" && (
+            <span
+              className={cx(
+                "font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+                locating === "located" ? "text-cb-ok-dark" : "text-cb-bad-dark",
+              )}
+              title={locateNote}
+            >
+              {locating === "located"
+                ? "FOUND — HIGHLIGHTED"
+                : locating === "not_located"
+                  ? "NOT ON THIS PART"
+                  : "NO TEXT LAYER TO SEARCH"}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* 2 — rationale: the only field present on every finding, so it is the body text */}
       <p className="font-cb-serif text-[12.5px] leading-[1.55] text-cb-ink-text">

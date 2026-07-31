@@ -308,3 +308,49 @@ export function ErrorNote({ message, onDismiss }: { message: string; onDismiss?:
 export function money(value: number, currency = "HK$"): string {
   return `${currency}${Math.round(Math.abs(value)).toLocaleString("en-US")}`;
 }
+
+// ---------------------------------------------------------------------------
+// The team (named profiles)
+// ---------------------------------------------------------------------------
+/** The avatar colour set — brass-adjacent tones from the palette, assigned round-robin when a
+ *  member has none stored. Initials, never photos: this is a desk tool, not a social app. */
+export const AVATAR_COLOURS = ["#1E3A52", "#BD9A5F", "#2F6E8A", "#3C8A63", "#856636", "#8A3826"];
+
+export function avatarColour(member: { colour?: string; member_id?: string } | null): string {
+  if (member?.colour) return member.colour;
+  if (!member?.member_id) return "#8A97A3";
+  let hash = 0;
+  for (const ch of member.member_id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATAR_COLOURS[hash % AVATAR_COLOURS.length];
+}
+
+/** A team member as a circle of initials. `title` carries the full name — the design's rule. */
+export function Avatar({
+  member,
+  size = 22,
+  ring,
+}: {
+  member: { name?: string; initials?: string; colour?: string; member_id?: string } | null;
+  size?: number;
+  /** Overlapping stacks ring each avatar in ink so they read as separate circles. */
+  ring?: boolean;
+}) {
+  const initials = member?.initials || (member?.name ?? "?").slice(0, 1).toUpperCase();
+  return (
+    <span
+      title={member?.name ?? "Nobody identified"}
+      style={{
+        width: size,
+        height: size,
+        background: avatarColour(member),
+        fontSize: Math.round(size * 0.38),
+      }}
+      className={cx(
+        "flex flex-none select-none items-center justify-center rounded-full font-cb-sans font-semibold text-white",
+        ring && "border-[1.5px] border-cb-ink",
+      )}
+    >
+      {initials}
+    </span>
+  );
+}

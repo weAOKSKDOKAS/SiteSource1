@@ -10,6 +10,36 @@ export interface GateStates {
   scope: boolean;
 }
 
+/** Desk metadata for one tender. The close-date fields are A FINDING, not form fields: read
+ *  from the Conditions of Tender with a citation, honestly `not_found` when the read fails,
+ *  and only overwritable by a human confirmation. */
+export interface SetMeta {
+  owner_id: string;
+  client: string;
+  package: string;
+  archived: boolean;
+  outcome: "live" | "submitted" | "won" | "lost";
+  close_date: string; // ISO or ""
+  close_date_status: "reading" | "found" | "not_found" | "confirmed";
+  close_date_clause: string;
+  close_date_page: number | null;
+  close_date_part_id: string;
+  close_date_quote: string;
+  close_date_confirmed_by: string;
+  query_cutoff: string; // ISO or ""
+  last_touched_by: string;
+  last_touched_at: string | null;
+}
+
+/** The counts the home cards and filters derive from. Computed server-side because they must
+ *  agree with what the gates refuse — `blocked` is the same arithmetic the 409s are built on. */
+export interface SetCounts {
+  undecided: number;
+  citation_failed: number;
+  unaccepted_fallbacks: number;
+  open_rfis: number;
+}
+
 export interface SetRow {
   set_id: string;
   name: string;
@@ -18,6 +48,75 @@ export interface SetRow {
   tier: number | null;
   gates: GateStates;
   price: number | null;
+  has_letter: boolean;
+  meta: SetMeta;
+  counts: SetCounts;
+  blocked: boolean;
+}
+
+// --- the team (named profiles, not accounts) --------------------------------
+export interface TeamMember {
+  member_id: string;
+  name: string;
+  initials: string;
+  colour: string;
+  role: string;
+  archived: boolean;
+  created_at?: string;
+}
+
+// --- criteria & rates editing ----------------------------------------------
+/** A criterion row with its editing metadata — what the Criteria screen renders. */
+export interface CriterionRow {
+  id: string;
+  category_id: string;
+  category: string;
+  clause_area: string;
+  acceptable_position: string;
+  why_it_matters: string;
+  red_flag: string;
+  is_placeholder: boolean;
+  enabled: boolean;
+  sort_order: number;
+  updated_by: string;
+  updated_at: string | null;
+}
+
+export interface RateRowFull {
+  rate_id: string;
+  category: string;
+  code: string;
+  description: string;
+  unit: string;
+  rate: number;
+  currency: string;
+  source: string;
+  notes: string;
+  archived: boolean;
+  updated_by: string;
+  updated_at: string | null;
+}
+
+export interface RatesResponse {
+  count: number;
+  rows: RateRowFull[];
+  categories: string[];
+  seed_duplicates: string[];
+}
+
+// --- app-wide settings (the AI model) --------------------------------------
+export interface LLMSettingsResponse {
+  provider: string; // "" = auto
+  model_anthropic: string;
+  model_deepseek: string;
+  providers: string[];
+  effective: {
+    text_provider: string;
+    vision_provider: string; // always "anthropic" — DeepSeek rejects images
+    model_anthropic: string;
+    model_deepseek: string;
+  };
+  rows: { key: string; value: string; updated_by: string; updated_at: string | null }[];
 }
 
 export interface GateState {
@@ -292,7 +391,9 @@ export interface CriteriaResponse {
   count: number;
   criteria: Criterion[];
   placeholders: Criterion[];
-  thresholds: unknown[];
+  thresholds: { id: string; rule: string; extract_field: string }[];
+  /** Every criterion with its editing metadata — the Criteria screen's list. */
+  rows: CriterionRow[];
 }
 
 // --- review: where each quotation physically sits --------------------------
