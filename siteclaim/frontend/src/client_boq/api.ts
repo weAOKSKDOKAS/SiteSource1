@@ -6,10 +6,12 @@ import type {
   CitationsResponse,
   CriteriaResponse,
   CriterionRow,
+  EstimateResponse,
   DocumentRow,
   Highlight,
   GateState,
   JobState,
+  LetterResponse,
   LLMSettingsResponse,
   ManifestGateState,
   Manifest,
@@ -323,6 +325,27 @@ export const api = {
       item_id: itemId,
       ...patch,
     }),
+  // --- the priced estimate (gate 3 must be passed) -------------------------
+  /** Run the deterministic cost spine. Refuses with a 409 until BOTH the register and the scope
+   *  are approved — two distinct messages, and the tab shows whichever one came back rather than
+   *  inventing its own. In DEMO the schedule and margin come from the fixture and it runs inline;
+   *  in LIVE both are required and the work happens on a thread, which is why this goes through
+   *  `runJob` like every other job start. */
+  runEstimate: (setId: string, body?: { margin_pct?: number; schedule?: unknown; letter?: unknown }) =>
+    post<JobState>("/estimate/run", { set_id: setId, ...(body ?? {}) }),
+  estimate: (setId: string) => get<EstimateResponse>(`/estimate/${setId}`),
+  workbookUrl: (setId: string) => `${ROOT}/estimate/${setId}/workbook`,
+
+  // --- the offer letter ----------------------------------------------------
+  /** The assembled draft. Nothing sends it — there is no transmit path in this product at all. */
+  letter: (setId: string) => get<LetterResponse>(`/estimate/${setId}/letter`),
+  /** The assumptions the price rests on. `internal` carries each line's source; `submission`
+   *  adds the tender's own warning clause, because qualifying a bid can disqualify it. */
+  qualificationsUrl: (setId: string, audience: "internal" | "submission" = "internal") =>
+    `${ROOT}/estimate/${setId}/qualifications?audience=${audience}`,
+  departureScheduleUrl: (setId: string, audience: "internal" | "submission" = "internal", fmt = "md") =>
+    `${ROOT}/review/${setId}/departure-schedule?audience=${audience}&format=${fmt}`,
+
   unmapScope: (setId: string, itemId: string) =>
     del<ScopeItemsResponse>(`/estimate/scope/item/${setId}/${itemId}`),
 };

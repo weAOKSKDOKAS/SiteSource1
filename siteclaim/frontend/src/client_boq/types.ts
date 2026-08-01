@@ -533,3 +533,130 @@ export interface ScopeItemsResponse {
 export interface ScopeSourcesResponse extends ScopeItemsResponse {
   sources: ScopeSource[];
 }
+
+// --- estimate: the priced build-up -----------------------------------------
+// Every shape here mirrors client_boq/models.py. The cost lines carry a full trace on purpose —
+// qty, rate, where the rate came from, and the amount — so a person can recompute any number by
+// hand. That is the whole reason the estimate is deterministic code rather than a model call.
+
+/** Where a rate came from. `missing` prices at 0 and raises a flag; it is never guessed. */
+export type RateSource = "csv" | "inline" | "missing" | "";
+
+export interface CostLine {
+  item_id: string;
+  description: string;
+  resource_ref: string;
+  qty: number;
+  unit: string;
+  productivity: number | null;
+  hours: number | null;
+  rate: number;
+  rate_source: RateSource;
+  amount: number;
+}
+
+export interface CostActivity {
+  item_id: string;
+  description: string;
+  category: string;
+  unit: string;
+  lines: CostLine[];
+  activity_total: number;
+}
+
+export interface IndirectLine {
+  item_id: string;
+  label: string;
+  basis: string; // lump | per_week | pct_of_direct
+  /** How it was computed, in words — hand-checkable. */
+  detail: string;
+  amount: number;
+}
+
+export type EstimateFlagKind =
+  | "missing_rate"
+  | "zero_or_negative_qty"
+  | "empty_activity"
+  | "rate_outlier"
+  | "unclassified_item";
+
+/** Raised by the rule layer. Surfaced for the human, never blocking, never a verdict. */
+export interface EstimateFlag {
+  kind: EstimateFlagKind | string;
+  item_id: string;
+  message: string;
+}
+
+export interface EstimateTotals {
+  total_direct: number;
+  total_indirect: number;
+  total_cost: number;
+  margin_pct: number;
+  price: number;
+  /** price − total_cost. A readout, not a "profitable / not" verdict. */
+  margin_amount: number;
+}
+
+export interface Estimate {
+  set_id: string;
+  duration_weeks: number | null;
+  activities: CostActivity[];
+  indirects: IndirectLine[];
+  unclassified: unknown[];
+  flags: EstimateFlag[];
+  totals: EstimateTotals;
+}
+
+export interface EstimateResponse {
+  set_id: string;
+  totals: EstimateTotals;
+  flag_counts: Record<string, number>;
+  estimate: Estimate;
+}
+
+// --- the offer letter ------------------------------------------------------
+/** `register` = a confirmed departure, carried VERBATIM. `draft` = an AI condition from the
+ *  scope. The distinction is the point: one is a decision already taken, the other a proposal. */
+export type AppendixSource = "register" | "draft" | string;
+
+export interface LetterAppendixItem {
+  text: string;
+  source: AppendixSource;
+}
+
+export interface PricingScheduleRow {
+  item_id: string;
+  description: string;
+  total: number;
+}
+
+export interface LetterMeta {
+  company_name: string;
+  company_address: string;
+  contact_name: string;
+  contact_number: string;
+  project: string;
+  client_name: string;
+  date: string;
+}
+
+export interface LetterOfOffer {
+  set_id: string;
+  meta: LetterMeta;
+  intro: string;
+  price: number;
+  price_str: string;
+  inclusions: string[];
+  exclusions: string[];
+  pricing_schedule: PricingScheduleRow[];
+  appendix: LetterAppendixItem[];
+  markdown: string;
+}
+
+export interface LetterResponse {
+  set_id: string;
+  price: number;
+  price_str: string;
+  markdown: string;
+  letter: LetterOfOffer;
+}

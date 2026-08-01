@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, health, runJob, setActor } from "./api";
-import { GlobalBar, StepStrip, TABS, stepStates, usePersisted } from "./chrome";
+import { GlobalBar, StepStrip, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
@@ -26,6 +26,8 @@ import { Rates } from "./screens/Rates";
 import { Settings } from "./screens/Settings";
 import { Team } from "./screens/Team";
 import { DocumentsTab } from "./tabs/Documents";
+import { OfferTab } from "./tabs/Offer";
+import { PriceTab } from "./tabs/Price";
 import { RegisterTab } from "./tabs/Register";
 import { ScopeTab } from "./tabs/Scope";
 import type {
@@ -557,8 +559,16 @@ function SetView({
             onError={onError}
             onProgress={onJob}
           />
+        ) : tab === "price" ? (
+          <PriceTab
+            data={data}
+            railOpen={railOpen}
+            onRefresh={refresh}
+            onError={onError}
+            onProgress={onJob}
+          />
         ) : (
-          <NotBuiltYet tab={tab} data={data} />
+          <OfferTab data={data} onError={onError} />
         )}
       </main>
 
@@ -613,17 +623,6 @@ function JobStrip({ job }: { job: JobState }) {
       </span>
     </div>
   );
-}
-
-/** A step that exists but has no screen yet. It opens and says so, rather than being locked —
- *  the same rule as a step that has not run. */
-function NotBuiltYet({ tab }: { tab: TabId; data: SetData }) {
-  const label = TABS.find((t) => t.id === tab)?.label ?? tab;
-  const copy: Record<string, string> = {
-    price: "The price is built and tested on the backend (the workbook and the cost build-up both run). It has no screen yet: this step has not been designed.",
-    offer: "The offer letter is drafted by the backend already. It has no screen yet: this step has not been designed.",
-  };
-  return <WaitingOn title={`${label} — no screen yet`}>{copy[tab] ?? ""}</WaitingOn>;
 }
 
 // hashFor is imported for future use by panels that need absolute links; keep the reference.

@@ -507,7 +507,17 @@ export function usePanes(
    *  room comes back; a deliberate one must not. */
   const [userFoldedDoc, setUserFoldedDoc] = usePersisted(`${tab}.docUserSet`, false);
   const [autoFoldRail, setAutoFoldRail] = useState(false);
-  const container = useRef<HTMLDivElement | null>(null);
+  /** A CALLBACK ref held in state, not a plain `useRef`.
+   *
+   *  A tab may not render its container on the first pass — Price returns a "Reading the
+   *  estimate…" panel while it loads, Register a gate explanation — and with a plain ref the
+   *  refit effect below runs once against `null`, bails, and then never re-runs, because nothing
+   *  in its dependency list changes when the div finally mounts. The result is a layout that is
+   *  never measured at all: exactly the right-hand overflow this hook exists to prevent, on
+   *  precisely the tabs that load something first. Holding the node in state re-runs the effect
+   *  the moment it attaches. */
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const container = useCallback((el: HTMLDivElement | null) => setNode(el), []);
 
   const effectiveRailOpen = railOpen && !autoFoldRail;
   const renderedRail = effectiveRailOpen ? railWidth : RAIL_FOLDED;
@@ -515,7 +525,7 @@ export function usePanes(
   // --- refit whenever the space changes ------------------------------------
   // The whole point: on mount and on every resize, not only while dragging.
   useEffect(() => {
-    const el = container.current;
+    const el = node;
     if (!el) return;
     const apply = () => {
       const width = el.clientWidth;
@@ -533,7 +543,7 @@ export function usePanes(
     const observer = new ResizeObserver(apply);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [railWidth, midWidth, railOpen, docCollapsed, userFoldedDoc, autoFoldRail, setMidWidth, setDocCollapsed]);
+  }, [node, railWidth, midWidth, railOpen, docCollapsed, userFoldedDoc, autoFoldRail, setMidWidth, setDocCollapsed]);
 
   const dragRail = useCallback(
     (dx: number) => setRailWidth(Math.max(RAIL_MIN, Math.min(RAIL_MAX, railWidth + dx))),
@@ -542,7 +552,7 @@ export function usePanes(
 
   const dragMiddle = useCallback(
     (dx: number) => {
-      const width = container.current?.clientWidth ?? window.innerWidth;
+      const width = node?.clientWidth ?? window.innerWidth;
       const wanted = midWidth + dx;
       const room = width - renderedRail - DIVIDERS - DOC_MIN;
       // Dragging decisively PAST the floor collapses the pane rather than jamming against it.
@@ -555,7 +565,7 @@ export function usePanes(
       }
       setMidWidth(clampMiddle(wanted, { container: width, rail: renderedRail }));
     },
-    [midWidth, renderedRail, setMidWidth, setDocCollapsed, setUserFoldedDoc],
+    [node, midWidth, renderedRail, setMidWidth, setDocCollapsed, setUserFoldedDoc],
   );
 
   return {
