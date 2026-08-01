@@ -438,3 +438,58 @@ rendering in the pane on both tabs.
 > render** while every other route worked, including routes added the same day. The same code in a
 > freshly started process rendered every page fine. If the pane says a page could not be rendered,
 > restart the backend before debugging the frontend.
+
+## 11. Price and Offer (Series P, 2026-08-01)
+
+The two steps the handoff never drew, and the last open item in the backlog. Their backend had
+worked from the beginning — `/estimate/run`, the .xlsx workbook, the offer-letter draft — so this
+was only ever a missing screen. Designed here from the handoff's own rules.
+
+### Price — the trace is the point
+
+`CostLine` carries a full, hand-recomputable trace: quantity, the productivity conversion when
+there is one, the rate, **where the rate came from**, and the amount. That is not incidental — it
+is why the estimate is deterministic code rather than a model call, and the screen would be
+dishonest if it showed only totals. So every activity opens to its resource lines, and each line
+shows `BOOK` / `INLINE` / `MISSING` beside the rate.
+
+**A missing rate prices at zero.** The backend refuses to guess one, which is only safe if the hole
+is impossible to miss, so `MISSING` is red on the line, red on the activity, counted in the rail,
+and filterable. The indirects show the arithmetic the backend wrote for exactly this purpose —
+`8000.0 per week × 20.0 weeks = 160000.0` — so a reader can check a number without leaving the
+page.
+
+**The margin is a readout, not a verdict.** `margin_amount` is price less cost and the backend
+deliberately declines to call it healthy or thin. The screen says so in as many words rather than
+adding a judgement the product has spent its whole design avoiding.
+
+The five rule flags each carry their *consequence*, not just their name: what the flag means for
+the number standing beside it. A flag never blocks a price — it marks what to look at before
+signing one.
+
+### Offer — authorship, line by line
+
+Appendix A is the one place two authorships sit side by side, so it is where the distinction is
+drawn hardest: **from the register** (a confirmed departure, carried verbatim — navy) above
+**drafted from the scope** (an AI proposal — brass), each labelled and counted. On the real fixture
+that is 4 confirmed against 3 drafted. On a page that becomes a contract, a decision a person took
+and a sentence a model wrote must never look alike.
+
+Sections carry the same distinction: `INJECTED FROM THE ESTIMATE` on the pricing schedule and the
+price, `AI DRAFTED` on the prose. The price is never written by a model; the prose is never a
+number.
+
+The two companion documents open as **internal working papers**, with the reason stated on screen
+rather than assumed — both reference tenders warn that qualifying a bid "may cause the tender to be
+disqualified", so the submission versions are opt-in. And nothing sends the letter: this product
+has no transmit path at all, which is more honest said plainly than implied by a disabled button.
+
+### The bug the new tabs exposed
+
+`usePanes` held its container in a plain `useRef`. Price returns a "Reading the estimate…" panel
+while it loads, so on the first render the container did not exist, the refit effect ran against
+`null` and bailed — and then never re-ran, because nothing in its dependency list changed when the
+div finally mounted. The layout was therefore **never measured at all** on exactly the tabs that
+load something first, which is the right-hand overflow §10 exists to prevent. The container is now
+a callback ref held in state, so the effect re-runs the moment the node attaches. Worth remembering:
+a `useRef` in an effect's dependency list is a lie — it never changes, so the effect never re-runs.

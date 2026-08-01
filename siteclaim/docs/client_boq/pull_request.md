@@ -16,7 +16,7 @@ subcontractors; `client_boq` takes the client's contract *in* and walks it to a 
 | Flow | tender → split by trade → shortlist → enquiries → level → award | binder → **ingest** → departure register (**review**) → scope freeze → cost estimate, workbook, offer letter (**estimate**) |
 | Code | `backend/pipeline/`, `db/`, `rules_engine/` | `backend/client_boq/` |
 | API | ~58 routes at the root | **59 routes** under `/client-boq/*` |
-| Frontend | 5-tab wizard, Atlas palette | a **tender desk** home (multi-tender shelf, team profiles, criteria/rates/model screens) + Documents · Register · Scope per tender, hash-routed under `#/tender`, paper/brass palette |
+| Frontend | 5-tab wizard, Atlas palette | a **tender desk** home (multi-tender shelf, team profiles, criteria/rates/model screens) + all five steps per tender (Documents · Register · Scope · Price · Offer), hash-routed under `#/tender`, paper/brass palette |
 
 The governing principle is the same in both, and every design decision below follows from it:
 
@@ -36,7 +36,7 @@ cite — which is what makes the register auditable at all.
 
 ---
 
-## 3. The change, in six passes
+## 3. The change, in seven passes
 
 Read in this order; each pass assumes the one before it.
 
@@ -119,7 +119,7 @@ carrying every hex, size, weight and copy string. Full write-up in **`ui_build.m
 | U3 | Register tab (frames 02/03) + negotiation text + RFI withdrawal | FE + 2 routes |
 | U4 | Panels (frames 04, 05, 06) | FE only |
 | U5 | Scope tab (frame 07) + **the freeze gate** | ~half BE |
-| U6 | Price and Offer tabs | **blocked — not designed** |
+| U6 | Price and Offer tabs | done in Pass 7 — designed here, not in the handoff |
 
 Roughly three quarters frontend. The remaining quarter was not cosmetic: **frame 07 turned out to
 be the freeze gate that T4, T5 and T6 had all pointed at and nothing implemented.**
@@ -254,6 +254,37 @@ Five complaints after using the desk. Two shared a cause no amount of CSS-readin
   desk has a Procurement button, and because both set the hash they push history — so Back moves
   between the products in both directions.
 
+### Pass 7 — Series P: Price and Offer, the last two screens
+
+The two steps the handoff never drew, and the last open item in the backlog (`U6`). Their backend
+worked from the start — `/estimate/run`, the .xlsx workbook, the offer-letter draft — so this was
+only ever a missing screen. **The five-step workflow now runs end to end in the UI.**
+
+- **Price shows the trace, not just the total.** `CostLine` carries a hand-recomputable chain —
+  quantity, the productivity conversion when there is one, the rate, **where the rate came from**,
+  and the amount — which is why the estimate is deterministic code rather than a model call. Every
+  activity opens to its resource lines; each line shows `BOOK` / `INLINE` / `MISSING`. A missing
+  rate prices at zero and is red on the line, red on the activity, counted in the rail and
+  filterable, because a hole the backend refuses to guess is only safe if it cannot be missed.
+  Indirects show the arithmetic the backend already wrote for the purpose
+  (`8000.0 per week × 20.0 weeks = 160000.0`).
+- **The margin is a readout, and the screen says so.** `margin_amount` is price less cost; the
+  backend declines to call it healthy or thin and so does the UI. The five rule flags each carry
+  their *consequence* — what the flag means for the number beside it — and none of them blocks.
+- **Offer draws authorship per line.** Appendix A is where a confirmed departure (carried verbatim,
+  navy) and an AI-drafted condition (brass) sit side by side, each labelled and counted — 4 against
+  3 on the real fixture. Sections are marked `INJECTED FROM THE ESTIMATE` or `AI DRAFTED`: the price
+  is never written by a model, the prose is never a number.
+- **Nothing sends it.** There is no transmit path in this product, said plainly rather than implied
+  by a disabled button. The two companion documents open as internal working papers with the
+  disqualification reason on screen.
+- **A latent bug the new tabs exposed.** `usePanes` held its container in a plain `useRef`. Price
+  renders a loading panel first, so the container did not exist when the refit effect ran; it bailed
+  on `null` and never re-ran, because nothing in its dependency list changes when the div mounts.
+  The layout was therefore never measured on exactly the tabs that load something first — the
+  overflow Pass 6 exists to prevent. Now a callback ref held in state. A `useRef` in a dependency
+  list is a lie: it never changes, so the effect never re-runs.
+
 ---
 
 ## 4. API surface — 35 → 59 routes
@@ -292,11 +323,11 @@ Thirteen more came with the tender desk:
 
 ## 5. Frontend
 
-New directory `siteclaim/frontend/src/client_boq/` — **~8,250 lines**:
+New directory `siteclaim/frontend/src/client_boq/` — **~9,350 lines**:
 
 | Area | Lines | |
 |---|---|---|
-| `tabs/` | 2651 | Documents · Register · Scope, the three worked screens |
+| `tabs/` | 3581 | all five steps — Documents · Register · Scope · Price · Offer |
 | `screens/` | 934 | Criteria library · Pricing & rates · AI model · Team · NotDesigned |
 | `PageView.tsx` | ~540 | continuous scroll, typed zoom, lazy pages, the 480px floor |
 | `home/` | 513 | the desk: shelf, folder cards, drop tile, summary strip |
@@ -556,7 +587,6 @@ to open on "Select a part to read it here" and now opens on a document.
 
 | Gap | Why |
 |---|---|
-| **Price and Offer tabs (U6)** | not designed. Their backend *works* — `/estimate/run`, the .xlsx workbook and the offer-letter draft are built and tested — so the gap is a drawn screen, not a capability. Both steps show `NOT YET RUN` rather than vanishing. |
 | **No WAS/NOW clause diff (frame 06)** | `ChangeEntry` carries the addendum's own advisory change table and **no old or new clause text**, so there is nothing to diff. The panel says so instead of drawing an invented one. (The real ND/2025/04 addendum states its own change table is "neither exhaustive nor guaranteed to be accurate" anyway.) |
 | **No manifest page-bound editing** | the endpoint accepts an edited parts list; the control that produces one is not built, so the button is disabled with a tooltip saying so. |
 | **No verdict clearing** | no endpoint clears a recorded verdict, so `Undo` explains that rather than pretending. Re-running the review is the honest reset. |
@@ -630,7 +660,8 @@ cd siteclaim\frontend; npm install; npm run dev
 4. `backend/client_boq/ingest/pdfops.py` — the deterministic PDF layer, no model, no network
 5. `frontend/src/client_boq/ui.tsx` — `authorOf`, the single most load-bearing helper
 6. `frontend/src/client_boq/tabs/Scope.tsx` — the freeze gate as a screen
-7. `docs/client_boq/ui_build.md` — every UI decision and departure, with reasons
+7. `frontend/src/client_boq/tabs/Price.tsx` — the cost trace, and why a missing rate is loud
+8. `docs/client_boq/ui_build.md` — every UI decision and departure, with reasons
 
 ---
 
@@ -655,6 +686,7 @@ endpoints and the DEMO_MODE warning.
       additive `llm_client._route` change
 - [x] Every AI call passes a `demo_fixture`; DEMO opens no socket
 - [x] Verified end to end against the real 411-page tender
+- [x] **All five steps have screens** — the workflow runs Documents → Offer in the UI (Pass 7)
 - [x] Layout verified by screenshot at 1152 / 1280 / 1366 — nothing past either edge
 - [x] `db/sitesource.db` byte-identical to `381397a` — see §10
 - [ ] **LIVE mode run end to end** — needs an `ANTHROPIC_API_KEY`; see §9 and `running_live.md`

@@ -36,7 +36,7 @@ decision taken and why, and what it does not do.
 | U3 | Register tab (frames 02/03) + negotiation text + RFI withdrawal | L | FE + 2 routes | `[x]` done 2026-07-30 |
 | U4 | Panels (frames 04, 05, 06) | M | FE only | `[x]` done 2026-07-30 |
 | U5 | Scope tab (frame 07) + **the freeze gate** | L | ~half BE | `[x]` done 2026-07-30 |
-| U6 | Price and Offer tabs | — | — | `[ ]` **blocked: not designed** |
+| U6 | Price and Offer tabs | L | FE | `[x]` done 2026-08-01 — see Series P |
 
 ## Series R — the revision after using it
 
@@ -50,11 +50,11 @@ Six complaints from real use. Full write-up in `ui_build.md` §6b.
 | R4 | Editable context cards + prove a quote against the page | M | FE + 2 routes | `[x]` done 2026-07-31 |
 | R5 | LIVE: job polling everywhere, progress strip, run buttons | M | FE | `[x]` done 2026-07-31 |
 
-**U6 is why this does not finish the product.** The handoff says "Not designed yet" for both, and
-the asymmetry is worth stating: their *backend already works* — `/estimate/run`, the deterministic
-.xlsx workbook and the offer-letter draft are all built and tested. What is missing is a drawn
-screen. Both steps appear in the step strip today showing `NOT YET RUN`, so they open and say what
-they are waiting for rather than vanishing.
+**U6 was the last open item, and it is now closed** (Series P). It had sat blocked because the
+handoff says "Not designed yet" for both steps while their *backend already worked* —
+`/estimate/run`, the deterministic .xlsx workbook and the offer-letter draft were built and tested
+from the start. What was missing was a drawn screen, so we drew them, following the handoff's own
+rules rather than inventing new ones.
 
 **After U1–U5:** 43 routes (from 35), 916 tests passing (from 879), the workflow drivable through
 the UI as far as the scope gate.
@@ -611,3 +611,18 @@ they are what make the review and the pricing yours rather than generic.
 is no auth anywhere in the app today. Jobs also live in an in-process dict and uploads on local
 disk, so a restart drops work in flight. Both are real, and neither is a client_boq problem to
 solve alone.
+
+## Series P — the last two screens: Price and Offer
+
+The five-step workflow now runs end to end in the UI. Both screens were designed here, from the
+handoff's rules, because it lists them as undesigned.
+
+| # | Stage | Split | Status |
+|---|---|---|---|
+| P1 | Estimate + letter types and API methods | FE | `[x]` done 2026-08-01 |
+| P2 | Price: run the estimate, the build-up, per-line cost traces, the five rule flags, the workbook | FE | `[x]` done 2026-08-01 |
+| P3 | Offer: the letter draft, per-line appendix provenance, the two companion documents | FE | `[x]` done 2026-08-01 |
+| P4 | A latent `usePanes` bug the new tabs exposed: a container that mounts late was never measured | FE | `[x]` done 2026-08-01 |
+
+**After P1–P4:** no backend change; every one of the 59 routes now has a screen that uses it except
+the revision workbook. Full write-up: `ui_build.md` §11.

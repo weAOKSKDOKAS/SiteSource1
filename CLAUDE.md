@@ -17,7 +17,7 @@ chassis but almost no business logic:
 | Flow | tender → split by trade → shortlist firms → email enquiries → level bids → award | binder → split into parts (**ingest**) → departure register (**review**) → cost estimate + workbook + offer letter (**estimate**) |
 | Code | `siteclaim/backend/pipeline/`, `db/`, `rules_engine/` | `siteclaim/backend/client_boq/` |
 | API | ~58 endpoints at root (`/ingest`, `/shortlist`, …) | 59 endpoints under `/client-boq/*` |
-| Frontend | Yes — 5 tabs, a 5-step wizard, **Atlas** palette | Yes — a **tender desk** home (multi-tender shelf, team profiles) + Documents · Register · Scope per tender, all hash-routed under `#/tender`, **paper/brass** palette. Criteria / Rates / AI-model / Team screens exist; Price and Offer are not designed yet. |
+| Frontend | Yes — 5 tabs, a 5-step wizard, **Atlas** palette | Yes — a **tender desk** home (multi-tender shelf, team profiles) + Documents · Register · Scope per tender, all hash-routed under `#/tender`, **paper/brass** palette. all five steps have screens, plus Criteria / Rates / AI-model / Team. |
 
 The governing principle in both: **the LLM reads, structures, proposes and drafts; deterministic code
 and human gates decide.** No price, verdict, or risk flag is ever written by a model.

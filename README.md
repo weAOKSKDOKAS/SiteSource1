@@ -9,7 +9,7 @@ logic.
 | Flow | tender → split by trade → shortlist firms → email enquiries → level bids → award | binder → **ingest** → departure register (**review**) → cost estimate, workbook and offer letter (**estimate**) |
 | Code | `siteclaim/backend/pipeline/`, `db/`, `rules_engine/` | `siteclaim/backend/client_boq/` |
 | API | ~58 endpoints at the root | 59 endpoints under `/client-boq/*` |
-| Frontend | yes, a 5-tab wizard | yes — a tender-desk home + Documents · Register · Scope, at `#/tender` |
+| Frontend | yes, a 5-tab wizard | yes — a tender-desk home + all five steps (Documents · Register · Scope · Price · Offer), at `#/tender` |
 
 The governing principle in both: **the LLM reads, structures, proposes and drafts;
 deterministic code and human gates decide.** No price, verdict, risk flag, or document
