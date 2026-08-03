@@ -9,7 +9,7 @@ The set is addressed by ``set_id``, which IS the procurement ``run_ref`` (see ``
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
@@ -20,6 +20,7 @@ class ConfirmBillPartsRequest(BaseModel):
     schedule), so this is a list, not one id."""
 
     part_ids: list[str] = Field(default_factory=list)
+    confirmed_by: str = "operator"
 
 
 class BridgeRouteDecision(BaseModel):
@@ -34,14 +35,30 @@ class ConfirmBridgeRoutesRequest(BaseModel):
 
 @router.get("/{set_id}/bq-candidates")
 def get_bq_candidates(set_id: str) -> dict:
-    """Every part in the set, with which one(s) are proposed as the bill. Never auto-selects."""
-    raise NotImplementedError("GET /bridge/{set_id}/bq-candidates: list parts, propose the pricing ones")
+    """Every part in the set, with which one(s) are proposed as the bill. Never auto-selects.
+
+    Read-only: a GET registers nothing. A set with no parts returns 404 rather than an empty list
+    that would read as "this tender has no documents".
+    """
+    from bridge import parts
+
+    body = parts.bq_candidates(set_id)
+    if not body["parts"]:
+        raise HTTPException(status_code=404, detail=body["message"])
+    return body
 
 
 @router.post("/{set_id}/bq-part")
 def post_bq_part(set_id: str, req: ConfirmBillPartsRequest) -> dict:
     """The human confirms which part(s) are the bill — the gate before any priced row exists."""
-    raise NotImplementedError("POST /bridge/{set_id}/bq-part: persist the confirmed bill-part set")
+    from bridge import parts
+
+    try:
+        return parts.confirm_bill_parts(set_id, req.part_ids, confirmed_by=req.confirmed_by)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{set_id}/scope")
