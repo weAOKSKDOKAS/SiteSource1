@@ -1,5 +1,5 @@
 // The app-level navigation sidebar — 206px open, a 48px icon rail collapsed. Per the home-page
-// handoff: three blocks (shelves · CUSTOMISE · ORGANISATION) separated by hairlines, "+ New
+// handoff: blocks (shelves · CUSTOMISE · MANAGE · ORGANISATION) separated by hairlines, "+ New
 // tender" on top doing the same thing as dropping a file, and the signed-in user at the foot.
 
 import type { Surface } from "./routes";
@@ -48,6 +48,14 @@ export function NavSidebar({
     { label: "Letter templates", short: "LT", surface: { kind: "notdesigned", screen: "letters" } },
     { label: "Standard positions", short: "SP", surface: { kind: "notdesigned", screen: "positions" } },
   ];
+  // The management screens: the firm register, the benchmark corpus and the project spine. These
+  // are reference data that outlives any one tender, which is why they sit in the sidebar rather
+  // than on a tender's tab strip.
+  const manage: NavItem[] = [
+    { label: "Subcontractors", short: "SC", surface: { kind: "screen", screen: "subcontractors" } },
+    { label: "Benchmarks", short: "BM", surface: { kind: "screen", screen: "benchmarks" } },
+    { label: "Projects", short: "PJ", surface: { kind: "screen", screen: "projects" } },
+  ];
   const organisation: NavItem[] = [
     { label: "Team & access", short: "TM", surface: { kind: "screen", screen: "team" }, count: counts.team },
     { label: "Clients", short: "CS", surface: { kind: "notdesigned", screen: "clients" } },
@@ -75,7 +83,7 @@ export function NavSidebar({
         >
           ‹
         </button>
-        {[shelves, customise, organisation].map((block, bi) => (
+        {[shelves, customise, manage, organisation].map((block, bi) => (
           <div key={bi} className="flex w-full flex-col items-center gap-1">
             {bi > 0 && <span className="my-1 h-px w-6 bg-cb-border" />}
             {block.map((item) => (
@@ -130,6 +138,7 @@ export function NavSidebar({
       </div>
       <NavBlock items={shelves} active={active} />
       <NavBlock heading="CUSTOMISE" items={customise} active={active} />
+      <NavBlock heading="MANAGE" items={manage} active={active} />
       <NavBlock heading="ORGANISATION" items={organisation} active={active} />
 
       <div className="mt-auto flex items-center gap-2 border-t border-cb-border p-2.5">

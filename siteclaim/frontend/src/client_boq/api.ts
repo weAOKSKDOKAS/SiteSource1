@@ -3,6 +3,8 @@
 // exactly which gate refused and why, and rewriting them here would lose that.
 
 import type {
+  BenchmarkProject,
+  BenchmarkSummary,
   BidReply,
   BqCandidates,
   BridgeRouteDecisions,
@@ -18,6 +20,7 @@ import type {
   DispatchSet,
   DocumentRow,
   EstimateResponse,
+  FirmsPage,
   GateState,
   Highlight,
   JobState,
@@ -28,15 +31,21 @@ import type {
   LevelledBid,
   Manifest,
   ManifestGateState,
+  MatchConfirm,
+  MatchProposal,
   PartContext,
   PartDetail,
   PartSpec,
   PartsResponse,
+  ProjectDashboard,
+  ProjectEOS,
+  ProjectSummary,
   RFIBatchRow,
   RFIItem,
   RFIsResponse,
   RateRowFull,
   RatesResponse,
+  ReasonCode,
   RecommendAllResponse,
   RegisterResponse,
   RevisionRow,
@@ -53,6 +62,8 @@ import type {
   ShortlistSet,
   TeamMember,
   TenderReplies,
+  VarianceReasonSuggestions,
+  VarianceRecord,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
@@ -504,6 +515,62 @@ export const api = {
         `/tender/${encodeURIComponent(slug)}/replies/withdraw`,
         { firm_id: firmId, package_key: packageKey },
       ),
+  },
+  // --- the management screens ----------------------------------------------
+  // Firm register, benchmark corpus and projects — procurement's own root-mounted endpoints,
+  // reached through this client for the same reason `sourcing` is: one product, one client, and a
+  // gate refusal keeps its status code.
+  manage: {
+    /** The browseable firm database — real-provenance register firms only. */
+    firms: (opts?: { q?: string; trade?: string; limit?: number; offset?: number }) => {
+      const p = new URLSearchParams();
+      if (opts?.q) p.set("q", opts.q);
+      if (opts?.trade) p.set("trade", opts.trade);
+      if (opts?.limit != null) p.set("limit", String(opts.limit));
+      if (opts?.offset != null) p.set("offset", String(opts.offset));
+      const qs = p.toString();
+      return rget<FirmsPage>(`/firms${qs ? `?${qs}` : ""}`);
+    },
+    coverage: () => rget<Coverage>("/coverage"),
+
+    projects: () => rget<ProjectSummary[]>("/project"),
+    projectDashboard: (runRef: string) =>
+      rget<ProjectDashboard>(`/project/${encodeURIComponent(runRef)}`),
+
+    benchmarkProjects: () => rget<BenchmarkProject[]>("/benchmark/projects"),
+    benchmarkSummary: () => rget<BenchmarkSummary>("/benchmark/summary"),
+    createBenchmarkProject: (body: { name: string; trade?: string; client?: string; contract_ref?: string }) =>
+      rpost<BenchmarkProject>("/benchmark/projects", body),
+    benchmarkMatches: (id: number) => rget<MatchProposal>(`/benchmark/${id}/matches`),
+    /** The human gate: a proposed match becomes a variance record only when confirmed here. */
+    confirmMatches: (id: number, confirm: MatchConfirm[]) =>
+      rpost<VarianceRecord[]>(`/benchmark/${id}/matches/confirm`, { confirm }),
+    benchmarkVariance: (id: number) => rget<VarianceRecord[]>(`/benchmark/${id}/variance`),
+    /** The SOLE writer of a reason code. A suggestion is never a reason until a person posts it. */
+    setVarianceReason: (id: number, recordId: number, body: { reason_code: string; note?: string }) =>
+      rpost<VarianceRecord>(`/benchmark/${id}/variance/${recordId}/reason`, body),
+    reasonCodes: () => rget<ReasonCode[]>("/benchmark/reason-codes"),
+    reasonSuggestions: (id: number) =>
+      rget<VarianceReasonSuggestions>(`/benchmark/${id}/variance/reason-suggestions`),
+    benchmarkEos: (id: number) => rget<ProjectEOS | null>(`/benchmark/${id}/eos`),
+    attachEos: (id: number, narrative: string, summary = "") => {
+      const fd = new FormData();
+      fd.append("narrative", narrative);
+      if (summary) fd.append("summary", summary);
+      return fetch(`${BASE}/benchmark/${id}/eos-upload`, {
+        method: "POST",
+        body: fd,
+        headers: actorHeaders(),
+      }).then((r) => handle<ProjectEOS>(r));
+    },
+    uploadBenchmarkFile: (path: string, files: File[]) => {
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      return fetch(BASE + path, { method: "POST", body: fd, headers: actorHeaders() }).then((r) =>
+        handle<unknown>(r),
+      );
+    },
+    actualsTemplateUrl: (id: number) => `${BASE}/benchmark/actuals-template.xlsx?project=${id}`,
   },
 };
 

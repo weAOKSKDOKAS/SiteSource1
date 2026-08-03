@@ -158,7 +158,7 @@ function TradeSection({
 
   return (
     <section className="space-y-3">
-      <Card className="relative overflow-hidden p-0">
+      <Card flush className="relative overflow-hidden">
         <ScanLine active={loading} />
         <h3 className="border-b border-cb-divider px-3 py-2 font-cb-sans text-[10px] font-semibold uppercase tracking-cb-chip text-cb-muted">
           {tradeLabel(trade)} — claimed vs corrected
@@ -236,7 +236,7 @@ function TradeSection({
         </div>
       </Card>
 
-      <Card className="overflow-x-auto p-0">
+      <Card flush className="overflow-x-auto">
         <h3 className="border-b border-cb-divider px-3 py-2 font-cb-sans text-[10px] font-semibold uppercase tracking-cb-chip text-cb-muted">
           {tradeLabel(trade)} — rates by item (edit a rate to re-level)
         </h3>
@@ -347,7 +347,7 @@ function CalloutCard({
   const arr = Array.isArray(children) ? (children as ReactNode[]).flat() : [children];
   const empty = arr.filter(Boolean).length === 0;
   return (
-    <Card className="overflow-hidden p-0">
+    <Card flush className="overflow-hidden">
       <h4
         className={cx(
           "border-b border-cb-divider px-3 py-2 font-cb-sans text-[9px] font-semibold uppercase tracking-cb-chip",
@@ -577,7 +577,7 @@ function LiveLevel({
 
             {bids.length > 0 && <LiveComparison bids={bids} onOpenDetail={setDetail} />}
 
-            <Card className="divide-y divide-cb-divider p-0">
+            <Card flush className="divide-y divide-cb-divider">
               {pkg.firms.map((f) => (
                 <ReturnRow
                   key={f.firm_id}
@@ -761,7 +761,7 @@ function LiveComparison({
 }) {
   const cheapest = bids.length ? Math.min(...bids.map((b) => b.corrected_total)) : 0;
   return (
-    <Card className="overflow-x-auto p-0">
+    <Card flush className="overflow-x-auto">
       <table className="w-full text-[12px]">
         <thead>
           <tr className="border-b border-cb-divider text-left font-cb-sans text-[9px] uppercase tracking-cb-chip text-cb-faint">

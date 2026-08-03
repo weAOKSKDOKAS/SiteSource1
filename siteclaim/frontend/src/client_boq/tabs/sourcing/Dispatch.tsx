@@ -110,7 +110,7 @@ export function Dispatch({
         each enquiry in the outbox with exactly your edited text.
       </p>
 
-      <Card className="p-0">
+      <Card flush>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cb-divider px-3 py-2">
           <h3 className="font-cb-sans text-[12px] font-semibold text-cb-ink-text">
             Selected for enquiry
@@ -158,7 +158,7 @@ export function Dispatch({
       </Card>
 
       {dispatch && (
-        <Card className="p-0">
+        <Card flush>
           <div className="flex items-center justify-between border-b border-cb-divider bg-cb-ok-tint px-3 py-2">
             <h3 className="font-cb-sans text-[12px] font-semibold text-cb-ink-text">
               Outbox — {dispatch.bundles.length} enquir

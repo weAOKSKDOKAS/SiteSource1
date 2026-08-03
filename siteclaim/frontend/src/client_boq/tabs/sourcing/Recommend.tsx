@@ -178,7 +178,7 @@ function TradeRecommendation({
         </button>
       </div>
 
-      <Card className="overflow-hidden p-0">
+      <Card flush className="overflow-hidden">
         {awaiting && (
           <div className="flex flex-wrap items-center gap-3 border-b border-cb-divider px-3 py-2.5">
             <span className="text-[16px]">⏳</span>
@@ -227,7 +227,7 @@ function TradeRecommendation({
         ))}
       </Card>
 
-      <Card className="overflow-hidden p-0">
+      <Card flush className="overflow-hidden">
         <div className="border-b border-cb-divider px-3 py-2">
           <h4 className="text-[12px] font-semibold text-cb-ink-text">
             Bid distribution &amp; historical band
@@ -242,7 +242,7 @@ function TradeRecommendation({
         </div>
       </Card>
 
-      <Card className="overflow-hidden p-0">
+      <Card flush className="overflow-hidden">
         <h4 className="border-b border-cb-divider px-3 py-2 font-cb-sans text-[9px] font-semibold uppercase tracking-cb-chip text-cb-muted">
           Ranked — clean firms first, flagged firms demoted
         </h4>

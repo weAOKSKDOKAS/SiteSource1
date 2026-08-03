@@ -232,19 +232,28 @@ export function IconButton({
 // ---------------------------------------------------------------------------
 // Cards & consequences
 // ---------------------------------------------------------------------------
+/** `flush` drops the card's own padding, for a card whose child is a table or a divided list and
+ *  must reach the border. It is a PROP rather than a `className="p-0"` because `cx` concatenates,
+ *  it does not resolve: `p-0` and `p-[12px_13px]` are both plain `padding` at equal specificity,
+ *  so which one wins is decided by the order Tailwind happens to emit them in the bundle — and it
+ *  emits `.p-0` first, so every `<Card className="p-0">` in this app was silently rendering
+ *  padded. Measured in the built CSS on 2026-08-03, then fixed here rather than at 13 call sites. */
 export function Card({
   children,
   className,
   selected,
+  flush,
 }: {
   children: ReactNode;
   className?: string;
   selected?: boolean;
+  flush?: boolean;
 }) {
   return (
     <div
       className={cx(
-        "cb-row rounded-cb-card border border-cb-border p-[12px_13px]",
+        "cb-row rounded-cb-card border border-cb-border",
+        flush ? null : "p-[12px_13px]",
         selected ? "border-l-[3px] border-l-cb-brass bg-cb-selected" : "bg-white",
         className,
       )}

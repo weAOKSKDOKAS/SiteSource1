@@ -84,7 +84,7 @@ export function Shortlist({
         const flagged = candidates.filter((c) => c.recommended_against).length;
         const picked = (approvals[trade] ?? []).length;
         return (
-          <Card key={trade} className="p-0">
+          <Card key={trade} flush>
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cb-divider px-3 py-2">
               <h3 className="font-cb-sans text-[12px] font-semibold text-cb-ink-text">
                 {tradeLabel(trade)}

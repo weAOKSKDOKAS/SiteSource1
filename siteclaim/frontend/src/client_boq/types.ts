@@ -1099,3 +1099,189 @@ export interface LevelUploadResult {
   levelled: LevelledBid[];
   misdirected?: MisdirectedHint | null;
 }
+
+// ---------------------------------------------------------------------------
+// The management screens — firm register, benchmark corpus, projects
+// ---------------------------------------------------------------------------
+// Copied from src/types.ts on the same terms as everything above: separate type files by design,
+// and the backend is the authority.
+
+export interface FirmsPage {
+  items: FirmProfile[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface EstimateProject {
+  id: number;
+  name: string;
+  trade: string;
+  client: string;
+  contract_ref: string;
+  status: string;
+  provenance: string;
+  source: string;
+  run_ref: string;
+  package_key: string;
+  scope_of_works: string;
+  notes: string;
+  created_at: string;
+  closed_at: string;
+  item_count: number;
+  priced_item_count: number;
+  total: number | null;
+}
+
+export interface DashboardPackage {
+  package_key: string;
+  trade: string;
+  scope_summary: string;
+  recommended_route: string;
+  chosen_route: string | null;
+  track: string; // left | right | undecided
+  estimate_id: number | null;
+  decided_by: string;
+}
+
+export interface ProjectSummary {
+  run_ref: string;
+  name: string;
+  provenance: string;
+  package_count: number;
+  self_perform_count: number;
+  sublet_count: number;
+  estimate_count: number;
+  benchmark_project_id: number | null;
+}
+
+export interface ProjectDashboard {
+  run_ref: string;
+  name: string;
+  provenance: string;
+  packages: DashboardPackage[];
+  estimates: EstimateProject[];
+  benchmark_project_id: number | null;
+}
+
+export interface BenchmarkProject {
+  id: number;
+  name: string;
+  trade: string;
+  client: string;
+  contract_ref: string;
+  status: string;
+  provenance: string;
+  source: string;
+  notes: string;
+  created_at: string;
+  closed_at: string;
+  tender_item_count: number;
+  actual_item_count: number;
+  variance_count: number;
+}
+
+export interface BenchmarkSummary {
+  projects: number;
+  tender_items: number;
+  actual_items: number;
+  variance_records: number;
+  reasoned_records: number;
+  coverage_by_trade: Record<string, number>;
+  coverage_by_granularity: Record<string, number>;
+}
+
+export interface BenchmarkItem {
+  id: number;
+  project_id: number;
+  item_ref: string;
+  description: string;
+  unit: string;
+  qty: number | null;
+  rate: number | null;
+  amount: number | null;
+  section: string;
+  granularity?: string;
+}
+
+export interface MatchPair {
+  tier: number;
+  similarity: number | null;
+  tender: BenchmarkItem | null;
+  actual: BenchmarkItem | null;
+}
+
+export interface MatchProposal {
+  project_id: number;
+  tier1: MatchPair[];
+  tier2: MatchPair[];
+  tier3: MatchPair[];
+}
+
+export interface MatchConfirm {
+  tender_item_id?: number | null;
+  actual_item_id?: number | null;
+  match_tier: number;
+}
+
+/** One matched tender-vs-actual line. `reason_code` is written ONLY by a human confirming it —
+ *  `suggested_reason` is a proposal drawn from the EOS narrative and is never the same field. */
+export interface VarianceRecord {
+  id: number;
+  project_id: number;
+  tender_item_id: number | null;
+  actual_item_id: number | null;
+  item_ref: string;
+  granularity: string;
+  match_tier: number | null;
+  tender_rate: number | null;
+  actual_rate: number | null;
+  tender_qty: number | null;
+  actual_qty: number | null;
+  tender_amount: number | null;
+  actual_amount: number | null;
+  rate_delta: number | null;
+  rate_delta_pct: number | null;
+  amount_delta: number | null;
+  amount_delta_qty: number | null;
+  amount_delta_rate: number | null;
+  reason_code: string;
+  reason_note: string;
+  tagged_by: string;
+  confirmed_at: string;
+  source: string;
+  suggested_reason: string | null;
+}
+
+export interface ReasonCode {
+  code: string;
+  label: string;
+  description: string;
+  category: string;
+}
+
+export interface ProjectEOS {
+  id: number;
+  project_id: number;
+  narrative: string;
+  summary: string;
+  source_doc: string;
+  has_images: boolean;
+  provenance: string;
+  created_at: string;
+}
+
+export interface ReasonCandidate {
+  item_ref: string;
+  granularity: string;
+  reason_code: string;
+  snippet: string;
+  source: string; // reason-from-eos | fallback
+  record_id: number | null;
+}
+
+export interface VarianceReasonSuggestions {
+  project_id: number;
+  eos_attached: boolean;
+  candidates: ReasonCandidate[];
+}

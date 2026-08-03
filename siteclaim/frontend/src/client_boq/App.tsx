@@ -14,16 +14,19 @@ import { GlobalBar, StepStrip, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
-import type { Surface } from "./nav/routes";
+import type { NotDesignedId, ScreenId, Surface } from "./nav/routes";
 import { go, hashFor, parseHash } from "./nav/routes";
 import { AddendumPanel, RfiPanel } from "./panels";
 import type { PanelRequest } from "./panels";
 import { ProfilePicker } from "./profile/ProfilePicker";
 import { CommandSearch } from "./search/CommandSearch";
+import { Benchmarks } from "./screens/Benchmarks";
 import { CriteriaLibrary } from "./screens/CriteriaLibrary";
 import { NotDesigned } from "./screens/NotDesigned";
+import { Projects } from "./screens/Projects";
 import { Rates } from "./screens/Rates";
 import { Settings } from "./screens/Settings";
+import { Subcontractors } from "./screens/Subcontractors";
 import { Team } from "./screens/Team";
 import { DocumentsTab } from "./tabs/Documents";
 import { OfferTab } from "./tabs/Offer";
@@ -66,6 +69,24 @@ export interface SetData {
 }
 
 const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false };
+
+/** The app-bar title for every screen that is not a shelf or a set. Typed as a TOTAL record over
+ *  both id unions, so adding a screen to `routes.ts` and forgetting its title is a compile error
+ *  rather than an `undefined` in the app bar. The previous inline object literal was exactly the
+ *  hand-maintained-copy trap `routes.ts` warns about, one level up. */
+const SCREEN_TITLES: Record<ScreenId | NotDesignedId, string> = {
+  criteria: "Criteria library",
+  rates: "Pricing & rates",
+  team: "Team & access",
+  settings: "AI model",
+  subcontractors: "Subcontractors",
+  benchmarks: "Benchmarks",
+  projects: "Projects",
+  letters: "Letter templates",
+  positions: "Standard positions",
+  clients: "Clients",
+  audit: "Audit log",
+};
 
 export default function ClientBoqApp() {
   const [surface, setSurface] = useState<Surface>(() => parseHash(window.location.hash));
@@ -247,16 +268,7 @@ export default function ClientBoqApp() {
           : "Awaiting client"
       : surface.kind === "set"
         ? openSetRow?.name ?? surface.setId
-        : {
-            criteria: "Criteria library",
-            rates: "Pricing & rates",
-            team: "Team & access",
-            settings: "AI model",
-            letters: "Letter templates",
-            positions: "Standard positions",
-            clients: "Clients",
-            audit: "Audit log",
-          }[surface.screen];
+        : SCREEN_TITLES[surface.screen];
 
   const deadlineChip =
     isSet && openSetRow?.meta.close_date
@@ -343,6 +355,12 @@ export default function ClientBoqApp() {
                 setCurrentUserId(m.member_id);
               }}
             />
+          ) : surface.screen === "subcontractors" ? (
+            <Subcontractors onError={setError} />
+          ) : surface.screen === "benchmarks" ? (
+            <Benchmarks onError={setError} />
+          ) : surface.screen === "projects" ? (
+            <Projects onError={setError} />
           ) : (
             <Settings demoMode={demoMode} onError={setError} />
           )

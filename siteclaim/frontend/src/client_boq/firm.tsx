@@ -119,10 +119,13 @@ export function FirmRecord({
       {(email || firm.address) && (
         <div>
           <SectionLabel className="mb-1">Contact</SectionLabel>
+          {/* Navy, not brass — same rule as the trade chips below, and the same hex the firm row
+              uses for this field on the Subcontractors screen, which this drawer opens over. An
+              enquiry address is a contact fact off the register; nothing proposed it. */}
           {email && (
             <a
               href={`mailto:${email}`}
-              className="block font-cb-mono text-[11px] text-cb-brass-text hover:underline"
+              className="block font-cb-mono text-[11px] text-cb-navy hover:underline"
             >
               ✉ {email}
             </a>
