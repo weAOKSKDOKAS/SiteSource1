@@ -1,0 +1,17 @@
+{
+  "summary": "Supply, fabrication and installation of aluminium windows and unitised curtain walling to the Harbour Crest Residences tower, including performance testing and structural glazing certification.",
+  "notes": [
+    {"kind": "inclusion", "text": "Supply and installation of aluminium windows and unitised curtain-wall panels to all elevations.", "source": "draft"},
+    {"kind": "inclusion", "text": "Air and water penetration testing of the curtain-wall mock-up.", "source": "draft"},
+    {"kind": "exclusion", "text": "Builder's work in connection (openings, making good) by others.", "source": "draft"},
+    {"kind": "exclusion", "text": "Permanent power and water for testing to be provided by the main contractor.", "source": "draft"},
+    {"kind": "ambiguity", "text": "Slab-edge tolerances are not stated; bracketry allowance assumes ±15mm.", "source": "draft"},
+    {"kind": "conflict", "text": "The specification calls for 6mm glass while the drawings note 8mm at podium level.", "source": "draft"},
+    {"kind": "assumption", "text": "Continuous crane access to the facade is available during the installation window.", "source": "draft"}
+  ],
+  "clarifying_questions": [
+    "Confirm the glass thickness at podium level (spec vs drawings).",
+    "Confirm who provides temporary power and water for on-site testing.",
+    "Confirm the programme handover dates for facade access."
+  ]
+}

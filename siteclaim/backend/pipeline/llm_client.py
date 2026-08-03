@@ -118,6 +118,10 @@ class LLMClient:
 
     def __init__(self, provider: Optional[str] = None, model: Optional[str] = None) -> None:
         self.provider = (provider or extraction_provider()).lower()  # constructed default
+        # An EXPLICITLY passed provider is remembered separately from the env-derived default,
+        # because _route honours it for text calls (see there). Callers that construct bare
+        # LLMClient() — every procurement site — leave this None and route exactly as before.
+        self._provider_arg = provider.lower().strip() if provider else None
         self._model_arg = model  # explicit model override, if any
         self.model = model or self._default_model()
         self._clients: dict = {}  # one lazily-built SDK client per provider (routing may switch)
@@ -133,13 +137,17 @@ class LLMClient:
         """Pick the provider for a call by its content.
 
         A call carrying any image → Anthropic (Sonnet) vision — DeepSeek's chat API
-        rejects image input. A text-only call → the cheap text provider: DeepSeek when
-        ``DEEPSEEK_API_KEY`` is set, otherwise Anthropic in text mode (works today with
-        no new key). Content routing overrides the constructed provider so images never
-        reach DeepSeek and text takes the cheapest available path.
+        rejects image input; that is a physical constraint and outranks everything below.
+        A text-only call → an EXPLICITLY constructed provider when one was passed
+        (``LLMClient(provider=...)`` — how client_boq applies its app-wide model setting),
+        else the cheap default: DeepSeek when ``DEEPSEEK_API_KEY`` is set, otherwise
+        Anthropic in text mode (works today with no new key). Bare ``LLMClient()`` —
+        every procurement call site — routes exactly as it always has.
         """
         if images:
             return "anthropic"
+        if self._provider_arg:
+            return self._provider_arg
         if os.getenv("DEEPSEEK_API_KEY", "").strip():
             return "deepseek"
         return "anthropic"
