@@ -1,6 +1,11 @@
 // The app-level navigation sidebar — 206px open, a 48px icon rail collapsed. Per the home-page
 // handoff: blocks (shelves · CUSTOMISE · MANAGE · ORGANISATION) separated by hairlines, "+ New
 // tender" on top doing the same thing as dropping a file, and the signed-in user at the foot.
+//
+// There was a "‹ Procurement" button under "+ New tender" (and a "‹" on the icon rail) that
+// cleared the hash to swap `main.tsx` to the other root. `main.tsx` no longer forks, so clearing
+// the hash lands back on the desk — the control had no destination left and is gone. Its Atlas
+// screens are still on disk; they are simply not somewhere the app can send you.
 
 import type { Surface } from "./routes";
 import { go } from "./routes";
@@ -13,12 +18,6 @@ interface NavItem {
   surface: Surface;
   count?: number;
   countTone?: "plain" | "warn";
-}
-
-/** Back to the procurement product. Clearing the hash is all it takes: `main.tsx` branches on
- *  `#/tender` and re-renders the other root. */
-function toProcurement() {
-  window.location.hash = "";
 }
 
 export function NavSidebar({
@@ -75,14 +74,6 @@ export function NavSidebar({
         >
           +
         </button>
-        <button
-          type="button"
-          onClick={toProcurement}
-          title="Procurement — the other product"
-          className="cb-press mb-1 flex h-7 w-7 flex-none items-center justify-center rounded-cb-btn border border-cb-border font-cb-mono text-[11px] text-cb-muted"
-        >
-          ‹
-        </button>
         {[shelves, customise, manage, organisation].map((block, bi) => (
           <div key={bi} className="flex w-full flex-col items-center gap-1">
             {bi > 0 && <span className="my-1 h-px w-6 bg-cb-border" />}
@@ -122,18 +113,6 @@ export function NavSidebar({
           className="cb-press w-full rounded-[5px] bg-cb-brass px-3 py-2 text-left font-cb-sans text-[11.5px] font-semibold text-cb-on-brass"
         >
           + New tender
-        </button>
-        {/* The way back to the other product. Setting the hash is the whole navigation —
-            main.tsx listens for it and swaps the root — and because it pushes a history entry,
-            the browser's Back button works between the two products in both directions. */}
-        <button
-          type="button"
-          onClick={toProcurement}
-          title="Switch to the procurement product"
-          className="cb-press flex w-full items-center gap-1.5 rounded-[5px] border border-cb-border px-3 py-1.5 text-left font-cb-sans text-[11px] font-medium text-cb-body"
-        >
-          <span className="font-cb-mono text-[11px] text-cb-muted">‹</span>
-          Procurement
         </button>
       </div>
       <NavBlock items={shelves} active={active} />
