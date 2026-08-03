@@ -660,3 +660,152 @@ export interface LetterResponse {
   markdown: string;
   letter: LetterOfOffer;
 }
+
+// ---------------------------------------------------------------------------
+// The bridge (/bridge/*) — the join between this review and the procurement fork
+// ---------------------------------------------------------------------------
+// DUPLICATION, DELIBERATE. `SorItem`, `TradeWorkPackage` and `ScopePackages` also exist in
+// src/types.ts, where procurement defines them. They are copied rather than imported because the
+// two products keep separate type files by design: a cross-import is the beginning of a tangle,
+// and the day procurement changes its shape we want a compile error here, not a silent drift in a
+// screen nobody was editing. If these ever disagree with the backend, the backend wins — every
+// shape below is read off backend/bridge/router.py and backend/schemas/models.py.
+
+/** One priceable line of the bill. */
+export interface SorItem {
+  item_ref: string;
+  description?: string | null;
+  unit?: string | null;
+  qty?: number | null;
+  section?: string | null;
+  clause_refs: string[];
+}
+
+export interface SectionMeta {
+  code: string;
+  title: string;
+  item_count: number;
+  section_trade: string;
+}
+
+/** The scope for one trade, split out of the bill. */
+export interface TradeWorkPackage {
+  trade: string;
+  scope_summary: string;
+  sor_items: SorItem[];
+  source_refs: string[];
+  sections: SectionMeta[];
+}
+
+export interface ScopePackages {
+  project_name: string;
+  packages: TradeWorkPackage[];
+}
+
+/** An extracted item the provenance guard refused: its section is not one the bill itself
+ *  declares, so it never was a real bill line. Surfaced, never silently dropped. */
+export interface UnrecognisedItem {
+  item_ref: string;
+  description: string;
+  section: string;
+  reason: string;
+}
+
+/** One part of the set, as a candidate for being the priced bill. `proposed` means its category
+ *  is `pricing`; it is a PROPOSAL, and only `confirmed` reflects a human's choice. */
+export interface BqCandidatePart {
+  part_id: string;
+  n: number;
+  title: string;
+  category: string;
+  pages: number;
+  scanned: boolean;
+  has_pdf: boolean;
+  source_doc: string;
+  rev: number;
+  proposed: boolean;
+  confirmed: boolean;
+}
+
+export interface BqCandidates {
+  set_id: string;
+  parts: BqCandidatePart[];
+  proposed: string[];
+  confirmed: string[];
+  /** Confirmed part ids that no longer exist in the set (a re-split dropped them). Shown, never
+   *  silently discarded. */
+  stale_confirmed: string[];
+  message: string;
+}
+
+/** The bill split. Note the UI never calls this "scope": that word already means client_boq's
+ *  estimate scope on this desk, and one strip cannot carry two unrelated things under one name. */
+export interface BridgeSplitResponse {
+  set_id: string;
+  scope: ScopePackages;
+  unrecognised_items: UnrecognisedItem[];
+  /** Honest-degradation messages from the run — an unreadable part, a quarantined item. */
+  notes: string[];
+}
+
+export interface BridgeSplitRead {
+  set_id: string;
+  scope: ScopePackages;
+}
+
+/** One routable package with its recommendation. `recommended_route` is ADVISORY — the AI
+ *  proposes; `chosen_route` is null until a human decides, and the bridge records that decision in
+ *  its own table rather than here. */
+export interface BridgeRoutePackage {
+  id?: number | null;
+  package_key: string;
+  trade: string;
+  section?: string | null;
+  section_title: string;
+  scope_summary: string;
+  recommended_route: string;
+  rationale: string;
+  signals: Record<string, number | boolean | string>;
+  chosen_route?: string | null;
+  decided_by: string;
+  decided_at: string;
+  source: string;
+}
+
+/** POST /route/analyze — runs the proposal. */
+export interface BridgeRouteProposal {
+  set_id: string;
+  run_ref: string;
+  packages: BridgeRoutePackage[];
+  /** Shown, never blocking: an unanswered client query does not move the submission deadline. */
+  open_queries: number;
+  notes: string[];
+}
+
+/** GET /route/proposal — a pure read that never re-runs the analysis. An empty `packages` means
+ *  "not yet run", which is a state and not an error. */
+export interface BridgeRouteProposalRead {
+  set_id: string;
+  run_ref: string;
+  packages: BridgeRoutePackage[];
+  open_queries: number;
+  review_approved: boolean;
+  has_split: boolean;
+}
+
+export interface BridgeRouteDecision {
+  package_key: string;
+  chosen_route: string;
+  decided_by: string;
+  decided_at: string;
+}
+
+/** Both POST /route/confirm and GET /route/decisions return this shape, so a tab renders
+ *  identically whether it just confirmed or is reading back after a reload. */
+export interface BridgeRouteDecisions {
+  set_id: string;
+  run_ref: string;
+  decisions: BridgeRouteDecision[];
+  self_perform_packages: string[];
+  sublet_packages: string[];
+}

@@ -3,29 +3,35 @@
 // exactly which gate refused and why, and rewriting them here would lose that.
 
 import type {
+  BqCandidates,
+  BridgeRouteDecisions,
+  BridgeRouteProposal,
+  BridgeRouteProposalRead,
+  BridgeSplitRead,
+  BridgeSplitResponse,
   CitationsResponse,
   CriteriaResponse,
   CriterionRow,
-  EstimateResponse,
   DocumentRow,
-  Highlight,
+  EstimateResponse,
   GateState,
+  Highlight,
   JobState,
-  LetterResponse,
   LLMSettingsResponse,
-  ManifestGateState,
+  LetterResponse,
   Manifest,
+  ManifestGateState,
   PartContext,
   PartDetail,
   PartSpec,
   PartsResponse,
+  RFIBatchRow,
+  RFIItem,
+  RFIsResponse,
   RateRowFull,
   RatesResponse,
   RegisterResponse,
   RevisionRow,
-  RFIBatchRow,
-  RFIItem,
-  RFIsResponse,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -87,6 +93,23 @@ const post = <T>(path: string, body: unknown): Promise<T> =>
 
 const del = <T>(path: string): Promise<T> =>
   fetch(ROOT + path, { method: "DELETE", headers: actorHeaders() }).then((r) => handle<T>(r));
+
+// --- the bridge -------------------------------------------------------------
+// Mounted at /bridge, not under /client-boq, so it needs its own root — everything else (the
+// error shape, the actor header, the typing style) is identical. The bridge belongs to neither
+// product: it carries one tender from this review into the procurement routing fork.
+const BRIDGE = `${BASE}/bridge`;
+
+const bget = <T>(path: string): Promise<T> => fetch(BRIDGE + path).then((r) => handle<T>(r));
+
+const bpost = <T>(path: string, body: unknown): Promise<T> =>
+  fetch(BRIDGE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
+
+const setPath = (setId: string) => `/${encodeURIComponent(setId)}`;
 
 /** Is this backend in DEMO mode? Drives the app-bar chip, which is not decoration: it means
  *  uploaded files were not read and every finding on screen came from a fixture. */
@@ -348,6 +371,47 @@ export const api = {
 
   unmapScope: (setId: string, itemId: string) =>
     del<ScopeItemsResponse>(`/estimate/scope/item/${setId}/${itemId}`),
+
+  // --- the bridge: this review -> the procurement routing fork --------------
+  // set_id IS the procurement run_ref, so every call here is keyed by the same id the desk uses.
+  bridge: {
+    /** Every part in the set, with which one(s) are PROPOSED as the priced bill. Proposing is not
+     *  confirming: the category comes from an AI interpretation stage, so a human picks. 404s only
+     *  when the set has no parts at all. */
+    candidates: (setId: string) =>
+      bget<BqCandidates>(`${setPath(setId)}/bq-candidates`),
+
+    /** Confirm the SET of bill parts — several are legitimate (a bill of quantities AND a daywork
+     *  schedule are both priceable). 400 on an unknown id or an empty selection. */
+    confirmBillParts: (setId: string, partIds: string[]) =>
+      bpost<BqCandidates>(`${setPath(setId)}/bq-part`, { part_ids: partIds }),
+
+    /** Run the bill split. 409 until a bill part is confirmed — the message names bq-part. */
+    runSplit: (setId: string) => bpost<BridgeSplitResponse>(`${setPath(setId)}/scope`, {}),
+    /** The persisted split. 404 before it has been run. */
+    split: (setId: string) => bget<BridgeSplitRead>(`${setPath(setId)}/scope`),
+
+    /** Propose a route per package. 409 until the review register is approved — the backend's own
+     *  sentence names the gate and how to clear it, and `.status` on the thrown Error is what lets
+     *  the tab tell that apart from a real failure. */
+    analyzeRoutes: (setId: string) =>
+      bpost<BridgeRouteProposal>(`${setPath(setId)}/route/analyze`, {}),
+
+    /** A PURE read — it never re-runs the analysis, which would be a write and, live, a model
+     *  call. Empty `packages` means "not yet run", which is a state, not an error. */
+    proposal: (setId: string) =>
+      bget<BridgeRouteProposalRead>(`${setPath(setId)}/route/proposal`),
+
+    /** A pure read. No decisions yet is an empty list, not a 404. */
+    decisions: (setId: string) =>
+      bget<BridgeRouteDecisions>(`${setPath(setId)}/route/decisions`),
+
+    /** The Layer-4 gate: record the human's route per package. Seeds no estimate on either side. */
+    confirmRoutes: (
+      setId: string,
+      decisions: { package_key: string; chosen_route: string }[],
+    ) => bpost<BridgeRouteDecisions>(`${setPath(setId)}/route/confirm`, { decisions }),
+  },
 };
 
 /** Poll a background job to completion. No ceiling — a 400-page binder takes as long as it takes. */
