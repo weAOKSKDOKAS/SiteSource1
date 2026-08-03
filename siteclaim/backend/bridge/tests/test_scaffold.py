@@ -50,11 +50,11 @@ def test_the_scope_endpoint_carries_both_verbs():
 
 def test_stubs_are_honest_about_being_unimplemented():
     # A stub must fail loudly, not return a plausible empty value — a silent {} here would look
-    # exactly like "this tender has no bill parts" to every caller downstream.
-    from bridge import decisions, identity, parts, scope
+    # exactly like "this tender has no bill parts" to every caller downstream. This list shrinks
+    # as each phase lands; a NameError here means a function was renamed, not implemented.
+    from bridge import decisions, parts, scope
 
     for call in (
-        lambda: identity.run_ref_for("x"),
         lambda: parts.bq_candidates("x"),
         lambda: scope.scope_from_set("x"),
         lambda: decisions.confirm_routes("x", {}),
