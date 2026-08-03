@@ -34,7 +34,18 @@ from pydantic import BaseModel, Field  # noqa: E402
 from pipeline.documents import extract_document, to_images  # noqa: E402
 from pipeline.llm_client import demo_mode  # noqa: E402
 from pipeline.stage_01_ingest.classify import classify_documents  # noqa: E402
-from pipeline.stage_01_ingest.doc_index import build_doc_index, save_doc_index  # noqa: E402
+from pipeline.stage_01_ingest.doc_index import (  # noqa: E402
+    UnrecognisedItem,
+    build_doc_index,
+    quarantine_unrecognised_items,
+    save_doc_index,
+)
+
+# The provenance backstop moved to doc_index (beside build_doc_index, which produces the
+# ``sr_sections`` it checks against) so every ingest path can apply it — the bridge included, which
+# would otherwise ship weaker than /ingest-upload. Alias kept: this name is already imported
+# elsewhere, and a move must not break its callers.
+_quarantine_unrecognised_items = quarantine_unrecognised_items
 from pipeline.stage_01_ingest.ingest import ingest_tender  # noqa: E402
 from pipeline.stage_02_shortlist.shortlist import shortlist  # noqa: E402
 from pipeline.stage_03_dispatch.dispatch import build_dispatch  # noqa: E402
@@ -109,6 +120,7 @@ from pipeline.estimate.letter import LETTER_FIXTURE, draft_letter  # noqa: E402
 from pipeline.estimate.rates import suggest_rates  # noqa: E402
 from schemas.project import DashboardPackage, ProjectDashboard, ProjectSummary  # noqa: E402
 from client_boq.router import router as client_boq_router  # noqa: E402 — the client→BOQ module (self-contained)
+from bridge.router import router as bridge_router  # noqa: E402 — the join between the two halves
 from schemas.models import (  # noqa: E402
     BidLineItem,
     BidReply,
@@ -169,6 +181,10 @@ app.add_middleware(
 # The client→BOQ capability (REVIEW then ESTIMATE). Self-contained under /client-boq; this single
 # include is the module's only footprint in the app entrypoint. See backend/client_boq/CONTEXT.md.
 app.include_router(client_boq_router)
+
+# The bridge: one tender from an approved client_boq review, through a human bill-part
+# confirmation and a scope split, into the routing fork. See backend/bridge/CONTEXT.md.
+app.include_router(bridge_router)
 
 
 # ---------------------------------------------------------------------------
@@ -540,17 +556,6 @@ class DocKind(BaseModel):
     source: str  # filename | title | llm | fallback | "" (unclassified)
 
 
-class UnrecognisedItem(BaseModel):
-    """An extracted item quarantined by the provenance backstop — its section is not one the
-    Schedule of Rates itself declares, so it never became a real SoR item. Surfaced, never silently
-    dropped, and never formed into a package."""
-
-    item_ref: str
-    description: str = ""
-    section: str = ""
-    reason: str = ""
-
-
 class IngestUploadResponse(BaseModel):
     """The scope split plus the trade-tagged tender, so the client can hand the tagged
     tender to ``/dispatch`` for per-trade document routing. ``tender_slug`` is the
@@ -648,37 +653,6 @@ class IngestJobState(BaseModel):
     error: Optional[str] = None
     result: Optional[IngestUploadResponse] = None
     warnings: list[str] = Field(default_factory=list)  # per-section batches that couldn't be read
-
-
-def _quarantine_unrecognised_items(
-    scope: ScopePackages, sr_sections: set[str],
-) -> tuple[ScopePackages, list[UnrecognisedItem]]:
-    """Provenance backstop: drop any extracted item whose section is NOT one of the Schedule of
-    Rates' OWN section codes — an item that exists in no SR section never was a real SoR item (a
-    phantom from another document's item-like rows). Dropped items are returned FLAGGED — surfaced,
-    never silently lost — and a package left with no items is dropped (never routed). Deterministic;
-    the caller runs it only when the SR actually declared section headers to check against."""
-    from collections import Counter
-
-    kept_packages = []
-    unrecognised: list[UnrecognisedItem] = []
-    for pkg in scope.packages:
-        kept = []
-        for it in pkg.sor_items:
-            code = (it.section or "").strip().upper()
-            if code in sr_sections:
-                kept.append(it)
-            else:
-                unrecognised.append(UnrecognisedItem(
-                    item_ref=it.item_ref, description=it.description or "", section=code,
-                    reason=f"section {code or '—'} is not a Schedule-of-Rates section",
-                ))
-        if not kept:
-            continue  # the whole package was unrecognised -> never routed
-        counts = Counter((it.section or "").strip().upper() for it in kept)
-        sections = [m.model_copy(update={"item_count": counts[m.code]}) for m in pkg.sections if counts.get(m.code)]
-        kept_packages.append(pkg.model_copy(update={"sor_items": kept, "sections": sections}))
-    return scope.model_copy(update={"packages": kept_packages}), unrecognised
 
 
 def _ingest_live(
