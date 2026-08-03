@@ -156,25 +156,107 @@ def propose_routes(set_id: str, *, on_error: Optional[Callable[[str], None]] = N
 def ensure_tables(conn: sqlite3.Connection) -> None:
     """Create the bridge's route-decision table if absent (lazy DDL, idempotent).
 
-    Will create ``bridge_route_decisions(set_id, package_key, chosen_route, ...)`` with a UNIQUE
-    constraint on ``(set_id, package_key)`` from the start, so re-deciding updates in place.
+    UNIQUE ``(set_id, package_key)`` from the first version, so re-deciding a package updates in
+    place instead of leaving two contradictory decisions to be read back in insertion order.
+    (``package_routes`` has no such constraint; this table is not that table, and does not
+    inherit its gap.)
     """
-    raise NotImplementedError(
-        "ensure_tables: CREATE TABLE IF NOT EXISTS bridge_route_decisions, UNIQUE(set_id, package_key)"
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS bridge_route_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_id TEXT NOT NULL,
+            package_key TEXT NOT NULL,
+            chosen_route TEXT NOT NULL,
+            decided_by TEXT NOT NULL DEFAULT 'operator',
+            decided_at TEXT NOT NULL,
+            UNIQUE(set_id, package_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_bridge_route_decisions_set ON bridge_route_decisions(set_id);
+        """
     )
+    conn.commit()
+
+
+def load_decisions(conn: sqlite3.Connection, set_id: str) -> list[dict]:
+    """Every persisted route decision for ``set_id``, in package order."""
+    ensure_tables(conn)
+    rows = conn.execute(
+        "SELECT package_key, chosen_route, decided_by, decided_at FROM bridge_route_decisions "
+        "WHERE set_id = ? ORDER BY package_key",
+        (set_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = "operator") -> dict:
     """Record the human's route per package for ``set_id`` and return the self-perform/sublet split.
 
-    Will validate every route against ``schemas.routing.ROUTES`` before writing anything, persist
-    by ``(set_id, package_key)``, and seed NO estimate on either side.
+    Validates every route against ``schemas.routing.ROUTES`` and every package_key against the
+    persisted proposal BEFORE writing anything — a decision for a package nobody proposed would
+    otherwise sit in the table describing a package that does not exist.
+
+    **Seeds nothing, on either side.** ``client_boq_estimates`` is keyed by ``set_id`` — ONE
+    estimate per tender — and that is correct: a main contractor submits one priced bill with a
+    single tendered total, and every item on it is priced. The route decision does not change which
+    items appear in the submission; it changes only where each item's RATE comes from (our own
+    build-up, or a subcontractor's quote). Seeding one estimate per self-perform package would
+    create N documents where the tender needs one.
+
+    It also never calls the procurement ``/route/confirm``, which seeds only when a ``scope`` is
+    supplied — so that endpoint keeps working exactly as it does today, unedited, and remains the
+    sole writer of ``package_routes.chosen_route``.
     """
-    raise NotImplementedError(
-        "confirm_routes: validate against ROUTES, persist by (set_id, package_key), seed nothing"
-    )
+    from schemas.routing import ROUTES, SELF_PERFORM, SUBLET
 
+    from bridge.identity import bridge_conn, run_ref_for
+    from db import routing
 
-def load_decisions(conn: sqlite3.Connection, set_id: str) -> list[dict]:
-    """Every persisted route decision for ``set_id``, in package order."""
-    raise NotImplementedError("load_decisions: read the persisted route decisions for a set")
+    ref = run_ref_for(set_id)
+    if not decisions:
+        raise ValueError("Decide at least one package — an empty confirmation records nothing.")
+    bad = {key: route for key, route in decisions.items() if route not in ROUTES}
+    if bad:
+        raise ValueError(
+            f"unknown route(s) {bad} (use one of {list(ROUTES)})"
+        )
+
+    conn = bridge_conn()
+    try:
+        # The same gate the proposal is behind: confirming a route IS routing, and a gate that only
+        # covers the advisory step would be bypassed by posting straight here.
+        require_approved_review(conn, ref)
+        ensure_tables(conn)
+        proposed = {p["package_key"] for p in routing.read_proposal(conn, ref)}
+        if not proposed:
+            raise LookupError(
+                f"No route proposal for set {ref!r} — POST /bridge/{ref}/route/analyze first."
+            )
+        unknown = sorted(set(decisions) - proposed)
+        if unknown:
+            raise ValueError(
+                f"Unknown package_key(s) for set {ref!r}: {', '.join(unknown)}. "
+                f"Proposed: {', '.join(sorted(proposed))}."
+            )
+
+        stamp = _now()
+        conn.executemany(
+            "INSERT INTO bridge_route_decisions (set_id, package_key, chosen_route, decided_by, decided_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(set_id, package_key) DO UPDATE SET "
+            "chosen_route = excluded.chosen_route, decided_by = excluded.decided_by, "
+            "decided_at = excluded.decided_at",
+            [(ref, key, route, decided_by, stamp) for key, route in decisions.items()],
+        )
+        conn.commit()
+        stored = load_decisions(conn, ref)
+    finally:
+        conn.close()
+
+    return {
+        "set_id": ref,
+        "run_ref": ref,
+        "decisions": stored,
+        "self_perform_packages": [d["package_key"] for d in stored if d["chosen_route"] == SELF_PERFORM],
+        "sublet_packages": [d["package_key"] for d in stored if d["chosen_route"] == SUBLET],
+    }

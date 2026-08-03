@@ -122,7 +122,23 @@ def post_route_analyze(set_id: str) -> dict:
 
 @router.post("/{set_id}/route/confirm")
 def post_route_confirm(set_id: str, req: ConfirmBridgeRoutesRequest) -> dict:
-    """The Layer-4 gate: record the human's routes. Seeds no estimate on either side."""
-    raise NotImplementedError(
-        "POST /bridge/{set_id}/route/confirm: persist decisions, return the splits, seed nothing"
-    )
+    """The Layer-4 gate: record the human's routes. Seeds no estimate on either side.
+
+    The procurement ``/route/confirm`` is not called and not changed: it seeds only when a
+    ``scope`` is supplied, so it keeps working exactly as it does today and stays the sole writer
+    of ``package_routes.chosen_route``.
+    """
+    from bridge import decisions
+
+    try:
+        return decisions.confirm_routes(
+            set_id,
+            {d.package_key: d.chosen_route for d in req.decisions},
+            decided_by=req.decided_by,
+        )
+    except decisions.ReviewNotApproved as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

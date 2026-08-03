@@ -48,17 +48,20 @@ def test_the_scope_endpoint_carries_both_verbs():
     assert {"get", "post"} <= methods
 
 
-def test_stubs_are_honest_about_being_unimplemented():
-    # A stub must fail loudly, not return a plausible empty value — a silent {} here would look
-    # exactly like "this tender has no bill parts" to every caller downstream. This list shrinks
-    # as each phase lands; a NameError here means a function was renamed, not implemented.
-    from bridge import decisions
+def test_no_stub_survives_now_that_every_phase_has_landed():
+    # This started life as the inverse — a list of stubs asserted to raise NotImplementedError —
+    # and shrank by one entry per phase. Now that the last one is implemented, the useful assertion
+    # is that none came back: a NotImplementedError left in a shipped path would be a 500 on an
+    # endpoint that looks wired.
+    import bridge.decisions
+    import bridge.identity
+    import bridge.parts
+    import bridge.router
+    import bridge.scope
 
-    for call in (
-        lambda: decisions.confirm_routes("x", {}),
-    ):
-        with pytest.raises(NotImplementedError):
-            call()
+    for mod in (bridge.identity, bridge.parts, bridge.scope, bridge.decisions, bridge.router):
+        source = open(mod.__file__, encoding="utf-8").read()
+        assert "NotImplementedError" not in source, f"{mod.__name__} still carries a stub"
 
 
 def test_the_bridge_never_imports_the_gmail_path():
