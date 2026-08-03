@@ -120,6 +120,27 @@ def post_route_analyze(set_id: str) -> dict:
     return {**body, "notes": notes}
 
 
+@router.get("/{set_id}/route/proposal")
+def get_route_proposal(set_id: str) -> dict:
+    """The persisted route proposal — a pure read that never re-runs the analysis.
+
+    The step chips have to know whether a proposal exists. POSTing analyze to find out would be a
+    write and, live, a model call. A set with no proposal returns ``packages: []`` — "not yet run"
+    is a state, not an error, so this never 404s.
+    """
+    from bridge import decisions
+
+    return decisions.stored_proposal(set_id)
+
+
+@router.get("/{set_id}/route/decisions")
+def get_route_decisions(set_id: str) -> dict:
+    """The persisted route decisions — a pure read. No decisions yet is ``decisions: []``."""
+    from bridge import decisions
+
+    return decisions.stored_decisions(set_id)
+
+
 @router.post("/{set_id}/route/confirm")
 def post_route_confirm(set_id: str, req: ConfirmBridgeRoutesRequest) -> dict:
     """The Layer-4 gate: record the human's routes. Seeds no estimate on either side.

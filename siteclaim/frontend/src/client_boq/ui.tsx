@@ -2,6 +2,7 @@
 // colour from the caller, because the palette carries meaning: a chip that picks its own colour
 // would eventually say the wrong thing.
 
+import { useEffect, useState } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import type { DepartureItem, RegisterStatus } from "./types";
 
@@ -231,19 +232,28 @@ export function IconButton({
 // ---------------------------------------------------------------------------
 // Cards & consequences
 // ---------------------------------------------------------------------------
+/** `flush` drops the card's own padding, for a card whose child is a table or a divided list and
+ *  must reach the border. It is a PROP rather than a `className="p-0"` because `cx` concatenates,
+ *  it does not resolve: `p-0` and `p-[12px_13px]` are both plain `padding` at equal specificity,
+ *  so which one wins is decided by the order Tailwind happens to emit them in the bundle — and it
+ *  emits `.p-0` first, so every `<Card className="p-0">` in this app was silently rendering
+ *  padded. Measured in the built CSS on 2026-08-03, then fixed here rather than at 13 call sites. */
 export function Card({
   children,
   className,
   selected,
+  flush,
 }: {
   children: ReactNode;
   className?: string;
   selected?: boolean;
+  flush?: boolean;
 }) {
   return (
     <div
       className={cx(
-        "cb-row rounded-cb-card border border-cb-border p-[12px_13px]",
+        "cb-row rounded-cb-card border border-cb-border",
+        flush ? null : "p-[12px_13px]",
         selected ? "border-l-[3px] border-l-cb-brass bg-cb-selected" : "bg-white",
         className,
       )}
@@ -352,5 +362,379 @@ export function Avatar({
     >
       {initials}
     </span>
+  );
+}
+
+// ===========================================================================
+// Primitives the ported procurement screens need
+// ===========================================================================
+// Built once, here, rather than invented inline four times — four inconsistent drawers is a
+// worse outcome than one that is slightly wrong everywhere.
+//
+// TWO RULES THEY ALL FOLLOW:
+//
+// 1. Colour carries meaning, so these take it from the caller wherever it is semantic (the same
+//    reason `Pill` and `Chip` above do). Atlas's `tone="brand" | "violet" | …` enums are NOT
+//    translated by name — Atlas blue means "Claude wrote this" and cb blue means "an uncovered
+//    clause", so a mechanical swap would silently invert them. Where a tone is genuinely a
+//    magnitude and not an authorship claim (a match score), a fixed scale is used and says so.
+//
+// 2. They must work INSIDE `[data-app="cboq"]` without depending on it. `.cb-press` and the
+//    `--cb-*` motion variables only apply under that attribute (set at App.tsx), so nothing here
+//    uses them for anything load-bearing — every open/closed state is real conditional rendering
+//    or a plain Tailwind transition, never a CSS class that might not be loaded.
+
+/** A tiny spinner for a control that is working. */
+export function Spinner() {
+  return (
+    <span
+      className="inline-block h-3 w-3 animate-spin rounded-full border-[1.5px] border-current border-t-transparent"
+      aria-hidden
+    />
+  );
+}
+
+/** Three pulsing dots plus an optional label — for a region that is loading, not a control. */
+export function LoadingDots({ label }: { label?: string }) {
+  return (
+    <span className="inline-flex items-center gap-2 text-[11px] text-cb-faint" role="status" aria-live="polite">
+      <span className="flex gap-1" aria-hidden>
+        {[0, 160, 320].map((delay) => (
+          <span
+            key={delay}
+            className="h-1.5 w-1.5 animate-pulse rounded-full bg-cb-faint"
+            style={{ animationDelay: `${delay}ms` }}
+          />
+        ))}
+      </span>
+      {label}
+    </span>
+  );
+}
+
+/** A hairline that sweeps a card while work is in flight. Purely an affordance — it says
+ *  "something is happening here", never what the result is. */
+export function ScanLine({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 h-[2px] overflow-hidden rounded-t-[inherit]" aria-hidden>
+      <div
+        className="h-full w-1/3 animate-[cbSweep_1.4s_ease-in-out_infinite]"
+        style={{ background: "linear-gradient(90deg, transparent, var(--color-cb-brass), transparent)" }}
+      />
+    </div>
+  );
+}
+
+/** How bad a finding is. `warning` uses `cb-amber`, whose token comment already names warning as
+ *  one of its meanings; there is deliberately no amber FILL because cb has no amber tint token and
+ *  inventing a hex would put an unowned colour in the palette. */
+export type Severity = "fatal" | "warning" | "info";
+
+const SEVERITY: Record<Severity, { label: string; cls: string; dot: string }> = {
+  fatal: { label: "Fatal", cls: "bg-cb-bad-tint text-cb-bad-dark", dot: "bg-cb-bad" },
+  warning: { label: "Warning", cls: "border border-cb-brass-line text-cb-amber", dot: "bg-cb-amber" },
+  info: { label: "Info", cls: "bg-cb-info-fill text-cb-muted", dot: "bg-cb-muted" },
+};
+
+export function SeverityTag({ severity }: { severity: Severity }) {
+  const s = SEVERITY[severity];
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center gap-1.5 rounded-cb-chip px-2 py-0.5 font-cb-sans text-[10px] font-semibold uppercase tracking-cb-chip",
+        s.cls,
+      )}
+    >
+      <span className={cx("h-1.5 w-1.5 rounded-full", s.dot)} />
+      {s.label}
+    </span>
+  );
+}
+
+/** Semantic match of a firm's closeout history to this scope.
+ *
+ *  The tiers are a MAGNITUDE, not an authorship claim, so they use the ok/muted/faint scale rather
+ *  than brass or navy — a brass chip here would say "a model decided this", and the score is
+ *  deterministic cross-reference. `assessed` false with a zero score is "nothing to score
+ *  against", which is not the same as a measured zero and must not read as one. */
+export function MatchChip({ score, assessed = true }: { score: number; assessed?: boolean }) {
+  if (!assessed && score <= 0) {
+    return (
+      <span
+        className="inline-flex items-center rounded-cb-pill bg-cb-panel px-2 py-0.5 font-cb-sans text-[10px] font-medium text-cb-faint"
+        title="No closeout record yet — there is nothing to score against. Firms are ordered by trade/specialty and the public risk screen; match ranking activates once closeout (EOS) evidence exists."
+      >
+        unassessed — no closeout yet
+      </span>
+    );
+  }
+  const value = Math.round(score * 100);
+  const tier =
+    score >= 0.7 ? "bg-cb-ok-tint text-cb-ok-dark" : score >= 0.5 ? "bg-cb-panel text-cb-body" : "bg-cb-panel text-cb-faint";
+  return (
+    <span
+      className={cx("inline-flex items-center rounded-cb-pill px-2 py-0.5 font-cb-mono text-[10px] font-medium", tier)}
+      title="Semantic match of the firm's closeout history to this scope"
+    >
+      {value}% match
+    </span>
+  );
+}
+
+/** A titled, collapsible block. Children render only when open — the same behaviour as the screen
+ *  this was ported from, and it means the block does not depend on `.cb-expand` being loaded. */
+export function Collapse({
+  title,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="rounded-cb-card border border-cb-border">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left font-cb-sans text-[11px] font-medium text-cb-ink-text"
+      >
+        <span>
+          {title}
+          {count != null && <span className="ml-1.5 font-cb-mono text-[10px] text-cb-faint">{count}</span>}
+        </span>
+        <span className="text-cb-faint" aria-hidden>{open ? "−" : "+"}</span>
+      </button>
+      {open && <div className="border-t border-cb-divider px-3 py-2">{children}</div>}
+    </div>
+  );
+}
+
+/** A centred overlay for a decision that needs the whole screen's attention. */
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  wide = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  wide?: boolean;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-cb-ink/40 px-4"
+      onClick={onClose}
+    >
+      <div
+        className={cx(
+          "flex max-h-[88vh] w-full flex-col rounded-cb-card border border-cb-border bg-cb-surface p-5 shadow-cb-card",
+          wide ? "max-w-3xl" : "max-w-lg",
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-cb-serif text-base font-semibold text-cb-ink-text">{title}</h3>
+          <button className="text-cb-faint hover:text-cb-ink-text" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** The right-anchored detail record. Stays mounted so the slide runs both ways; escape, scrim and
+ *  ✕ all close it.
+ *
+ *  `accent` is a className, not a tone enum — the caller says what the record MEANS (brass for a
+ *  model's proposal, navy for a deterministic result, bad for a failure) instead of picking from a
+ *  list of names whose colours mean something different in the other design system. */
+export function Drawer({
+  open,
+  onClose,
+  title,
+  subtitle,
+  eyebrow = "Detail record",
+  accent = "bg-cb-brass",
+  children,
+  footer,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: ReactNode;
+  eyebrow?: string;
+  accent?: string;
+  children: ReactNode;
+  footer?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  return (
+    <div
+      className={cx("fixed inset-0 z-[80]", open ? "pointer-events-auto" : "pointer-events-none")}
+      aria-hidden={!open}
+    >
+      <div
+        className={cx(
+          "absolute inset-0 bg-cb-ink/45 transition-opacity duration-300",
+          open ? "opacity-100" : "opacity-0",
+        )}
+        onClick={onClose}
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={cx(
+          "absolute right-0 top-0 h-full w-[432px] max-w-[92vw] overflow-y-auto bg-cb-surface",
+          "shadow-[-30px_0_60px_-30px_rgba(12,26,40,0.5)]",
+          "transition-transform duration-300 ease-[cubic-bezier(.3,.8,.25,1)]",
+          open ? "translate-x-0" : "translate-x-[105%]",
+        )}
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-cb-border px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={cx("h-2 w-2 rounded-full", accent)} aria-hidden />
+              <SectionLabel>{eyebrow}</SectionLabel>
+            </div>
+            <h3 className="mt-1 font-cb-serif text-base font-semibold text-cb-ink-text">{title}</h3>
+            {subtitle && <div className="mt-0.5 text-[11px] text-cb-muted">{subtitle}</div>}
+          </div>
+          <button className="text-cb-faint hover:text-cb-ink-text" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </header>
+        <div className="px-5 py-4">{children}</div>
+        {footer && <p className="px-5 pb-5 text-center text-[10px] text-cb-faint">{footer}</p>}
+      </aside>
+    </div>
+  );
+}
+
+/** The heading above a step's body. */
+export function StepHeading({ title, lead }: { title: string; lead: string }) {
+  return (
+    <div>
+      <h2 className="font-cb-serif text-lg font-semibold text-cb-ink-text">{title}</h2>
+      <p className="mt-0.5 max-w-2xl text-[12px] text-cb-muted">{lead}</p>
+    </div>
+  );
+}
+
+/** A section heading with optional lead and a right-hand slot. */
+export function SectionHeader({ title, lead, right }: { title: string; lead?: string; right?: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-2">
+      <div>
+        <h2 className="font-cb-serif text-base font-semibold text-cb-ink-text">{title}</h2>
+        {lead && <p className="mt-0.5 max-w-2xl text-[12px] text-cb-muted">{lead}</p>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+/** Back / continue for a step. `loading` disables forward travel while work is in flight. */
+export function StepNav({
+  onBack,
+  onNext,
+  nextLabel = "Continue →",
+  loading = false,
+  nextDisabled = false,
+}: {
+  onBack?: () => void;
+  onNext?: () => void;
+  nextLabel?: string;
+  loading?: boolean;
+  nextDisabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-t border-cb-divider pt-3">
+      {onBack ? (
+        <Button variant="ghost" onClick={onBack}>
+          ← Back
+        </Button>
+      ) : (
+        <span />
+      )}
+      {onNext && (
+        <Button variant="brass" onClick={onNext} disabled={loading || nextDisabled}>
+          {loading ? (
+            <span className="inline-flex items-center gap-2">
+              <Spinner /> Working…
+            </span>
+          ) : (
+            nextLabel
+          )}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** One headline number with its label. `accent` is a className so the caller says what the number
+ *  means rather than choosing from a palette of tone names. */
+export function StatCallout({
+  label,
+  value,
+  hint,
+  accent = "text-cb-ink-text",
+  className,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: string;
+  accent?: string;
+  className?: string;
+}) {
+  return (
+    <Card className={className}>
+      <div className={cx("font-cb-mono text-2xl font-bold leading-none", accent)}>{value}</div>
+      <div className="mt-1 text-[11px] font-medium text-cb-faint">{label}</div>
+      {hint && <div className="mt-0.5 text-[10px] text-cb-faint">{hint}</div>}
+    </Card>
+  );
+}
+
+/** A reference / docket block — a code that must be quoted back exactly. */
+export function Docket({
+  label = "Reference / docket",
+  code,
+  className,
+}: {
+  label?: string;
+  code: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cx("rounded-cb-card border border-cb-border bg-cb-panel px-4 py-3", className)}>
+      <SectionLabel className="mb-1">{label}</SectionLabel>
+      <div className="font-cb-mono text-sm font-semibold text-cb-ink-text">{code}</div>
+    </div>
   );
 }

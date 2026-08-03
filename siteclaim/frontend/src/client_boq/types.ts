@@ -660,3 +660,628 @@ export interface LetterResponse {
   markdown: string;
   letter: LetterOfOffer;
 }
+
+// ---------------------------------------------------------------------------
+// The bridge (/bridge/*) — the join between this review and the procurement fork
+// ---------------------------------------------------------------------------
+// DUPLICATION, DELIBERATE. `SorItem`, `TradeWorkPackage` and `ScopePackages` also exist in
+// src/types.ts, where procurement defines them. They are copied rather than imported because the
+// two products keep separate type files by design: a cross-import is the beginning of a tangle,
+// and the day procurement changes its shape we want a compile error here, not a silent drift in a
+// screen nobody was editing. If these ever disagree with the backend, the backend wins — every
+// shape below is read off backend/bridge/router.py and backend/schemas/models.py.
+
+/** One priceable line of the bill. */
+export interface SorItem {
+  item_ref: string;
+  description?: string | null;
+  unit?: string | null;
+  qty?: number | null;
+  section?: string | null;
+  clause_refs: string[];
+}
+
+export interface SectionMeta {
+  code: string;
+  title: string;
+  item_count: number;
+  section_trade: string;
+}
+
+/** The scope for one trade, split out of the bill. */
+export interface TradeWorkPackage {
+  trade: string;
+  scope_summary: string;
+  sor_items: SorItem[];
+  source_refs: string[];
+  sections: SectionMeta[];
+}
+
+export interface ScopePackages {
+  project_name: string;
+  packages: TradeWorkPackage[];
+}
+
+/** An extracted item the provenance guard refused: its section is not one the bill itself
+ *  declares, so it never was a real bill line. Surfaced, never silently dropped. */
+export interface UnrecognisedItem {
+  item_ref: string;
+  description: string;
+  section: string;
+  reason: string;
+}
+
+/** One part of the set, as a candidate for being the priced bill. `proposed` means its category
+ *  is `pricing`; it is a PROPOSAL, and only `confirmed` reflects a human's choice. */
+export interface BqCandidatePart {
+  part_id: string;
+  n: number;
+  title: string;
+  category: string;
+  pages: number;
+  scanned: boolean;
+  has_pdf: boolean;
+  source_doc: string;
+  rev: number;
+  proposed: boolean;
+  confirmed: boolean;
+}
+
+export interface BqCandidates {
+  set_id: string;
+  parts: BqCandidatePart[];
+  proposed: string[];
+  confirmed: string[];
+  /** Confirmed part ids that no longer exist in the set (a re-split dropped them). Shown, never
+   *  silently discarded. */
+  stale_confirmed: string[];
+  message: string;
+}
+
+/** The bill split. Note the UI never calls this "scope": that word already means client_boq's
+ *  estimate scope on this desk, and one strip cannot carry two unrelated things under one name. */
+export interface BridgeSplitResponse {
+  set_id: string;
+  scope: ScopePackages;
+  unrecognised_items: UnrecognisedItem[];
+  /** Honest-degradation messages from the run — an unreadable part, a quarantined item. */
+  notes: string[];
+}
+
+export interface BridgeSplitRead {
+  set_id: string;
+  scope: ScopePackages;
+}
+
+/** One routable package with its recommendation. `recommended_route` is ADVISORY — the AI
+ *  proposes; `chosen_route` is null until a human decides, and the bridge records that decision in
+ *  its own table rather than here. */
+export interface BridgeRoutePackage {
+  id?: number | null;
+  package_key: string;
+  trade: string;
+  section?: string | null;
+  section_title: string;
+  scope_summary: string;
+  recommended_route: string;
+  rationale: string;
+  signals: Record<string, number | boolean | string>;
+  chosen_route?: string | null;
+  decided_by: string;
+  decided_at: string;
+  source: string;
+}
+
+/** POST /route/analyze — runs the proposal. */
+export interface BridgeRouteProposal {
+  set_id: string;
+  run_ref: string;
+  packages: BridgeRoutePackage[];
+  /** Shown, never blocking: an unanswered client query does not move the submission deadline. */
+  open_queries: number;
+  notes: string[];
+}
+
+/** GET /route/proposal — a pure read that never re-runs the analysis. An empty `packages` means
+ *  "not yet run", which is a state and not an error. */
+export interface BridgeRouteProposalRead {
+  set_id: string;
+  run_ref: string;
+  packages: BridgeRoutePackage[];
+  open_queries: number;
+  review_approved: boolean;
+  has_split: boolean;
+}
+
+export interface BridgeRouteDecision {
+  package_key: string;
+  chosen_route: string;
+  decided_by: string;
+  decided_at: string;
+}
+
+/** Both POST /route/confirm and GET /route/decisions return this shape, so a tab renders
+ *  identically whether it just confirmed or is reading back after a reload. */
+export interface BridgeRouteDecisions {
+  set_id: string;
+  run_ref: string;
+  decisions: BridgeRouteDecision[];
+  self_perform_packages: string[];
+  sublet_packages: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Sourcing (/shortlist, /dispatch, …) — the sublet fork
+// ---------------------------------------------------------------------------
+// Copied from src/types.ts for the same reason the bridge shapes above are: separate type files
+// by design. The backend is the authority for all of them.
+
+export type Severity = "fatal" | "warning" | "info";
+
+export interface Evidence {
+  source: string;
+  signal_type: string;
+  snippet: string;
+  reference: string;
+}
+
+export interface RiskFlag {
+  severity: Severity;
+  label: string;
+  rule_ref: string;
+  evidence: Evidence[];
+}
+
+export interface RegisteredTrade {
+  code: string;
+  group: string;
+  specialty: string;
+}
+
+export interface FirmProfile {
+  firm_id: string;
+  name: string;
+  name_zh: string;
+  registered_grade: string;
+  value_band: string;
+  trades: string[];
+  registered_trades: RegisteredTrade[];
+  public_flags: RiskFlag[];
+  closeout_summary: string;
+  award_history: string[];
+  description: string;
+  enquiry_email: string;
+  br_no: string;
+  address: string;
+  reg_date: string;
+  expiry_date: string;
+}
+
+export interface Candidate {
+  firm: FirmProfile;
+  trade: string;
+  match_score: number;
+  evidence: Evidence[];
+  risk_flags: RiskFlag[];
+  /** A fatal flag demotes a firm below every clean one regardless of price or match. Deterministic
+   *  Layer 1 — never a model's opinion. */
+  recommended_against: boolean;
+}
+
+export interface ShortlistSet {
+  per_trade: Record<string, Candidate[]>;
+}
+
+export interface Coverage {
+  total_firms: number;
+  register_count: number;
+  overlay_count: number;
+  flagged_count: number;
+  flagged_firms: number;
+  flags_by_type: Record<string, number>;
+  trades: string[];
+  flag_sources: string[];
+  registers: number;
+  provenance: string;
+}
+
+export type DispatchStatus =
+  | "drafted"
+  | "approved"
+  | "sent_mock"
+  | "sent"
+  | "send_failed"
+  | "drafted_gmail";
+
+export interface DispatchBundle {
+  firm_id: string;
+  firm_name: string;
+  trade: string;
+  bundle_doc_refs: string[];
+  email_subject: string;
+  email_body: string;
+  status: DispatchStatus;
+}
+
+export interface DispatchSet {
+  bundles: DispatchBundle[];
+}
+
+export interface AttachmentOverride {
+  package_key: string;
+  removed: string[];
+  whole: string[];
+}
+
+export interface DraftFailure {
+  firm_id: string;
+  reason: string;
+}
+
+export interface DraftRecipient {
+  firm_id: string;
+  to: string;
+}
+
+export interface DispatchDraftsResponse {
+  drafted: string[];
+  failed: DraftFailure[];
+  recipients: DraftRecipient[];
+  outbox_written: boolean;
+  /** Top-level actionable notice (Gmail unconfigured / DEMO / TEST MODE); "" when all is well. */
+  message: string;
+  bundles: DispatchBundle[];
+}
+
+/** One planned attachment for a package. `mode` is the whole point: `sliced` means pages were cut
+ *  from a legal original, `whole` means the file goes intact (the safe default), `generated` means
+ *  we produced it (the priced-return sheet). `flags` records why a slice degraded to whole. */
+export interface PlanAttachment {
+  source_doc: string;
+  out_filename: string;
+  mode: "sliced" | "whole" | "generated";
+  pages: number[];
+  clauses: string[];
+  reason: string;
+  flags: string[];
+}
+
+/** A spec a package's lines reference that is not in the upload. Surfaced, never silently absent. */
+export interface MissingSpec {
+  spec: string;
+  referenced_by: string;
+}
+
+export interface SectionPlan {
+  package_key: string;
+  section: string;
+  attachments: PlanAttachment[];
+  missing_specs: MissingSpec[];
+}
+
+// ---------------------------------------------------------------------------
+// Level & award — what came back, and who gets it
+// ---------------------------------------------------------------------------
+
+export interface ArithmeticFinding {
+  location: string;
+  issue: string;
+  corrected_value: number;
+  severity: Severity;
+}
+
+export interface BidLineItem {
+  item_ref: string;
+  description: string;
+  unit: string;
+  qty: number;
+  rate: number | null;
+  amount: number | null;
+}
+
+export interface BidReply {
+  firm_id: string;
+  trade: string;
+  line_items: BidLineItem[];
+  exclusions: string[];
+  claimed_total: number | null;
+}
+
+/** One firm's bid after Layer 1 has recomputed it. `corrected_total` is OURS — the arithmetic we
+ *  redid — and `normalized_total` is what they claimed. The difference is the finding. */
+export interface LevelledBid {
+  firm_id: string;
+  firm_name: string;
+  trade: string;
+  normalized_total: number;
+  corrected_total: number;
+  arithmetic_findings: ArithmeticFinding[];
+  exclusions: string[];
+  scope_gaps: string[];
+}
+
+export type ReplyStatus = "active" | "superseded" | "withdrawn" | "migrated";
+
+export interface TenderReplyInfo {
+  firm_id: string;
+  trade: string;
+  line_items: number;
+  claimed_total: number | null;
+  status: ReplyStatus;
+  received_at: string | null;
+}
+
+export interface TenderReplies {
+  tender_slug: string;
+  reply_count: number;
+  last_received: string | null;
+  replies: TenderReplyInfo[];
+  outstanding: { firm_id: string; trade: string }[];
+  comparison_available: boolean;
+  /** routed-unit package_key -> that unit's bill-line count (the coverage denominator, Layer 1). */
+  unit_totals: Record<string, number>;
+}
+
+export interface AwaitingFirm {
+  firm_id: string;
+  firm_name: string;
+  ref: string;
+  received: boolean;
+  status: DispatchStatus;
+}
+
+export interface AwaitingPackage {
+  trade: string;
+  firms: AwaitingFirm[];
+}
+
+/** A return that priced a DIFFERENT unit than the one it was uploaded against. Reported so the
+ *  operator can re-attach it, never silently filed under the wrong package. */
+export interface MisdirectedHint {
+  target_unit: string;
+  matched_unit: string;
+  matched_items: number;
+  unit_total: number;
+}
+
+export interface BidDistributionPoint {
+  firm_name: string;
+  corrected_total: number;
+}
+
+export interface HistoricalBand {
+  low: number;
+  median: number;
+  high: number;
+}
+
+export interface RankedFirm {
+  firm_id: string;
+  firm_name: string;
+  corrected_total: number;
+  risk_flags: RiskFlag[];
+  recommended_against: boolean;
+  reason: string;
+  /** A return that priced NOTHING for this unit — excluded from the ranking, never awardable at 0. */
+  no_priced_coverage: boolean;
+}
+
+export interface Recommendation {
+  trade: string;
+  recommended_firm_id: string | null;
+  ranked: RankedFirm[];
+  rationale: string;
+  bid_distribution: BidDistributionPoint[];
+  historical_band: HistoricalBand | null;
+  /** No valid priced return has arrived — the award gate is closed for this package. */
+  awaiting_valid_return: boolean;
+}
+
+export interface LevelSection {
+  trade: string;
+  levelled: LevelledBid[];
+}
+
+export interface LevelAllResponse {
+  sections: LevelSection[];
+}
+
+export interface RecommendSection {
+  trade: string;
+  recommendation: Recommendation;
+}
+
+export interface RecommendAllResponse {
+  sections: RecommendSection[];
+}
+
+export interface LevelUploadResult {
+  levelled: LevelledBid[];
+  misdirected?: MisdirectedHint | null;
+}
+
+// ---------------------------------------------------------------------------
+// The management screens — firm register, benchmark corpus, projects
+// ---------------------------------------------------------------------------
+// Copied from src/types.ts on the same terms as everything above: separate type files by design,
+// and the backend is the authority.
+
+export interface FirmsPage {
+  items: FirmProfile[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface EstimateProject {
+  id: number;
+  name: string;
+  trade: string;
+  client: string;
+  contract_ref: string;
+  status: string;
+  provenance: string;
+  source: string;
+  run_ref: string;
+  package_key: string;
+  scope_of_works: string;
+  notes: string;
+  created_at: string;
+  closed_at: string;
+  item_count: number;
+  priced_item_count: number;
+  total: number | null;
+}
+
+export interface DashboardPackage {
+  package_key: string;
+  trade: string;
+  scope_summary: string;
+  recommended_route: string;
+  chosen_route: string | null;
+  track: string; // left | right | undecided
+  estimate_id: number | null;
+  decided_by: string;
+}
+
+export interface ProjectSummary {
+  run_ref: string;
+  name: string;
+  provenance: string;
+  package_count: number;
+  self_perform_count: number;
+  sublet_count: number;
+  estimate_count: number;
+  benchmark_project_id: number | null;
+}
+
+export interface ProjectDashboard {
+  run_ref: string;
+  name: string;
+  provenance: string;
+  packages: DashboardPackage[];
+  estimates: EstimateProject[];
+  benchmark_project_id: number | null;
+}
+
+export interface BenchmarkProject {
+  id: number;
+  name: string;
+  trade: string;
+  client: string;
+  contract_ref: string;
+  status: string;
+  provenance: string;
+  source: string;
+  notes: string;
+  created_at: string;
+  closed_at: string;
+  tender_item_count: number;
+  actual_item_count: number;
+  variance_count: number;
+}
+
+export interface BenchmarkSummary {
+  projects: number;
+  tender_items: number;
+  actual_items: number;
+  variance_records: number;
+  reasoned_records: number;
+  coverage_by_trade: Record<string, number>;
+  coverage_by_granularity: Record<string, number>;
+}
+
+export interface BenchmarkItem {
+  id: number;
+  project_id: number;
+  item_ref: string;
+  description: string;
+  unit: string;
+  qty: number | null;
+  rate: number | null;
+  amount: number | null;
+  section: string;
+  granularity?: string;
+}
+
+export interface MatchPair {
+  tier: number;
+  similarity: number | null;
+  tender: BenchmarkItem | null;
+  actual: BenchmarkItem | null;
+}
+
+export interface MatchProposal {
+  project_id: number;
+  tier1: MatchPair[];
+  tier2: MatchPair[];
+  tier3: MatchPair[];
+}
+
+export interface MatchConfirm {
+  tender_item_id?: number | null;
+  actual_item_id?: number | null;
+  match_tier: number;
+}
+
+/** One matched tender-vs-actual line. `reason_code` is written ONLY by a human confirming it —
+ *  `suggested_reason` is a proposal drawn from the EOS narrative and is never the same field. */
+export interface VarianceRecord {
+  id: number;
+  project_id: number;
+  tender_item_id: number | null;
+  actual_item_id: number | null;
+  item_ref: string;
+  granularity: string;
+  match_tier: number | null;
+  tender_rate: number | null;
+  actual_rate: number | null;
+  tender_qty: number | null;
+  actual_qty: number | null;
+  tender_amount: number | null;
+  actual_amount: number | null;
+  rate_delta: number | null;
+  rate_delta_pct: number | null;
+  amount_delta: number | null;
+  amount_delta_qty: number | null;
+  amount_delta_rate: number | null;
+  reason_code: string;
+  reason_note: string;
+  tagged_by: string;
+  confirmed_at: string;
+  source: string;
+  suggested_reason: string | null;
+}
+
+export interface ReasonCode {
+  code: string;
+  label: string;
+  description: string;
+  category: string;
+}
+
+export interface ProjectEOS {
+  id: number;
+  project_id: number;
+  narrative: string;
+  summary: string;
+  source_doc: string;
+  has_images: boolean;
+  provenance: string;
+  created_at: string;
+}
+
+export interface ReasonCandidate {
+  item_ref: string;
+  granularity: string;
+  reason_code: string;
+  snippet: string;
+  source: string; // reason-from-eos | fallback
+  record_id: number | null;
+}
+
+export interface VarianceReasonSuggestions {
+  project_id: number;
+  eos_attached: boolean;
+  candidates: ReasonCandidate[];
+}

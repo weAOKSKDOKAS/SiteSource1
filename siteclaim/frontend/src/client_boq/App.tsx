@@ -14,22 +14,27 @@ import { GlobalBar, StepStrip, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
-import type { Surface } from "./nav/routes";
+import type { NotDesignedId, ScreenId, Surface } from "./nav/routes";
 import { go, hashFor, parseHash } from "./nav/routes";
 import { AddendumPanel, RfiPanel } from "./panels";
 import type { PanelRequest } from "./panels";
 import { ProfilePicker } from "./profile/ProfilePicker";
 import { CommandSearch } from "./search/CommandSearch";
+import { Benchmarks } from "./screens/Benchmarks";
 import { CriteriaLibrary } from "./screens/CriteriaLibrary";
 import { NotDesigned } from "./screens/NotDesigned";
+import { Projects } from "./screens/Projects";
 import { Rates } from "./screens/Rates";
 import { Settings } from "./screens/Settings";
+import { Subcontractors } from "./screens/Subcontractors";
 import { Team } from "./screens/Team";
 import { DocumentsTab } from "./tabs/Documents";
 import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
 import { RegisterTab } from "./tabs/Register";
+import { RouteTab } from "./tabs/Route";
 import { ScopeTab } from "./tabs/Scope";
+import { SourcingTab } from "./tabs/Sourcing";
 import type {
   CitationsResponse,
   CriteriaResponse,
@@ -57,9 +62,31 @@ export interface SetData {
   citations: CitationsResponse | null;
   scope: ScopeResponse | null;
   hasEstimate: boolean;
+  /** The routing fork, read back from the bridge rather than remembered — a reload must not reset
+   *  a step chip to a state the tender is already past. Both reads are pure: they never re-run the
+   *  analysis, which would be a write and, live, a model call. */
+  route: { hasProposal: boolean; hasDecisions: boolean };
 }
 
 const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false };
+
+/** The app-bar title for every screen that is not a shelf or a set. Typed as a TOTAL record over
+ *  both id unions, so adding a screen to `routes.ts` and forgetting its title is a compile error
+ *  rather than an `undefined` in the app bar. The previous inline object literal was exactly the
+ *  hand-maintained-copy trap `routes.ts` warns about, one level up. */
+const SCREEN_TITLES: Record<ScreenId | NotDesignedId, string> = {
+  criteria: "Criteria library",
+  rates: "Pricing & rates",
+  team: "Team & access",
+  settings: "AI model",
+  subcontractors: "Subcontractors",
+  benchmarks: "Benchmarks",
+  projects: "Projects",
+  letters: "Letter templates",
+  positions: "Standard positions",
+  clients: "Clients",
+  audit: "Audit log",
+};
 
 export default function ClientBoqApp() {
   const [surface, setSurface] = useState<Surface>(() => parseHash(window.location.hash));
@@ -241,16 +268,7 @@ export default function ClientBoqApp() {
           : "Awaiting client"
       : surface.kind === "set"
         ? openSetRow?.name ?? surface.setId
-        : {
-            criteria: "Criteria library",
-            rates: "Pricing & rates",
-            team: "Team & access",
-            settings: "AI model",
-            letters: "Letter templates",
-            positions: "Standard positions",
-            clients: "Clients",
-            audit: "Audit log",
-          }[surface.screen];
+        : SCREEN_TITLES[surface.screen];
 
   const deadlineChip =
     isSet && openSetRow?.meta.close_date
@@ -337,6 +355,12 @@ export default function ClientBoqApp() {
                 setCurrentUserId(m.member_id);
               }}
             />
+          ) : surface.screen === "subcontractors" ? (
+            <Subcontractors onError={setError} />
+          ) : surface.screen === "benchmarks" ? (
+            <Benchmarks onError={setError} />
+          ) : surface.screen === "projects" ? (
+            <Projects onError={setError} />
           ) : (
             <Settings demoMode={demoMode} onError={setError} />
           )
@@ -348,6 +372,7 @@ export default function ClientBoqApp() {
             setId={surface.setId}
             tab={surface.tab}
             railOpen={railOpen}
+            demoMode={demoMode}
             onError={setError}
             onJob={setJob}
             onSetsChanged={() => void loadSets()}
@@ -431,6 +456,7 @@ function SetView({
   setId,
   tab,
   railOpen,
+  demoMode,
   onError,
   onJob,
   onSetsChanged,
@@ -440,6 +466,9 @@ function SetView({
   setId: string;
   tab: TabId;
   railOpen: boolean;
+  /** DEMO means uploaded files were not read. Sourcing needs it: the live path shows the assembled
+   *  attachment plan and can hand bundles to Gmail; DEMO does neither. */
+  demoMode: boolean;
   onError: (msg: string) => void;
   onJob: (job: JobState | null) => void;
   onSetsChanged: () => void;
@@ -458,11 +487,13 @@ function SetView({
     const setRow = rows.sets.find((r) => r.set_id === setId);
     const optional = <T,>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
 
-    const [manifest, parts, register, scope] = await Promise.all([
+    const [manifest, parts, register, scope, proposal, decisions] = await Promise.all([
       optional(api.manifest(setId)),
       optional(api.parts(setId)),
       optional(api.register(setId)),
       optional(api.scope(setId)),
+      optional(api.bridge.proposal(setId)),
+      optional(api.bridge.decisions(setId)),
     ]);
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
@@ -478,6 +509,10 @@ function SetView({
       citations,
       scope,
       hasEstimate: setRow?.price != null,
+      route: {
+        hasProposal: Boolean(proposal?.packages.length),
+        hasDecisions: Boolean(decisions?.decisions.length),
+      },
     });
   }, [setId]);
 
@@ -517,6 +552,8 @@ function SetView({
         register: Boolean(data?.register),
         scope: Boolean(data?.scope),
         estimate: Boolean(data?.hasEstimate),
+        proposal: Boolean(data?.route.hasProposal),
+        decisions: Boolean(data?.route.hasDecisions),
       }),
     [data],
   );
@@ -559,6 +596,10 @@ function SetView({
             onError={onError}
             onProgress={onJob}
           />
+        ) : tab === "route" ? (
+          <RouteTab data={data} onError={onError} onRefresh={refresh} />
+        ) : tab === "sourcing" ? (
+          <SourcingTab data={data} demoMode={demoMode} onError={onError} />
         ) : tab === "price" ? (
           <PriceTab
             data={data}

@@ -5,15 +5,34 @@
 //   #/tender                      the desk (home)
 //   #/tender/archived             submitted / won / lost — off the shelf, on the record
 //   #/tender/awaiting             tenders with open queries
-//   #/tender/criteria|rates|team|settings     the management screens
+//   #/tender/criteria|rates|team|settings     the customise screens
+//   #/tender/subcontractors|benchmarks|projects   the management screens
 //   #/tender/letters|positions|clients|audit  entry points without screens yet
 //   #/tender/s/{setId}/{tab}      one tender, one tab
 
+import { TABS } from "../chrome";
 import type { TabId } from "../chrome";
 
 export type ShelfFilter = "desk" | "archived" | "awaiting";
-export type ScreenId = "criteria" | "rates" | "team" | "settings";
-export type NotDesignedId = "letters" | "positions" | "clients" | "audit";
+
+// ONE list per family, with the type DERIVED from it — the same fix as TAB_IDS below, for the same
+// reason. A hand-maintained `ScreenId` union beside a hand-maintained `SCREENS` array only caught a
+// REMOVED screen; an ADDED one compiled cleanly against a stale array and then `parseHash` silently
+// dropped its deep link to the desk. Adding the three management screens doubles that list, so it
+// is derived now rather than after someone loses a link.
+const SCREENS = [
+  "criteria",
+  "rates",
+  "team",
+  "settings",
+  "subcontractors",
+  "benchmarks",
+  "projects",
+] as const;
+const NOT_DESIGNED = ["letters", "positions", "clients", "audit"] as const;
+
+export type ScreenId = (typeof SCREENS)[number];
+export type NotDesignedId = (typeof NOT_DESIGNED)[number];
 
 export type Surface =
   | { kind: "home"; shelf: ShelfFilter }
@@ -21,18 +40,20 @@ export type Surface =
   | { kind: "notdesigned"; screen: NotDesignedId }
   | { kind: "set"; setId: string; tab: TabId };
 
-const SCREENS: ScreenId[] = ["criteria", "rates", "team", "settings"];
-const NOT_DESIGNED: NotDesignedId[] = ["letters", "positions", "clients", "audit"];
-const TAB_IDS: TabId[] = ["documents", "register", "scope", "price", "offer"];
+// DERIVED, not re-listed. A hand-maintained copy only caught a REMOVED tab (the `TabId[]`
+// annotation rejects an unknown string); an ADDED tab compiled cleanly against a stale list and
+// then `parseHash` bounced its deep link back to "documents" — a failure invisible until someone
+// shared the link. Deriving is the least clever fix that cannot drift.
+const TAB_IDS: TabId[] = TABS.map((t) => t.id);
 
 export function parseHash(hash: string): Surface {
   const parts = hash.replace(/^#\/tender\/?/, "").split("/").filter(Boolean);
   if (!parts.length) return { kind: "home", shelf: "desk" };
   if (parts[0] === "archived") return { kind: "home", shelf: "archived" };
   if (parts[0] === "awaiting") return { kind: "home", shelf: "awaiting" };
-  if ((SCREENS as string[]).includes(parts[0]))
+  if ((SCREENS as readonly string[]).includes(parts[0]))
     return { kind: "screen", screen: parts[0] as ScreenId };
-  if ((NOT_DESIGNED as string[]).includes(parts[0]))
+  if ((NOT_DESIGNED as readonly string[]).includes(parts[0]))
     return { kind: "notdesigned", screen: parts[0] as NotDesignedId };
   if (parts[0] === "s" && parts[1]) {
     const tab = (TAB_IDS as string[]).includes(parts[2] ?? "") ? (parts[2] as TabId) : "documents";

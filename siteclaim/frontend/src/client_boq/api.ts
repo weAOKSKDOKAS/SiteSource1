@@ -3,29 +3,52 @@
 // exactly which gate refused and why, and rewriting them here would lose that.
 
 import type {
+  BenchmarkProject,
+  BenchmarkSummary,
+  BidReply,
+  BqCandidates,
+  BridgeRouteDecisions,
+  BridgeRouteProposal,
+  BridgeRouteProposalRead,
+  BridgeSplitRead,
+  BridgeSplitResponse,
   CitationsResponse,
+  Coverage,
   CriteriaResponse,
   CriterionRow,
-  EstimateResponse,
+  DispatchDraftsResponse,
+  DispatchSet,
   DocumentRow,
-  Highlight,
+  EstimateResponse,
+  FirmsPage,
   GateState,
+  Highlight,
   JobState,
-  LetterResponse,
   LLMSettingsResponse,
-  ManifestGateState,
+  LetterResponse,
+  LevelAllResponse,
+  LevelUploadResult,
+  LevelledBid,
   Manifest,
+  ManifestGateState,
+  MatchConfirm,
+  MatchProposal,
   PartContext,
   PartDetail,
   PartSpec,
   PartsResponse,
-  RateRowFull,
-  RatesResponse,
-  RegisterResponse,
-  RevisionRow,
+  ProjectDashboard,
+  ProjectEOS,
+  ProjectSummary,
   RFIBatchRow,
   RFIItem,
   RFIsResponse,
+  RateRowFull,
+  RatesResponse,
+  ReasonCode,
+  RecommendAllResponse,
+  RegisterResponse,
+  RevisionRow,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -33,9 +56,14 @@ import type {
   ScopeSection,
   ScopeSourcesResponse,
   SearchResponse,
+  SectionPlan,
   SetMeta,
   SetRow,
+  ShortlistSet,
   TeamMember,
+  TenderReplies,
+  VarianceReasonSuggestions,
+  VarianceRecord,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
@@ -87,6 +115,37 @@ const post = <T>(path: string, body: unknown): Promise<T> =>
 
 const del = <T>(path: string): Promise<T> =>
   fetch(ROOT + path, { method: "DELETE", headers: actorHeaders() }).then((r) => handle<T>(r));
+
+// --- the bridge -------------------------------------------------------------
+// Mounted at /bridge, not under /client-boq, so it needs its own root — everything else (the
+// error shape, the actor header, the typing style) is identical. The bridge belongs to neither
+// product: it carries one tender from this review into the procurement routing fork.
+const BRIDGE = `${BASE}/bridge`;
+
+const bget = <T>(path: string): Promise<T> => fetch(BRIDGE + path).then((r) => handle<T>(r));
+
+const bpost = <T>(path: string, body: unknown): Promise<T> =>
+  fetch(BRIDGE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
+
+const setPath = (setId: string) => `/${encodeURIComponent(setId)}`;
+
+// --- procurement's own endpoints (sourcing) ---------------------------------
+// At the bare BASE — /shortlist, /dispatch and friends are mounted at the root, under neither
+// prefix. Reached through this client rather than by importing src/api.ts: one product, one
+// client. Note src/api.ts throws a bare Error with no `.status`; going through `handle` here means
+// a gate refusal keeps its status code, which is the whole reason this file has its own error shape.
+const rget = <T>(path: string): Promise<T> => fetch(BASE + path).then((r) => handle<T>(r));
+
+const rpost = <T>(path: string, body: unknown): Promise<T> =>
+  fetch(BASE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
 
 /** Is this backend in DEMO mode? Drives the app-bar chip, which is not decoration: it means
  *  uploaded files were not read and every finding on screen came from a fixture. */
@@ -348,6 +407,171 @@ export const api = {
 
   unmapScope: (setId: string, itemId: string) =>
     del<ScopeItemsResponse>(`/estimate/scope/item/${setId}/${itemId}`),
+
+  // --- the bridge: this review -> the procurement routing fork --------------
+  // set_id IS the procurement run_ref, so every call here is keyed by the same id the desk uses.
+  bridge: {
+    /** Every part in the set, with which one(s) are PROPOSED as the priced bill. Proposing is not
+     *  confirming: the category comes from an AI interpretation stage, so a human picks. 404s only
+     *  when the set has no parts at all. */
+    candidates: (setId: string) =>
+      bget<BqCandidates>(`${setPath(setId)}/bq-candidates`),
+
+    /** Confirm the SET of bill parts — several are legitimate (a bill of quantities AND a daywork
+     *  schedule are both priceable). 400 on an unknown id or an empty selection. */
+    confirmBillParts: (setId: string, partIds: string[]) =>
+      bpost<BqCandidates>(`${setPath(setId)}/bq-part`, { part_ids: partIds }),
+
+    /** Run the bill split. 409 until a bill part is confirmed — the message names bq-part. */
+    runSplit: (setId: string) => bpost<BridgeSplitResponse>(`${setPath(setId)}/scope`, {}),
+    /** The persisted split. 404 before it has been run. */
+    split: (setId: string) => bget<BridgeSplitRead>(`${setPath(setId)}/scope`),
+
+    /** Propose a route per package. 409 until the review register is approved — the backend's own
+     *  sentence names the gate and how to clear it, and `.status` on the thrown Error is what lets
+     *  the tab tell that apart from a real failure. */
+    analyzeRoutes: (setId: string) =>
+      bpost<BridgeRouteProposal>(`${setPath(setId)}/route/analyze`, {}),
+
+    /** A PURE read — it never re-runs the analysis, which would be a write and, live, a model
+     *  call. Empty `packages` means "not yet run", which is a state, not an error. */
+    proposal: (setId: string) =>
+      bget<BridgeRouteProposalRead>(`${setPath(setId)}/route/proposal`),
+
+    /** A pure read. No decisions yet is an empty list, not a 404. */
+    decisions: (setId: string) =>
+      bget<BridgeRouteDecisions>(`${setPath(setId)}/route/decisions`),
+
+    /** The Layer-4 gate: record the human's route per package. Seeds no estimate on either side. */
+    confirmRoutes: (
+      setId: string,
+      decisions: { package_key: string; chosen_route: string }[],
+    ) => bpost<BridgeRouteDecisions>(`${setPath(setId)}/route/confirm`, { decisions }),
+  },
+
+  // --- sourcing: the sublet fork -------------------------------------------
+  // These are procurement's own endpoints, at the bare BASE rather than under /client-boq or
+  // /bridge. They are reached through THIS client rather than by importing src/api.ts, for the
+  // same reason the types are copied: one product, one client, no cross-import.
+  sourcing: {
+    /** Ranked candidates per package, with cited evidence and deterministic risk flags. */
+    shortlist: (scope: unknown, opts?: { includePublic?: boolean; k?: number }) =>
+      rpost<ShortlistSet>("/shortlist", {
+        scope,
+        ...(opts?.includePublic ? { include_public: true } : {}),
+        ...(opts?.k ? { k: opts.k } : {}),
+      }),
+    /** How wide the screen is — shown so a shortlist is read against the pool it came from. */
+    coverage: () => rget<Coverage>("/coverage"),
+    /** Compose (send:false) or record (send:true) the enquiry bundles. */
+    dispatch: (body: unknown) => rpost<DispatchSet>("/dispatch", body),
+    /** Assemble the relevant-only attachments and create ONE Gmail DRAFT per firm. Never a send:
+     *  the operator reviews and sends from Gmail. A Gmail failure comes back as partial success. */
+    dispatchDrafts: (body: unknown) => rpost<DispatchDraftsResponse>("/dispatch/drafts", body),
+    /** The per-section relevant-document plan, previewed before anything is drafted. */
+    dispatchPlan: (scope: unknown, approvals: Record<string, string[]>, projectName: string) =>
+      rpost<SectionPlan[]>("/dispatch/plan", {
+        scope,
+        approvals,
+        project_name: projectName,
+      }),
+
+    // --- level & award ------------------------------------------------------
+    /** One leveling section per sublet package. Layer 1 recomputes every amount — the corrected
+     *  total is OURS, and the difference from what a firm claimed is the finding. */
+    levelAll: (replies: BidReply[], scope: unknown) =>
+      rpost<LevelAllResponse>("/level-all", { replies, scope }),
+    /** One risk-adjusted recommendation per package. `demoFixtures` maps package -> baked
+     *  rationale so the narration works offline; a missing package simply narrates nothing. */
+    recommendAll: (
+      levelled: LevelledBid[],
+      demoFixtures: Record<string, string>,
+      scope: unknown = null,
+    ) => rpost<RecommendAllResponse>("/recommend-all", { levelled, demo_fixtures: demoFixtures, scope }),
+    levelingXlsxUrl: () => `${BASE}/leveling.xlsx`,
+
+    /** Manual priced-return intake (live): a subcontractor's returned bill for one firm+package.
+     *  Passing the tender lets the backend run the misdirect guard against the scope. */
+    levelUpload: (files: File[], firmId: string, trade: string, tender = "") => {
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      fd.append("firm_id", firmId);
+      fd.append("trade", trade);
+      if (tender) fd.append("tender", tender);
+      return fetch(`${BASE}/level-upload`, { method: "POST", body: fd, headers: actorHeaders() }).then(
+        (r) => handle<LevelUploadResult>(r),
+      );
+    },
+
+    /** Which replies have landed for a tender. Refreshed on demand — there is no polling loop. */
+    tenderReplies: (slug: string) =>
+      rget<TenderReplies>(`/tender/${encodeURIComponent(slug)}/replies`),
+    tenderComparisonUrl: (slug: string) =>
+      `${BASE}/tender/${encodeURIComponent(slug)}/comparison.xlsx`,
+    /** The human gate: take a firm's reply out of the comparison for one unit. The reply is KEPT
+     *  as history server-side — never deleted — and the comparison is re-levelled without it. */
+    withdrawReply: (slug: string, firmId: string, packageKey: string) =>
+      rpost<{ withdrawn: boolean; firm_id: string; package_key: string; reply_count: number }>(
+        `/tender/${encodeURIComponent(slug)}/replies/withdraw`,
+        { firm_id: firmId, package_key: packageKey },
+      ),
+  },
+  // --- the management screens ----------------------------------------------
+  // Firm register, benchmark corpus and projects — procurement's own root-mounted endpoints,
+  // reached through this client for the same reason `sourcing` is: one product, one client, and a
+  // gate refusal keeps its status code.
+  manage: {
+    /** The browseable firm database — real-provenance register firms only. */
+    firms: (opts?: { q?: string; trade?: string; limit?: number; offset?: number }) => {
+      const p = new URLSearchParams();
+      if (opts?.q) p.set("q", opts.q);
+      if (opts?.trade) p.set("trade", opts.trade);
+      if (opts?.limit != null) p.set("limit", String(opts.limit));
+      if (opts?.offset != null) p.set("offset", String(opts.offset));
+      const qs = p.toString();
+      return rget<FirmsPage>(`/firms${qs ? `?${qs}` : ""}`);
+    },
+    coverage: () => rget<Coverage>("/coverage"),
+
+    projects: () => rget<ProjectSummary[]>("/project"),
+    projectDashboard: (runRef: string) =>
+      rget<ProjectDashboard>(`/project/${encodeURIComponent(runRef)}`),
+
+    benchmarkProjects: () => rget<BenchmarkProject[]>("/benchmark/projects"),
+    benchmarkSummary: () => rget<BenchmarkSummary>("/benchmark/summary"),
+    createBenchmarkProject: (body: { name: string; trade?: string; client?: string; contract_ref?: string }) =>
+      rpost<BenchmarkProject>("/benchmark/projects", body),
+    benchmarkMatches: (id: number) => rget<MatchProposal>(`/benchmark/${id}/matches`),
+    /** The human gate: a proposed match becomes a variance record only when confirmed here. */
+    confirmMatches: (id: number, confirm: MatchConfirm[]) =>
+      rpost<VarianceRecord[]>(`/benchmark/${id}/matches/confirm`, { confirm }),
+    benchmarkVariance: (id: number) => rget<VarianceRecord[]>(`/benchmark/${id}/variance`),
+    /** The SOLE writer of a reason code. A suggestion is never a reason until a person posts it. */
+    setVarianceReason: (id: number, recordId: number, body: { reason_code: string; note?: string }) =>
+      rpost<VarianceRecord>(`/benchmark/${id}/variance/${recordId}/reason`, body),
+    reasonCodes: () => rget<ReasonCode[]>("/benchmark/reason-codes"),
+    reasonSuggestions: (id: number) =>
+      rget<VarianceReasonSuggestions>(`/benchmark/${id}/variance/reason-suggestions`),
+    benchmarkEos: (id: number) => rget<ProjectEOS | null>(`/benchmark/${id}/eos`),
+    attachEos: (id: number, narrative: string, summary = "") => {
+      const fd = new FormData();
+      fd.append("narrative", narrative);
+      if (summary) fd.append("summary", summary);
+      return fetch(`${BASE}/benchmark/${id}/eos-upload`, {
+        method: "POST",
+        body: fd,
+        headers: actorHeaders(),
+      }).then((r) => handle<ProjectEOS>(r));
+    },
+    uploadBenchmarkFile: (path: string, files: File[]) => {
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      return fetch(BASE + path, { method: "POST", body: fd, headers: actorHeaders() }).then((r) =>
+        handle<unknown>(r),
+      );
+    },
+    actualsTemplateUrl: (id: number) => `${BASE}/benchmark/actuals-template.xlsx?project=${id}`,
+  },
 };
 
 /** Poll a background job to completion. No ceiling — a 400-page binder takes as long as it takes. */
