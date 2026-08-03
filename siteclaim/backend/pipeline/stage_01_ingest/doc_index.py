@@ -19,7 +19,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from schemas.models import DocType
+from schemas.models import DocType, ScopePackages
 
 _log = logging.getLogger(__name__)
 
@@ -483,6 +483,53 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
 def build_doc_index(docs: list[tuple[str, DocType, bytes]]) -> list[DocIndexEntry]:
     """Index every uploaded original: ``(filename, doc_type, bytes)`` -> entries."""
     return [build_doc_entry(name, doc_type, data) for (name, doc_type, data) in docs]
+
+
+class UnrecognisedItem(BaseModel):
+    """An extracted item quarantined by the provenance backstop — its section is not one the
+    Schedule of Rates itself declares, so it never became a real SoR item. Surfaced, never silently
+    dropped, and never formed into a package."""
+
+    item_ref: str
+    description: str = ""
+    section: str = ""
+    reason: str = ""
+
+
+def quarantine_unrecognised_items(
+    scope: ScopePackages, sr_sections: set[str],
+) -> tuple[ScopePackages, list[UnrecognisedItem]]:
+    """Provenance backstop: drop any extracted item whose section is NOT one of the Schedule of
+    Rates' OWN section codes — an item that exists in no SR section never was a real SoR item (a
+    phantom from another document's item-like rows). Dropped items are returned FLAGGED — surfaced,
+    never silently lost — and a package left with no items is dropped (never routed). Deterministic;
+    the caller runs it only when the SR actually declared section headers to check against.
+
+    Lives here, beside ``build_doc_index``, because ``sr_sections`` comes from that index: any
+    caller that can build the index can apply the guard, so no ingest path has to ship weaker than
+    ``/ingest-upload``.
+    """
+    from collections import Counter
+
+    kept_packages = []
+    unrecognised: list[UnrecognisedItem] = []
+    for pkg in scope.packages:
+        kept = []
+        for it in pkg.sor_items:
+            code = (it.section or "").strip().upper()
+            if code in sr_sections:
+                kept.append(it)
+            else:
+                unrecognised.append(UnrecognisedItem(
+                    item_ref=it.item_ref, description=it.description or "", section=code,
+                    reason=f"section {code or '—'} is not a Schedule-of-Rates section",
+                ))
+        if not kept:
+            continue  # the whole package was unrecognised -> never routed
+        counts = Counter((it.section or "").strip().upper() for it in kept)
+        sections = [m.model_copy(update={"item_count": counts[m.code]}) for m in pkg.sections if counts.get(m.code)]
+        kept_packages.append(pkg.model_copy(update={"sor_items": kept, "sections": sections}))
+    return scope.model_copy(update={"packages": kept_packages}), unrecognised
 
 
 def save_doc_index(workspace, tender_id: str, entries: list[DocIndexEntry]) -> None:

@@ -52,10 +52,9 @@ def test_stubs_are_honest_about_being_unimplemented():
     # A stub must fail loudly, not return a plausible empty value — a silent {} here would look
     # exactly like "this tender has no bill parts" to every caller downstream. This list shrinks
     # as each phase lands; a NameError here means a function was renamed, not implemented.
-    from bridge import decisions, scope
+    from bridge import decisions
 
     for call in (
-        lambda: scope.scope_from_set("x"),
         lambda: decisions.confirm_routes("x", {}),
     ):
         with pytest.raises(NotImplementedError):

@@ -63,14 +63,42 @@ def post_bq_part(set_id: str, req: ConfirmBillPartsRequest) -> dict:
 
 @router.post("/{set_id}/scope")
 def post_scope(set_id: str) -> dict:
-    """Run the scope split over the confirmed bill parts, persist it, and return it."""
-    raise NotImplementedError("POST /bridge/{set_id}/scope: run and persist the scope split")
+    """Run the scope split over the confirmed bill parts, persist it, and return it.
+
+    Sync ``def`` on purpose: this reads pdfs and runs the extraction, and must not block the
+    event loop. ``notes`` carries every honest-degradation message the split produced (an
+    unreadable part, a quarantined item) — nothing is dropped quietly.
+    """
+    from bridge import scope as scope_mod
+
+    notes: list[str] = []
+    try:
+        scope, unrecognised = scope_mod.scope_from_set(set_id, on_error=notes.append)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    scope_mod.save_scope(set_id, scope)
+    return {
+        "set_id": set_id,
+        "scope": scope.model_dump(),
+        "unrecognised_items": [u.model_dump() for u in unrecognised],
+        "notes": notes,
+    }
 
 
 @router.get("/{set_id}/scope")
 def get_scope(set_id: str) -> dict:
     """The persisted scope split for this set."""
-    raise NotImplementedError("GET /bridge/{set_id}/scope: return the persisted scope split")
+    from bridge import scope as scope_mod
+
+    scope = scope_mod.load_scope(set_id)
+    if scope is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No scope split stored for set {set_id!r} — POST /bridge/{set_id}/scope first.",
+        )
+    return {"set_id": set_id, "scope": scope.model_dump()}
 
 
 @router.post("/{set_id}/route/analyze")
