@@ -1,0 +1,594 @@
+// The Route tab — where one tender forks, package by package, into "we build this" or "someone
+// quotes us for this".
+//
+// Three things about this screen are load-bearing, and each of them is a rule the product already
+// lives by rather than a decision taken here:
+//
+//  * THE BILL IS CHOSEN BY A PERSON. Which document produces every priced row is proposed from a
+//    part's `category`, and that category was written by an AI interpretation stage. So the screen
+//    PROPOSES a set and a human CONFIRMS it. It is a SET, not one document: a bill of quantities
+//    and a separate daywork or provisional-items schedule are both priceable.
+//  * THE ROUTE IS ADVISORY UNTIL A PERSON SETS IT. Every card shows the recommendation as a
+//    recommendation — never pre-applied, never styled like a decision already taken — and the
+//    toggle beside it is the decision. The coverage signal underneath is deterministic Layer 1,
+//    which is why it is stated as counts rather than as a verdict.
+//  * A GATE IS AN EXPLANATION, NOT A DEAD END. Routing sits behind the review gate, so the
+//    analysis 409s until the register is approved. The tab opens anyway and says which gate
+//    refused and how to clear it, in the backend's own sentence — the same no-padlock rule the
+//    step chips follow.
+//
+// Vocabulary note: the bridge's bill split is NEVER called "scope" here. That word already means
+// client_boq's estimate scope on this desk, and one tab strip cannot carry two unrelated things
+// under one name.
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import type { SetData } from "../App";
+import { api } from "../api";
+import type {
+  BqCandidates,
+  BridgeRouteDecisions,
+  BridgeRoutePackage,
+  BridgeRouteProposalRead,
+  ScopePackages,
+  SorItem,
+} from "../types";
+import {
+  Button,
+  Card,
+  Chip,
+  Collapse,
+  Drawer,
+  ErrorNote,
+  LoadingDots,
+  Pill,
+  ScanLine,
+  SectionLabel,
+  WaitingOn,
+  cx,
+} from "../ui";
+
+export const ROUTE_LABEL: Record<string, string> = {
+  self_perform: "Self-perform",
+  sublet: "Sublet",
+};
+
+// Local rather than imported from procurement's format.ts, for the same reason the bridge types
+// are copied rather than imported: this product keeps its own helpers, and a cross-import is the
+// beginning of a tangle.
+function tradeLabel(trade: string): string {
+  const [base, section] = trade.split(":");
+  const label = base.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return section ? `${label} · Section ${section}` : label;
+}
+
+/** A section header title is stored upper-case (DRILLING); show it in title case. */
+function titleCase(s: string): string {
+  return s.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+
+/** The bill lines behind a routing card — for a section sub-package just that section's items. */
+function itemsFor(p: BridgeRoutePackage, split: ScopePackages | null): SorItem[] {
+  const pkg = split?.packages.find((x) => x.trade === p.trade);
+  if (!pkg) return [];
+  return p.section ? pkg.sor_items.filter((it) => (it.section ?? "") === p.section) : pkg.sor_items;
+}
+
+/** The deterministic coverage signal. Counts, never a verdict — Layer 1 says how many firms exist,
+ *  it does not say what to do about it. Neutral panel chips, because a coloured chip here would
+ *  imply an authorship or a judgement that these numbers do not carry. */
+export function SignalChips({ signals }: { signals: Record<string, number | boolean | string> }) {
+  const chip = (label: string, key: string) =>
+    signals[key] !== undefined ? (
+      <Chip key={key} className="bg-cb-panel text-cb-body">{`${label}: ${String(signals[key])}`}</Chip>
+    ) : null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {chip("register firms", "trade_firm_count")}
+      {chip("assessable", "assessable_firm_count")}
+      {chip("in-house", "in_house_history")}
+      {signals.thin_pool ? (
+        <Chip className="border border-cb-brass-line text-cb-amber">thin pool</Chip>
+      ) : null}
+    </div>
+  );
+}
+
+function Stage({
+  n,
+  title,
+  done,
+  children,
+}: {
+  n: number;
+  title: string;
+  done?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span
+          className={cx(
+            "flex h-5 w-5 items-center justify-center rounded-full font-cb-mono text-[10px]",
+            done ? "bg-cb-ok text-white" : "bg-cb-panel text-cb-muted",
+          )}
+          aria-hidden
+        >
+          {done ? "✓" : n}
+        </span>
+        <h3 className="font-cb-serif text-sm font-semibold text-cb-ink-text">{title}</h3>
+      </div>
+      <div className="pl-7">{children}</div>
+    </section>
+  );
+}
+
+export function RouteTab({
+  data,
+  onError,
+  onRefresh,
+}: {
+  data: SetData;
+  onError: (message: string) => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const setId = data.setId;
+
+  const [candidates, setCandidates] = useState<BqCandidates | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [split, setSplit] = useState<ScopePackages | null>(null);
+  const [splitNotes, setSplitNotes] = useState<string[]>([]);
+  const [proposal, setProposal] = useState<BridgeRouteProposalRead | null>(null);
+  const [decisions, setDecisions] = useState<BridgeRouteDecisions | null>(null);
+  const [chosen, setChosen] = useState<Record<string, string>>({});
+
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<"" | "bill" | "split" | "analyze" | "confirm">("");
+  const [gate, setGate] = useState("");
+  const [error, setError] = useState("");
+  const [detail, setDetail] = useState<BridgeRoutePackage | null>(null);
+
+  // One load for everything this tab reads back. The proposal and decisions endpoints are pure
+  // reads — they never re-run the analysis — so this is safe to call on mount and after each step.
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [cand, spl, prop, dec] = await Promise.all([
+      api.bridge.candidates(setId).catch(() => null), // 404 = the set has no parts yet
+      api.bridge.split(setId).catch(() => null), // 404 = the split has not been run
+      api.bridge.proposal(setId).catch(() => null),
+      api.bridge.decisions(setId).catch(() => null),
+    ]);
+    setCandidates(cand);
+    setSplit(spl?.scope ?? null);
+    setProposal(prop);
+    setDecisions(dec);
+    if (cand) setPicked(cand.confirmed.length ? cand.confirmed : cand.proposed);
+    if (dec?.decisions.length) {
+      setChosen(Object.fromEntries(dec.decisions.map((d) => [d.package_key, d.chosen_route])));
+    } else if (prop?.packages.length) {
+      // Default the toggles to what was recommended. This is a DEFAULT, not a decision: nothing is
+      // recorded until Confirm, and every card still reads "Recommended: …" beside the toggle.
+      setChosen(Object.fromEntries(prop.packages.map((p) => [p.package_key, p.recommended_route])));
+    }
+    setLoading(false);
+  }, [setId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const run = async (kind: typeof busy, fn: () => Promise<void>) => {
+    setBusy(kind);
+    setError("");
+    try {
+      await fn();
+    } catch (e: unknown) {
+      const err = e as Error & { status?: number };
+      // A 409 from the review gate is not a failure — it is the gate saying it has not been
+      // cleared. Show its own sentence in place, and leave the tab open.
+      if (err.status === 409) setGate(err.message);
+      else {
+        setError(err.message);
+        onError(err.message);
+      }
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const confirmBill = () =>
+    run("bill", async () => {
+      const next = await api.bridge.confirmBillParts(setId, picked);
+      setCandidates(next);
+      await onRefresh();
+    });
+
+  const runSplit = () =>
+    run("split", async () => {
+      const res = await api.bridge.runSplit(setId);
+      setSplit(res.scope);
+      setSplitNotes(res.notes);
+      await onRefresh();
+    });
+
+  const analyze = () =>
+    run("analyze", async () => {
+      setGate("");
+      const res = await api.bridge.analyzeRoutes(setId);
+      setProposal({
+        set_id: res.set_id,
+        run_ref: res.run_ref,
+        packages: res.packages,
+        open_queries: res.open_queries,
+        review_approved: true,
+        has_split: true,
+      });
+      setChosen(Object.fromEntries(res.packages.map((p) => [p.package_key, p.recommended_route])));
+      await onRefresh();
+    });
+
+  const confirmRoutes = () =>
+    run("confirm", async () => {
+      const body = (proposal?.packages ?? []).map((p) => ({
+        package_key: p.package_key,
+        chosen_route: chosen[p.package_key] ?? p.recommended_route,
+      }));
+      setDecisions(await api.bridge.confirmRoutes(setId, body));
+      await onRefresh();
+    });
+
+  const billConfirmed = Boolean(candidates?.confirmed.length);
+  const decided = Boolean(decisions?.decisions.length);
+  const packages = proposal?.packages ?? [];
+  const counts = useMemo(() => {
+    const self = packages.filter((p) => (chosen[p.package_key] ?? p.recommended_route) === "self_perform").length;
+    return { self, sublet: packages.length - self };
+  }, [packages, chosen]);
+
+  if (loading) {
+    return (
+      <div className="flex-1 overflow-y-auto p-6">
+        <LoadingDots label="Reading the bill, the split and any routing already recorded…" />
+      </div>
+    );
+  }
+
+  if (!candidates) {
+    return (
+      <WaitingOn title="Nothing to route yet">
+        This tender has no parts. Ingest the documents and approve the split manifest first — the
+        bill has to exist before it can be routed.
+      </WaitingOn>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-4xl space-y-6 p-6">
+        {error && <ErrorNote message={error} onDismiss={() => setError("")} />}
+
+        {/* 1 — the human bill gate */}
+        <Stage n={1} title="Which document is the priced bill?" done={billConfirmed}>
+          <p className="mb-2 text-[12px] text-cb-muted">{candidates.message}</p>
+          {candidates.stale_confirmed.length > 0 && (
+            <p className="mb-2 text-[11px] text-cb-amber">
+              {candidates.stale_confirmed.length} previously confirmed part(s) no longer exist in
+              this set: {candidates.stale_confirmed.join(", ")}.
+            </p>
+          )}
+          <div className="space-y-1.5">
+            {candidates.parts.map((p) => {
+              const on = picked.includes(p.part_id);
+              return (
+                <Card key={p.part_id} selected={on} className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() =>
+                      setPicked((cur) =>
+                        cur.includes(p.part_id) ? cur.filter((x) => x !== p.part_id) : [...cur, p.part_id],
+                      )
+                    }
+                    className="mt-0.5 accent-[var(--color-cb-brass)]"
+                    aria-label={`Use ${p.title} as a priced bill`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-cb-sans text-[12px] font-semibold text-cb-ink-text">
+                        {p.title || p.part_id}
+                      </span>
+                      <Chip className="bg-cb-panel text-cb-muted">{p.category}</Chip>
+                      {p.proposed && (
+                        // Brass: a model's reading proposed this. Never "confirmed".
+                        <Chip className="bg-cb-brass-tint text-cb-brass-text">proposed</Chip>
+                      )}
+                      {p.confirmed && <Chip className="bg-cb-ok-tint text-cb-ok-dark">confirmed</Chip>}
+                      {p.scanned && (
+                        <Chip className="border border-cb-brass-line text-cb-amber">scanned</Chip>
+                      )}
+                      {!p.has_pdf && (
+                        <Chip className="bg-cb-bad-tint text-cb-bad-dark">no file — yields nothing</Chip>
+                      )}
+                    </div>
+                    <div className="mt-0.5 font-cb-mono text-[10px] text-cb-faint">
+                      {p.part_id} · {p.pages} pages{p.source_doc ? ` · ${p.source_doc}` : ""}
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <Button
+              variant="brass"
+              onClick={confirmBill}
+              disabled={busy !== "" || picked.length === 0}
+              disabledReason={picked.length === 0 ? "Choose at least one part — the bill is what produces every priced line." : undefined}
+            >
+              {busy === "bill" ? "Confirming…" : billConfirmed ? "Re-confirm bill" : "Confirm bill"}
+            </Button>
+            <span className="text-[11px] text-cb-faint">
+              {picked.length} selected — every confirmed part yields priced lines; the rest become
+              context only.
+            </span>
+          </div>
+        </Stage>
+
+        {/* 2 — the split */}
+        <Stage n={2} title="Split the bill into trade packages" done={Boolean(split)}>
+          {!billConfirmed ? (
+            <p className="text-[12px] text-cb-faint">Waits on the bill above.</p>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <Button variant={split ? "outline" : "brass"} onClick={runSplit} disabled={busy !== ""}>
+                  {busy === "split" ? "Splitting…" : split ? "Re-run the split" : "Run the split"}
+                </Button>
+                {split && (
+                  <span className="text-[11px] text-cb-muted">
+                    {split.packages.length} packages ·{" "}
+                    {split.packages.reduce((n, p) => n + p.sor_items.length, 0)} priced lines
+                  </span>
+                )}
+              </div>
+              {splitNotes.length > 0 && (
+                <div className="mt-2">
+                  <Collapse title="What the split reported" count={splitNotes.length}>
+                    <ul className="space-y-1">
+                      {splitNotes.map((n, i) => (
+                        <li key={i} className="text-[11px] leading-relaxed text-cb-body">
+                          {n}
+                        </li>
+                      ))}
+                    </ul>
+                  </Collapse>
+                </div>
+              )}
+            </>
+          )}
+        </Stage>
+
+        {/* 3 — the proposal, behind the review gate */}
+        <Stage n={3} title="Route each package" done={decided}>
+          {gate ? (
+            // The no-padlock rule: the tab stays open and states the gate in the backend's own
+            // words, because that sentence names which gate refused and why.
+            <Card className="border-cb-brass-line bg-cb-warm">
+              <SectionLabel>Waiting on the review gate</SectionLabel>
+              <p className="mt-1 text-[12px] leading-relaxed text-cb-body">{gate}</p>
+            </Card>
+          ) : !split ? (
+            <p className="text-[12px] text-cb-faint">Waits on the split above.</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="relative flex flex-wrap items-center justify-between gap-2">
+                <ScanLine active={busy === "analyze" || busy === "confirm"} />
+                <p className="text-[12px] text-cb-muted">
+                  {packages.length ? (
+                    <>
+                      <span className="font-cb-mono">{proposal?.run_ref}</span> · {packages.length}{" "}
+                      packages · {counts.self} self-perform / {counts.sublet} sublet
+                    </>
+                  ) : (
+                    "No routing proposed yet."
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={analyze} disabled={busy !== ""}>
+                    {busy === "analyze"
+                      ? "Proposing…"
+                      : packages.length
+                        ? "Re-propose routing"
+                        : "Propose routing"}
+                  </Button>
+                  {packages.length > 0 && (
+                    <Button variant="brass" onClick={confirmRoutes} disabled={busy !== ""}>
+                      {busy === "confirm" ? "Recording…" : decided ? "Re-confirm routing" : "Confirm routing"}
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {proposal && proposal.open_queries > 0 && (
+                <p className="text-[11px] text-cb-amber">
+                  {proposal.open_queries} client question(s) still open — shown, not blocking: an
+                  unanswered query does not move the submission deadline.
+                </p>
+              )}
+
+              {packages.map((p) => {
+                const pick = chosen[p.package_key] ?? p.recommended_route;
+                const items = itemsFor(p, split);
+                const heading = p.section
+                  ? `${tradeLabel(p.trade)} · ${p.section_title ? titleCase(p.section_title) : `Section ${p.section}`}`
+                  : tradeLabel(p.trade);
+                return (
+                  <Card key={p.package_key}>
+                    <div className="flex flex-wrap items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setDetail(p)}
+                            title="Open the routing record"
+                            className="text-balance text-left font-cb-sans text-[12px] font-semibold text-cb-ink-text hover:text-cb-brass-text"
+                          >
+                            {heading}
+                          </button>
+                          {p.section && (
+                            <span className="font-cb-mono text-[10px] text-cb-faint">{p.package_key}</span>
+                          )}
+                          {/* Brass says a model proposed this. It is a RECOMMENDATION and the word
+                              stays on the chip, so it can never read as a decision already taken. */}
+                          <Chip className="bg-cb-brass-tint text-cb-brass-text">
+                            {`Recommended: ${ROUTE_LABEL[p.recommended_route] ?? p.recommended_route}`}
+                          </Chip>
+                          {/* Navy says a deterministic rule wrote it — the fallback path uses no
+                              model at all, so claiming brass here would be a lie. */}
+                          {p.source === "fallback" && (
+                            <Chip className="bg-cb-info-fill text-cb-navy">rule-based</Chip>
+                          )}
+                        </div>
+                        {p.rationale && (
+                          <p className="mt-1 text-[12px] leading-relaxed text-cb-body">{p.rationale}</p>
+                        )}
+                        {p.scope_summary && (
+                          <p className="mt-1 text-[11px] text-cb-faint">{p.scope_summary}</p>
+                        )}
+                        <div className="mt-2">
+                          <SignalChips signals={p.signals} />
+                        </div>
+                        {items.length > 0 && (
+                          <div className="mt-2">
+                            <Collapse
+                              title={p.section ? `Section ${p.section} lines` : "Bill lines"}
+                              count={items.length}
+                            >
+                              <ul className="space-y-1">
+                                {items.map((it) => (
+                                  <li key={it.item_ref} className="flex gap-2 text-[11px] leading-relaxed">
+                                    <span className="shrink-0 font-cb-mono font-semibold text-cb-ink-text">
+                                      {it.item_ref}
+                                    </span>
+                                    <span className="text-cb-body">{it.description}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </Collapse>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex overflow-hidden rounded-cb-btn border border-cb-border-strong">
+                        {["self_perform", "sublet"].map((r) => (
+                          <button
+                            key={r}
+                            onClick={() => setChosen((cur) => ({ ...cur, [p.package_key]: r }))}
+                            className={cx(
+                              "px-3 py-1.5 font-cb-sans text-[11px] font-semibold transition-colors",
+                              pick === r
+                                ? "bg-cb-ink text-white"
+                                : "bg-white text-cb-muted hover:bg-cb-panel",
+                            )}
+                          >
+                            {ROUTE_LABEL[r]}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+
+              {decided && (
+                <p className="text-[11px] text-cb-ok-dark">
+                  Routing recorded. {decisions?.self_perform_packages.length ?? 0} self-perform,{" "}
+                  {decisions?.sublet_packages.length ?? 0} sublet — the sublet packages are what the
+                  Sourcing tab works from. No estimate is created by this decision on either side.
+                </p>
+              )}
+            </div>
+          )}
+        </Stage>
+      </div>
+
+      <PackageDrawer pkg={detail} decided={decisions} onClose={() => setDetail(null)} />
+    </div>
+  );
+}
+
+/** The routing record for one package: what was recommended, the deterministic signal behind it,
+ *  and the human decision once made. */
+function PackageDrawer({
+  pkg,
+  decided,
+  onClose,
+}: {
+  pkg: BridgeRoutePackage | null;
+  decided: BridgeRouteDecisions | null;
+  onClose: () => void;
+}) {
+  const decision = pkg
+    ? decided?.decisions.find((d) => d.package_key === pkg.package_key) ?? null
+    : null;
+  return (
+    <Drawer
+      open={pkg != null}
+      onClose={onClose}
+      eyebrow="Routing record"
+      accent="bg-cb-brass"
+      title={pkg ? tradeLabel(pkg.trade) : ""}
+      subtitle={pkg && <span className="font-cb-mono">{pkg.package_key}</span>}
+      footer="The recommendation is advisory — the human decision (decided-by, decided-at) is the record of truth."
+    >
+      {pkg && (
+        <div className="space-y-2">
+          {pkg.scope_summary && (
+            <p className="text-[11px] leading-relaxed text-cb-body">{pkg.scope_summary}</p>
+          )}
+          <Collapse title="Recommendation (advisory)" defaultOpen>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Chip className="bg-cb-brass-tint text-cb-brass-text">
+                {ROUTE_LABEL[pkg.recommended_route] ?? pkg.recommended_route}
+              </Chip>
+              <Chip className="bg-cb-info-fill text-cb-navy">
+                {pkg.source === "fallback" ? "rule-based" : pkg.source}
+              </Chip>
+            </div>
+            {pkg.rationale && (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-cb-body">{pkg.rationale}</p>
+            )}
+          </Collapse>
+
+          <Collapse title="Coverage signal (Layer 1)" defaultOpen>
+            <SignalChips signals={pkg.signals} />
+          </Collapse>
+
+          <Collapse title="Human decision" defaultOpen={Boolean(decision)}>
+            {decision ? (
+              <div className="text-[11px] leading-relaxed text-cb-body">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Pill className="bg-cb-ok-tint text-cb-ok-dark">
+                    {ROUTE_LABEL[decision.chosen_route] ?? decision.chosen_route}
+                  </Pill>
+                  {decision.chosen_route !== pkg.recommended_route && (
+                    <Pill className="border border-cb-brass-line text-cb-amber">override</Pill>
+                  )}
+                </div>
+                <SectionLabel className="mt-2">Decided by</SectionLabel>
+                <div className="font-cb-mono text-cb-ink-text">
+                  {decision.decided_by}
+                  {decision.decided_at ? ` · ${decision.decided_at.slice(0, 10)}` : ""}
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-cb-faint">
+                Not decided yet — set the toggle and confirm routing.
+              </p>
+            )}
+          </Collapse>
+        </div>
+      )}
+    </Drawer>
+  );
+}

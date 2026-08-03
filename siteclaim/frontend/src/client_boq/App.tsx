@@ -29,6 +29,7 @@ import { DocumentsTab } from "./tabs/Documents";
 import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
 import { RegisterTab } from "./tabs/Register";
+import { RouteTab } from "./tabs/Route";
 import { ScopeTab } from "./tabs/Scope";
 import type {
   CitationsResponse,
@@ -57,6 +58,10 @@ export interface SetData {
   citations: CitationsResponse | null;
   scope: ScopeResponse | null;
   hasEstimate: boolean;
+  /** The routing fork, read back from the bridge rather than remembered — a reload must not reset
+   *  a step chip to a state the tender is already past. Both reads are pure: they never re-run the
+   *  analysis, which would be a write and, live, a model call. */
+  route: { hasProposal: boolean; hasDecisions: boolean };
 }
 
 const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false };
@@ -458,11 +463,13 @@ function SetView({
     const setRow = rows.sets.find((r) => r.set_id === setId);
     const optional = <T,>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
 
-    const [manifest, parts, register, scope] = await Promise.all([
+    const [manifest, parts, register, scope, proposal, decisions] = await Promise.all([
       optional(api.manifest(setId)),
       optional(api.parts(setId)),
       optional(api.register(setId)),
       optional(api.scope(setId)),
+      optional(api.bridge.proposal(setId)),
+      optional(api.bridge.decisions(setId)),
     ]);
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
@@ -478,6 +485,10 @@ function SetView({
       citations,
       scope,
       hasEstimate: setRow?.price != null,
+      route: {
+        hasProposal: Boolean(proposal?.packages.length),
+        hasDecisions: Boolean(decisions?.decisions.length),
+      },
     });
   }, [setId]);
 
@@ -517,11 +528,8 @@ function SetView({
         register: Boolean(data?.register),
         scope: Boolean(data?.scope),
         estimate: Boolean(data?.hasEstimate),
-        // The routing fork is not wired yet — the Route tab lands next and brings the two
-        // read-only bridge GETs with it. Until then these are honestly false, so the chips read
-        // "waits on the register" / "not yet run", which is exactly what an unbuilt tab is.
-        proposal: false,
-        decisions: false,
+        proposal: Boolean(data?.route.hasProposal),
+        decisions: Boolean(data?.route.hasDecisions),
       }),
     [data],
   );
@@ -565,12 +573,7 @@ function SetView({
             onProgress={onJob}
           />
         ) : tab === "route" ? (
-          // Placeholder. WaitingOn, not NotDesigned: NotDesigned takes a four-value union of
-          // SIDEBAR screens with hardcoded copy — a different concept that happens to look alike.
-          <WaitingOn title="Route — screen not built yet">
-            The routing fork decides, per package, whether we build it ourselves or put it out to
-            subcontractors. The backend is ready; this screen is next.
-          </WaitingOn>
+          <RouteTab data={data} onError={onError} onRefresh={refresh} />
         ) : tab === "sourcing" ? (
           <WaitingOn title="Sourcing — screen not built yet">
             Shortlist, dispatch, level and recommend for the packages routed to sublet. Waits on the
