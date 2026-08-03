@@ -9,6 +9,7 @@
 //   #/tender/letters|positions|clients|audit  entry points without screens yet
 //   #/tender/s/{setId}/{tab}      one tender, one tab
 
+import { TABS } from "../chrome";
 import type { TabId } from "../chrome";
 
 export type ShelfFilter = "desk" | "archived" | "awaiting";
@@ -23,7 +24,11 @@ export type Surface =
 
 const SCREENS: ScreenId[] = ["criteria", "rates", "team", "settings"];
 const NOT_DESIGNED: NotDesignedId[] = ["letters", "positions", "clients", "audit"];
-const TAB_IDS: TabId[] = ["documents", "register", "scope", "price", "offer"];
+// DERIVED, not re-listed. A hand-maintained copy only caught a REMOVED tab (the `TabId[]`
+// annotation rejects an unknown string); an ADDED tab compiled cleanly against a stale list and
+// then `parseHash` bounced its deep link back to "documents" — a failure invisible until someone
+// shared the link. Deriving is the least clever fix that cannot drift.
+const TAB_IDS: TabId[] = TABS.map((t) => t.id);
 
 export function parseHash(hash: string): Surface {
   const parts = hash.replace(/^#\/tender\/?/, "").split("/").filter(Boolean);

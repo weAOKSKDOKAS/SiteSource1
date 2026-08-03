@@ -517,6 +517,11 @@ function SetView({
         register: Boolean(data?.register),
         scope: Boolean(data?.scope),
         estimate: Boolean(data?.hasEstimate),
+        // The routing fork is not wired yet — the Route tab lands next and brings the two
+        // read-only bridge GETs with it. Until then these are honestly false, so the chips read
+        // "waits on the register" / "not yet run", which is exactly what an unbuilt tab is.
+        proposal: false,
+        decisions: false,
       }),
     [data],
   );
@@ -559,6 +564,18 @@ function SetView({
             onError={onError}
             onProgress={onJob}
           />
+        ) : tab === "route" ? (
+          // Placeholder. WaitingOn, not NotDesigned: NotDesigned takes a four-value union of
+          // SIDEBAR screens with hardcoded copy — a different concept that happens to look alike.
+          <WaitingOn title="Route — screen not built yet">
+            The routing fork decides, per package, whether we build it ourselves or put it out to
+            subcontractors. The backend is ready; this screen is next.
+          </WaitingOn>
+        ) : tab === "sourcing" ? (
+          <WaitingOn title="Sourcing — screen not built yet">
+            Shortlist, dispatch, level and recommend for the packages routed to sublet. Waits on the
+            route decision, which is what says which packages those are.
+          </WaitingOn>
         ) : tab === "price" ? (
           <PriceTab
             data={data}

@@ -8,12 +8,27 @@ import { Chip, cx } from "./ui";
 // ---------------------------------------------------------------------------
 // Steps
 // ---------------------------------------------------------------------------
-export type TabId = "documents" | "register" | "scope" | "price" | "offer";
+export type TabId =
+  | "documents"
+  | "register"
+  | "scope"
+  | "route"
+  | "sourcing"
+  | "price"
+  | "offer";
 
+// The order IS the reading order of a tender: what arrived, what we found in it, what we are
+// pricing, who builds each package, who quotes the ones we sublet, the price, the offer.
+//
+// `route` and `sourcing` split at the routing decision. `sourcing` holds shortlist → dispatch →
+// level → recommend as internal steps rather than four more tabs, because they are already a
+// wizard with a stepper of their own.
 export const TABS: { id: TabId; label: string }[] = [
   { id: "documents", label: "Documents" },
   { id: "register", label: "Register" },
   { id: "scope", label: "Scope" },
+  { id: "route", label: "Route" },
+  { id: "sourcing", label: "Sourcing" },
   { id: "price", label: "Price" },
   { id: "offer", label: "Offer" },
 ];
@@ -30,7 +45,17 @@ export type StepState =
  *  409; a tab that opens and explains itself does not. */
 export function stepStates(
   gates: GateStates,
-  has: { parts: boolean; register: boolean; scope: boolean; estimate: boolean },
+  has: {
+    parts: boolean;
+    register: boolean;
+    scope: boolean;
+    estimate: boolean;
+    // The routing fork. `proposal` = a route has been proposed for at least one package;
+    // `decisions` = a human has chosen at least one. Both are read back from the bridge rather
+    // than remembered, so a reload does not reset a chip to a state the tender is past.
+    proposal: boolean;
+    decisions: boolean;
+  },
 ): Record<TabId, StepState> {
   return {
     documents: gates.manifest ? { kind: "done" } : has.parts ? { kind: "open" } : { kind: "open" },
@@ -48,6 +73,23 @@ export function stepStates(
         : gates.review
           ? { kind: "waiting", label: "NOT YET RUN" }
           : { kind: "waiting", label: "WAITS ON THE REGISTER" },
+    // Routing sits behind the review gate and both forks inherit it: you cannot decide
+    // self-perform vs sublet without knowing the contract terms, and you should not send an RFQ
+    // on terms nobody has read. Same chain as `scope` above, ending at the human decision.
+    route: has.decisions
+      ? { kind: "done" }
+      : has.proposal
+        ? { kind: "open" }
+        : gates.review
+          ? { kind: "waiting", label: "NOT YET RUN" }
+          : { kind: "waiting", label: "WAITS ON THE REGISTER" },
+    // Sourcing prices only what we sublet, so it waits on the decision that says which packages
+    // those are. It has no "done": an award is per package, not per tender.
+    sourcing: has.decisions
+      ? { kind: "open" }
+      : { kind: "waiting", label: "WAITS ON THE ROUTE" },
+    // Unchanged. `gates.scope` is client_boq's ESTIMATE scope gate — a different thing from the
+    // bill split the Route tab runs, which is never called "scope" in this UI.
     price: has.estimate
       ? { kind: "done" }
       : gates.scope
