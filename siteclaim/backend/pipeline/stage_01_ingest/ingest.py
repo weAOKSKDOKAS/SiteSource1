@@ -340,6 +340,142 @@ def annotate_sections(
     return scope.model_copy(update={"packages": packages})
 
 
+# ---------------------------------------------------------------------------
+# The heading chain — an item's real description
+# ---------------------------------------------------------------------------
+# A bill's item cell rarely says what the item IS. Bill 6 of CEDD ND/2025/04:
+#
+#   column B   Instrument Installation        <- heading
+#   column C     6.1  Standpipe
+#   column B   Recording                      <- heading
+#   column C     6.4  Standpipe
+#
+# 6.1 is INSTALLING a standpipe; 6.4 is RECORDING from one. Different work, different rate, and
+# as extracted they were the same string. Bill 5 goes three deep: REPORT WORK -> Draft final
+# report -> "laboratory tests". The chain above an item IS its description; the leaf alone is not.
+#
+# In the workbook that chain is which column the text sits in. In the PDF render it is leading
+# whitespace — which only exists once the text is read in reading order, which is why this could
+# not be built before `pdfops.page_text` started sorting.
+#
+# Everything below is DETERMINISTIC. The model never writes a chain, and a chain is never
+# invented: where the indentation does not establish one, the item keeps its leaf text and says
+# no heading was found.
+
+# Lines that are structure, not content: the page markers page_text emits and the `=== label ===`
+# block headers the ingest callers wrap each document in.
+_SKIP_LINE = re.compile(r"^\s*(?:\[page \d+\]|={3,}.*={3,})\s*$")
+# A heading is prose. These are the things at a heading's indent that are NOT one: a bare number,
+# a currency/quantity cell, a unit, a rule of dashes, a carried-forward footer.
+_NOT_HEADING = re.compile(
+    r"^(?:[\d\s.,:;/()%$-]+|[A-Za-z]{1,3}|(?:carried|brought)\s+(?:to|from)\b.*|page\s+\d+.*)$",
+    re.I,
+)
+_MAX_HEADING_CHARS = 90
+_MAX_CHAIN_DEPTH = 4
+
+
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+# A schedule reference opens with one or two letters and then a DIGIT — `A1a(a)`, `E10(l)`,
+# `BB7a`, `M-01`, `H1`. The digit is the whole point: `section_of` reads leading letters off a
+# value already known to BE an item_ref, so as a line classifier it answers "yes" to every word
+# in the document — `Instrument Installation` came back as section `INSTRUMENT` and every heading
+# was read as an item. Bill references are left to `bill_of`, which is already strict.
+_SOR_REF_HEAD = re.compile(r"^[A-Za-z]{1,2}-?\d")
+
+
+def _leading_ref(line: str) -> str:
+    """The item reference a line opens with, in EITHER family, or ``''`` when the line is prose."""
+    token = line.strip().split(None, 1)
+    if not token:
+        return ""
+    head = token[0].rstrip(".:)|")
+    return head if (bill_of(head) or _SOR_REF_HEAD.match(head)) else ""
+
+
+def _is_heading(text: str) -> bool:
+    body = text.strip()
+    if not body or len(body) > _MAX_HEADING_CHARS:
+        return False
+    if _NOT_HEADING.match(body):
+        return False
+    return sum(c.isalpha() for c in body) >= 2
+
+
+def heading_chains(doc_text: str) -> dict[str, list[str]]:
+    """``item_ref -> the chain of headings above it``, read from indentation.
+
+    One pass, one stack. A line with no item reference, sitting at a SHALLOWER indent than the
+    items that follow it, is their heading; a new line at or left of a stacked heading's indent
+    closes it. An item's chain is every open heading strictly shallower than the item itself —
+    so an item at the same indent as the text above it inherits nothing, which is the honest
+    answer rather than a guess.
+
+    First occurrence wins, matching ``_section_titles``: a ref repeated in a running header or a
+    collection page must not overwrite the chain from where the item was actually priced.
+    """
+    chains: dict[str, list[str]] = {}
+    stack: list[tuple[int, str]] = []   # (indent, heading text), outermost first
+    for raw in (doc_text or "").splitlines():
+        if not raw.strip() or _SKIP_LINE.match(raw):
+            continue
+        indent = _indent_of(raw)
+        ref = _leading_ref(raw)
+        if ref:
+            if ref not in chains:
+                chains[ref] = [text for depth, text in stack if depth < indent][-_MAX_CHAIN_DEPTH:]
+            continue
+        body = raw.strip()
+        if not _is_heading(body):
+            continue
+        # A heading closes every open heading at or right of its own column.
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        stack.append((indent, body))
+    return chains
+
+
+def attach_heading_chains(
+    scope: ScopePackages, doc_text: str,
+    on_note: Optional[Callable[[str], None]] = None,
+) -> ScopePackages:
+    """Stamp each item's ``heading_path`` from the document's own indentation.
+
+    The leaf ``description`` is left exactly as extracted — the chain is ADDITIONAL, never a
+    replacement, so nothing downstream that reads a description loses what it had. An item the
+    indentation says nothing about keeps an empty chain, and the count of those is reported
+    rather than hidden: a package where no item found a heading usually means the render lost
+    its reading order, which is a fact about the document worth seeing.
+    """
+    chains = heading_chains(doc_text)
+    # `any(values)`, not `chains` — a document whose every item sits at the left margin produces
+    # an entry per item and a chain for none of them. That is a FLAT document, not a package that
+    # missed the structure, and reporting it would put a note on every schedule that has never had
+    # indentation to lose.
+    if not any(chains.values()):
+        return scope
+    packages: list[TradeWorkPackage] = []
+    for pkg in scope.packages:
+        items = []
+        found = 0
+        for it in pkg.sor_items:
+            chain = chains.get((it.item_ref or "").strip(), [])
+            if chain:
+                found += 1
+            items.append(it if list(it.heading_path) == chain else it.model_copy(update={"heading_path": chain}))
+        if on_note and items and not found:
+            on_note(
+                f"package {pkg.trade!r}: no heading chain was found for any of its {len(items)} "
+                "items, so each carries only the text in its own cell — two items that differ "
+                "only by the heading above them will read identically"
+            )
+        packages.append(pkg.model_copy(update={"sor_items": items}))
+    return scope.model_copy(update={"packages": packages})
+
+
 _RECOVER_MAIN = re.compile(r"^\s*(?:Item:\s*)?([A-Z]{1,2}\d+)\b[)\.|:\s]*(.*)$")
 _RECOVER_SUB = re.compile(r"^\s*(?:Item:\s*)?\(([a-z]{1,4})\)\s*[)\.|:\s]*(.*)$")
 _ROMAN = frozenset({"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"})
@@ -429,6 +565,71 @@ def recover_dropped_sor_items(scope: ScopePackages, doc_text: str) -> ScopePacka
         print(f"[ingest] recovered {len(recovered)} SoR rows the extractor dropped "
               f"(from OCR): {', '.join(recovered[:30])}{' …' if len(recovered) > 30 else ''}")
     return scope.model_copy(update={"packages": packages})
+
+
+# ---------------------------------------------------------------------------
+# Count fidelity — say so when items are missing
+# ---------------------------------------------------------------------------
+# The first live bill returned 136 of 162 items and said nothing. Silently returning 136 of 162
+# is the worst outcome available: a priced return built on it is wrong in a way nobody can see.
+#
+# Detection is cheap where recovery is not. Within one bill the item numbers are a SEQUENCE, so
+# `2.24` present with `2.25` and `2.26` absent is a hole that arithmetic can find with no model,
+# no OCR and no second read of the document. This does not recover the missing rows — it refuses
+# to let them go unmentioned, which is the part that was missing.
+_MAX_REPORTED_GAP = 40   # a "gap" larger than this is a different bill, not a dropped row
+
+_TAIL_NUM = re.compile(r"^\d{1,2}\s*[.\-/]\s*(\d+)$")
+
+
+def _bill_item_number(ref: str) -> Optional[int]:
+    """The item number within its bill (``2.24`` -> 24), or ``None`` for a non-bill ref."""
+    m = _TAIL_NUM.match((ref or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def sequence_gaps(scope: ScopePackages) -> dict[str, list[int]]:
+    """``"<bill>" -> the item numbers missing from its run``, per bill, across the whole scope.
+
+    Only the interior is reported. A bill whose numbering starts at 3 may simply begin there, and
+    a bill's last item is unknowable from the inside — inventing either end would produce a
+    warning nobody can act on, which is how a real signal gets ignored.
+    """
+    seen: dict[str, set[int]] = {}
+    for pkg in scope.packages:
+        for it in pkg.sor_items:
+            bill = bill_of(it.item_ref or "")
+            n = _bill_item_number(it.item_ref or "")
+            if bill and n is not None:
+                seen.setdefault(bill, set()).add(n)
+    gaps: dict[str, list[int]] = {}
+    for bill, numbers in seen.items():
+        lo, hi = min(numbers), max(numbers)
+        if hi - lo > _MAX_REPORTED_GAP:
+            continue
+        missing = [n for n in range(lo, hi + 1) if n not in numbers]
+        if missing:
+            gaps[bill] = missing
+    return gaps
+
+
+def report_sequence_gaps(
+    scope: ScopePackages, on_note: Optional[Callable[[str], None]] = None,
+) -> dict[str, list[int]]:
+    """Report every interior hole in a bill's numbering. Returns them too, so a caller that wants
+    to put them on a response rather than in a log can."""
+    gaps = sequence_gaps(scope)
+    if on_note:
+        for bill in sorted(gaps, key=lambda b: int(b)):
+            missing = gaps[bill]
+            shown = ", ".join(f"{bill}.{n}" for n in missing[:12])
+            more = f" and {len(missing) - 12} more" if len(missing) > 12 else ""
+            on_note(
+                f"bill {bill}: {len(missing)} item(s) are missing from the middle of its "
+                f"numbering — {shown}{more}. They were priced in the document and did not come "
+                "out of the extraction; this split is INCOMPLETE for that bill."
+            )
+    return gaps
 
 
 def consolidate_fragmented_sections(scope: ScopePackages) -> ScopePackages:
@@ -829,6 +1030,9 @@ def ingest_tender(
     # Completeness backstop: add back any SoR row the OCR captured but the LLM structuring dropped
     # (a scanned schedule's ruled rows — G7-G10, G17, G3(f) … — must never be silently lost).
     recovered = recover_dropped_sor_items(normalised, doc_text)
+    # An item's real description is the chain of headings above it, not the text in its own cell.
+    # Deterministic, from the document's own indentation — see `heading_chains`.
+    recovered = attach_heading_chains(recovered, doc_text, on_note=on_error)
     # Tag each item with its SoR section (or its BQ bill — the family is read per package from the
     # references themselves) and roll up the per-package section metadata (the routable unit).
     # doc_text supplies the header titles on the live path; demo has none. `on_error` carries the
@@ -838,4 +1042,8 @@ def ingest_tender(
     # Merge any section whose rows got scattered across trades back into one package (the section
     # is the routable unit), then refresh the per-package section metadata from the moved items.
     consolidated = consolidate_fragmented_sections(annotated)
-    return annotate_sections(consolidated, doc_text)
+    final = annotate_sections(consolidated, doc_text)
+    # Last, on the finished scope: an interior hole in a bill's numbering means rows were priced
+    # in the document and did not come out. Reported, never silently accepted.
+    report_sequence_gaps(final, on_note=on_error)
+    return final

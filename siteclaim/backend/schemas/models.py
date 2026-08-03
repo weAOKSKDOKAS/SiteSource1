@@ -143,6 +143,15 @@ class SorItem(BaseModel):
     # first digit (``A1a(a)`` -> ``A``, ``E10(l)`` -> ``E``, ``BB7a`` -> ``BB``). Set at
     # ingest; the section is the routable unit (a package can split by section at Route).
     section: Optional[str] = None
+    # The chain of headings above this item in the source document, outermost first
+    # (``["Instrument Installation"]``, ``["REPORT WORK", "Draft final report"]``). In a bill the
+    # item cell rarely says what the work IS — 6.1 and 6.4 are both "Standpipe", and the whole
+    # difference between installing one and recording from one lives in the heading. Derived
+    # DETERMINISTICALLY at ingest from the indentation of the sorted page text
+    # (``ingest.heading_chains``); the model writes no part of it. Empty means the document's own
+    # layout established no chain — never a guess, and never a substitute for ``description``,
+    # which stays exactly the leaf text that was extracted.
+    heading_path: list[str] = Field(default_factory=list)
     # The reference tokens from this row's "Clause Ref" column, verbatim — GS/PS/PB clauses
     # (e.g. ["GS 7.34", "PS 7.34A", "PB 71"]). Captured at ingest; the dispatch assembler
     # parses these deterministically to slice each firm's spec bundle to exactly the clauses

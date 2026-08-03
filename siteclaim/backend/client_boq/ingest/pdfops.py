@@ -643,7 +643,27 @@ def has_text_layer(data: bytes, start: int = 1, end: int = 0) -> bool:
 
 def page_text(data: bytes, start: int, end: int) -> str:
     """Plain text of a page range, each page prefixed ``[page N]`` with N the SOURCE page
-    number — so a citation read out of a part still points at the original binder."""
+    number — so a citation read out of a part still points at the original binder.
+
+    ``sort=True``, and that is the whole of the fix for the worst defect this module has had.
+    PyMuPDF's default returns text in the order the PDF's content stream happens to store it,
+    which on a ruled bill page is NOT reading order: the column-B headings land in a clump at the
+    bottom of the page, detached from the column-C items they govern. Bill 6 of CEDD ND/2025/04
+    came out as six items and three descriptions — 6.1 "Standpipe" and 6.4 "Standpipe", where the
+    real difference (installing one, versus recording from one) lived entirely in a heading the
+    model never saw. Sorted, the headings sit above their items, and PyMuPDF space-pads the text
+    to reflect the layout, so the column an entry sat in survives as leading whitespace. That
+    indentation is what :func:`~pipeline.stage_01_ingest.ingest.heading_chains` reads.
+
+    Only the newlines are stripped, never the spaces: stripping the page would cost its FIRST
+    line the indent that says what level it is.
+
+    The other ``get_text()`` calls in this module are deliberately left unsorted. Sorting adds
+    ~1,300-1,600 padding characters per page, and ``_page_chars`` is a MEASUREMENT of how much
+    real text a page carries — measured on the sample tender, sorting moves three near-blank
+    pages above the scanned threshold on padding alone. A measurement must not be inflated by
+    whitespace it did not have.
+    """
     import fitz  # PyMuPDF — lazy
 
     if not data:
@@ -653,10 +673,10 @@ def page_text(data: bytes, start: int, end: int) -> str:
         with fitz.open(stream=data, filetype="pdf") as doc:
             for index in range(max(0, start - 1), min(end, len(doc))):
                 try:
-                    text = (doc[index].get_text() or "").strip()
+                    text = (doc[index].get_text("text", sort=True) or "").strip("\n")
                 except Exception:  # noqa: BLE001
                     text = ""
-                if text:
+                if text.strip():
                     chunks.append(f"[page {index + 1}]\n{text}")
     except Exception:  # noqa: BLE001
         return ""
