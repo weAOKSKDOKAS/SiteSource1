@@ -103,10 +103,21 @@ def get_scope(set_id: str) -> dict:
 
 @router.post("/{set_id}/route/analyze")
 def post_route_analyze(set_id: str) -> dict:
-    """Propose a route per package — 409s until the client_boq review register is approved."""
-    raise NotImplementedError(
-        "POST /bridge/{set_id}/route/analyze: 409 until review approved, then propose routes"
-    )
+    """Propose a route per package — 409s until the client_boq review register is approved.
+
+    Routing sits behind the review gate and both forks inherit it. An OPEN QUERY, by contrast,
+    never blocks: the count rides on the response for a human to weigh.
+    """
+    from bridge import decisions
+
+    notes: list[str] = []
+    try:
+        body = decisions.propose_routes(set_id, on_error=notes.append)
+    except decisions.ReviewNotApproved as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {**body, "notes": notes}
 
 
 @router.post("/{set_id}/route/confirm")
