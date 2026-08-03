@@ -89,6 +89,9 @@ class JobState(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     done: int = 0                    # per-part progress (ingest); 0/0 when not applicable
     total: int = 0
+    # A cancel has been asked for but the current stage has not finished yet. The distinction
+    # matters on screen: "stopping at the next step" is true, "stopped" would not be.
+    cancel_requested: bool = False
 
 
 class ManifestGateState(BaseModel):
@@ -98,12 +101,42 @@ class ManifestGateState(BaseModel):
     tier: int = 0
 
 
+def _begin(job_id: str, stage: str) -> None:
+    """Mark a job running — unless it was cancelled while it sat in the queue.
+
+    The pool holds two workers, so a job can wait behind another for minutes, and a cancel during
+    that wait is the cheapest one there is: nothing has been spent yet. Without this check the
+    worker's own `status="running"` would resurrect it and the run would proceed anyway.
+    """
+    if jobs.JOBS.cancelled(job_id):
+        raise jobs.JobCancelled(stage)
+    jobs.JOBS.update(job_id, status="running", stage=stage)
+
+
+def _stage_cb(job_id: str):
+    """The progress callback every worker is given: record the stage it just reached, and STOP
+    if a cancel was requested while the previous stage ran.
+
+    A stage boundary is the only place a cancel can take effect. The work between boundaries is a
+    blocking model call on a pool thread, and Python cannot interrupt one — so cancelling does not
+    stop what is running, it stops the next thing from starting. On a run of ~100 calls at 20-120
+    seconds each that is nearly all of the saving, and the UI says exactly that rather than
+    implying the current call died.
+    """
+    def _cb(stage: str) -> None:
+        if jobs.JOBS.cancelled(job_id):
+            raise jobs.JobCancelled(stage)
+        jobs.JOBS.update(job_id, stage=stage)
+    return _cb
+
+
 def _job_state(job_id: str, job) -> JobState:
     """One shape for every poll endpoint, so all three workflows report progress alike."""
     return JobState(
         job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
         error=job.error or None, result=job.result if job.status == "done" else None,
         warnings=list(job.warnings), done=job.done, total=job.total,
+        cancel_requested=job.cancel_requested,
     )
 
 
@@ -262,15 +295,17 @@ def _parts_payload(set_id: str, rows) -> dict:
 
 
 def _run_ingest_job(job_id: str, uploads: list[RawUpload], project_name: str, actor: str = "") -> None:
-    jobs.JOBS.update(job_id, status="running", stage="reading")
     try:
+        _begin(job_id, "reading")
         manifest = ingest_run.run_inspect(
-            uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+            uploads, project_name, progress_cb=_stage_cb(job_id),
             on_note=lambda m: jobs.JOBS.add_warning(job_id, m),
         )
         _stamp_new_set(manifest.set_id, actor)
         jobs.JOBS.update(job_id, status="done", stage="awaiting-approval",
                          result=_manifest_payload(manifest))
+    except jobs.JobCancelled as stop:
+        jobs.JOBS.update(job_id, status="cancelled", stage=f"stopped before {stop}")
     except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 
@@ -323,6 +358,25 @@ def post_ingest_upload(
     job_id = jobs.JOBS.create("ingest")
     jobs.POOL.submit(_run_ingest_job, job_id, uploads, project_name, actor)
     return JobState(job_id=job_id, kind="ingest", status="queued", stage="uploading")
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobState)
+def post_cancel_job(job_id: str) -> JobState:
+    """Ask a running job to stop at its next stage boundary.
+
+    ONE endpoint for every workflow, because there is one job store. It is a request, not a kill:
+    the work between boundaries is a blocking model call on a pool thread and Python cannot
+    interrupt one, so what this buys is that the next call is not started. On a run of ~100 calls
+    at 20-120 seconds each that is nearly all of the saving.
+
+    Cancelling a job that has already finished is a no-op rather than an error — by the time a
+    person reaches the button the run may have ended, and that is not a failure to report.
+    """
+    job = jobs.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
+    jobs.JOBS.cancel(job_id)
+    return _job_state(job_id, jobs.JOBS.get(job_id) or job)
 
 
 @router.get("/ingest/status/{job_id}", response_model=JobState)
@@ -408,9 +462,9 @@ def _manifest_gate_or_409(set_id: str) -> None:
 
 
 def _run_split_job(job_id: str, set_id: str, actor: str = "") -> None:
-    jobs.JOBS.update(job_id, status="running", stage="splitting")
     try:
-        ingest_run.run_split(set_id, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s))
+        _begin(job_id, "splitting")
+        ingest_run.run_split(set_id, progress_cb=_stage_cb(job_id))
         conn = store.get_conn()
         try:
             rows = store.load_parts(conn, set_id)
@@ -423,6 +477,8 @@ def _run_split_job(job_id: str, set_id: str, actor: str = "") -> None:
             conn.close()
         jobs.JOBS.update(job_id, status="done", stage="ingested",
                          done=len(rows), total=len(rows), result=_parts_payload(set_id, rows))
+    except jobs.JobCancelled as stop:
+        jobs.JOBS.update(job_id, status="cancelled", stage=f"stopped before {stop}")
     except Exception as exc:  # noqa: BLE001
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 
@@ -1338,13 +1394,16 @@ def get_ingest_download(set_id: str, include_source: bool = False) -> Response:
 def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str,
                     set_id: str = "") -> None:
     """Background worker: run the review and record progress/result/error on the job."""
-    jobs.JOBS.update(job_id, status="running", stage="ingesting")
     try:
+        _begin(job_id, "ingesting")
         register = review_run.run_review(
             uploads, project_name, set_id=set_id,
-            progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+            progress_cb=_stage_cb(job_id),
+            on_note=lambda m: jobs.JOBS.add_warning(job_id, m),
         )
         jobs.JOBS.update(job_id, status="done", stage="verifying", result=_result_payload(register))
+    except jobs.JobCancelled as stop:
+        jobs.JOBS.update(job_id, status="cancelled", stage=f"stopped before {stop}")
     except Exception as exc:  # noqa: BLE001 — any stage failure becomes a job error, not a crash
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 
@@ -1756,13 +1815,15 @@ def _gate_or_409(set_id: str) -> None:
 
 def _run_estimate_job(job_id: str, set_id: str, margin_pct: float, schedule: EstimateSchedule,
                       letter: LetterMeta | None) -> None:
-    jobs.JOBS.update(job_id, status="running", stage="costing")
     try:
+        _begin(job_id, "costing")
         estimate = estimate_run.run_estimate(
             set_id, margin_pct, schedule, letter_meta=letter,
-            progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+            progress_cb=_stage_cb(job_id),
         )
         jobs.JOBS.update(job_id, status="done", stage="persisting", result=_estimate_payload(estimate))
+    except jobs.JobCancelled as stop:
+        jobs.JOBS.update(job_id, status="cancelled", stage=f"stopped before {stop}")
     except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 
@@ -1808,15 +1869,17 @@ def _scope_gate_or_409(set_id: str) -> None:
 
 
 def _run_scope_job(job_id: str, set_id: str) -> None:
-    jobs.JOBS.update(job_id, status="running", stage="scoping")
     try:
-        estimate_run.run_scope(set_id, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s))
+        _begin(job_id, "scoping")
+        estimate_run.run_scope(set_id, progress_cb=_stage_cb(job_id))
         conn = store.get_conn()
         try:
             scope = store.load_scope(conn, set_id)
         finally:
             conn.close()
         jobs.JOBS.update(job_id, status="done", stage="scoping", result=_scope_payload(set_id, scope))
+    except jobs.JobCancelled as stop:
+        jobs.JOBS.update(job_id, status="cancelled", stage=f"stopped before {stop}")
     except Exception as exc:  # noqa: BLE001
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 

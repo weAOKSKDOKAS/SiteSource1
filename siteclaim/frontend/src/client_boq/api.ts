@@ -246,6 +246,13 @@ export const api = {
     post<ManifestGateState>("/ingest/manifest/approve", { set_id: setId, parts, approved }),
   split: (setId: string) => post<JobState>("/ingest/split", { set_id: setId }),
 
+  /** Ask a running job to stop at its next stage boundary. ONE endpoint for every workflow,
+   *  because there is one job store. It is a request, not a kill — the work between boundaries is
+   *  a blocking model call the server cannot interrupt — so what it buys is that the next call is
+   *  never started. On a ~100-call run that is nearly all of the saving. */
+  cancelJob: (jobId: string) =>
+    post<JobState>(`/jobs/${encodeURIComponent(jobId)}/cancel`, {}),
+
   // --- parts ---------------------------------------------------------------
   parts: (setId: string) => get<PartsResponse>(`/ingest/parts/${setId}`),
   part: (setId: string, partId: string) => get<PartDetail>(`/ingest/parts/${setId}/${partId}`),
@@ -589,6 +596,10 @@ export function pollJob(
           onProgress?.(state);
           if (state.status === "done") resolve(state);
           else if (state.status === "error") reject(new Error(state.error || "The job failed"));
+          // A cancelled run RESOLVES. It is not a failure — somebody asked for it — so it must
+          // not reach an error banner; the caller reads `.status` and refreshes as it would after
+          // any other ending.
+          else if (state.status === "cancelled") resolve(state);
           else setTimeout(tick, 1500);
         })
         .catch((e: unknown) => {
@@ -617,7 +628,10 @@ export async function runJob(
 ): Promise<JobState> {
   const started = await start();
   onProgress?.(started);
-  if (started.status === "done" || started.status === "error" || !started.job_id) {
+  if (
+    started.status === "done" || started.status === "error" ||
+    started.status === "cancelled" || !started.job_id
+  ) {
     if (started.status === "error") throw new Error(started.error || "The job failed");
     return started;
   }

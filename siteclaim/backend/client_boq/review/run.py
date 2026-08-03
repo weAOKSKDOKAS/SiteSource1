@@ -63,12 +63,17 @@ def _ingested_parts(set_id: str):
 def run_review(
     uploads: list[RawUpload], project_name: str = "", *, set_id: str = "",
     progress_cb: Optional[ProgressCB] = None,
+    on_note: Optional[Callable[[str], None]] = None,
 ) -> DepartureRegister:
     """Run the review end to end and persist it. Returns the assembled, citation-checked register.
 
     Give it a ``set_id`` to review a set that has already been through ingest: the review then
     reads the approved parts, a part at a time, and every clause carries the part it came from.
     Give it ``uploads`` to review loose documents directly, as before.
+
+    ``on_note`` carries what the person reading the register needs to know that is not IN it —
+    today, which parts were not read for contractual positions, and whether the set contained a
+    contractual document at all.
     """
 
     def step(stage: str) -> None:
@@ -81,7 +86,7 @@ def run_review(
     step("ingesting")
     parts = _ingested_parts(set_id)
     if parts and not demo_mode():
-        parsed = s01_ingest.ingest_from_parts(parts, project_name)
+        parsed = s01_ingest.ingest_from_parts(parts, project_name, on_note=on_note)
     else:
         parsed = s01_ingest.ingest_review_documents(uploads, project_name, workspace=ws)
     final_name = (project_name or parsed.name or DEFAULT_REVIEW_NAME).strip() or DEFAULT_REVIEW_NAME

@@ -27,7 +27,7 @@ assigns the set identity and persists the result; this stage only produces the p
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from client_boq.models import ClauseItem, ParsedDocumentSet, PartSpec, RawUpload
 from pipeline.documents import extract_document
@@ -93,13 +93,36 @@ def _structure(client: LLMClient, body: str, label: str) -> list[ClauseItem]:
     return list(parsed.clauses)
 
 
+# Categories the review does NOT read for contractual positions.
+#
+# A bill of quantities has no contractual clauses. Reading one for them produced six structuring
+# calls that each returned exactly 8,000 output tokens — two retried and still at the ceiling —
+# and a register whose findings were "No letter of offer in the document set" and "No tender
+# clarifications in the document set": true, and useless, because the set contained only a bill.
+# A drawing set is geometry; its text layer is title blocks and annotations.
+#
+# A SKIP-list rather than an allow-list, deliberately. Every other category can carry a
+# contractual position — safety requirements are obligations, bid forms carry the form of tender —
+# and `other` is the honestly-uncategorised bucket, so excluding it would silently drop a
+# contractual document the classifier failed to place, which is the exact failure this module
+# exists to prevent. A skip-list also means a category added to PART_CATEGORIES later is read by
+# default rather than dropped by omission. Spending a call is cheaper than losing a clause.
+NON_CONTRACTUAL_CATEGORIES = frozenset({"pricing", "drawings"})
+
+
 def ingest_from_parts(
     parts: list[tuple[PartSpec, str]], project_name: str = "",
+    *, on_note: Optional[Callable[[str], None]] = None,
 ) -> ParsedDocumentSet:
     """Structure an already-split set, one part at a time.
 
     ``parts`` pairs each part with the path of its cut PDF. Reading the part's own file means
     the 200-page extraction cap applies per part instead of per binder, so nothing is dropped.
+
+    Parts whose category is in :data:`NON_CONTRACTUAL_CATEGORIES` are skipped and REPORTED — a
+    skipped document is a fact about the review, not an implementation detail. When every part is
+    skipped the set carries no contractual document at all, and that is said plainly rather than
+    left to be inferred from a register full of findings about documents nobody uploaded.
     """
     from client_boq.ingest import pdfops  # local import: keeps the review path light
 
@@ -107,7 +130,33 @@ def ingest_from_parts(
     clauses: list[ClauseItem] = []
     doc_names: list[str] = []
 
+    # One pass, two lists — partitioned by identity rather than by re-filtering, so two parts that
+    # happen to compare equal cannot land in both.
+    readable: list[tuple[PartSpec, str]] = []
+    skipped: list[PartSpec] = []
     for part, pdf_path in parts:
+        if (part.category or "").strip().lower() in NON_CONTRACTUAL_CATEGORIES:
+            skipped.append(part)
+        else:
+            readable.append((part, pdf_path))
+    if on_note and skipped:
+        names = ", ".join(f"{p.part_id} ({p.category})" for p in skipped[:8])
+        more = f" and {len(skipped) - 8} more" if len(skipped) > 8 else ""
+        on_note(
+            f"{len(skipped)} part(s) were NOT read for contractual positions — {names}{more}. A "
+            "bill of quantities carries priced items, not clauses, and a drawing set carries "
+            "geometry; reading them for contractual positions produces padding, not findings."
+        )
+    if on_note and parts and not readable:
+        on_note(
+            "This set contains NO contractual document — every part is pricing or drawings. The "
+            "review has nothing to read, so it reports nothing. A finding that a letter of offer "
+            "or a clarification is absent would be true and useless: neither was ever uploaded. "
+            "Upload the conditions of contract, the specification or the tender conditions to "
+            "review them."
+        )
+
+    for part, pdf_path in readable:
         source = part.source_doc or pdf_path
         if source not in doc_names:
             doc_names.append(source)

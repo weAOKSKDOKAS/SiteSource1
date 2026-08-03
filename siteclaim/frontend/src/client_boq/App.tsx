@@ -135,6 +135,12 @@ export default function ClientBoqApp() {
       throw e;
     }
   }, []);
+  /** Ask the server to stop at its next stage boundary. The strip keeps showing the run until it
+   *  actually stops — the current model call cannot be interrupted, and pretending otherwise
+   *  would have the screen disagree with what the machine is doing. */
+  const stopJob = useCallback((jobId: string) => {
+    void api.cancelJob(jobId).then(setJob).catch(() => undefined);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   /** A citation deep link for the open set's Documents tab (READ FROM COT on a card). */
@@ -349,7 +355,7 @@ export default function ClientBoqApp() {
 
       {error && <ErrorNote message={error} onDismiss={() => setError(null)} />}
       {/* Above the sidebar/content split, so it is on screen from every tab AND from the desk. */}
-      {(work || job) && <JobStrip work={work} job={job} />}
+      {(work || job) && <JobStrip work={work} job={job} onStop={stopJob} />}
 
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <NavSidebar
@@ -683,9 +689,11 @@ function SetView({
 function JobStrip({
   work,
   job,
+  onStop,
 }: {
   work: { label: string; status: "running" | "done" } | null;
   job: JobState | null;
+  onStop: (jobId: string) => void;
 }) {
   const pct = job?.total ? Math.round(((job.done ?? 0) / job.total) * 100) : null;
   const done = work?.status === "done" && !job;
@@ -741,8 +749,22 @@ function JobStrip({
       >
         {done
           ? "Finished. Open the tab that started it to see the result."
-          : "Still running — it keeps going wherever you navigate. Live model runs take as long as they take."}
+          : job?.cancel_requested
+            ? "Stopping at the next step. The call already in flight has to finish first — it cannot be interrupted."
+            : "Still running — it keeps going wherever you navigate. Live model runs take as long as they take."}
       </span>
+      {/* Only where the server keeps a job id. A blocking endpoint has nothing to cancel, and a
+          button that quietly did nothing would be worse than no button. */}
+      {!done && job?.job_id && !job.cancel_requested && (
+        <button
+          type="button"
+          onClick={() => onStop(job.job_id as string)}
+          title="Stop after the current step finishes"
+          className="cb-press ml-auto flex-none rounded-cb-btn border border-cb-brass-line px-2.5 py-[3px] font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text"
+        >
+          STOP
+        </button>
+      )}
     </div>
   );
 }

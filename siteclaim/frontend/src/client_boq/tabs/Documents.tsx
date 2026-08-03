@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, usePanes, usePersisted } from "../chrome";
 import { PageView } from "../PageView";
 import { BoundsEditor } from "./BoundsEditor";
 // `Highlight` is imported explicitly because the DOM lib declares a global of the same name
@@ -120,6 +120,9 @@ export function DocumentsTab({
   const [reading, setReading] = useState<string | null>(null);
   const [editingCard, setEditingCard] = useState<string | null>(null);
   const [editingBounds, setEditingBounds] = useState(false);
+  /** Opt-in, remembered, and off by default. Paired with the shell's STOP: automatic advance
+   *  without a way to stop it is worse than clicking. */
+  const [chain, setChain] = usePersisted("chainReview", false);
   const [locations, setLocations] = useState<Record<string, LocateResult>>({});
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const panes = usePanes("documents", 244, 560, railOpen);
@@ -242,9 +245,25 @@ export function DocumentsTab({
       // pool thread. Reading the first response would appear to work offline and do nothing at
       // all with a real key.
       await keep("Splitting the binder", async () => {
-        await runJob(() => api.split(data.setId), api.ingestStatus, (s) => onProgress?.(s));
+        const cut = await runJob(() => api.split(data.setId), api.ingestStatus, (s) => onProgress?.(s));
         onProgress?.(null);
         await onRefresh();
+        // The ONE hop in this workflow that crosses no human gate. Splitting leaves the parts cut
+        // and the manifest gate already passed, which is the whole of what the review needs — so
+        // where the person has asked for it, the review starts here instead of after a trip to
+        // another tab. Everything downstream of the review DOES cross a gate (the register's
+        // verdicts, then the scope, then the bill confirmation, then the routing decision), so
+        // there is nothing further to chain: this is not a first step towards auto-running the
+        // workflow, it is the only step that can exist.
+        if (chain && cut.status !== "cancelled") {
+          await runJob(
+            () => api.runReview(data.setId, data.name),
+            api.reviewStatus,
+            (s) => onProgress?.(s),
+          );
+          onProgress?.(null);
+          await onRefresh();
+        }
       });
     } catch (e: unknown) {
       onProgress?.(null);
@@ -524,6 +543,15 @@ export function DocumentsTab({
                 <Button variant="outline" onClick={reopen} disabled={busy}>
                   Reopen
                 </Button>
+                <label className="flex flex-none cursor-pointer items-center gap-1.5 font-cb-sans text-[10.5px] text-cb-body">
+                  <input
+                    type="checkbox"
+                    checked={chain}
+                    onChange={(e) => setChain(e.target.checked)}
+                    className="accent-cb-brass"
+                  />
+                  then run the review
+                </label>
                 <Consequence>
                   Re-splitting costs no model calls — the cut is deterministic. The interpreted
                   cards are rewritten. Reopening lets you correct a boundary; nothing already cut

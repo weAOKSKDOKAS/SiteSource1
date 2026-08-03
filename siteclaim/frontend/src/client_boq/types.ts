@@ -142,13 +142,17 @@ export interface ScopeGateState {
 export interface JobState {
   job_id?: string | null;
   kind: string;
-  status: "queued" | "running" | "done" | "error";
+  status: "queued" | "running" | "done" | "error" | "cancelled";
   stage: string;
   error?: string | null;
   result?: unknown;
   warnings?: string[];
   done?: number;
   total?: number;
+  /** A stop was asked for and the current stage has not finished. `cancel_requested` true with
+   *  status still "running" is the state the strip reads to say "stopping at the next step" —
+   *  which is true — rather than "stopped", which would not be. */
+  cancel_requested?: boolean;
 }
 
 // --- ingest: the manifest (gate 1) ----------------------------------------

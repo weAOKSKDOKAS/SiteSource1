@@ -28,13 +28,19 @@ class Job:
     """One background job's live state (mirrors the main app's ``_IngestJob``)."""
 
     kind: str = ""                 # "review" | "estimate"
-    status: str = "queued"         # queued | running | done | error
+    status: str = "queued"         # queued | running | done | error | cancelled
     stage: str = ""                # workflow-specific stage label
     done: int = 0
     total: int = 0
     result: Optional[dict] = None
     error: str = ""
     warnings: list[str] = field(default_factory=list)
+    # Set by `cancel()`; READ by the worker at each stage boundary. It is a request, never a
+    # kill: a model call already in flight is a blocking HTTP request on a pool thread and Python
+    # cannot interrupt one. What cancelling buys is that the NEXT call is not started — on a run
+    # of ~100 calls at 20-120 seconds each, that is the whole of the saving, and it is worth
+    # having. The UI must say "stopping at the next step", not "stopped".
+    cancel_requested: bool = False
 
 
 class JobStore:
@@ -67,6 +73,34 @@ class JobStore:
             job = self._jobs.get(job_id)
             if job is not None:
                 job.warnings.append(message)
+
+    def cancel(self, job_id: str) -> bool:
+        """Ask a job to stop at its next stage boundary. False when there is no such job, or it
+        has already finished — cancelling a finished job is a no-op, not an error.
+
+        A queued job that has not started yet is marked cancelled immediately: there is no
+        boundary to wait for, and the worker checks before it does anything.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status in ("done", "error", "cancelled"):
+                return False
+            job.cancel_requested = True
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.stage = "cancelled before it started"
+            return True
+
+    def cancelled(self, job_id: str) -> bool:
+        """Whether this job has been asked to stop. Called by a worker at a stage boundary."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return bool(job and job.cancel_requested)
+
+
+class JobCancelled(Exception):
+    """Raised by a worker's stage-boundary check so the run unwinds through its own error path
+    rather than each stage needing a return-value protocol."""
 
 
 # Module-level singletons, exactly as api.py holds _INGEST_JOBS / _INGEST_POOL.
