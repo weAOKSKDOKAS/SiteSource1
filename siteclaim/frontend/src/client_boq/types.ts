@@ -809,3 +809,152 @@ export interface BridgeRouteDecisions {
   self_perform_packages: string[];
   sublet_packages: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Sourcing (/shortlist, /dispatch, …) — the sublet fork
+// ---------------------------------------------------------------------------
+// Copied from src/types.ts for the same reason the bridge shapes above are: separate type files
+// by design. The backend is the authority for all of them.
+
+export type Severity = "fatal" | "warning" | "info";
+
+export interface Evidence {
+  source: string;
+  signal_type: string;
+  snippet: string;
+  reference: string;
+}
+
+export interface RiskFlag {
+  severity: Severity;
+  label: string;
+  rule_ref: string;
+  evidence: Evidence[];
+}
+
+export interface RegisteredTrade {
+  code: string;
+  group: string;
+  specialty: string;
+}
+
+export interface FirmProfile {
+  firm_id: string;
+  name: string;
+  name_zh: string;
+  registered_grade: string;
+  value_band: string;
+  trades: string[];
+  registered_trades: RegisteredTrade[];
+  public_flags: RiskFlag[];
+  closeout_summary: string;
+  award_history: string[];
+  description: string;
+  enquiry_email: string;
+  br_no: string;
+  address: string;
+  reg_date: string;
+  expiry_date: string;
+}
+
+export interface Candidate {
+  firm: FirmProfile;
+  trade: string;
+  match_score: number;
+  evidence: Evidence[];
+  risk_flags: RiskFlag[];
+  /** A fatal flag demotes a firm below every clean one regardless of price or match. Deterministic
+   *  Layer 1 — never a model's opinion. */
+  recommended_against: boolean;
+}
+
+export interface ShortlistSet {
+  per_trade: Record<string, Candidate[]>;
+}
+
+export interface Coverage {
+  total_firms: number;
+  register_count: number;
+  overlay_count: number;
+  flagged_count: number;
+  flagged_firms: number;
+  flags_by_type: Record<string, number>;
+  trades: string[];
+  flag_sources: string[];
+  registers: number;
+  provenance: string;
+}
+
+export type DispatchStatus =
+  | "drafted"
+  | "approved"
+  | "sent_mock"
+  | "sent"
+  | "send_failed"
+  | "drafted_gmail";
+
+export interface DispatchBundle {
+  firm_id: string;
+  firm_name: string;
+  trade: string;
+  bundle_doc_refs: string[];
+  email_subject: string;
+  email_body: string;
+  status: DispatchStatus;
+}
+
+export interface DispatchSet {
+  bundles: DispatchBundle[];
+}
+
+export interface AttachmentOverride {
+  package_key: string;
+  removed: string[];
+  whole: string[];
+}
+
+export interface DraftFailure {
+  firm_id: string;
+  reason: string;
+}
+
+export interface DraftRecipient {
+  firm_id: string;
+  to: string;
+}
+
+export interface DispatchDraftsResponse {
+  drafted: string[];
+  failed: DraftFailure[];
+  recipients: DraftRecipient[];
+  outbox_written: boolean;
+  /** Top-level actionable notice (Gmail unconfigured / DEMO / TEST MODE); "" when all is well. */
+  message: string;
+  bundles: DispatchBundle[];
+}
+
+/** One planned attachment for a package. `mode` is the whole point: `sliced` means pages were cut
+ *  from a legal original, `whole` means the file goes intact (the safe default), `generated` means
+ *  we produced it (the priced-return sheet). `flags` records why a slice degraded to whole. */
+export interface PlanAttachment {
+  source_doc: string;
+  out_filename: string;
+  mode: "sliced" | "whole" | "generated";
+  pages: number[];
+  clauses: string[];
+  reason: string;
+  flags: string[];
+}
+
+/** A spec a package's lines reference that is not in the upload. Surfaced, never silently absent. */
+export interface MissingSpec {
+  spec: string;
+  referenced_by: string;
+}
+
+export interface SectionPlan {
+  package_key: string;
+  section: string;
+  attachments: PlanAttachment[];
+  missing_specs: MissingSpec[];
+}

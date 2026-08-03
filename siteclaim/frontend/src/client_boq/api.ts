@@ -10,8 +10,11 @@ import type {
   BridgeSplitRead,
   BridgeSplitResponse,
   CitationsResponse,
+  Coverage,
   CriteriaResponse,
   CriterionRow,
+  DispatchDraftsResponse,
+  DispatchSet,
   DocumentRow,
   EstimateResponse,
   GateState,
@@ -39,8 +42,10 @@ import type {
   ScopeSection,
   ScopeSourcesResponse,
   SearchResponse,
+  SectionPlan,
   SetMeta,
   SetRow,
+  ShortlistSet,
   TeamMember,
 } from "./types";
 
@@ -110,6 +115,20 @@ const bpost = <T>(path: string, body: unknown): Promise<T> =>
   }).then((r) => handle<T>(r));
 
 const setPath = (setId: string) => `/${encodeURIComponent(setId)}`;
+
+// --- procurement's own endpoints (sourcing) ---------------------------------
+// At the bare BASE — /shortlist, /dispatch and friends are mounted at the root, under neither
+// prefix. Reached through this client rather than by importing src/api.ts: one product, one
+// client. Note src/api.ts throws a bare Error with no `.status`; going through `handle` here means
+// a gate refusal keeps its status code, which is the whole reason this file has its own error shape.
+const rget = <T>(path: string): Promise<T> => fetch(BASE + path).then((r) => handle<T>(r));
+
+const rpost = <T>(path: string, body: unknown): Promise<T> =>
+  fetch(BASE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
 
 /** Is this backend in DEMO mode? Drives the app-bar chip, which is not decoration: it means
  *  uploaded files were not read and every finding on screen came from a fixture. */
@@ -411,6 +430,34 @@ export const api = {
       setId: string,
       decisions: { package_key: string; chosen_route: string }[],
     ) => bpost<BridgeRouteDecisions>(`${setPath(setId)}/route/confirm`, { decisions }),
+  },
+
+  // --- sourcing: the sublet fork -------------------------------------------
+  // These are procurement's own endpoints, at the bare BASE rather than under /client-boq or
+  // /bridge. They are reached through THIS client rather than by importing src/api.ts, for the
+  // same reason the types are copied: one product, one client, no cross-import.
+  sourcing: {
+    /** Ranked candidates per package, with cited evidence and deterministic risk flags. */
+    shortlist: (scope: unknown, opts?: { includePublic?: boolean; k?: number }) =>
+      rpost<ShortlistSet>("/shortlist", {
+        scope,
+        ...(opts?.includePublic ? { include_public: true } : {}),
+        ...(opts?.k ? { k: opts.k } : {}),
+      }),
+    /** How wide the screen is — shown so a shortlist is read against the pool it came from. */
+    coverage: () => rget<Coverage>("/coverage"),
+    /** Compose (send:false) or record (send:true) the enquiry bundles. */
+    dispatch: (body: unknown) => rpost<DispatchSet>("/dispatch", body),
+    /** Assemble the relevant-only attachments and create ONE Gmail DRAFT per firm. Never a send:
+     *  the operator reviews and sends from Gmail. A Gmail failure comes back as partial success. */
+    dispatchDrafts: (body: unknown) => rpost<DispatchDraftsResponse>("/dispatch/drafts", body),
+    /** The per-section relevant-document plan, previewed before anything is drafted. */
+    dispatchPlan: (scope: unknown, approvals: Record<string, string[]>, projectName: string) =>
+      rpost<SectionPlan[]>("/dispatch/plan", {
+        scope,
+        approvals,
+        project_name: projectName,
+      }),
   },
 };
 
