@@ -44,6 +44,13 @@ _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
 # chunker header (`ingest._SECTION_HEADER_RE`) so the SoR page ranges index on the SAME section
 # codes dispatch routes by. Group 1 = code (upper-cased at collection), group 2 = title.
 _SOR_SECTION_HEADER = re.compile(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)\s*[:.\-]\s*(.+?)\s*$")
+# The BILL-OF-QUANTITIES header form, beside the Section form rather than folded into it — the
+# Schedule-of-Rates pattern above is live and must keep matching exactly what it matches today.
+# `Bill No. 1 - General and Preliminaries`, `BILL NO. 2 : GROUND INVESTIGATION FIELDWORKS`,
+# `Bill No.3 Laboratory Testing` (no separator). Mirrors `ingest._BILL_HEADER_RE` for the same
+# reason the Section forms mirror: the guard must check against the vocabulary the extractor
+# assigns. Group 1 = bill number, group 2 = title.
+_BILL_SECTION_HEADER = re.compile(r"(?im)^\s*bill\s*(?:no\.?|number)?\s*(\d{1,2})\b\s*[:.\-–—]?\s*(.+?)\s*$")
 
 # A PS/GS clause id: a dotted number with optional letter / bracket / trailing-letter suffixes
 # (7.34, 7.34A, 7.39S, 7.41.(4)S, 7.72(6)S — the dot before the bracket is optional). Kept verbatim
@@ -174,17 +181,33 @@ def _spec_markers(pages: list[str], section_number: str) -> list[tuple[str, int]
 
 
 def _sor_section_markers(pages: list[str]) -> list[tuple[str, int]]:
-    """``(SECTION_CODE_upper, 0-based page)`` for every Schedule-of-Rates section header, in document
+    """``(SECTION_CODE_upper, 0-based page)`` for every priced-document section header, in document
     order — fed to :func:`_spans` to map each section code to the pages it spans. A section header is
     a standalone row even in a multi-column SoR (it precedes the item table), so a line-start match is
-    enough; a code repeated in a running header simply unions onto that section's page span."""
-    markers: list[tuple[str, int]] = []
+    enough; a code repeated in a running header simply unions onto that section's page span.
+
+    Both header families are scanned, and where a document declares BILL headers those are the only
+    markers kept. That is not tidiness — it is the fix for the second half of the ND/2025/04 failure.
+    ``_SOR_SECTION_HEADER``'s code class is ``[A-Za-z0-9]+``, so in a Bill of Quantities it happily
+    matched the *specification* cross-references scattered through the preambles (``SECTION 24 :
+    EARTHWORKS``) and reported the bill's sections as ``['1','2','24','28','29','3']``. Those are not
+    bill numbers; ND/2025/04 has nine, numbered 1 to 9. When a document says ``Bill No. n`` it has
+    told us its own vocabulary, and a ``SECTION n`` line inside it is pointing somewhere else.
+
+    A Schedule of Rates carries no Bill headers, so it takes the first branch and its markers are
+    byte-for-byte what they were."""
+    bills: list[tuple[str, int]] = []
+    sections: list[tuple[str, int]] = []
     for page_no, text in enumerate(pages):
         for line in text.splitlines():
+            b = _BILL_SECTION_HEADER.match(line)
+            if b:
+                bills.append((b.group(1).lstrip("0") or b.group(1), page_no))
+                continue
             m = _SOR_SECTION_HEADER.match(line)
             if m:
-                markers.append((m.group(1).upper(), page_no))
-    return markers
+                sections.append((m.group(1).upper(), page_no))
+    return bills or sections
 
 
 # -- layout-aware spec markers (multi-column scanned PS / GS) ----------------

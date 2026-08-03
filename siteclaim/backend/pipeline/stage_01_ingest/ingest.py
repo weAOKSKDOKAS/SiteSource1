@@ -108,6 +108,10 @@ def _user_prompt(tender: TenderPackage) -> str:
 # and merge the items (deterministic; never splits mid-line / mid-item-row).
 # ---------------------------------------------------------------------------
 _SECTION_RE = re.compile(r"(?im)^\s*(?:section|part)\s+[A-Za-z0-9]")
+# The Bill-of-Quantities equivalent, ALONGSIDE `_SECTION_RE` rather than folded into it — the
+# Schedule-of-Rates path is live and its pattern must keep matching exactly what it matches today.
+# `Bill No. 1 …`, `BILL NO.2 …`, `Bill 3 …`.
+_BILL_RE = re.compile(r"(?im)^\s*bill\s*(?:no\.?|number)?\s*\d")
 _PAGE_RE = re.compile(r"(?m)^\[page \d+\]")
 
 # The section code is the leading letters of an item_ref before the first digit/punctuation
@@ -116,12 +120,82 @@ _SECTION_CODE_RE = re.compile(r"^\s*([A-Za-z]+)")
 # A section header the chunker sees — `SECTION A : PRELIMINARIES ITEMS`, two-letter
 # `SECTION BA : GENERAL`, `SECTION K : (Not used)`. Captures the code and its title.
 _SECTION_HEADER_RE = re.compile(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)\s*[:.\-]\s*(.+?)\s*$")
+# The Bill form of the same thing, again added BESIDE the Section form. Real documents vary in
+# punctuation and case, and the separator is genuinely optional — all three of these occur:
+#   `Bill No. 1 - General and Preliminaries`
+#   `BILL NO. 2 : GROUND INVESTIGATION FIELDWORKS`
+#   `Bill No.3 Laboratory Testing`          <- no separator at all
+# A title is required, exactly as the Section form requires one, so a bare `Bill No. 1` cross-
+# reference in prose is not read as a header. Group 1 = bill number, group 2 = title.
+_BILL_HEADER_RE = re.compile(r"(?im)^\s*bill\s*(?:no\.?|number)?\s*(\d{1,2})\b\s*[:.\-–—]?\s*(.+?)\s*$")
 
 
 def section_of(item_ref: str) -> str:
     """The SoR section code for an item_ref — its leading letters, upper-cased ('' if none)."""
     m = _SECTION_CODE_RE.match(item_ref or "")
     return m.group(1).upper() if m else ""
+
+
+# ---------------------------------------------------------------------------
+# Two document families
+# ---------------------------------------------------------------------------
+# A Hong Kong SCHEDULE OF RATES numbers its items with a letter section code — `A1a(a)`, `E10(l)`,
+# `BB7a`, `M-01`. A BILL OF QUANTITIES numbers them `<bill>.<item>` — `1.17`, `2.24`, `3.1` — with
+# no letters anywhere. CEDD ND/2025/04 extracted 136 items correctly and every one was quarantined,
+# because `section_of("1.17")` is '' and no numeric code could ever be valid.
+#
+# THE BILL IS THE SECTION. ND/2025/04 yields nine sections, `1` through `9` — not bill-plus-
+# subsection: you do not sublet item 2.4 and self-perform item 2.5 of the same drilling operation.
+# `route_units()` already splits a large package further by section when the thresholds are met, so
+# finer grain stays available without redefining what a section is.
+#
+# The detection below is DETERMINISTIC — read off the item references themselves, with the
+# document's own headers as corroboration. No LLM, no configuration flag, no user question.
+
+# A bill reference: a small leading integer, a separator, then the item number. `\d{1,2}` is the
+# bound the brief asks for — a bill number is a small positive integer, so `2025.1` (a date that
+# reached the reference column) matches nothing and inherits the running bill instead of opening a
+# section of its own. A BARE integer (`2`, `1(a)`) is deliberately NOT a bill reference: those are
+# Schedule-of-Rates refs that lost their leading letter, which is the case fill-forward exists for.
+_BILL_REF_RE = re.compile(r"^\s*(\d{1,2})\s*[.\-/]\s*\d")
+_MAX_BILL = 99
+# At least this many bill-shaped refs before a package can be read as a bill. One dotted ref in a
+# schedule is noise; two or more, outnumbering the letter-prefixed ones, is a document.
+_BILL_MIN_REFS = 2
+
+
+def bill_of(item_ref: str) -> str:
+    """The BQ bill number for an item_ref — the leading integer before the first separator
+    (``1.17`` -> ``1``, ``24.2`` -> ``24``, ``01.3`` -> ``1``), ``''`` when the ref is not
+    bill-shaped. The numeric counterpart of :func:`section_of`; neither ever sees the other's
+    family, which is how the Schedule-of-Rates path stays byte-for-byte unchanged."""
+    m = _BILL_REF_RE.match(item_ref or "")
+    if not m:
+        return ""
+    code = m.group(1).lstrip("0")
+    return code if code and int(code) <= _MAX_BILL else ""
+
+
+def section_family(items: list) -> tuple[str, int, int]:
+    """``(family, n_bill_refs, n_letter_refs)`` for one package — ``"bq"`` or ``"sor"``.
+
+    Bill iff at least ``_BILL_MIN_REFS`` references are bill-shaped AND they outnumber the
+    letter-prefixed ones. Everything else — including a package with no readable refs at all — is
+    a Schedule of Rates, so the live path is what an ambiguous package falls back to, never the
+    new one.
+
+    The counts come back with the verdict rather than staying inside the helper: a package that
+    carries BOTH forms is a real document problem, and the caller surfaces it (see
+    :func:`annotate_sections`) instead of resolving it silently by majority vote."""
+    n_bill = n_letter = 0
+    for it in items:
+        ref = getattr(it, "item_ref", "") or ""
+        if bill_of(ref):
+            n_bill += 1
+        elif section_of(ref):
+            n_letter += 1
+    family = "bq" if (n_bill >= _BILL_MIN_REFS and n_bill > n_letter) else "sor"
+    return family, n_bill, n_letter
 
 
 # Valid SoR section codes: single letters A–Z, the two-letter BA–BF range the real schedules use,
@@ -131,10 +205,16 @@ def section_of(item_ref: str) -> str:
 # are snapped back onto this set so one real section stops fragmenting into several.
 _LETTERS = frozenset(chr(c) for c in range(ord("A"), ord("Z") + 1))
 _TWO_LETTER_SECTIONS = frozenset({"BA", "BB", "BC", "BD", "BE", "BF"})
+# The bill equivalent: 1 … 99. Bounded because a bill number is a small positive integer, not a
+# year — the same bound `_BILL_REF_RE` applies, restated so a code from a Bill HEADER is checked too.
+_BILL_CODES = frozenset(str(n) for n in range(1, _MAX_BILL + 1))
 
 
-def _valid_section_codes(titles: dict[str, str]) -> frozenset[str]:
-    return _LETTERS | _TWO_LETTER_SECTIONS | frozenset(titles)
+def _valid_section_codes(titles: dict[str, str], family: str = "sor") -> frozenset[str]:
+    """The codes a section may resolve to. The ``"sor"`` default is the original letter set —
+    untouched, and the letters are NOT widened for bills."""
+    base = _BILL_CODES if family == "bq" else (_LETTERS | _TWO_LETTER_SECTIONS)
+    return base | frozenset(titles)
 
 
 def _snap_section(raw: str, valid: frozenset[str]) -> Optional[str]:
@@ -150,16 +230,33 @@ def _snap_section(raw: str, valid: frozenset[str]) -> Optional[str]:
     return None
 
 
-def _normalise_sections(items: list, valid: frozenset[str]) -> list[str]:
-    """The corrected section code for each item, walking the package IN ORDER: a valid or
-    prefix-snapped code sets the running section; an unresolvable one (empty, or corrupt with no
-    valid prefix) inherits the running section (fill-forward). A leading run before any section
-    resolves is back-filled from the first section that does. Deterministic — no LLM, and never an
-    invented section: an all-unresolvable package keeps ''."""
+def _resolve_code(item_ref: str, valid: frozenset[str], family: str) -> Optional[str]:
+    """One item's section code before fill-forward, per family.
+
+    SoR: the leading letters, prefix-snapped onto ``valid`` (``HS`` -> ``H``).
+
+    BQ: the leading bill number, checked against ``valid`` and **never snapped**. A bill number
+    has no prefix structure, so snapping ``24`` to its longest valid prefix would resolve it to
+    bill ``2`` — silently moving bill 24's items into bill 2, which fill-forward would then spread
+    down the rest of the bill. An unrecognised bill number resolves to ``None`` and inherits the
+    running one, which is the honest answer."""
+    if family == "bq":
+        code = bill_of(item_ref)
+        return code if code in valid else None
+    return _snap_section(section_of(item_ref), valid)
+
+
+def _normalise_sections(items: list, valid: frozenset[str], family: str = "sor") -> list[str]:
+    """The corrected section code for each item, walking the package IN ORDER: a resolved code
+    sets the running section; an unresolvable one (empty, or corrupt) inherits the running section
+    (fill-forward). A leading run before any section resolves is back-filled from the first section
+    that does. Fill-forward is family-INDEPENDENT and deliberately so: an item whose reference the
+    extractor could not read belongs to the bill or section it sits inside, in either family.
+    Deterministic — no LLM, and never an invented section: an all-unresolvable package keeps ''."""
     running = ""
     codes: list[str] = []
     for it in items:
-        snapped = _snap_section(section_of(getattr(it, "item_ref", "")), valid)
+        snapped = _resolve_code(getattr(it, "item_ref", ""), valid, family)
         if snapped:
             running = snapped
         codes.append(snapped or running)
@@ -167,28 +264,57 @@ def _normalise_sections(items: list, valid: frozenset[str]) -> list[str]:
     return [c or first for c in codes] if first else codes
 
 
-def _section_titles(text: str) -> dict[str, str]:
-    """Map each section code to the title from its header (first occurrence wins)."""
+def _headers(pattern: re.Pattern, text: str) -> dict[str, str]:
+    """``{code: title}`` for one header pattern over ``text`` — first occurrence of a code wins."""
     titles: dict[str, str] = {}
-    for m in _SECTION_HEADER_RE.finditer(text or ""):
+    for m in pattern.finditer(text or ""):
         code, title = m.group(1).upper(), m.group(2).strip()
         if code and title and code not in titles:
             titles[code] = title
     return titles
 
 
-def annotate_sections(scope: ScopePackages, doc_text: str = "") -> ScopePackages:
+def _section_titles(text: str) -> dict[str, str]:
+    """Map each section code to the title from its header (first occurrence wins).
+
+    Both header forms are read. Where a code is declared by BOTH — only possible numerically, and
+    only when a bill's preamble also cites a spec section — the BILL header wins: in a Bill of
+    Quantities a ``SECTION 24 :`` line is a cross-reference to the specification, not a section of
+    this document. A Schedule of Rates carries no Bill headers, so its titles are unchanged."""
+    titles = _headers(_SECTION_HEADER_RE, text)
+    titles.update(_headers(_BILL_HEADER_RE, text))
+    return titles
+
+
+def annotate_sections(
+    scope: ScopePackages, doc_text: str = "",
+    on_note: Optional[Callable[[str], None]] = None,
+) -> ScopePackages:
     """Set each item's ``section`` (from its ref) and each package's ``sections`` metadata
     (code, header title if seen, item_count) — the routable unit made visible. Deterministic;
-    a single-section package (every demo package) simply carries one section."""
+    a single-section package (every demo package) simply carries one section.
+
+    The reference family is decided PER PACKAGE, from that package's own references (see
+    :func:`section_family`), because one tender can carry both a Schedule of Rates and a Bill of
+    Quantities. ``on_note`` receives a line for a package that mixes the two forms — a visible
+    decision rather than a majority vote hidden in a helper."""
     titles = _section_titles(doc_text)
-    valid = _valid_section_codes(titles)
     packages: list[TradeWorkPackage] = []
     for pkg in scope.packages:
+        family, n_bill, n_letter = section_family(pkg.sor_items)
+        if on_note and n_bill and n_letter:
+            kept, other = ("bill", "schedule") if family == "bq" else ("schedule", "bill")
+            on_note(
+                f"package {pkg.trade!r} mixes reference forms — {n_bill} bill-style "
+                f"(<bill>.<item>) and {n_letter} schedule-style (letter-prefixed); read as the "
+                f"{kept} family, so the {other}-style refs inherit the surrounding section rather "
+                "than opening one of their own"
+            )
+        valid = _valid_section_codes(titles, family)
         # Repair each item's section code deterministically (snap OCR corruptions onto the valid
         # set, fill-forward a lost code) so one real section stops fragmenting into H / HS / '';
         # then roll up the section metadata from the CORRECTED codes.
-        codes = _normalise_sections(pkg.sor_items, valid)
+        codes = _normalise_sections(pkg.sor_items, valid, family)
         items = [
             it if it.section == code else it.model_copy(update={"section": code})
             for it, code in zip(pkg.sor_items, codes)
@@ -380,9 +506,14 @@ def _split_on(text: str, pattern: re.Pattern) -> list[str]:
 
 
 def _split_into_blocks(text: str) -> list[str]:
-    """Prefer Section-header boundaries when cleanly detectable (>=2), else page boundaries."""
+    """Prefer Section-header boundaries when cleanly detectable (>=2), then Bill headers, else
+    page boundaries. Section is tried FIRST so a Schedule of Rates chunks exactly as before; a
+    Bill of Quantities has no Section headers to find and falls through to the Bill form, which
+    used to leave it as one undivided block on the page fallback."""
     if len(_SECTION_RE.findall(text)) >= 2:
         return _split_on(text, _SECTION_RE)
+    if len(_BILL_RE.findall(text)) >= 2:
+        return _split_on(text, _BILL_RE)
     if len(_PAGE_RE.findall(text)) >= 2:
         return _split_on(text, _PAGE_RE)
     return [text]
@@ -405,8 +536,10 @@ def _cap_block(block: str, max_chars: int) -> list[str]:
 
 
 def _is_section_header(line: str) -> bool:
-    """True when a line is a Section/Part header (so it carries trade context, not an item row)."""
-    return bool(_SECTION_RE.match(line or ""))
+    """True when a line is a Section/Part or Bill header (so it carries trade context, not an item
+    row). Both callers use it to keep a header OUT of the row count and repeat it on each batch, so
+    a bill's batches keep their bill context exactly as a schedule's keep their section."""
+    return bool(_SECTION_RE.match(line or "") or _BILL_RE.match(line or ""))
 
 
 def _row_batches(chunk: str, max_rows: int) -> list[str]:
@@ -538,9 +671,16 @@ def _chunk_label(text: str) -> str:
     if m:
         title = m.group(2).strip()
         return f"section {m.group(1).upper()}" + (f" ({title})" if title else "")
+    b = _BILL_HEADER_RE.search(text or "")
+    if b:
+        title = b.group(2).strip()
+        return f"bill {b.group(1)}" + (f" ({title})" if title else "")
     m2 = re.search(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)", text or "")
     if m2:
         return f"section {m2.group(1).upper()}"
+    b2 = re.search(r"(?im)^\s*bill\s*(?:no\.?|number)?\s*(\d{1,2})\b", text or "")
+    if b2:
+        return f"bill {b2.group(1)}"
     return "a Schedule-of-Rates batch"
 
 
@@ -689,9 +829,12 @@ def ingest_tender(
     # Completeness backstop: add back any SoR row the OCR captured but the LLM structuring dropped
     # (a scanned schedule's ruled rows — G7-G10, G17, G3(f) … — must never be silently lost).
     recovered = recover_dropped_sor_items(normalised, doc_text)
-    # Tag each item with its SoR section and roll up the per-package section metadata (the
-    # routable unit). doc_text supplies the header titles on the live path; demo has none.
-    annotated = annotate_sections(recovered, doc_text)
+    # Tag each item with its SoR section (or its BQ bill — the family is read per package from the
+    # references themselves) and roll up the per-package section metadata (the routable unit).
+    # doc_text supplies the header titles on the live path; demo has none. `on_error` carries the
+    # mixed-family note; only this first call reports, because the second annotate below re-reads
+    # the SAME references after consolidation and would say it twice.
+    annotated = annotate_sections(recovered, doc_text, on_note=on_error)
     # Merge any section whose rows got scattered across trades back into one package (the section
     # is the routable unit), then refresh the per-package section metadata from the moved items.
     consolidated = consolidate_fragmented_sections(annotated)
