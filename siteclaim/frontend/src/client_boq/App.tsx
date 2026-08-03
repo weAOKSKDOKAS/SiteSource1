@@ -31,6 +31,7 @@ import { PriceTab } from "./tabs/Price";
 import { RegisterTab } from "./tabs/Register";
 import { RouteTab } from "./tabs/Route";
 import { ScopeTab } from "./tabs/Scope";
+import { SourcingTab } from "./tabs/Sourcing";
 import type {
   CitationsResponse,
   CriteriaResponse,
@@ -353,6 +354,7 @@ export default function ClientBoqApp() {
             setId={surface.setId}
             tab={surface.tab}
             railOpen={railOpen}
+            demoMode={demoMode}
             onError={setError}
             onJob={setJob}
             onSetsChanged={() => void loadSets()}
@@ -436,6 +438,7 @@ function SetView({
   setId,
   tab,
   railOpen,
+  demoMode,
   onError,
   onJob,
   onSetsChanged,
@@ -445,6 +448,9 @@ function SetView({
   setId: string;
   tab: TabId;
   railOpen: boolean;
+  /** DEMO means uploaded files were not read. Sourcing needs it: the live path shows the assembled
+   *  attachment plan and can hand bundles to Gmail; DEMO does neither. */
+  demoMode: boolean;
   onError: (msg: string) => void;
   onJob: (job: JobState | null) => void;
   onSetsChanged: () => void;
@@ -575,10 +581,7 @@ function SetView({
         ) : tab === "route" ? (
           <RouteTab data={data} onError={onError} onRefresh={refresh} />
         ) : tab === "sourcing" ? (
-          <WaitingOn title="Sourcing — screen not built yet">
-            Shortlist, dispatch, level and recommend for the packages routed to sublet. Waits on the
-            route decision, which is what says which packages those are.
-          </WaitingOn>
+          <SourcingTab data={data} demoMode={demoMode} onError={onError} />
         ) : tab === "price" ? (
           <PriceTab
             data={data}
