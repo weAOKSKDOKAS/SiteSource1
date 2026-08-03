@@ -30,9 +30,30 @@ the routing decision — without either side learning about the other.
    RFQ on terms nobody has read. `/bridge/{set_id}/route/analyze` 409s until the register is
    approved, then calls the existing `route_units()` / `package_signal()` / `recommend_routes()`
    unchanged.
-5. **decisions** — the Layer-4 gate records the human's route per package in
+5. **decisions** — holds both halves of the fork: `propose_routes()` (the gated analyze above) and
+   `confirm_routes()`, the Layer-4 gate that records the human's route per package in
    `bridge_route_decisions`, UNIQUE on `(set_id, package_key)`, and **seeds no estimate on either
-   side** (see below).
+   side** (see below). Confirm sits behind the same review gate as analyze — confirming a route is
+   routing, and a gate covering only the advisory step would be bypassed by posting straight to
+   confirm. Both validate before writing: an unknown route, or a `package_key` that was never
+   proposed, is refused rather than stored.
+
+## Tables this package owns
+
+All created lazily (`CREATE TABLE IF NOT EXISTS`) on the connection `identity.bridge_conn()` opens,
+which is `client_boq.store.get_conn()` — the bridge joins against their data, so it opens the
+database that data is in. Live (and under a test's `SITESOURCE_DB`) that is the same shared
+database procurement uses; in DEMO with no override it is client_boq's gitignored scratch DB, which
+is also what keeps the committed `sitesource.db` byte-identical (trap 3b).
+
+| Table | Key | Holds |
+| --- | --- | --- |
+| `bridge_bill_parts` | UNIQUE `(set_id, part_id)` | which part(s) a human confirmed as the priced bill |
+| `bridge_scopes` | `set_id` PK | the persisted `ScopePackages` split |
+| `bridge_route_decisions` | UNIQUE `(set_id, package_key)` | the human's route per package |
+
+The umbrella row lives in procurement's existing `unified_projects` (keyed `run_ref == set_id`),
+and the route proposal in its existing `package_routes`. Neither is extended.
 
 ## Outputs
 - `ScopePackages` for the set (persisted, re-readable).
