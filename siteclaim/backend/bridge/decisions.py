@@ -178,15 +178,104 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone()
+    return bool(row["n"])
+
+
 def load_decisions(conn: sqlite3.Connection, set_id: str) -> list[dict]:
-    """Every persisted route decision for ``set_id``, in package order."""
-    ensure_tables(conn)
+    """Every persisted route decision for ``set_id``, in package order.
+
+    A pure read: it does NOT create the table, so a GET that lands before any decision has been
+    recorded returns ``[]`` rather than writing DDL. (``confirm_routes`` calls ``ensure_tables``
+    itself before it writes, so nothing depends on this creating it.)
+    """
+    if not _table_exists(conn, "bridge_route_decisions"):
+        return []
     rows = conn.execute(
         "SELECT package_key, chosen_route, decided_by, decided_at FROM bridge_route_decisions "
         "WHERE set_id = ? ORDER BY package_key",
         (set_id,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def stored_proposal(set_id: str) -> dict:
+    """The persisted route proposal for ``set_id`` — a pure read, and NEVER a re-run.
+
+    The step chips need to know whether a proposal exists. Calling ``propose_routes`` to find out
+    would be a write (``write_proposal`` deletes and re-inserts) and, live, a model call — so this
+    reads ``package_routes`` back instead.
+
+    "Not yet run" is a STATE, not an error: a set with no proposal returns ``packages: []``.
+
+    ``section``/``section_title`` are recovered by re-running ``route_units`` over the persisted
+    split — deterministic Layer-1 Python, no model — so a reloaded tab shows the same headings as
+    the one that just ran the analysis. With no split stored they are simply absent.
+    """
+    from db import routing
+    from pipeline.routing.split import route_units
+
+    from bridge import scope as scope_mod
+    from bridge.identity import bridge_conn, run_ref_for
+    from client_boq import store as cb_store
+
+    ref = run_ref_for(set_id)
+    conn = bridge_conn()
+    try:
+        saved = routing.read_proposal(conn, ref)
+        split = scope_mod.load_scope_on(conn, ref)
+        open_queries = cb_store.open_rfi_count(conn, ref)
+        review_approved = cb_store.review_is_approved(conn, ref)
+    finally:
+        conn.close()
+
+    section: dict[str, object] = {}
+    section_title: dict[str, str] = {}
+    if split is not None:
+        for unit in route_units(split):
+            section[unit["package_key"]] = unit["section"]
+            section_title[unit["package_key"]] = unit["section_title"]
+
+    return {
+        "set_id": ref,
+        "run_ref": ref,
+        "packages": [
+            {**row, "section": section.get(row["package_key"]),
+             "section_title": section_title.get(row["package_key"], "")}
+            for row in saved
+        ],
+        "open_queries": open_queries,
+        "review_approved": review_approved,
+        "has_split": split is not None,
+    }
+
+
+def stored_decisions(set_id: str) -> dict:
+    """The persisted route decisions for ``set_id`` — a pure read.
+
+    Same shape as ``confirm_routes`` returns, so a tab renders identically whether it just
+    confirmed or is reading back after a reload. No decisions yet is ``decisions: []``, not a 404.
+    """
+    from schemas.routing import SELF_PERFORM, SUBLET
+
+    from bridge.identity import bridge_conn, run_ref_for
+
+    ref = run_ref_for(set_id)
+    conn = bridge_conn()
+    try:
+        stored = load_decisions(conn, ref)
+    finally:
+        conn.close()
+    return {
+        "set_id": ref,
+        "run_ref": ref,
+        "decisions": stored,
+        "self_perform_packages": [d["package_key"] for d in stored if d["chosen_route"] == SELF_PERFORM],
+        "sublet_packages": [d["package_key"] for d in stored if d["chosen_route"] == SUBLET],
+    }
 
 
 def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = "operator") -> dict:
