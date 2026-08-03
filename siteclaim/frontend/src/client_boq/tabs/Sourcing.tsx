@@ -20,15 +20,23 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api } from "../api";
 import type {
+  AwaitingPackage,
+  BidReply,
   BridgeRouteProposalRead,
+  Coverage,
   DispatchSet,
+  LevelledBid,
+  MisdirectedHint,
+  Recommendation,
   ScopePackages,
   SectionPlan,
   ShortlistSet,
-  Coverage,
+  TenderReplies,
 } from "../types";
 import { Button, ErrorNote, LoadingDots, WaitingOn, cx } from "../ui";
 import { Dispatch, type Draft } from "./sourcing/Dispatch";
+import { Level } from "./sourcing/Level";
+import { Recommend } from "./sourcing/Recommend";
 import { Shortlist } from "./sourcing/Shortlist";
 
 type StepId = "shortlist" | "dispatch" | "level" | "recommend";
@@ -100,6 +108,18 @@ export function SourcingTab({
   // Lifted out of StepDispatch, which used to fetch this itself.
   const [plans, setPlans] = useState<SectionPlan[] | null>(null);
   const [plansError, setPlansError] = useState("");
+
+  // Level & award.
+  const [levelled, setLevelled] = useState<Record<string, LevelledBid[]> | null>(null);
+  // The raw replies behind the editable rate matrix. The desk has no demo-case loader (the wizard
+  // got these from one), so in DEMO the summary tables populate from the levelled sections while
+  // the matrix stays empty; on the live path rates are corrected by re-uploading a return, which
+  // is the real workflow anyway.
+  const [replies, setReplies] = useState<BidReply[]>([]);
+  const [levelStale, setLevelStale] = useState(false);
+  const [tenderReplies, setTenderReplies] = useState<TenderReplies | null>(null);
+  const [recommendations, setRecommendations] = useState<Record<string, Recommendation> | null>(null);
+  const [awards, setAwards] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -214,6 +234,87 @@ export function SourcingTab({
       attachment_overrides: overrides,
     });
 
+  // --- level & award -------------------------------------------------------
+  const refreshReplies = () =>
+    void api.sourcing
+      .tenderReplies(setId)
+      .then(setTenderReplies)
+      .catch(() => setTenderReplies(null)); // 404 = nothing has landed yet, which is a state
+
+  const runLevel = () =>
+    run(async () => {
+      const res = await api.sourcing.levelAll(replies, scope);
+      setLevelled(Object.fromEntries(res.sections.map((s2) => [s2.trade, s2.levelled])));
+      setLevelStale(false);
+      if (!demoMode) refreshReplies();
+    });
+
+  const editRate = (firmId: string, itemRef: string, rate: number | null) => {
+    setReplies((cur) =>
+      cur.map((r) =>
+        r.firm_id === firmId
+          ? {
+              ...r,
+              line_items: r.line_items.map((l) => (l.item_ref === itemRef ? { ...l, rate } : l)),
+            }
+          : r,
+      ),
+    );
+    setLevelStale(true); // the corrected totals no longer match the rates on screen
+  };
+
+  const uploadReturn = async (
+    trade: string,
+    firmId: string,
+    files: File[],
+  ): Promise<MisdirectedHint | null> => {
+    const res = await api.sourcing.levelUpload(files, firmId, trade, setId);
+    // A misdirected return is NOT filed — it comes back as a hint for the operator to confirm.
+    if (res.misdirected) return res.misdirected;
+    await runLevel();
+    return null;
+  };
+
+  const withdrawReply = async (firmId: string, packageKey: string) => {
+    await api.sourcing.withdrawReply(setId, firmId, packageKey);
+    await runLevel();
+  };
+
+  const runRecommend = () =>
+    run(async () => {
+      const flat = Object.values(levelled ?? {}).flat();
+      const res = await api.sourcing.recommendAll(flat, {}, scope);
+      setRecommendations(Object.fromEntries(res.sections.map((s2) => [s2.trade, s2.recommendation])));
+    });
+
+  // What was dispatched, and whether each firm's return has landed — by EITHER path (an active
+  // reply aligned to the unit, or a manual upload that levelled into its section).
+  const awaiting: AwaitingPackage[] = useMemo(() => {
+    if (!dispatch) return [];
+    const byUnit = new Map<string, AwaitingPackage>();
+    for (const b of dispatch.bundles) {
+      const received =
+        (tenderReplies?.replies ?? []).some(
+          (r) => r.trade === b.trade && r.firm_id === b.firm_id && r.status === "active",
+        ) || (levelled?.[b.trade] ?? []).some((l) => l.firm_id === b.firm_id);
+      const pkg = byUnit.get(b.trade) ?? { trade: b.trade, firms: [] };
+      pkg.firms.push({
+        firm_id: b.firm_id,
+        firm_name: b.firm_name,
+        ref: (b.email_subject.match(/\[SiteSource Ref:\s*([^\]]+)\]/) ?? [])[1]?.trim() ?? "",
+        received,
+        status: b.status,
+      });
+      byUnit.set(b.trade, pkg);
+    }
+    return [...byUnit.values()];
+  }, [dispatch, tenderReplies, levelled]);
+
+  const awaitingTrades = useMemo(
+    () => Object.entries(recommendations ?? {}).filter(([, r]) => r.awaiting_valid_return).map(([t]) => t),
+    [recommendations],
+  );
+
   if (loading) {
     return (
       <div className="flex-1 overflow-y-auto p-6">
@@ -308,11 +409,57 @@ export function SourcingTab({
                 Run the shortlist first — dispatch sends enquiries to the firms selected there.
               </WaitingOn>
             )
+          ) : step === "level" ? (
+            levelled ? (
+              <Level
+                sections={levelled}
+                replies={replies}
+                stale={levelStale}
+                xlsxUrl={api.sourcing.levelingXlsxUrl()}
+                loading={busy}
+                onEditRate={editRate}
+                onRecompute={runLevel}
+                live={!demoMode}
+                awaiting={awaiting}
+                onUploadReturn={uploadReturn}
+                tenderReplies={tenderReplies}
+                comparisonUrl={api.sourcing.tenderComparisonUrl(setId)}
+                onRefreshReplies={refreshReplies}
+                onWithdrawReply={withdrawReply}
+              />
+            ) : (
+              <div className="space-y-3">
+                <p className="max-w-3xl text-[12px] leading-relaxed text-cb-muted">
+                  Level the priced returns: the rules engine recomputes every amount as qty × rate,
+                  flags arithmetic errors, and treats a missing rate as a scope gap rather than a
+                  cheap bid.
+                </p>
+                <Button variant="brass" onClick={runLevel} disabled={busy || !scope}>
+                  {busy ? "Levelling…" : "Level the returns"}
+                </Button>
+              </div>
+            )
+          ) : recommendations ? (
+            <Recommend
+              sections={recommendations}
+              awards={awards}
+              awaitingTrades={awaitingTrades}
+              onSetAward={(trade, firmId) => setAwards((cur) => ({ ...cur, [trade]: firmId }))}
+              onSkip={(trade) => setAwards((cur) => ({ ...cur, [trade]: "" }))}
+            />
+          ) : levelled ? (
+            <div className="space-y-3">
+              <p className="max-w-3xl text-[12px] leading-relaxed text-cb-muted">
+                The engine ranks each package by corrected price, read against the firm database — a
+                fatal flag demotes a firm regardless of price. Claude narrates; you award.
+              </p>
+              <Button variant="brass" onClick={runRecommend} disabled={busy}>
+                {busy ? "Ranking…" : "Recommend an award"}
+              </Button>
+            </div>
           ) : (
-            <WaitingOn title={`${step === "level" ? "Level & compare" : "Award"} — screen not built yet`}>
-              {step === "level"
-                ? "The priced returns, with every amount recomputed and every arithmetic error, scope gap and exclusion flagged. Ported next."
-                : "The risk-adjusted recommendation and the human award. Ported next — the recommendation is advisory and the award stays a person's."}
+            <WaitingOn title="Waits on the levelling">
+              Level the returns first — the ranking is computed from the corrected totals.
             </WaitingOn>
           )}
         </div>

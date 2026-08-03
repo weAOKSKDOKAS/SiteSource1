@@ -3,6 +3,7 @@
 // exactly which gate refused and why, and rewriting them here would lose that.
 
 import type {
+  BidReply,
   BqCandidates,
   BridgeRouteDecisions,
   BridgeRouteProposal,
@@ -22,6 +23,9 @@ import type {
   JobState,
   LLMSettingsResponse,
   LetterResponse,
+  LevelAllResponse,
+  LevelUploadResult,
+  LevelledBid,
   Manifest,
   ManifestGateState,
   PartContext,
@@ -33,6 +37,7 @@ import type {
   RFIsResponse,
   RateRowFull,
   RatesResponse,
+  RecommendAllResponse,
   RegisterResponse,
   RevisionRow,
   ScopeGateState,
@@ -47,6 +52,7 @@ import type {
   SetRow,
   ShortlistSet,
   TeamMember,
+  TenderReplies,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
@@ -458,6 +464,46 @@ export const api = {
         approvals,
         project_name: projectName,
       }),
+
+    // --- level & award ------------------------------------------------------
+    /** One leveling section per sublet package. Layer 1 recomputes every amount — the corrected
+     *  total is OURS, and the difference from what a firm claimed is the finding. */
+    levelAll: (replies: BidReply[], scope: unknown) =>
+      rpost<LevelAllResponse>("/level-all", { replies, scope }),
+    /** One risk-adjusted recommendation per package. `demoFixtures` maps package -> baked
+     *  rationale so the narration works offline; a missing package simply narrates nothing. */
+    recommendAll: (
+      levelled: LevelledBid[],
+      demoFixtures: Record<string, string>,
+      scope: unknown = null,
+    ) => rpost<RecommendAllResponse>("/recommend-all", { levelled, demo_fixtures: demoFixtures, scope }),
+    levelingXlsxUrl: () => `${BASE}/leveling.xlsx`,
+
+    /** Manual priced-return intake (live): a subcontractor's returned bill for one firm+package.
+     *  Passing the tender lets the backend run the misdirect guard against the scope. */
+    levelUpload: (files: File[], firmId: string, trade: string, tender = "") => {
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      fd.append("firm_id", firmId);
+      fd.append("trade", trade);
+      if (tender) fd.append("tender", tender);
+      return fetch(`${BASE}/level-upload`, { method: "POST", body: fd, headers: actorHeaders() }).then(
+        (r) => handle<LevelUploadResult>(r),
+      );
+    },
+
+    /** Which replies have landed for a tender. Refreshed on demand — there is no polling loop. */
+    tenderReplies: (slug: string) =>
+      rget<TenderReplies>(`/tender/${encodeURIComponent(slug)}/replies`),
+    tenderComparisonUrl: (slug: string) =>
+      `${BASE}/tender/${encodeURIComponent(slug)}/comparison.xlsx`,
+    /** The human gate: take a firm's reply out of the comparison for one unit. The reply is KEPT
+     *  as history server-side — never deleted — and the comparison is re-levelled without it. */
+    withdrawReply: (slug: string, firmId: string, packageKey: string) =>
+      rpost<{ withdrawn: boolean; firm_id: string; package_key: string; reply_count: number }>(
+        `/tender/${encodeURIComponent(slug)}/replies/withdraw`,
+        { firm_id: firmId, package_key: packageKey },
+      ),
   },
 };
 
