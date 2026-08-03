@@ -197,3 +197,11 @@
   background: var(--color-cb-desk);
   border-radius: 1px;
 }
+
+/* The ScanLine sweep — an affordance that says work is IN FLIGHT, never what the result is.
+   Top level, not scoped to [data-app="cboq"], because @keyframes cannot be nested inside a
+   selector; the element that uses it is scoped instead. */
+@keyframes cbSweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
