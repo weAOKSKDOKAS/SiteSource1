@@ -193,9 +193,13 @@ def test_token_state_with_a_refresh_token_falls_through_to_the_existing_path(mon
     from pipeline.gmail_client import token_state
 
     # A well-formed token (carrying a refresh_token) is passed through UNCHANGED to the existing
-    # library-dependent path — proving the pre-check intercepts only the broken-file cases. The
-    # suite deliberately runs with the Google packages uninstalled, so that path reports `no_libs`
-    # here, exactly as any existing token file did before this fix (never misread as expired).
+    # library-dependent path — proving the pre-check intercepts only the broken-file cases and
+    # never misreads a good token as expired.
+    #
+    # What that path then reports depends on whether the optional Google packages are installed:
+    # `no_libs` without them (a minimal container), `refreshable` with them (a full
+    # `requirements.txt` install). Both outcomes prove the same thing — the pre-check let the
+    # token through — so assert on that, not on the container's package list.
     tok = tmp_path / "good.json"
     tok.write_text(
         json.dumps({"token": "x", "refresh_token": "r", "client_id": "a", "client_secret": "b"}),
@@ -203,7 +207,8 @@ def test_token_state_with_a_refresh_token_falls_through_to_the_existing_path(mon
     )
     monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tok))
     state, _ = token_state()
-    assert state == "no_libs"
+    assert state in {"no_libs", "refreshable"}
+    assert state not in {"expired", "unreadable", "missing"}
 
 
 def test_a_successful_draft_bumps_the_drafts_created_counter():

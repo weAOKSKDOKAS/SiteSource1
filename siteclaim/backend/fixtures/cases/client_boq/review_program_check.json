@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "kind": "milestone",
+      "description": "Facade access depends on a client-controlled handover that no programme fixes, so the uncapped liquidated damages sit against a delay the Subcontractor cannot bound.",
+      "contract_ref": "8.3",
+      "cited_text": "Liquidated damages",
+      "ld_rate_per_day": null,
+      "program_days": null,
+      "ld_cap_value": null,
+      "scope_mobilisations": null,
+      "program_mobilisations": null
+    }
+  ]
+}

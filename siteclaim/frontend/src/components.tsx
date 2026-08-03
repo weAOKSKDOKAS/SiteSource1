@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "./api";
 import { tradeLabel } from "./format";
@@ -31,6 +31,93 @@ const NAV: { view: TopView; label: string; enabled: boolean; soon?: string }[] =
   { view: "projects", label: "Projects", enabled: true },
   { view: "database", label: "Database", enabled: true },
 ];
+
+/** The logo is the product switcher.
+ *
+ *  One build hosts two products — procurement (this one) and the tender-review desk at `#/tender`
+ *  — and until now the only way between them was typing the hash. `main.tsx` already listens for
+ *  `hashchange` and swaps the whole root, so setting the hash is the entire navigation; because
+ *  it pushes a history entry, the browser's Back button returns here on its own.
+ *
+ *  Built locally: this app has no dropdown primitive. The Escape-to-close idiom is lifted from
+ *  `Modal` in ui.tsx; the outside-click handler is new (nothing here had one).
+ */
+function ProductMenu() {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, [open]);
+
+  const item = (
+    label: string,
+    detail: string,
+    current: boolean,
+    onPick: () => void,
+  ) => (
+    <button
+      type="button"
+      onClick={() => {
+        setOpen(false);
+        if (!current) onPick();
+      }}
+      className={cx(
+        "flex w-full items-start gap-2 px-3 py-2.5 text-left transition-colors",
+        current ? "bg-line-soft/60" : "hover:bg-line-soft",
+      )}
+    >
+      <span className={cx("mt-[3px] w-3 flex-none text-xs font-bold", current ? "text-brand" : "text-transparent")}>
+        ✓
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-ink">{label}</span>
+        <span className="block text-xs text-ink-faint">{detail}</span>
+      </span>
+    </button>
+  );
+
+  return (
+    <div ref={wrap} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Switch product"
+        className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-line-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-bright"
+      >
+        <span className="font-display text-lg font-bold tracking-display text-ink">
+          Site<span className="text-brand">Source</span>
+        </span>
+        <span className={cx("text-[10px] text-ink-faint transition-transform", open && "rotate-180")}>▾</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-[calc(100%+6px)] z-50 w-[268px] overflow-hidden rounded-card border border-line bg-card py-1 shadow-card"
+        >
+          {item("Procurement", "source work out to subcontractors", true, () => {})}
+          {item("Review tender", "the client's contract in → BOQ", false, () => {
+            window.location.hash = "#/tender";
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Header({
   demoMode,
@@ -70,9 +157,7 @@ export function Header({
     <header className="sticky top-0 z-50 border-b border-ink/[0.08] bg-paper/80 backdrop-blur-[12px] backdrop-saturate-150">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
         <div className="flex items-center gap-2.5">
-          <span className="font-display text-lg font-bold tracking-display text-ink">
-            Site<span className="text-brand">Source</span>
-          </span>
+          <ProductMenu />
           {demoMode && (
             <span
               className="inline-flex items-center gap-1.5 rounded-full bg-ink px-2.5 py-1 text-xs font-bold uppercase tracking-eyebrow text-white"

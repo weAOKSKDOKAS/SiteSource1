@@ -1,165 +1,152 @@
-# SiteClaim
+# SiteSource
 
-SiteClaim is a **SOPO-compliant payment-claim drafting copilot** for Hong Kong
-construction subcontractors. A subcontractor describes the work and uploads messy
-evidence (invoices, site records, the contract); SiteClaim extracts the facts,
-checks them against SOPO — the Construction Industry Security of Payment Ordinance
-(Cap. 652) — with a deterministic Rules Engine, drafts a compliant payment claim
-grounded in CIC templates, audits the draft against the facts, and routes it to a
-person for approval before anything is served.
+Two construction products on one FastAPI backend. Everything below lives under
+`siteclaim/`; the repo root holds only `README.md`, `CLAUDE.md` and `BUILD_PLAN.md`.
 
-The guiding principle: **the LLM never decides the law; it fills and drafts — the
-Rules Engine checks.**
+- **Procurement** (`backend/pipeline/`) — a contractor sources work **out**: a tender is
+  ingested and split by trade, firms are shortlisted from the proprietary database,
+  enquiries go out by email, bids come back and are levelled, and an award is recommended.
+  Five numbered stages; it owns the React frontend.
+- **client_boq** (`backend/client_boq/`) — the client's contract comes **in**: a tender
+  binder is ingested and split into parts, reviewed into a departure register, and priced
+  into an estimate with a workbook and an offer letter. Three gated workflows; no frontend
+  yet, driven over HTTP.
 
-> ⚠️ Statutory parameters in `backend/rules_engine/sopo_config.py` are tagged
-> **SOURCED** or **`# UNVERIFIED`** (see below). Validate every value with a
-> quantity surveyor or construction lawyer before relying on output. SiteClaim
-> assists drafting; it is **not legal advice**.
+The guiding principle in both: **the LLM reads, structures, proposes and drafts;
+deterministic code and human gates decide.** No price, verdict, risk flag, or document
+boundary is ever committed by a model alone.
 
-## Run the demo (offline, one command)
+`CLAUDE.md` is the architecture (the four layers, the module boundary, the traps).
+`CONTEXT.md` is the procurement stage routing table.
+`backend/client_boq/CONTEXT.md` is the client_boq stage map.
 
-Requires **Python 3.11+** and **Node 18+**. From `siteclaim/`:
+## Run the demo (offline)
 
-```bash
-make demo        # backend (DEMO_MODE) on :8000 + frontend on :5173, zero network
-```
+Requires **Python 3.11+** (verified on 3.14) and **Node 18+**. DEMO mode is fully offline:
+every AI call short-circuits to a baked fixture, so it needs no API key and opens no socket.
 
-Then open <http://localhost:5173> and load a demo case:
-
-- **clean** → walks through to a **Fileable** verdict.
-- **messy** → low-confidence facts, draft placeholders → **Fileable with fixes**.
-- **gotcha** → served on the wrong legal entity → **Not fileable**, citing
-  `notice.correct_party`. Fix the served-on party at the Facts gate and the
-  verdict flips to Fileable.
-
-Or run the two processes by hand:
+On Linux/macOS, from `siteclaim/`:
 
 ```bash
-cd backend && DEMO_MODE=true uvicorn api:app --reload --port 8000
-cd frontend && npm install && npm run dev
+make install     # backend + frontend dependencies
+make demo        # API (DEMO_MODE) on :8000 + wizard on :5173, zero network
+make test        # the backend suite
 ```
 
-Other shortcuts: `make test` (backend suite), `make build-frontend`,
-`make snapshots` (regenerate the frontend's offline fixtures from the pipeline).
+On Windows, `make` is unavailable and a bare `python` is the Microsoft Store stub, so run
+the commands directly with the `py` launcher:
 
-## Live document upload (real invoices)
-
-Outside DEMO_MODE, a subcontractor can upload a **real invoice (PDF or image)** and
-SiteClaim extracts the facts from the **document content** via a vision model.
-PDFs are rasterised to images (PyMuPDF); the model reads them directly (no OCR).
-The provider is swappable — default **DeepSeek V4** (OpenAI-compatible), with the
-Claude path as the native-multimodal fallback. Configure with env vars:
-
-| Var | Default | Notes |
-| --- | --- | --- |
-| `EXTRACTION_PROVIDER` | `deepseek` | `deepseek` or `anthropic` |
-| `DEEPSEEK_API_KEY` | — | required for DeepSeek |
-| `DEEPSEEK_MODEL` | `deepseek-v4-pro` | or `deepseek-v4-flash` |
-| `ANTHROPIC_API_KEY` | — | required if `EXTRACTION_PROVIDER=anthropic` |
-
-`openai` and `pymupdf` are imported **lazily** (only on the live upload path), so
-DEMO_MODE stays zero-network and zero-dependency. The API endpoint is
-`POST /extract-upload` (multipart); the JSON `POST /extract` remains for
-fixtures/typed input.
-
-**Capture a fixture (the offline safety net).** Run a real upload through the live
-provider once, lock the result, and replay it byte-for-byte in DEMO_MODE:
-
-```bash
-EXTRACTION_PROVIDER=deepseek DEEPSEEK_API_KEY=… \
-  python scripts/capture_fixture.py <case_id> invoice.pdf [more…]
+```powershell
+cd backend
+py -3.14 -m venv .venv                 # scripts\start_backend.bat looks for it here
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m pytest -q                    # 798 passed, 5 skipped
+$env:DEMO_MODE="true"; python -m uvicorn api:app --port 8000
 ```
 
-It writes `backend/fixtures/cases/<case_id>/` (source, extracted, judge verdict,
-rasterised images) and re-runs the case offline to confirm the replay.
+Then `cd frontend; npm install; npm run dev` for the procurement wizard on `:5173`, or open
+`http://localhost:8000/docs` to drive either product directly.
 
-> DeepSeek's official docs confirm the base URL, OpenAI compatibility, and the V4
-> model names but do not publish a vision message format; we send the
-> OpenAI-standard `image_url` block. If that ever differs, only one function
-> (`build_openai_messages`) changes — the Anthropic path is the working swap target.
+**Run pytest and uvicorn from `backend/`.** There is no `pytest.ini` or `pyproject.toml`, so
+imports resolve only from that directory and only via `python -m pytest`. (Note the
+Makefile's `seed` target contradicts this — it is written to run from `siteclaim/`.)
+
+## Live mode
+
+DEMO and LIVE are a real code fork on `demo_mode()`, not the same code with different
+config. Green tests prove the deterministic engine and the data contracts; they prove
+nothing about the live model path.
+
+```
+# backend/.env  (auto-loaded by api.py; copy from .env.example)
+DEMO_MODE=false
+EXTRACTION_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+# DEEPSEEK_API_KEY=sk-...        # optional; text-only calls route here when set
+```
+
+Provider routing lives in one place, `backend/pipeline/llm_client.py`: anything carrying
+images goes to Anthropic, text-only goes to DeepSeek when a key is present. `openai`,
+`anthropic` and `pymupdf` are imported lazily, so DEMO never loads them.
 
 ## Architecture
 
-SiteClaim is an **ICM (Interpretable Context Methodology) workspace**: the folder
-structure *is* the architecture. Stages hand off **plain typed data** (the
-Pydantic models in `backend/schemas/models.py`) — there is **no agent framework**
-(no LangChain / CrewAI / AutoGen), no shared mutable memory. A stage reads one or
-more typed objects, does its work, and writes the next object; a stage boundary
-can be an in-process call, a file in `backend/fixtures/`, or an HTTP payload — the
+An **ICM (Interpreted Context Methodology) workspace**: the folder structure *is* the
+architecture. Stages hand off **plain typed data** (Pydantic models) — no agent framework,
+no shared mutable memory. A stage reads typed objects, does its work, and writes the next
+object; a stage boundary can be an in-process call, a file, or an HTTP payload, and the
 contract is identical.
 
 ### Four layers
 
-1. **Rules Engine** (`backend/rules_engine/`) — pure, deterministic Python. **Legal
-   correctness lives here.** Every statutory number is a named constant in
-   `sopo_config.py`; calendar-vs-working-day arithmetic is in `business_days.py`.
-   No ML, no LLM imports (enforced by a purity test).
-2. **Claude (LLM)** — reads messy input, extracts facts, drafts prose. Used in
-   stages 01 and 03, plus an LLM-as-judge confidence pass in 02 and a thin
-   consistency pass in 04. It never decides validity or computes a deadline.
-3. **RAG grounding** (`backend/references/`) — a curated SOPO + CIC corpus; only
-   the relevant sections are loaded into each prompt (tight grounding).
-4. **Human-in-the-loop** — a person reviews and edits at **every gate**; nothing
-   is served without sign-off. The API has one endpoint per stage (no monolithic
-   `/run`) precisely so a human can edit between every step.
+1. **Rules engines** (`backend/rules_engine/`, `backend/client_boq/rules.py`) — pure,
+   deterministic Python. Arithmetic and thresholds live here. No LLM imports.
+2. **The model** (`backend/pipeline/llm_client.py`) — reads messy documents, structures
+   them, proposes and drafts. It never writes a decision value.
+3. **Grounding** (`backend/db/`, `backend/references/rubrics/`,
+   `backend/docs/client_boq/review_criteria.md`) — the proprietary firm database, the
+   trade taxonomy and levelling rubrics, the acceptable-terms criteria library.
+4. **Human gates** — a person reviews and edits at every gate; the API has one endpoint per
+   stage, with no monolithic `/run`, precisely so a human can edit between every step.
 
-### Five stages (`backend/pipeline/`)
+### Procurement — five stages (`backend/pipeline/`)
 
-Each stage folder carries a `CONTEXT.md` with `## Inputs / ## Process / ## Outputs`.
-Flow is strictly forward.
+| # | Stage | Consumes | Produces |
+| - | ----- | -------- | -------- |
+| 01 | `ingest` | `TenderPackage` | `ScopePackages` |
+| 02 | `shortlist` | `ScopePackages` + database | `ShortlistSet` |
+| 03 | `dispatch` | `ShortlistSet` + approvals | `DispatchSet` |
+| 04 | `level` | `BidReplies` + `ScopePackages` | `LevelledBids` |
+| 05 | `recommend` | `LevelledBids` + database | `Recommendation` |
 
-| # | Stage | Layer | In → Out |
-| - | ----- | ----- | -------- |
-| 01 | `stage_01_extract` | 2 | `SourceMaterial` → `ExtractedFacts` (per-field `confidence` + `source_span`) |
-| 02 | `stage_02_validate` | 2 + 1 | LLM-as-judge confidence review, then the deterministic engine → `ValidityReport` + `DeadlineSet` |
-| 03 | `stage_03_draft` | 2 + 3 | facts + reports → `ClaimDraft` (structured + `rendered_markdown`; gaps become flagged placeholders) |
-| 04 | `stage_04_audit` | 1 (+ thin 2) | forensic cross-check → `AuditReport` + verdict (`FILEABLE` / `FILEABLE_WITH_FIXES` / `NOT_FILEABLE`) |
-| 05 | review | 4 | human approval (the wizard's final gate + a person's sign-off) |
+Flow is strictly forward. A fatal risk flag demotes a firm regardless of price, and no
+award leaves stage 05 without explicit human sign-off.
 
-A **fatal** check in Stage 02 blocks a fileable draft; a fatal finding in Stage 04
-yields `NOT_FILEABLE`. The frontend mirrors these five stages as a review-gate
-wizard; the **Savings** view states the time/cost economics from explicit,
-adjustable assumptions; and each audit finding **expands to show the fact(s) and
-`source_span` it came from** ("interpretable by construction").
+### client_boq — three gated workflows (`backend/client_boq/`)
 
-### Workspace layout
+```
+ingest    inspect -> plan the split (AI) -> [GATE] -> cut (Det) -> interpret each part (AI)
+review    read the parts -> criteria match -> assemble one register -> [GATE] verdicts
+estimate  scope draft -> [GATE] -> cost build-up (Det) -> workbook + offer-letter draft
+```
+
+Each gate refuses with a distinct 409 until it is passed. Ingest exists because the review
+could not otherwise survive a real tender: a 400-page binder in one prompt overran both the
+output ceiling and the 200-page extraction cap, so it is split first and read a part at a
+time.
+
+## Workspace layout
 
 ```
 siteclaim/
-├── CLAUDE.md            Layer-0 orientation (read first)
-├── CONTEXT.md           pipeline routing in brief
-├── Makefile             make demo / test / snapshots
+├── CLAUDE.md            architecture + the traps (read first)
+├── CONTEXT.md           procurement stage routing
+├── DEMO.md              procurement demo runbook
+├── Makefile             make demo / test / install / build-frontend
 ├── backend/
-│   ├── schemas/models.py        the typed contracts every stage passes
-│   ├── rules_engine/            Layer 1 — sopo_config.py + the checks (deterministic)
-│   ├── pipeline/stage_NN_*/     one folder per stage, each with a CONTEXT.md
-│   ├── references/              Layer 3 corpus (SOPO overview, CIC templates)
-│   ├── fixtures/                demo cases + snapshot builder
-│   └── api.py                   FastAPI — one POST per stage + /health + demo loaders
-└── frontend/            React + TS + Vite + Tailwind review-gate wizard + savings dashboard
+│   ├── api.py                     FastAPI — one endpoint per stage, + /health
+│   ├── schemas/models.py          the typed contracts the procurement stages pass
+│   ├── rules_engine/              deterministic levelling, ranking and risk
+│   ├── pipeline/                  procurement stages 01-05
+│   │   ├── llm_client.py          the ONLY LLM seam (both products use it)
+│   │   ├── documents.py           PDF text + page images (both products use it)
+│   │   └── workspace.py           per-tender file storage (both products use it)
+│   ├── client_boq/                ingest/ review/ estimate/ + router, models, store
+│   ├── db/                        the proprietary firm database + schema + seeds
+│   ├── references/rubrics/        trade taxonomy, levelling and risk rubrics
+│   └── fixtures/                  DEMO fixtures (cases/) + out/ (gitignored artifacts)
+├── docs/                          EMAIL_SETUP, QUICKSTART, PRODUCT_ARCHITECTURE, client_boq/
+└── frontend/            React + TS + Vite + Tailwind — PROCUREMENT ONLY
 ```
 
-## Statutory provenance — SOURCED vs UNVERIFIED
+## Notes
 
-Every value in `sopo_config.py` is tagged in one of two tiers:
-
-- **SOURCED** — taken from a secondary source (a law-firm summary or the CIC FAQ),
-  still to be cross-checked against the enacted e-legislation Cap. 652 text. Most
-  deadline/threshold constants are here.
-- **`# UNVERIFIED`** — an unconfirmed placeholder a QS/lawyer must set.
-
-Remaining **UNVERIFIED** items to confirm before any real use:
-
-- **`PERMITTED_SERVICE_METHODS`** — the methods that validly serve a claim are not
-  yet confirmed, so `notice.method` is graded a non-blocking **warning**, never
-  fatal. (This is deliberate: the demo's fatal defect is wrong-party service,
-  which *is* unambiguous.)
-- **Consultancy threshold** — whether/what monetary threshold applies to
-  consultancy contracts is unconfirmed (`THRESHOLD_BY_CONTRACT_TYPE`).
-- Plus the post/deemed-service interval (`DEEMED_SERVICE_DAYS_BY_POST`), the
-  minimum interval between claims (`MIN_DAYS_BETWEEN_CLAIMS`), the default
-  reference-date interval, and the determination-extension window.
-
-The savings figures in the dashboard are **assumptions, not measurements** —
-each is labelled with its basis and shown as a bear/base/bull range so the
-economics are auditable rather than asserted.
+- **Do not set `SITESOURCE_DB`** in your shell, and **do not run the seed**. Both databases
+  are committed; a DEMO run writes to a gitignored scratch DB and a hygiene test asserts the
+  committed one stays byte-identical.
+- **FastAPI is pinned to 0.115.6.** Later versions make `include_router` lazy and break the
+  route-registration tests. See `CLAUDE.md` section 8.
+- **5 tests skip by design** — they need the system `tesseract` binary. Read the notes at the
+  bottom of `backend/requirements.txt` before installing `pytesseract`: the package without
+  the binary is worse than neither.

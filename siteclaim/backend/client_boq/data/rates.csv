@@ -1,0 +1,22 @@
+rate_id,category,code,description,unit,rate,currency,source,notes
+LAB-CONC,labour,LAB-CONC,Concreting gang (all-in),hr,650,HKD,seed,Illustrative v1 rate — replace with the company book
+LAB-STEEL,labour,LAB-STEEL,Steel-fixer gang (all-in),hr,720,HKD,seed,Illustrative
+LAB-CARP,labour,LAB-CARP,Carpenter / formwork gang,hr,580,HKD,seed,Illustrative
+LAB-GLAZ,labour,LAB-GLAZ,Facade / glazing crew,hr,690,HKD,seed,Illustrative
+LAB-GEN,labour,LAB-GEN,General labourer,hr,420,HKD,seed,Illustrative
+PLT-PUMP42,plant,PLT-PUMP42,Concrete boom pump 42m (incl. operator),day,4800,HKD,seed,Illustrative
+PLT-CRANE,plant,PLT-CRANE,Mobile crane 50t (incl. operator),day,12500,HKD,seed,Illustrative
+PLT-HOIST,plant,PLT-HOIST,Material / passenger hoist,week,9800,HKD,seed,Illustrative
+PLT-SCAFF,plant,PLT-SCAFF,Access scaffold supply & erect,m2,145,HKD,seed,Illustrative
+MAT-C40,material,MAT-C40,Ready-mixed concrete C40/20 supply,m3,1150,HKD,seed,Illustrative
+MAT-REBAR,material,MAT-REBAR,Reinforcement steel supply,tonne,6800,HKD,seed,Illustrative
+MAT-ALU,material,MAT-ALU,Aluminium curtain-wall unit supply,m2,2650,HKD,seed,Illustrative
+MAT-GLASS,material,MAT-GLASS,Insulated glazing unit supply,m2,980,HKD,seed,Illustrative
+MAT-SEAL,material,MAT-SEAL,Weather seal / gasket,m,55,HKD,seed,Illustrative
+SUB-REBAR,subcontract,SUB-REBAR,"Reinforcement supply, cut, bend & fix",tonne,14500,HKD,seed,Illustrative subcontract rate
+SUB-WPROOF,subcontract,SUB-WPROOF,Waterproofing / tanking (applied),m2,320,HKD,seed,Illustrative
+SUB-PAINT,subcontract,SUB-PAINT,Painting & decoration,m2,95,HKD,seed,Illustrative
+SUB-FIRE,subcontract,SUB-FIRE,Fire-services package (lump),item,185000,HKD,seed,Illustrative
+PRD-FORMWORK,productivity,PRD-FORMWORK,Wall formwork erection output,m2/hr,2.5,,seed,Crew output rate (m2 per crew-hour)
+PRD-REBARFIX,productivity,PRD-REBARFIX,Reinforcement fixing output,tonne/hr,0.08,,seed,Crew output rate (tonnes per crew-hour)
+PRD-GLAZ,productivity,PRD-GLAZ,Curtain-wall installation output,m2/hr,1.2,,seed,Crew output rate (m2 per crew-hour)

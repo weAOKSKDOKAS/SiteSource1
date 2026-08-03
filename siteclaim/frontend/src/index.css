@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* The second product's palette. Imported here rather than from a component, because Tailwind v4
+   only generates utilities for `@theme` blocks that reach the root stylesheet — a `@theme` in a
+   CSS file imported from TSX is inert. Every token in it is `cb-` prefixed, so nothing below
+   changes meaning. See client_boq/tokens.css for why there are two palettes at all. */
+@import "./client_boq/tokens.css";
+
 /* ---------------------------------------------------------------------------
    Atlas design system (Phase 0). Quiet chrome — navy ink + cool panels +
    hairlines; the semantic signal colours are load-bearing and reserved:

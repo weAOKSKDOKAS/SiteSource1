@@ -1,0 +1,17 @@
+{
+  "notes": "Refined the bookmark draft in one place: the outline's single 100-page 'COT' bookmark (p5-104) actually contains two distinct documents, the Conditions of Tender proper (p5-16) and its Appendices A to G (p17-104, which carry the Form of Tender, the Fee Proposal schedules and the evaluation criteria). Those are priced and returned separately by the tenderer, so they are separate parts. All other boundaries are the document's own.",
+  "parts": [
+    {"n": 1, "abbr": "INV", "slug": "invitation-letter", "title": "Invitation Letter", "start": 1, "end": 4, "category": "tender-instructions"},
+    {"n": 2, "abbr": "CT", "slug": "conditions-of-tender", "title": "Conditions of Tender (incl. master cover and list of tender documents)", "start": 5, "end": 16, "category": "tender-instructions"},
+    {"n": 3, "abbr": "CTAP", "slug": "ct-appendices-a-g", "title": "Appendices A to G to Conditions of Tender (Form of Tender, Fee Proposal, evaluation criteria)", "start": 17, "end": 104, "category": "bid-forms"},
+    {"n": 4, "abbr": "SCT", "slug": "special-conditions-of-tender", "title": "Special Conditions of Tender", "start": 105, "end": 109, "category": "tender-conditions"},
+    {"n": 5, "abbr": "AB", "slug": "assignment-brief", "title": "Assignment Brief with Annex 1 Definitions and Annex 2 Technical Specifications", "start": 110, "end": 216, "category": "scope"},
+    {"n": 6, "abbr": "SPEC", "slug": "specification-schedules", "title": "Annex 3.00 Specification Schedules", "start": 217, "end": 245, "category": "specifications"},
+    {"n": 7, "abbr": "DRG", "slug": "tender-drawings", "title": "Annex 4.00 Tender Drawings", "start": 246, "end": 350, "category": "drawings"},
+    {"n": 8, "abbr": "MOA", "slug": "memorandum-of-agreement", "title": "Memorandum of Agreement", "start": 351, "end": 354, "category": "contract-data"},
+    {"n": 9, "abbr": "COE", "slug": "general-conditions-of-employment", "title": "General Conditions of Employment", "start": 355, "end": 379, "category": "contract-conditions"},
+    {"n": 10, "abbr": "GCC", "slug": "cic-gcc-2b-car", "title": "CIC General Conditions of Contract and Guidelines (2b) Contractors' All Risks", "start": 380, "end": 387, "category": "contract-conditions"},
+    {"n": 11, "abbr": "CSR", "slug": "contractors-safety-requirements", "title": "Contractor's Safety Requirements", "start": 388, "end": 397, "category": "safety-requirements"},
+    {"n": 12, "abbr": "APP", "slug": "vendor-list-application-form", "title": "CIC Vendor List Application Form PRO-01", "start": 398, "end": 411, "category": "admin-forms"}
+  ]
+}

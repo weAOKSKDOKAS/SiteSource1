@@ -1,0 +1,80 @@
+{
+  "duration_weeks": 20,
+  "items": [
+    {
+      "item_id": "A1",
+      "description": "Reinforced concrete frame",
+      "category": "direct",
+      "unit": "item",
+      "lines": [
+        {"description": "Ready-mix concrete C40", "resource_ref": "MAT-C40", "qty": 500, "unit": "m3"},
+        {"description": "Reinforcement supply & fix", "resource_ref": "SUB-REBAR", "qty": 40, "unit": "tonne"},
+        {"description": "Formwork labour (productivity-based)", "resource_ref": "LAB-CARP", "qty": 800, "unit": "m2", "productivity": 2.5}
+      ]
+    },
+    {
+      "item_id": "A2",
+      "description": "Aluminium curtain walling",
+      "category": "direct",
+      "unit": "item",
+      "lines": [
+        {"description": "Curtain-wall units supply", "resource_ref": "MAT-ALU", "qty": 1200, "unit": "m2"},
+        {"description": "Glazing installation (productivity-based)", "resource_ref": "LAB-GLAZ", "qty": 1200, "unit": "m2", "productivity": 1.2},
+        {"description": "Crane hire (rate overridden inline)", "resource_ref": "PLT-CRANE", "inline_rate": 25000, "qty": 10, "unit": "day"}
+      ]
+    },
+    {
+      "item_id": "A3",
+      "description": "Waterproofing",
+      "category": "direct",
+      "unit": "item",
+      "lines": [
+        {"description": "Applied waterproofing", "resource_ref": "SUB-WPROOF", "qty": 600, "unit": "m2"},
+        {"description": "Specialist tanking (no rate on file)", "resource_ref": "SUB-TANKING", "qty": 150, "unit": "m2"}
+      ]
+    },
+    {
+      "item_id": "A4",
+      "description": "Provisional builder's work (to be detailed)",
+      "category": "direct",
+      "unit": "item",
+      "lines": []
+    },
+    {
+      "item_id": "A5",
+      "description": "Site cleaning",
+      "category": "direct",
+      "unit": "item",
+      "lines": [
+        {"description": "General labour (quantity not yet set)", "resource_ref": "LAB-GEN", "qty": 0, "unit": "hr"}
+      ]
+    },
+    {
+      "item_id": "U1",
+      "description": "Head-office overhead recovery",
+      "category": "overhead",
+      "unit": "item"
+    },
+    {
+      "item_id": "I1",
+      "description": "Site management & supervision",
+      "category": "indirect",
+      "basis": "per_week",
+      "rate": 8000
+    },
+    {
+      "item_id": "I2",
+      "description": "Insurances & bonds",
+      "category": "indirect",
+      "basis": "pct_of_direct",
+      "pct": 2.5
+    },
+    {
+      "item_id": "I3",
+      "description": "Mobilisation & site establishment",
+      "category": "indirect",
+      "basis": "lump",
+      "amount": 120000
+    }
+  ]
+}

@@ -108,6 +108,7 @@ from pipeline.estimate.draft import ESTIMATE_DRAFT_FIXTURE, draft_estimate  # no
 from pipeline.estimate.letter import LETTER_FIXTURE, draft_letter  # noqa: E402
 from pipeline.estimate.rates import suggest_rates  # noqa: E402
 from schemas.project import DashboardPackage, ProjectDashboard, ProjectSummary  # noqa: E402
+from client_boq.router import router as client_boq_router  # noqa: E402 — the client→BOQ module (self-contained)
 from schemas.models import (  # noqa: E402
     BidLineItem,
     BidReply,
@@ -164,6 +165,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# The client→BOQ capability (REVIEW then ESTIMATE). Self-contained under /client-boq; this single
+# include is the module's only footprint in the app entrypoint. See backend/client_boq/CONTEXT.md.
+app.include_router(client_boq_router)
 
 
 # ---------------------------------------------------------------------------
