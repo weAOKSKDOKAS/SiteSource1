@@ -101,6 +101,40 @@ export default function ClientBoqApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [job, setJob] = useState<JobState | null>(null);
+  // What long-running work is in flight, ABOVE the tab that started it.
+  //
+  // A split on the Route tab looked like it paused when you navigated away. It did not: the work
+  // is a sync handler on the server (or, for ingest/review/estimate, a thread on `jobs.POOL`), and
+  // neither cares what the browser is showing. What died was the only record that it was running —
+  // a `busy` string inside the tab component, which unmounts with the tab. So the record lives
+  // here, on the root, which never unmounts; a 26-page bill takes minutes and nobody should have
+  // to sit on one screen watching it.
+  const [work, setWork] = useState<{ label: string; status: "running" | "done" } | null>(null);
+  const doneTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (doneTimer.current) window.clearTimeout(doneTimer.current);
+  }, []);
+
+  /** Run something long and let the whole shell know. `job` still carries per-stage progress where
+   *  the server exposes a job id; this carries the fact that ANYTHING is running, which is the part
+   *  a blocking endpoint like the bridge split never had. A failure clears rather than marks: the
+   *  error banner directly above is the report, and a red strip beside it would just compete. */
+  const track = useCallback(async <T,>(label: string, run: () => Promise<T>): Promise<T> => {
+    if (doneTimer.current) {
+      window.clearTimeout(doneTimer.current);
+      doneTimer.current = null;
+    }
+    setWork({ label, status: "running" });
+    try {
+      const out = await run();
+      setWork({ label, status: "done" });
+      doneTimer.current = window.setTimeout(() => setWork(null), 6000);
+      return out;
+    } catch (e) {
+      setWork(null);
+      throw e;
+    }
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   /** A citation deep link for the open set's Documents tab (READ FROM COT on a card). */
@@ -182,12 +216,14 @@ export default function ClientBoqApp() {
       }
       const projectName = pdfs[0].name.replace(/\.pdf$/i, "");
       try {
-        const done = await runJob(
-          () => api.upload(pdfs, projectName),
-          api.ingestStatus,
-          setJob,
-        );
-        setJob(null);
+        const done = await track(`Reading ${projectName}`, async () => {
+          const state = await runJob(() => api.upload(pdfs, projectName), api.ingestStatus, setJob);
+          setJob(null);
+          return state;
+        });
+        // Whatever the ingest needs the person to know that is not in the manifest — today, that
+        // this upload landed on a tender that already exists rather than starting a new one.
+        for (const note of done.warnings ?? []) setError(note);
         await loadSets();
         const result = done.result as { set_id?: string } | undefined;
         if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" });
@@ -196,7 +232,7 @@ export default function ClientBoqApp() {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [loadSets],
+    [loadSets, track],
   );
 
   useEffect(() => {
@@ -312,7 +348,8 @@ export default function ClientBoqApp() {
       />
 
       {error && <ErrorNote message={error} onDismiss={() => setError(null)} />}
-      {job && <JobStrip job={job} />}
+      {/* Above the sidebar/content split, so it is on screen from every tab AND from the desk. */}
+      {(work || job) && <JobStrip work={work} job={job} />}
 
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <NavSidebar
@@ -375,6 +412,7 @@ export default function ClientBoqApp() {
             demoMode={demoMode}
             onError={setError}
             onJob={setJob}
+            onTrack={track}
             onSetsChanged={() => void loadSets()}
             docTarget={docTarget}
             onDocTargetUsed={() => setDocTarget(null)}
@@ -459,6 +497,7 @@ function SetView({
   demoMode,
   onError,
   onJob,
+  onTrack,
   onSetsChanged,
   docTarget,
   onDocTargetUsed,
@@ -471,6 +510,8 @@ function SetView({
   demoMode: boolean;
   onError: (msg: string) => void;
   onJob: (job: JobState | null) => void;
+  /** Register long work with the shell, so it stays visible after this tab unmounts. */
+  onTrack: <T,>(label: string, run: () => Promise<T>) => Promise<T>;
   onSetsChanged: () => void;
   docTarget: { partId: string; page: number } | null;
   onDocTargetUsed: () => void;
@@ -577,6 +618,7 @@ function SetView({
             onRefresh={refresh}
             onError={onError}
             onProgress={onJob}
+            onTrack={onTrack}
             initialTarget={docTarget}
           />
         ) : tab === "register" ? (
@@ -597,7 +639,7 @@ function SetView({
             onProgress={onJob}
           />
         ) : tab === "route" ? (
-          <RouteTab data={data} onError={onError} onRefresh={refresh} />
+          <RouteTab data={data} onError={onError} onRefresh={refresh} onTrack={onTrack} />
         ) : tab === "sourcing" ? (
           <SourcingTab data={data} demoMode={demoMode} onError={onError} />
         ) : tab === "price" ? (
@@ -607,6 +649,7 @@ function SetView({
             onRefresh={refresh}
             onError={onError}
             onProgress={onJob}
+            onTrack={onTrack}
           />
         ) : (
           <OfferTab data={data} onError={onError} />
@@ -637,30 +680,68 @@ function SetView({
 /** What a background job is doing. Only ever visible in LIVE — DEMO runs everything inline, which
  *  is exactly why the polling this reports on was so easy to leave out. `done`/`total` have been
  *  on the Job model since ingest was built and this is the first thing to show them. */
-function JobStrip({ job }: { job: JobState }) {
-  const pct = job.total ? Math.round(((job.done ?? 0) / job.total) * 100) : null;
+function JobStrip({
+  work,
+  job,
+}: {
+  work: { label: string; status: "running" | "done" } | null;
+  job: JobState | null;
+}) {
+  const pct = job?.total ? Math.round(((job.done ?? 0) / job.total) * 100) : null;
+  const done = work?.status === "done" && !job;
+  // The label reads left to right as: what is running · which stage it is on. `work` names the
+  // operation (it survives the tab); `job` names the stage (it only exists where the server keeps
+  // a job id). Either alone is enough to render.
+  const heading = [work?.label ?? job?.kind, job?.stage?.replace(/-/g, " ")]
+    .filter(Boolean)
+    .join(" · ")
+    .toUpperCase();
   return (
-    <div className="flex flex-none items-center gap-3 border-b border-cb-brass-line bg-cb-brass-tint px-[18px] py-2">
-      <span className="ssDot h-2 w-2 flex-none rounded-full bg-cb-brass" />
-      <span className="flex-none font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
-        {job.kind.toUpperCase()} · {job.stage.toUpperCase().replace(/-/g, " ")}
+    <div
+      className={cx(
+        "flex flex-none items-center gap-3 border-b px-[18px] py-2",
+        done ? "border-cb-ok bg-cb-ok-tint" : "border-cb-brass-line bg-cb-brass-tint",
+      )}
+    >
+      <span
+        className={cx(
+          "h-2 w-2 flex-none rounded-full",
+          done ? "bg-cb-ok" : "ssDot bg-cb-brass",
+        )}
+      />
+      <span
+        className={cx(
+          "flex-none font-cb-mono text-[9px] font-semibold tracking-cb-label",
+          done ? "text-cb-ok-dark" : "text-cb-brass-text",
+        )}
+      >
+        {done ? `${heading} · DONE` : heading}
       </span>
       {pct != null && (
         <span className="flex-none font-cb-mono text-[10px] text-cb-brass-text">
-          {job.done}/{job.total}
+          {job?.done}/{job?.total}
         </span>
       )}
-      <div className="h-[4px] max-w-[280px] flex-1 overflow-hidden rounded-[2px] bg-cb-brass-line">
-        <div
-          style={{ width: pct != null ? `${pct}%` : "35%" }}
-          className={cx(
-            "h-full bg-cb-brass transition-[width] duration-300 ease-out",
-            pct == null && "animate-pulse",
-          )}
-        />
-      </div>
-      <span className="font-cb-sans text-[10px] text-cb-brass-text">
-        Reading your documents. This is a live model run, so it takes as long as it takes.
+      {!done && (
+        <div className="h-[4px] max-w-[280px] flex-1 overflow-hidden rounded-[2px] bg-cb-brass-line">
+          <div
+            style={{ width: pct != null ? `${pct}%` : "35%" }}
+            className={cx(
+              "h-full bg-cb-brass transition-[width] duration-300 ease-out",
+              pct == null && "animate-pulse",
+            )}
+          />
+        </div>
+      )}
+      <span
+        className={cx(
+          "font-cb-sans text-[10px]",
+          done ? "text-cb-ok-dark" : "ml-0 text-cb-brass-text",
+        )}
+      >
+        {done
+          ? "Finished. Open the tab that started it to see the result."
+          : "Still running — it keeps going wherever you navigate. Live model runs take as long as they take."}
       </span>
     </div>
   );

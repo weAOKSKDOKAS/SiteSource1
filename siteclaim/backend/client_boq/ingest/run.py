@@ -36,6 +36,38 @@ def _is_pdf(filename: str, content_type: Optional[str]) -> bool:
     return ct.endswith("/pdf") or (filename or "").lower().endswith(".pdf")
 
 
+def _note_existing_set(set_id: str, name: str, on_note: Progress) -> None:
+    """Say so, once, when this upload is landing on a tender that already exists.
+
+    Pure read, and it must run BEFORE ``upsert_document_set`` or every set looks pre-existing.
+    The message names what will actually be overwritten — an approved manifest reopening is the
+    part that costs someone their afternoon — rather than a bare "this already exists".
+    """
+    if on_note is None:
+        return
+    conn = store.get_conn()
+    try:
+        row = conn.execute(
+            "SELECT status FROM client_boq_document_sets WHERE set_id = ?", (set_id,)
+        ).fetchone()
+        if row is None:
+            return
+        approved = store.manifest_is_approved(conn, set_id)
+        parts = len(store.load_parts(conn, set_id))
+    finally:
+        conn.close()
+    detail = f"It already has {parts} part(s) cut" if parts else "Nothing has been cut from it yet"
+    gate = (
+        " Its manifest was APPROVED; this upload replaces the draft and reopens that gate."
+        if approved else ""
+    )
+    on_note(
+        f"This is not a new tender: {name!r} already exists as set {set_id!r}, and this upload "
+        f"lands on it. {detail}.{gate} A tender is identified by its name, so upload under a "
+        "different name if you meant to start a separate one."
+    )
+
+
 def _page_count(data: bytes) -> int:
     import fitz  # PyMuPDF — lazy
 
@@ -51,11 +83,20 @@ def run_inspect(
     project_name: str = "",
     *,
     progress_cb: Progress = None,
+    on_note: Progress = None,
 ) -> SplitManifest:
     """Inspect the upload and produce a DRAFT manifest for the human gate.
 
     The binder is the PDF with the most pages; any other uploaded file becomes a part in its
     own right (a tender often arrives as one big volume plus a handful of loose annexes).
+
+    ``on_note`` receives anything the person landing on the result needs to know that is not
+    part of the manifest itself. Today that is exactly one thing: a set with this id ALREADY
+    EXISTS. ``set_id`` is ``tender_slug(name)``, deliberately — a tender is identified by its
+    name, which is what lets an addendum land on the tender it amends. The consequence is that
+    re-uploading the same filename REOPENS that tender rather than creating a second one, and
+    that is correct; what was wrong is that it happened in silence, so an operator re-uploading
+    a corrected binder had no way to tell a fresh ingest from a landing on last week's work.
     """
     if not uploads:
         raise ValueError("No files were uploaded.")
@@ -68,6 +109,8 @@ def run_inspect(
     ws = Workspace()
     name = (project_name or DEFAULT_SET_NAME).strip() or DEFAULT_SET_NAME
     set_id = tender_slug(name)
+    # Asked BEFORE the upsert below, which would make every set look pre-existing.
+    _note_existing_set(set_id, name, on_note)
     for filename, _ct, data in uploads:
         ws.save_upload(name, filename or "document", data)
 
@@ -104,6 +147,12 @@ def run_inspect(
     try:
         store.upsert_document_set(conn, set_id=set_id, name=name, slug=set_id, status="inspected")
         store.save_manifest(conn, manifest)
+        # `save_manifest` PRESERVES the approval flag, deliberately: re-planning the same document
+        # must not silently move a gate a human set. But this is not a re-plan — it is a NEW draft
+        # replacing the old one, and leaving the flag alone would carry an approval given for a
+        # manifest nobody can see any more onto one nobody has read. Reopened through
+        # `approve_manifest`, the designated writer, so the flag still has exactly one owner.
+        store.approve_manifest(conn, set_id, False)
     finally:
         conn.close()
     store.save_manifest_artifact(ws, name, manifest)

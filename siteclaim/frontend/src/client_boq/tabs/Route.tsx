@@ -128,10 +128,15 @@ export function RouteTab({
   data,
   onError,
   onRefresh,
+  onTrack,
 }: {
   data: SetData;
   onError: (message: string) => void;
   onRefresh: () => Promise<void>;
+  /** Hand long work to the shell. This tab is where the symptom was reported: the bridge split
+   *  is a BLOCKING endpoint with no job id, so `busy` below was the only record it was running —
+   *  and `busy` is local state that dies with the tab. The work never stopped; the evidence did. */
+  onTrack?: <T,>(label: string, run: () => Promise<T>) => Promise<T>;
 }) {
   const setId = data.setId;
 
@@ -178,11 +183,18 @@ export function RouteTab({
     void load();
   }, [load]);
 
+  const LABEL: Record<Exclude<typeof busy, "">, string> = {
+    bill: "Confirming the priced bill",
+    split: "Splitting the bill into packages",
+    analyze: "Proposing a route per package",
+    confirm: "Recording the routing decisions",
+  };
+
   const run = async (kind: typeof busy, fn: () => Promise<void>) => {
     setBusy(kind);
     setError("");
     try {
-      await fn();
+      await (onTrack ? onTrack(LABEL[kind as Exclude<typeof busy, "">] ?? "Working", fn) : fn());
     } catch (e: unknown) {
       const err = e as Error & { status?: number };
       // A 409 from the review gate is not a failure — it is the gate saying it has not been

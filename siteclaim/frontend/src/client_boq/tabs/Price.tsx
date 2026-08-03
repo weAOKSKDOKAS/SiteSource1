@@ -72,12 +72,15 @@ export function PriceTab({
   onRefresh,
   onError,
   onProgress,
+  onTrack,
 }: {
   data: SetData;
   railOpen: boolean;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
   onProgress?: (job: JobState | null) => void;
+  /** Hand long work to the shell so it stays visible after this tab unmounts. */
+  onTrack?: <T,>(label: string, run: () => Promise<T>) => Promise<T>;
 }) {
   const [result, setResult] = useState<EstimateResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,6 +89,11 @@ export function PriceTab({
   const [flagFilter, setFlagFilter] = useState<string | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
   const panes = usePanes("price", 236, 620, railOpen);
+
+  /** The shell's tracker when it was supplied, a pass-through otherwise, so this tab still works
+   *  if it is ever rendered outside the desk shell. */
+  const keep = <T,>(label: string, run: () => Promise<T>) =>
+    onTrack ? onTrack(label, run) : run();
 
   useEffect(() => {
     let live = true;
@@ -113,7 +121,8 @@ export function PriceTab({
     try {
       // DEMO runs inline and returns the estimate; LIVE queues a job. `runJob` covers both — the
       // defect that made LIVE inert everywhere else is not worth repeating here.
-      await runJob(() => api.runEstimate(data.setId), api.estimateStatus, onProgress);
+      await keep("Pricing the estimate", () =>
+        runJob(() => api.runEstimate(data.setId), api.estimateStatus, onProgress));
       onProgress?.(null);
       setResult(await api.estimate(data.setId));
       await onRefresh();

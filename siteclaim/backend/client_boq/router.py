@@ -266,6 +266,7 @@ def _run_ingest_job(job_id: str, uploads: list[RawUpload], project_name: str, ac
     try:
         manifest = ingest_run.run_inspect(
             uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+            on_note=lambda m: jobs.JOBS.add_warning(job_id, m),
         )
         _stamp_new_set(manifest.set_id, actor)
         jobs.JOBS.update(job_id, status="done", stage="awaiting-approval",
@@ -309,13 +310,16 @@ def post_ingest_upload(
     if not uploads:
         raise HTTPException(status_code=422, detail="Upload at least one PDF tender document.")
     if demo_mode():
+        notes: list[str] = []
         try:
-            manifest = ingest_run.run_inspect(uploads, project_name)
+            manifest = ingest_run.run_inspect(uploads, project_name, on_note=notes.append)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _stamp_new_set(manifest.set_id, actor)
+        # Same envelope as the live path — DEMO has no job to hang warnings off, so they ride
+        # the inline JobState. A landing-on-an-existing-tender notice must not depend on mode.
         return JobState(kind="ingest", status="done", stage="awaiting-approval",
-                        result=_manifest_payload(manifest))
+                        warnings=notes, result=_manifest_payload(manifest))
     job_id = jobs.JOBS.create("ingest")
     jobs.POOL.submit(_run_ingest_job, job_id, uploads, project_name, actor)
     return JobState(job_id=job_id, kind="ingest", status="queued", stage="uploading")

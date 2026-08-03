@@ -10,6 +10,7 @@ import type { SetData } from "../App";
 import { api, runJob } from "../api";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
 import { PageView } from "../PageView";
+import { BoundsEditor } from "./BoundsEditor";
 // `Highlight` is imported explicitly because the DOM lib declares a global of the same name
 // (the CSS Custom Highlight API) — without this, TS silently resolves to that one.
 import type {
@@ -96,6 +97,7 @@ export function DocumentsTab({
   onRefresh,
   onError,
   onProgress,
+  onTrack,
   initialTarget,
 }: {
   data: SetData;
@@ -103,6 +105,8 @@ export function DocumentsTab({
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
   onProgress?: (job: JobState | null) => void;
+  /** Hand long work to the shell so it stays visible after this tab unmounts. */
+  onTrack?: <T,>(label: string, run: () => Promise<T>) => Promise<T>;
   /** A deep link from outside the tab — e.g. the desk card's READ FROM COT citation. Opens
    *  that part at that measured page. */
   initialTarget?: { partId: string; page: number } | null;
@@ -115,9 +119,15 @@ export function DocumentsTab({
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState<string | null>(null);
   const [editingCard, setEditingCard] = useState<string | null>(null);
+  const [editingBounds, setEditingBounds] = useState(false);
   const [locations, setLocations] = useState<Record<string, LocateResult>>({});
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const panes = usePanes("documents", 244, 560, railOpen);
+
+  /** The shell's tracker when it was supplied, a pass-through otherwise, so this tab still works
+   *  if it is ever rendered outside the desk shell. */
+  const keep = <T,>(label: string, run: () => Promise<T>) =>
+    onTrack ? onTrack(label, run) : run();
   const [sortByPage, setSortByPage] = useState(true);
 
   // A deep link (the desk card's READ FROM COT) held in a ref, so the first-page effect below
@@ -203,19 +213,39 @@ export function DocumentsTab({
     }
   }
 
+  /** Undo the approval. The gate was one-way, so a boundary noticed after locking meant reopening
+   *  the row by hand in SQLite. The approve endpoint has always taken `approved`, so this is the
+   *  same single writer moving the same flag the other way — not a second path to the gate. */
+  async function reopen() {
+    setBusy(true);
+    try {
+      await api.approveManifest(data.setId, undefined, false);
+      await onRefresh();
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Save edited page bounds WITHOUT approving. The server validates against the real page count
+   *  and refuses a split that does not fit; whatever it says comes straight back to the editor. */
+  async function saveBounds(parts: PartSpec[]) {
+    await api.approveManifest(data.setId, parts, false);
+    await onRefresh();
+  }
+
   async function split() {
     setBusy(true);
     try {
       // Through runJob, not a bare call: in LIVE this returns `queued` and the work happens on a
       // pool thread. Reading the first response would appear to work offline and do nothing at
       // all with a real key.
-      await runJob(
-        () => api.split(data.setId),
-        api.ingestStatus,
-        (s) => onProgress?.(s),
-      );
-      onProgress?.(null);
-      await onRefresh();
+      await keep("Splitting the binder", async () => {
+        await runJob(() => api.split(data.setId), api.ingestStatus, (s) => onProgress?.(s));
+        onProgress?.(null);
+        await onRefresh();
+      });
     } catch (e: unknown) {
       onProgress?.(null);
       onError(e instanceof Error ? e.message : String(e));
@@ -491,9 +521,13 @@ export function DocumentsTab({
                 <Button variant="outline" onClick={split} disabled={busy}>
                   {parts.length ? "Re-split from this manifest" : "Split into parts"}
                 </Button>
+                <Button variant="outline" onClick={reopen} disabled={busy}>
+                  Reopen
+                </Button>
                 <Consequence>
                   Re-splitting costs no model calls — the cut is deterministic. The interpreted
-                  cards are rewritten.
+                  cards are rewritten. Reopening lets you correct a boundary; nothing already cut
+                  is destroyed.
                 </Consequence>
               </>
             ) : (
@@ -501,7 +535,7 @@ export function DocumentsTab({
                 <Button variant="brass" onClick={approve} disabled={busy} className="px-[22px]">
                   Approve
                 </Button>
-                <Button variant="outline" disabled title="Editing page bounds lands with U2b">
+                <Button variant="outline" onClick={() => setEditingBounds(true)} disabled={busy}>
                   Edit page bounds
                 </Button>
                 <Consequence>
@@ -510,6 +544,14 @@ export function DocumentsTab({
               </>
             )}
           </div>
+          {editingBounds && (
+            <BoundsEditor
+              manifest={manifest}
+              open={editingBounds}
+              onClose={() => setEditingBounds(false)}
+              onSave={saveBounds}
+            />
+          )}
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-[9px] overflow-y-auto p-4">

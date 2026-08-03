@@ -366,6 +366,24 @@ def inspect(data: bytes, filename: str = "document.pdf", depth: int = DEFAULT_DE
 # ---------------------------------------------------------------------------
 # Validating and performing the cut
 # ---------------------------------------------------------------------------
+# How much of the document a manifest must account for before the cut is offered at all.
+#
+# The number has to sit far from BOTH neighbours to be worth anything. A real split lands at or
+# very near 100%: the planner is told to make adjacent parts touch, and the honest misses are a
+# trailing blank leaf or an unassigned divider — a percent or two on any document large enough to
+# be a tender. The failure this exists to catch is a planner that collapsed to a stub, which lands
+# at 1/26 = 4%. 60% is in the empty middle: nothing legitimate has ever been observed below it,
+# and nothing broken near it.
+#
+# Why not "any gap is an error"? Because a gap IS recoverable and the human gate exists to weigh
+# it — `test_gaps_and_overlaps_are_warnings_not_errors` pins that on purpose, and turning a
+# stray unassigned page into a hard refusal would block real work to catch a fault of a different
+# size. Why not 90%? A binder plus loose annexes can legitimately leave more unassigned than one
+# would guess, and an error a person cannot clear from the screen is worse than a warning they can
+# read. The gap and overlap warnings still fire underneath this, so a near-miss is never silent.
+MIN_COVERAGE_SHARE = 0.6
+
+
 def validate(manifest: SplitManifest, n_pages: int) -> tuple[list[str], list[str]]:
     """Check a manifest against the real page count. Returns ``(errors, warnings)``.
 
@@ -408,6 +426,18 @@ def validate(manifest: SplitManifest, n_pages: int) -> tuple[list[str], list[str
             f"Parts {overlap['parts'][0]} and {overlap['parts'][1]} overlap on pages "
             f"{overlap['start']}-{overlap['end']}."
         )
+    # Coverage far below the document is an ERROR, not a warning. A warning is an invitation to
+    # look; this is a manifest that is not a split of this document at all — the observed case was
+    # a planning call returning ONE part bounded 1-1 for a 26-page bill, which passed every
+    # bounds check (1 >= 1, 1 <= 26, 1 >= 1) and was offered for approval with a green button.
+    # A human approving that loses 25 of 26 pages silently.
+    if not errors and n_pages > 0 and report["covered_pages"] < n_pages * MIN_COVERAGE_SHARE:
+        errors.append(
+            f"The parts cover only {report['covered_pages']} of {n_pages} pages "
+            f"({report['covered_pages'] / n_pages:.0%}); a split must account for at least "
+            f"{MIN_COVERAGE_SHARE:.0%} of the document. Edit the page ranges, or re-run the "
+            "ingest if the document itself is wrong."
+        )
     if not errors and report["covered"] != n_pages:
         warnings.append(f"The parts cover {report['covered']} of {n_pages} pages.")
     return errors, warnings
@@ -427,14 +457,35 @@ def coverage(manifest: SplitManifest, n_pages: int) -> dict:
     gaps: list[dict] = []
     overlaps: list[dict] = []
     ordered = sorted(binder, key=lambda p: p.start)
+    # The interior: every pair of neighbours. This walk ALONE was the whole of the check, and a
+    # walk over pairs cannot see either end — a manifest whose single part covered page 1 of a
+    # 26-page bill produced no pairs at all and reported 0 gaps, over a gate that then refused it.
+    # The head and tail are checked separately, below and above the loop.
+    if ordered and n_pages > 0 and ordered[0].start > 1:
+        gaps.append({"start": 1, "end": min(ordered[0].start - 1, n_pages)})
     for a, b in zip(ordered, ordered[1:]):
         if b.start > a.end + 1:
             gaps.append({"start": a.end + 1, "end": b.start - 1})
         elif b.start <= a.end:
             overlaps.append({"start": b.start, "end": min(a.end, b.end), "parts": [a.n, b.n]})
+    # `max(end)`, not `ordered[-1].end`: the ordering is by START, so a part that begins earlier
+    # can still end later than the last one to begin.
+    last_end = max((p.end for p in ordered), default=0)
+    if ordered and n_pages > 0 and last_end < n_pages:
+        gaps.append({"start": last_end + 1, "end": n_pages})
     return {
         "pages": n_pages,
+        # The sum of the parts' own lengths — kept as it was, because callers depend on it and it
+        # is what the manifest screen prints. It double-counts an overlap and can exceed `pages`.
         "covered": sum(p.page_count() for p in binder),
+        # DISTINCT pages of THIS document that some part claims, clamped to the real document.
+        # This is the honest coverage figure, and the one `validate` judges on: a manifest that
+        # covers page 4 twice has not covered five pages.
+        "covered_pages": len({
+            page
+            for p in binder
+            for page in range(max(1, p.start), min(p.end, n_pages) + 1)
+        }) if n_pages > 0 else 0,
         "gaps": gaps,
         "overlaps": overlaps,
     }
