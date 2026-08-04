@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, health, runJob, setActor } from "./api";
-import { GlobalBar, StepStrip, stepStates, usePersisted } from "./chrome";
+import { GlobalBar, StepStrip, TAB_FOR_JOB, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
@@ -141,6 +141,37 @@ export default function ClientBoqApp() {
   const stopJob = useCallback((jobId: string) => {
     void api.cancelJob(jobId).then(setJob).catch(() => undefined);
   }, []);
+  /** What to do NEXT, offered where the person already is.
+   *
+   *  Every step after the review crosses a human gate — manifest approval, register verdicts, bill
+   *  confirmation, the routing decision — so full automation is wrong and is not built. What was
+   *  wrong is that after a stage finished the person had to find the right tab and the right button
+   *  themselves. This offers it; it never presses it. Where a gate intervenes the offer is only
+   *  ever "go to where the decision is". */
+  const [nextUp, setNextUp] = useState<{ label: string; hint: string; go: () => void } | null>(null);
+
+  /** Every job state the tabs report passes through here, so the shell can notice a completion the
+   *  tab is about to clear. */
+  const noteJob = useCallback((state: JobState | null) => {
+    setJob(state);
+    if (state?.status !== "done") return;
+    const setId = window.location.hash.match(/#\/tender\/s\/([^/]+)/)?.[1];
+    if (!setId) return;
+    const open = (tab: TabId, label: string, hint: string) =>
+      setNextUp({ label, hint, go: () => go({ kind: "set", setId: decodeURIComponent(setId), tab }) });
+    // The offer per finished stage. NEVER an approval: where the next thing is a gate, the offer
+    // opens the screen the gate lives on and the click is still the person's.
+    if (state.kind === "ingest") {
+      open("documents", "Review the split", "The manifest is drafted. Approving it is yours.");
+    } else if (state.kind === "review") {
+      open("register", "Open the register", "Each finding needs a verdict before anything downstream runs.");
+    } else if (state.kind === "scope") {
+      open("scope", "Open the scope", "The scope is drafted. Freezing it is yours.");
+    } else if (state.kind === "estimate") {
+      open("offer", "Open the offer letter", "The price is built. The letter draws on it.");
+    }
+  }, []);
+
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   /** A citation deep link for the open set's Documents tab (READ FROM COT on a card). */
@@ -223,7 +254,7 @@ export default function ClientBoqApp() {
       const projectName = pdfs[0].name.replace(/\.pdf$/i, "");
       try {
         const done = await track(`Reading ${projectName}`, async () => {
-          const state = await runJob(() => api.upload(pdfs, projectName), api.ingestStatus, setJob);
+          const state = await runJob(() => api.upload(pdfs, projectName), api.ingestStatus, noteJob);
           setJob(null);
           return state;
         });
@@ -238,7 +269,7 @@ export default function ClientBoqApp() {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [loadSets, track],
+    [loadSets, track, noteJob],
   );
 
   useEffect(() => {
@@ -355,7 +386,15 @@ export default function ClientBoqApp() {
 
       {error && <ErrorNote message={error} onDismiss={() => setError(null)} />}
       {/* Above the sidebar/content split, so it is on screen from every tab AND from the desk. */}
-      {(work || job) && <JobStrip work={work} job={job} onStop={stopJob} />}
+      {(work || job || nextUp) && (
+        <JobStrip
+          work={work}
+          job={job}
+          onStop={stopJob}
+          next={nextUp}
+          onDismissNext={() => setNextUp(null)}
+        />
+      )}
 
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <NavSidebar
@@ -417,7 +456,8 @@ export default function ClientBoqApp() {
             railOpen={railOpen}
             demoMode={demoMode}
             onError={setError}
-            onJob={setJob}
+            onJob={noteJob}
+            job={job}
             onTrack={track}
             onSetsChanged={() => void loadSets()}
             docTarget={docTarget}
@@ -503,6 +543,7 @@ function SetView({
   demoMode,
   onError,
   onJob,
+  job,
   onTrack,
   onSetsChanged,
   docTarget,
@@ -516,6 +557,8 @@ function SetView({
   demoMode: boolean;
   onError: (msg: string) => void;
   onJob: (job: JobState | null) => void;
+  /** The run in flight, so the step chips and the tab bodies say the same thing the strip does. */
+  job: JobState | null;
   /** Register long work with the shell, so it stays visible after this tab unmounts. */
   onTrack: <T,>(label: string, run: () => Promise<T>) => Promise<T>;
   onSetsChanged: () => void;
@@ -592,6 +635,14 @@ function SetView({
     }
   }, [docTarget, tab, data, onDocTargetUsed]);
 
+  // Which tab's work is running, translated from the job's own vocabulary. Only while it is
+  // actually in flight: a finished or cancelled job leaves the chips to `data`, which by then
+  // reflects the result.
+  const runningTab =
+    job && (job.status === "queued" || job.status === "running")
+      ? TAB_FOR_JOB[job.kind] ?? null
+      : null;
+
   const states = useMemo(
     () =>
       stepStates(data?.gates ?? EMPTY_GATES, {
@@ -601,8 +652,8 @@ function SetView({
         estimate: Boolean(data?.hasEstimate),
         proposal: Boolean(data?.route.hasProposal),
         decisions: Boolean(data?.route.hasDecisions),
-      }),
-    [data],
+      }, runningTab),
+    [data, runningTab],
   );
 
   return (
@@ -696,12 +747,19 @@ function JobStrip({
   work,
   job,
   onStop,
+  next,
+  onDismissNext,
 }: {
   work: { label: string; status: "running" | "done" } | null;
   job: JobState | null;
   onStop: (jobId: string) => void;
+  /** The next action, offered — never taken. Outlives the six-second DONE strip, because an offer
+   *  nobody had time to read is not an offer. */
+  next: { label: string; hint: string; go: () => void } | null;
+  onDismissNext: () => void;
 }) {
-  const done = work?.status === "done" && !job;
+  const running = Boolean(job) || work?.status === "running";
+  const done = !running && (work?.status === "done" || Boolean(next));
   // A DETERMINATE bar only where the total is genuinely known. Everywhere else the bar is
   // indeterminate and says so by moving on nothing — a bar that advances on a timer rather than on
   // work is worse than one that admits it does not know.
@@ -766,7 +824,7 @@ function JobStrip({
         className={cx("font-cb-sans text-[10px]", done ? "text-cb-ok-dark" : "text-cb-brass-text")}
       >
         {done
-          ? "Finished. Open the tab that started it to see the result."
+          ? next?.hint ?? "Finished. Open the tab that started it to see the result."
           : job?.cancel_requested
             ? "Stopping at the next step. The call already in flight has to finish first — it cannot be interrupted."
             : "Still running — it keeps going wherever you navigate."}
@@ -780,6 +838,29 @@ function JobStrip({
         >
           STOP
         </button>
+      )}
+      {done && next && (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              next.go();
+              onDismissNext();
+            }}
+            title={next.hint}
+            className="cb-press ml-auto flex-none rounded-cb-btn border border-cb-ok bg-white px-2.5 py-[3px] font-cb-sans text-[10.5px] font-semibold text-cb-ok-dark"
+          >
+            {next.label} →
+          </button>
+          <button
+            type="button"
+            onClick={onDismissNext}
+            title="Dismiss"
+            className="cb-press flex-none px-1 font-cb-mono text-[12px] text-cb-ok-dark"
+          >
+            ×
+          </button>
+        </>
       )}
     </div>
   );

@@ -604,8 +604,16 @@ export function pollJob(
         })
         .catch((e: unknown) => {
           const message = e instanceof Error ? e.message : String(e);
-          // A 404 means the job is gone; anything else may be a blip worth riding out.
-          if (message.startsWith("404") || ++failures > 5) reject(new Error(message));
+          // A 404 means the job is GONE — the process restarted, or the id expired — and there is
+          // nothing to wait for. Anything else may be a blip worth riding out.
+          //
+          // This read `message.startsWith("404")`, which never matched: `handle()` replaces the
+          // status line with the JSON `detail` whenever there is one, and the status endpoints
+          // answer `"Unknown or expired client_boq job"`. So a vanished job was treated as a blip
+          // and retried six times, while the strip claimed a run that had stopped existing.
+          // `handle()` already sets `error.status`; read the property, not the prose.
+          const status = (e as { status?: number } | null)?.status;
+          if (status === 404 || ++failures > 5) reject(new Error(message));
           else setTimeout(tick, 2000);
         });
     };

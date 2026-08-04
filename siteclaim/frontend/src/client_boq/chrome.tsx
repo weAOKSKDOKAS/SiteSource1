@@ -56,8 +56,18 @@ export function stepStates(
     proposal: boolean;
     decisions: boolean;
   },
+  /** The tab whose work is RUNNING right now, if any.
+   *
+   *  Without this the chips and the job disagree by construction: the chips are computed from
+   *  `data`, which does not change until a run finishes, so a review in flight showed
+   *  `NOT YET RUN` on the same screen as a strip reading `REVIEW · Still running`, above a run
+   *  button the tab itself had disabled because it knew perfectly well it was busy.
+   *
+   *  A display fix, deliberately: the job is still owned where it was, and this only stops one
+   *  surface saying something the surface beside it contradicts. */
+  running: TabId | null = null,
 ): Record<TabId, StepState> {
-  return {
+  const states = {
     documents: gates.manifest ? { kind: "done" } : has.parts ? { kind: "open" } : { kind: "open" },
     register: gates.review
       ? { kind: "done" }
@@ -96,8 +106,22 @@ export function stepStates(
         ? { kind: "waiting", label: "NOT YET RUN" }
         : { kind: "waiting", label: "WAITS ON THE SCOPE" },
     offer: has.estimate ? { kind: "open" } : { kind: "waiting", label: "WAITS ON THE PRICE" },
-  };
+  } as Record<TabId, StepState>;
+  // A running step says so, whatever it would otherwise have said — including over a `done`,
+  // because a RE-run is still a run in flight.
+  if (running && states[running]) states[running] = { kind: "waiting", label: "RUNNING…" };
+  return states;
 }
+
+/** Which tab owns a job of this kind. The job store names workflows; the tab strip names tabs,
+ *  and one screen has to be able to translate between them. Unknown kinds map to nothing rather
+ *  than to a guess. */
+export const TAB_FOR_JOB: Record<string, TabId> = {
+  ingest: "documents",
+  review: "register",
+  scope: "scope",
+  estimate: "price",
+};
 
 function chipFor(state: StepState, current: boolean) {
   if (state.kind === "done") return { text: "✓ DONE", cls: "text-cb-ok" };

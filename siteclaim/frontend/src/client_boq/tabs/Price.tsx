@@ -304,7 +304,14 @@ export function PriceTab({
           </Button>
         </header>
 
-        {!estimate ? (
+        {!estimate && busy ? (
+          <div className="p-5">
+            <WaitingOn title="The estimate is running">
+              Building the cost spine. It keeps going if you navigate away — the strip above
+              follows it, and stops it.
+            </WaitingOn>
+          </div>
+        ) : !estimate ? (
           <div className="p-5">
             <WaitingOn title="The estimate has not been run">
               Both gates are passed, so it can run now. The cost spine is deterministic — quantities

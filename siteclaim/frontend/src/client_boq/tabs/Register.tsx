@@ -384,6 +384,18 @@ export function RegisterTab({
     }
   }
 
+  if (!register && busy) {
+    // The tab knows it is busy — it disabled its own run button — so it must not also say the
+    // review has not been run. That contradiction, beside a strip reading "REVIEW · running", was
+    // the same component arguing with itself on one screen.
+    return (
+      <WaitingOn title="The review is running">
+        Reading each part against the criteria library. It keeps going if you navigate away — the
+        strip above follows it, and stops it.
+      </WaitingOn>
+    );
+  }
+
   if (!register) {
     return (
       <WaitingOn
