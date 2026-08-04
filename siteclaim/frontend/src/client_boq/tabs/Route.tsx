@@ -151,6 +151,10 @@ export function RouteTab({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"" | "bill" | "split" | "analyze" | "confirm">("");
   const [gate, setGate] = useState("");
+  /** Warnings the bridge returned alongside a SUCCESSFUL call — today, the soft review
+   *  gate's unread-terms notice. Distinct from `gate` (a refusal) and `error` (a failure):
+   *  this is work that went ahead and needs saying so. */
+  const [routeNotes, setRouteNotes] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [detail, setDetail] = useState<BridgeRoutePackage | null>(null);
 
@@ -237,6 +241,10 @@ export function RouteTab({
         has_split: true,
       });
       setChosen(Object.fromEntries(res.packages.map((p) => [p.package_key, p.recommended_route])));
+      // In soft mode the analyze call SUCCEEDS on an unapproved register and says so in `notes`.
+      // That sentence is the entire safety of the soft gate — a bypass nobody is told about is a
+      // gate that has silently stopped existing — so it is rendered, never swallowed.
+      setRouteNotes(res.notes ?? []);
       await onRefresh();
     });
 
@@ -246,11 +254,41 @@ export function RouteTab({
         package_key: p.package_key,
         chosen_route: chosen[p.package_key] ?? p.recommended_route,
       }));
-      setDecisions(await api.bridge.confirmRoutes(setId, body));
+      const recorded = await api.bridge.confirmRoutes(setId, body);
+      setDecisions(recorded);
+      // The same warning on the act, not just the advice: confirming a route on unread terms is
+      // the moment that matters.
+      setRouteNotes(recorded.notes ?? []);
       await onRefresh();
     });
 
   const billConfirmed = Boolean(candidates?.confirmed.length);
+
+  /** Show every part, not just the ones that could be the bill. */
+  const [showAllParts, setShowAllParts] = useState(false);
+
+  /** Which parts this gate actually renders.
+   *
+   *  A whole-pack archive extract makes this list 206 rows, and the question on screen is "which
+   *  document is the priced bill?" — a question 200 drawings and specification appendices do not
+   *  help answer. So the default is the parts the interpreter categorised `pricing`, plus anything
+   *  already confirmed, plus whatever is currently ticked (a selection must never vanish under the
+   *  person making it, which is why `picked` is in here and not just the server's two lists).
+   *
+   *  The backend is untouched: `candidates_on` still returns everything, because other consumers
+   *  read it and a display problem is not a reason to narrow an API.
+   *
+   *  The honest-degrade case is the important one. When NOTHING is proposed and nothing is
+   *  confirmed, the interpreter found no pricing part — the backend's own `message` says so — and
+   *  filtering to an empty list would stand the operator in front of a gate with nothing to pick.
+   *  There the full list IS the answer, so it renders automatically. */
+  const visibleParts = useMemo(() => {
+    const all = candidates?.parts ?? [];
+    const anyKnown = all.some((p) => p.proposed || p.confirmed);
+    if (showAllParts || !anyKnown) return all;
+    return all.filter((p) => p.proposed || p.confirmed || picked.includes(p.part_id));
+  }, [candidates, showAllParts, picked]);
+  const hiddenCount = (candidates?.parts.length ?? 0) - visibleParts.length;
   const decided = Boolean(decisions?.decisions.length);
   const packages = proposal?.packages ?? [];
   const counts = useMemo(() => {
@@ -290,7 +328,7 @@ export function RouteTab({
             </p>
           )}
           <div className="space-y-1.5">
-            {candidates.parts.map((p) => {
+            {visibleParts.map((p) => {
               const on = picked.includes(p.part_id);
               return (
                 <Card key={p.part_id} selected={on} className="flex items-start gap-3">
@@ -331,6 +369,17 @@ export function RouteTab({
               );
             })}
           </div>
+          {(hiddenCount > 0 || showAllParts) && (
+            <button
+              type="button"
+              onClick={() => setShowAllParts((v) => !v)}
+              className="cb-press mt-2 font-cb-sans text-[11px] text-cb-navy underline"
+            >
+              {showAllParts
+                ? `Show only the likely bill${candidates.parts.length ? ` (hide ${candidates.parts.length - (candidates.parts.filter((p) => p.proposed || p.confirmed || picked.includes(p.part_id)).length)})` : ""}`
+                : `Show all ${candidates.parts.length} parts`}
+            </button>
+          )}
           <div className="mt-2 flex items-center gap-2">
             <Button
               variant="brass"
@@ -383,6 +432,23 @@ export function RouteTab({
 
         {/* 3 — the proposal, behind the review gate */}
         <Stage n={3} title="Route each package" done={decided}>
+          {/* The soft gate's voice. In V1 an unapproved register no longer refuses this step — it
+              warns — and this is where the warning has to land, beside the decision it qualifies.
+              Amber border and text, no fill: it is not a failure and not a finding, it is the
+              condition the work below was done under. Rendered ABOVE the proposal deliberately;
+              read after choosing a route it would be an epitaph rather than a warning. */}
+          {routeNotes.length > 0 && (
+            <div className="mb-3 border border-cb-amber px-3 py-2">
+              <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-amber">
+                READ THIS BEFORE RELYING ON THE ROUTING
+              </div>
+              {routeNotes.map((n) => (
+                <p key={n} className="mt-1 font-cb-sans text-[11px] leading-[1.5] text-cb-amber">
+                  {n}
+                </p>
+              ))}
+            </div>
+          )}
           {gate ? (
             // The no-padlock rule: the tab stays open and states the gate in the backend's own
             // words, because that sentence names which gate refused and why.

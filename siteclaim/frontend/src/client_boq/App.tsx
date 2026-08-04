@@ -9,7 +9,7 @@
 //   #/tender/awaiting           open queries    #/tender/s/{setId}/{tab}   one tender
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, health, runJob, setActor } from "./api";
+import { api, health, pollJob, runJob, setActor } from "./api";
 import { GlobalBar, StepStrip, TAB_FOR_JOB, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
@@ -91,6 +91,9 @@ const SCREEN_TITLES: Record<ScreenId | NotDesignedId, string> = {
 export default function ClientBoqApp() {
   const [surface, setSurface] = useState<Surface>(() => parseHash(window.location.hash));
   const [demoMode, setDemoMode] = useState(false);
+  /** V1: an unapproved review register warns rather than blocking. The step chips have to
+   *  agree, or `WAITS ON THE REGISTER` sits beside a button that works. */
+  const [reviewGateSoft, setReviewGateSoft] = useState(false);
   const [sets, setSets] = useState<SetRow[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [criteria, setCriteria] = useState<CriteriaResponse | null>(null);
@@ -187,8 +190,16 @@ export default function ClientBoqApp() {
   // --- global data ----------------------------------------------------------
   useEffect(() => {
     health()
-      .then((h) => setDemoMode(h.demo_mode))
-      .catch(() => setDemoMode(false));
+      .then((h) => {
+        setDemoMode(h.demo_mode);
+        // Absent on an older server. The safe reading of a missing value is the STRICTER one:
+        // claiming the gate is soft when it is hard would put a Run button in front of a 409.
+        setReviewGateSoft(h.review_gate === "soft");
+      })
+      .catch(() => {
+        setDemoMode(false);
+        setReviewGateSoft(false);
+      });
   }, []);
 
   const loadSets = useCallback(async () => {
@@ -455,6 +466,7 @@ export default function ClientBoqApp() {
             tab={surface.tab}
             railOpen={railOpen}
             demoMode={demoMode}
+            reviewGateSoft={reviewGateSoft}
             onError={setError}
             onJob={noteJob}
             job={job}
@@ -541,6 +553,7 @@ function SetView({
   tab,
   railOpen,
   demoMode,
+  reviewGateSoft,
   onError,
   onJob,
   job,
@@ -555,6 +568,9 @@ function SetView({
   /** DEMO means uploaded files were not read. Sourcing needs it: the live path shows the assembled
    *  attachment plan and can hand bundles to Gmail; DEMO does neither. */
   demoMode: boolean;
+  /** V1: an unapproved register warns rather than blocking, so the step chips must not claim
+   *  scope and route are waiting on it. */
+  reviewGateSoft: boolean;
   onError: (msg: string) => void;
   onJob: (job: JobState | null) => void;
   /** The run in flight, so the step chips and the tab bodies say the same thing the strip does. */
@@ -635,6 +651,47 @@ function SetView({
     }
   }, [docTarget, tab, data, onDocTargetUsed]);
 
+  // Ask the server what this set is already doing, and adopt it.
+  //
+  // Without this the screen's only knowledge of a run was the poll loop that started it — which
+  // lived in a tab component, and tabs unmount on navigation. So: start a review, switch tabs,
+  // come back, and the Register tab rendered a Run button over a review that was still running.
+  // Pressing it got a 409 refusing an action the UI had just invited. A hard browser refresh was
+  // worse: nothing anywhere knew, and the strip stayed blank for the rest of the run.
+  //
+  // `pollJob` dedupes by job id (`LIVE_POLLS` in api.ts), so joining a loop that is already
+  // running costs nothing and cannot produce a second one. Re-runs per `setId`, because that is
+  // the question being asked — what is THIS set doing.
+  useEffect(() => {
+    let adopted = true;
+    void api
+      .liveJob(setId)
+      .then((state) => {
+        if (!adopted || !state.job_id) return;
+        if (state.status !== "queued" && state.status !== "running") return;
+        onJob(state);
+        const status =
+          state.kind === "review"
+            ? api.reviewStatus
+            : state.kind === "ingest" || state.kind === "archive"
+              ? api.ingestStatus
+              : api.estimateStatus; // scope and estimate share the estimate poll endpoint
+        return pollJob(status, state.job_id, onJob)
+          .catch(() => undefined) // the banner belongs to whoever STARTED the run, not to a re-join
+          .finally(() => {
+            onJob(null);
+            void refresh();
+          });
+      })
+      .catch(() => undefined); // a set with no job is the normal case, and never an error
+    return () => {
+      // Stops THIS effect adopting a late answer after the set changed. The poll loop itself is
+      // deliberately left alone: it belongs to the job, and the shell-level strip is what makes a
+      // run survive navigation in the first place.
+      adopted = false;
+    };
+  }, [setId, onJob, refresh]);
+
   // Which tab's work is running, translated from the job's own vocabulary. Only while it is
   // actually in flight: a finished or cancelled job leaves the chips to `data`, which by then
   // reflects the result.
@@ -652,8 +709,8 @@ function SetView({
         estimate: Boolean(data?.hasEstimate),
         proposal: Boolean(data?.route.hasProposal),
         decisions: Boolean(data?.route.hasDecisions),
-      }, runningTab),
-    [data, runningTab],
+      }, runningTab, reviewGateSoft),
+    [data, runningTab, reviewGateSoft],
   );
 
   return (
@@ -671,6 +728,7 @@ function SetView({
         ) : tab === "documents" ? (
           <DocumentsTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}
@@ -681,6 +739,7 @@ function SetView({
         ) : tab === "register" ? (
           <RegisterTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}
@@ -690,6 +749,7 @@ function SetView({
         ) : tab === "scope" ? (
           <ScopeTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}
@@ -702,6 +762,7 @@ function SetView({
         ) : tab === "price" ? (
           <PriceTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}

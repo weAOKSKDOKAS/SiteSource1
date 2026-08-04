@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes } from "../chrome";
 import { PageView } from "../PageView";
 import type {
   CitationRow,
@@ -54,6 +54,7 @@ type SortMode = "register" | "page" | "status";
 
 export function RegisterTab({
   data,
+  job,
   railOpen,
   onRefresh,
   onError,
@@ -61,6 +62,12 @@ export function RegisterTab({
   onProgress,
 }: {
   data: SetData;
+  /** The run in flight anywhere in this set, from the shell. A tab's own `busy` flag dies
+   *  with the component, so a run started here and navigated away from left this tab able to
+   *  offer its Run button again — over a job that was still going, which the server then
+   *  refused with a 409 the UI had invited. `busy` covers work THIS mount started; `job`
+   *  covers work the set is doing at all. */
+  job?: JobState | null;
   railOpen: boolean;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
@@ -90,6 +97,14 @@ export function RegisterTab({
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [criteriaRows, setCriteriaRows] = useState<Criterion[]>([]);
   const [busy, setBusy] = useState(false);
+  // The shell's job, narrowed to work that belongs to THIS tab. `TAB_FOR_JOB` is the one
+  // place that translates a workflow name into a tab, so this cannot drift from the chips.
+  const jobRunning =
+    !!job &&
+    (job.status === "queued" || job.status === "running") &&
+    TAB_FOR_JOB[job.kind] === "register";
+  // Everything that used to gate on `busy` gates on this instead.
+  const running = busy || jobRunning;
   /** Read the specification tree as well. Off by default — on a real government pack that is ~150
    *  of 206 parts, mostly appendices (borehole logs, test schedules) that carry no contractual
    *  position, and reading them is most of a long run. It is a DEFERRAL, not an exclusion: the
@@ -376,8 +391,33 @@ export function RegisterTab({
       onProgress?.(null);
       await onRefresh();
     } catch (e: unknown) {
+      const err = e as Error & { status?: number };
+      // Belt and braces on the race the recovery effect otherwise closes. If a review was already
+      // running when this button was pressed — two windows on one set, or a click that beat the
+      // mount-time `liveJob` call — the server says 409 and NAMES the job. That is not an error
+      // worth a red banner: the thing the operator asked for is already happening. So adopt it
+      // and show its progress, which is what they wanted to see in the first place.
+      if (err.status === 409 && /already running/i.test(err.message ?? "")) {
+        try {
+          const live = await api.liveJob(data.setId);
+          if (live.job_id) {
+            onProgress?.(live);
+            const finished = await runJob(
+              () => Promise.resolve(live),
+              api.reviewStatus,
+              (s) => onProgress?.(s),
+            );
+            setRunNotes(finished.warnings ?? []);
+            onProgress?.(null);
+            await onRefresh();
+            return;
+          }
+        } catch {
+          /* fall through to the banner — a 409 we cannot attach to is worth reporting */
+        }
+      }
       onProgress?.(null);
-      onError(e instanceof Error ? e.message : String(e));
+      onError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -395,10 +435,12 @@ export function RegisterTab({
     }
   }
 
-  if (!register && busy) {
-    // The tab knows it is busy — it disabled its own run button — so it must not also say the
-    // review has not been run. That contradiction, beside a strip reading "REVIEW · running", was
-    // the same component arguing with itself on one screen.
+  if (!register && running) {
+    // The tab knows the set is busy — its own run, or one it has just adopted from the shell —
+    // so it must not also say the review has not been run. That contradiction, beside a strip
+    // reading "REVIEW · running", was the same component arguing with itself on one screen. It is
+    // `running` and not `busy` because the run is very often NOT this mount's: start a review,
+    // navigate away, come back, and `busy` is false while the review is still going.
     return (
       <WaitingOn title="The review is running">
         Reading each part against the criteria library. It keeps going if you navigate away — the
@@ -414,7 +456,7 @@ export function RegisterTab({
         action={
           data.gates.manifest ? (
             <div className="flex flex-col items-center gap-2.5">
-              <Button variant="brass" onClick={runReview} disabled={busy}>
+              <Button variant="brass" onClick={runReview} disabled={running}>
                 Run the review
               </Button>
               {/* The skip, made visible and reversible at the point of decision — not a constant
@@ -427,7 +469,7 @@ export function RegisterTab({
                   type="checkbox"
                   checked={includeSpecs}
                   onChange={(e) => setIncludeSpecs(e.target.checked)}
-                  disabled={busy}
+                  disabled={running}
                   className="accent-[#BD9A5F]"
                 />
                 Read the specifications too — slower, and mostly appendices

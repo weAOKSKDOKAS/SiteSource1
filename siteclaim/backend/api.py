@@ -196,8 +196,11 @@ app.include_router(bridge_router)
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict[str, object]:
-    """Liveness probe; reports whether the server is offline (DEMO_MODE)."""
-    return {"status": "ok", "demo_mode": demo_mode()}
+    """Liveness probe; reports whether the server is offline (DEMO_MODE) and how hard the
+    review gate bites (``soft`` is the V1 default — see ``client_boq/gates.py``)."""
+    from client_boq.gates import review_gate_mode
+
+    return {"status": "ok", "demo_mode": demo_mode(), "review_gate": review_gate_mode()}
 
 
 class GmailStatus(BaseModel):

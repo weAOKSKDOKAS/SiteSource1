@@ -421,6 +421,9 @@ def post_ingest_upload(
         # the inline JobState. A landing-on-an-existing-tender notice must not depend on mode.
         return JobState(kind="ingest", status="done", stage="awaiting-approval",
                         warnings=notes, result=_manifest_payload(manifest))
+    # No `set_id` here, and that is correct rather than an omission: this job CREATES the set. Its
+    # id is not known until the manifest is planned, so there is nothing for `live_any_for` to
+    # match on and a set that does not exist cannot have a job recovered for it.
     job_id = jobs.JOBS.create("ingest")
     jobs.POOL.submit(_run_ingest_job, job_id, uploads, project_name, actor)
     return JobState(job_id=job_id, kind="ingest", status="queued", stage="uploading")
@@ -443,6 +446,29 @@ def post_cancel_job(job_id: str) -> JobState:
         raise HTTPException(status_code=404, detail="Unknown or expired client_boq job")
     jobs.JOBS.cancel(job_id)
     return _job_state(job_id, jobs.JOBS.get(job_id) or job)
+
+
+@router.get("/jobs/live/{set_id}", response_model=JobState)
+def get_live_job(set_id: str) -> JobState:
+    """Whatever this set is doing right now, of any kind — or ``job_id: null`` if nothing.
+
+    The screen's recovery route. Every other status endpoint needs a job id, which a browser that
+    has just loaded does not have: the id lived in the closure of a poll loop in a component that
+    unmounted, or in a tab that was never open. So a review would be running on the server while
+    the Register tab rendered a Run button, and pressing it produced a 409 the UI had invited.
+
+    NEVER 404s. "This set has no job" is a state, not an error — the same reasoning as
+    ``/route/proposal`` returning an empty list rather than 404ing on a set that has not been
+    routed. A 404 here would make the caller distinguish "no job" from "no set" on every poll, and
+    both answers mean the same thing to a screen: render normally.
+    """
+    job_id = jobs.JOBS.live_any_for(set_id)
+    job = jobs.JOBS.get(job_id) if job_id else None
+    if job_id is None or job is None:
+        # `job_id` stays None and the status enum is NOT widened — the client reads a null id as
+        # "nothing running" rather than learning a sixth status that means the same thing.
+        return JobState(status="queued", stage="")
+    return _job_state(job_id, job)
 
 
 @router.get("/ingest/status/{job_id}", response_model=JobState)
@@ -602,7 +628,7 @@ def post_ingest_split(req: SplitRequest, actor: str = Depends(_actor)) -> JobSta
             conn.close()
         return JobState(kind="ingest", status="done", stage="ingested",
                         done=len(rows), total=len(rows), result=_parts_payload(req.set_id, rows))
-    job_id = jobs.JOBS.create("ingest")
+    job_id = jobs.JOBS.create("ingest", set_id=req.set_id)
     jobs.POOL.submit(_run_split_job, job_id, req.set_id, actor)
     return JobState(job_id=job_id, kind="ingest", status="queued", stage="splitting")
 
@@ -1910,14 +1936,31 @@ def _estimate_payload(estimate: Estimate) -> dict:
     }
 
 
-def _gate_or_409(set_id: str) -> None:
+def _gate_or_409(set_id: str) -> Optional[str]:
+    """The review→estimate gate. Returns a warning in soft mode, ``None`` when there is none.
+
+    **V1 DELIBERATE DEPARTURE from the locked review→estimate hard-gate decision.** Default
+    ``REVIEW_GATE=soft`` lets the estimate run on an unapproved register and warns instead of
+    409ing; ``REVIEW_GATE=hard`` restores the original behaviour exactly. See ``client_boq/gates.py``.
+
+    The caller must surface the return value — both do, onto the job's warnings. A soft gate that
+    says nothing is worse than no gate, because silence reads as approval.
+
+    ``_scope_gate_or_409`` below is NOT affected and must not be: the scope freeze is a DATA
+    dependency (the estimate cannot price a scope that does not exist), not a review gate.
+    """
+    from client_boq.gates import SOFT_GATE_WARNING, review_gate_is_soft
+
     conn = store.get_conn()
     try:
-        if not store.review_is_approved(conn, set_id):
-            raise HTTPException(
-                status_code=409,
-                detail="Estimate is gated: the review register for this document set is not approved yet.",
-            )
+        if store.review_is_approved(conn, set_id):
+            return None
+        if review_gate_is_soft():
+            return SOFT_GATE_WARNING
+        raise HTTPException(
+            status_code=409,
+            detail="Estimate is gated: the review register for this document set is not approved yet.",
+        )
     finally:
         conn.close()
 
@@ -1995,9 +2038,10 @@ def _run_scope_job(job_id: str, set_id: str) -> None:
 
 @router.post("/estimate/scope", response_model=JobState)
 def post_estimate_scope(req: ScopeRunRequest) -> JobState:
-    """Estimate step 1 — draft the scope (s01). REFUSES until the review register is approved (the
-    review→estimate gate) — a 409 otherwise. DEMO runs inline; live runs as a background job."""
-    _gate_or_409(req.set_id)
+    """Estimate step 1 — draft the scope (s01). Behind the review→estimate gate: a 409 under
+    ``REVIEW_GATE=hard``, a warning on the response under the V1 default ``soft``. DEMO runs
+    inline; live runs as a background job."""
+    gate_note = _gate_or_409(req.set_id)
     if demo_mode():
         estimate_run.run_scope(req.set_id)
         conn = store.get_conn()
@@ -2005,10 +2049,17 @@ def post_estimate_scope(req: ScopeRunRequest) -> JobState:
             scope = store.load_scope(conn, req.set_id)
         finally:
             conn.close()
-        return JobState(kind="scope", status="done", stage="scoping", result=_scope_payload(req.set_id, scope))
-    job_id = jobs.JOBS.create("scope")
+        return JobState(kind="scope", status="done", stage="scoping",
+                        warnings=[gate_note] if gate_note else [],
+                        result=_scope_payload(req.set_id, scope))
+    job_id = jobs.JOBS.create("scope", set_id=req.set_id)
+    # Attached BEFORE submit, so the warning is on the job from its first poll rather than racing
+    # the worker — a bypass the operator only learns about at the end is one they already acted on.
+    if gate_note:
+        jobs.JOBS.add_warning(job_id, gate_note)
     jobs.POOL.submit(_run_scope_job, job_id, req.set_id)
-    return JobState(job_id=job_id, kind="scope", status="queued", stage="scoping")
+    return JobState(job_id=job_id, kind="scope", status="queued", stage="scoping",
+                    warnings=[gate_note] if gate_note else [])
 
 
 @router.post("/estimate/scope/approve", response_model=ScopeGateState)
@@ -2312,21 +2363,28 @@ def post_estimate_run(req: EstimateRunRequest) -> JobState:
     Live: requires ``margin_pct`` and a structured ``schedule``; runs as a background job (poll
     ``/estimate/status/{job_id}``). DEMO: loads the fixture schedule + fixture margin and runs inline
     (offline), returning the estimate."""
-    _gate_or_409(req.set_id)          # first gate: review approved
-    _scope_gate_or_409(req.set_id)    # second gate: scope approved
+    # First gate: review approved. Soft by default in V1 — warns rather than refusing.
+    gate_note = _gate_or_409(req.set_id)
+    # Second gate: scope approved. UNCHANGED and deliberately so — the scope freeze is a data
+    # dependency, not a review gate, and there is nothing to price without it.
+    _scope_gate_or_409(req.set_id)
     if demo_mode():
         estimate = estimate_run.run_estimate(
             req.set_id, estimate_run.DEMO_MARGIN_PCT, estimate_run.load_demo_schedule(),
             letter_meta=req.letter,
         )
         return JobState(kind="estimate", status="done", stage="persisting",
+                        warnings=[gate_note] if gate_note else [],
                         result=_estimate_payload(estimate))
 
     if req.schedule is None or req.margin_pct is None:
         raise HTTPException(status_code=422, detail="margin_pct and schedule are required for a live estimate run.")
-    job_id = jobs.JOBS.create("estimate")
+    job_id = jobs.JOBS.create("estimate", set_id=req.set_id)
+    if gate_note:
+        jobs.JOBS.add_warning(job_id, gate_note)
     jobs.POOL.submit(_run_estimate_job, job_id, req.set_id, req.margin_pct, req.schedule, req.letter)
-    return JobState(job_id=job_id, kind="estimate", status="queued", stage="costing")
+    return JobState(job_id=job_id, kind="estimate", status="queued", stage="costing",
+                    warnings=[gate_note] if gate_note else [])
 
 
 @router.get("/estimate/status/{job_id}", response_model=JobState)

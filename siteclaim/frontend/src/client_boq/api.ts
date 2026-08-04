@@ -149,7 +149,11 @@ const rpost = <T>(path: string, body: unknown): Promise<T> =>
 
 /** Is this backend in DEMO mode? Drives the app-bar chip, which is not decoration: it means
  *  uploaded files were not read and every finding on screen came from a fixture. */
-export const health = (): Promise<{ status: string; demo_mode: boolean }> =>
+/** `review_gate` is `"soft"` (the V1 default) or `"hard"`. Soft means an unapproved register no
+ *  longer blocks routing or pricing — it warns — so the step chips must stop saying those steps
+ *  are waiting on it. Optional in the type because an older server does not send it, and the
+ *  safe reading of a missing value is the stricter one. */
+export const health = (): Promise<{ status: string; demo_mode: boolean; review_gate?: string }> =>
   fetch(`${BASE}/health`).then((r) => handle(r));
 
 export const api = {
@@ -313,6 +317,13 @@ export const api = {
     );
   },
   reviewStatus: (jobId: string) => get<JobState>(`/review/status/${jobId}`),
+  /** Whatever this set is doing right now, of any kind — `job_id: null` when nothing is.
+   *
+   *  The screen's recovery route. Every other status call needs a job id, which a freshly loaded
+   *  browser does not have: the id lived in a poll loop belonging to a component that unmounted.
+   *  So a review ran on the server while the Register tab rendered a Run button, and pressing it
+   *  produced a 409 the UI had invited. Never 404s — "no job" is a state, not an error. */
+  liveJob: (setId: string) => get<JobState>(`/jobs/live/${encodeURIComponent(setId)}`),
   register: (setId: string) => get<RegisterResponse>(`/review/register/${setId}`),
   citations: (setId: string) => get<CitationsResponse>(`/review/${setId}/citations`),
   /** Gate 2. The only writer of a verdict. `approved: false` records verdicts without

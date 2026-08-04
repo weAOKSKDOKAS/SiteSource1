@@ -276,6 +276,6 @@ def post_archive_extract(req: ArchiveExtractRequest) -> dict:
             detail=("The split manifest for this pack is not approved yet. A tender pack passes "
                     "the same gate a single document does — approve it, then extract."),
         )
-    job_id = jobs.JOBS.create("archive")
+    job_id = jobs.JOBS.create("archive", set_id=req.set_id)
     jobs.POOL.submit(run_archive_extract_job, job_id, req.set_id, row["name"])
     return {"job_id": job_id, "kind": "archive", "status": "queued", "stage": "reading"}

@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes } from "../chrome";
 import { PageView } from "../PageView";
 import type {
   CostActivity,
@@ -68,6 +68,7 @@ function flagCopy(kind: string) {
 
 export function PriceTab({
   data,
+  job,
   railOpen,
   onRefresh,
   onError,
@@ -75,6 +76,12 @@ export function PriceTab({
   onTrack,
 }: {
   data: SetData;
+  /** The run in flight anywhere in this set, from the shell. A tab's own `busy` flag dies
+   *  with the component, so a run started here and navigated away from left this tab able to
+   *  offer its Run button again — over a job that was still going, which the server then
+   *  refused with a 409 the UI had invited. `busy` covers work THIS mount started; `job`
+   *  covers work the set is doing at all. */
+  job?: JobState | null;
   railOpen: boolean;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
@@ -85,6 +92,14 @@ export function PriceTab({
   const [result, setResult] = useState<EstimateResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // The shell's job, narrowed to work that belongs to THIS tab. `TAB_FOR_JOB` is the one
+  // place that translates a workflow name into a tab, so this cannot drift from the chips.
+  const jobRunning =
+    !!job &&
+    (job.status === "queued" || job.status === "running") &&
+    TAB_FOR_JOB[job.kind] === "price";
+  // Everything that used to gate on `busy` gates on this instead.
+  const running = busy || jobRunning;
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [flagFilter, setFlagFilter] = useState<string | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
@@ -299,12 +314,12 @@ export function PriceTab({
               Download workbook (.xlsx)
             </a>
           )}
-          <Button variant={estimate ? "outline" : "brass"} onClick={() => void run()} disabled={busy}>
+          <Button variant={estimate ? "outline" : "brass"} onClick={() => void run()} disabled={running}>
             {busy ? "Pricing…" : estimate ? "Re-run" : "Run the estimate"}
           </Button>
         </header>
 
-        {!estimate && busy ? (
+        {!estimate && running ? (
           <div className="p-5">
             <WaitingOn title="The estimate is running">
               Building the cost spine. It keeps going if you navigate away — the strip above

@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Divider, DocTab, Rail, RailFolded, usePanes, usePersisted } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes, usePersisted } from "../chrome";
 import { PageView } from "../PageView";
 import { BoundsEditor } from "./BoundsEditor";
 // `Highlight` is imported explicitly because the DOM lib declares a global of the same name
@@ -93,6 +93,7 @@ function segments(parts: PartSpec[], gaps: PageSpan[]): Segment[] {
 
 export function DocumentsTab({
   data,
+  job,
   railOpen,
   onRefresh,
   onError,
@@ -101,6 +102,12 @@ export function DocumentsTab({
   initialTarget,
 }: {
   data: SetData;
+  /** The run in flight anywhere in this set, from the shell. A tab's own `busy` flag dies
+   *  with the component, so a run started here and navigated away from left this tab able to
+   *  offer its Run button again — over a job that was still going, which the server then
+   *  refused with a 409 the UI had invited. `busy` covers work THIS mount started; `job`
+   *  covers work the set is doing at all. */
+  job?: JobState | null;
   railOpen: boolean;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
@@ -117,6 +124,14 @@ export function DocumentsTab({
   const [page, setPage] = useState<number | null>(null);
   const [contexts, setContexts] = useState<Record<string, PartContext>>({});
   const [busy, setBusy] = useState(false);
+  // The shell's job, narrowed to work that belongs to THIS tab. `TAB_FOR_JOB` is the one
+  // place that translates a workflow name into a tab, so this cannot drift from the chips.
+  const jobRunning =
+    !!job &&
+    (job.status === "queued" || job.status === "running") &&
+    TAB_FOR_JOB[job.kind] === "documents";
+  // Everything that used to gate on `busy` gates on this instead.
+  const running = busy || jobRunning;
   const [reading, setReading] = useState<string | null>(null);
   const [editingCard, setEditingCard] = useState<string | null>(null);
   const [editingBounds, setEditingBounds] = useState(false);
@@ -537,10 +552,10 @@ export function DocumentsTab({
             {manifest.approved ? (
               <>
                 <Chip className="bg-cb-ok-tint text-cb-ok-dark">✓ MANIFEST APPROVED</Chip>
-                <Button variant="outline" onClick={split} disabled={busy}>
+                <Button variant="outline" onClick={split} disabled={running}>
                   {parts.length ? "Re-split from this manifest" : "Split into parts"}
                 </Button>
-                <Button variant="outline" onClick={reopen} disabled={busy}>
+                <Button variant="outline" onClick={reopen} disabled={running}>
                   Reopen
                 </Button>
                 <label className="flex flex-none cursor-pointer items-center gap-1.5 font-cb-sans text-[10.5px] text-cb-body">

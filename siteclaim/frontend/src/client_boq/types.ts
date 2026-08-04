@@ -831,6 +831,10 @@ export interface BridgeRouteDecisions {
   decisions: BridgeRouteDecision[];
   self_perform_packages: string[];
   sublet_packages: string[];
+  /** Warnings on a call that SUCCEEDED — today, the soft review gate's unread-terms notice. Same
+   *  field and shape as `/route/analyze`'s, so one renderer serves both. Optional because the
+   *  persisted-read endpoint returns the same interface without them. */
+  notes?: string[];
 }
 
 // ---------------------------------------------------------------------------

@@ -99,6 +99,27 @@ class JobStore:
                     return job_id
         return None
 
+    def live_any_for(self, set_id: str) -> Optional[str]:
+        """The id of a job of ANY kind in flight for this set, or None.
+
+        `live_for` answers "may this workflow start?"; this answers "what is this set doing right
+        now?" — the question a screen has to ask when it opens. Without it a tab that mounts while
+        a run is in flight knows nothing about it, renders its Run button, and the operator gets a
+        409 from a button the UI had just told them to press.
+
+        First match wins. The pool serialises anyway, and where two jobs are live for one set (one
+        running, one queued behind it) either answer is true — the screen shows the set as busy,
+        which is the fact it needs. Insertion order makes it the oldest, which is the one that will
+        finish first.
+        """
+        if not set_id:
+            return None
+        with self._lock:
+            for job_id, job in self._jobs.items():
+                if job.set_id == set_id and job.status in ("queued", "running"):
+                    return job_id
+        return None
+
     def mark_running(self, job_id: str, stage: str) -> None:
         """A worker has picked this job up. Stops the queue clock and starts the run clock.
 

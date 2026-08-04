@@ -92,30 +92,77 @@ def test_run_split_reports_its_part_count_as_numbers(client):
     assert seen == []                        # what is under test, not the split itself
 
 
-def test_the_review_counts_its_parts():
-    from client_boq.models import PartSpec
-    from client_boq.review import s01_ingest
+def _part_pdf(tmp_path, name: str, pages: int):
+    """A real part on disk. The unit of progress is now a model CALL, and a part with no file
+    makes none — so a fixture of file-less parts can no longer exercise the counter at all."""
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open()
+    for i in range(pages):
+        # Many SHORT lines, not one long one: `insert_text` clips at the page edge, so a single
+        # 2,500-character string extracts back as the ~90 characters that fit. ~40 lines of ~68
+        # gives ~2,700 real chars a page against MAX_CHUNK_CHARS = 12000, so page count drives
+        # chunk count and a 6-page part is genuinely more than one model call.
+        page = doc.new_page()
+        for line in range(40):
+            page.insert_text((40, 40 + line * 18), f"clause {i}.{line} " + "lorem ipsum dolor " * 3,
+                             fontsize=7)
+    path = tmp_path / name
+    doc.save(str(path))
+    doc.close()
+    return str(path)
 
-    seen: list[tuple[int, int]] = []
-    parts = [(PartSpec(n=i, abbr=f"P{i}", slug=f"p{i}", title=f"Part {i}",
-                       category="contract-conditions"), "") for i in (1, 2, 3)]
-    s01_ingest.ingest_from_parts(parts, "T", count_cb=lambda d, t: seen.append((d, t)))
-    assert seen == [(0, 3), (1, 3), (2, 3), (3, 3)]   # each part, then the finished total
 
+def test_the_review_counts_its_model_calls(tmp_path):
+    """CHANGED CONTRACT — this asserted parts, and now asserts calls.
 
-def test_a_skipped_part_is_not_counted_as_work():
-    """The count is of what will be READ. Counting a skipped bill would put the bar ahead of the
-    work."""
+    It read `[(0,3),(1,3),(2,3),(3,3)]`: one tick per part, the denominator `len(readable)`. That
+    is the count that could not move during the expensive bit. A 40-page part is eight sequential
+    model calls, and all eight happened under one unchanging number — the strip sat at 0/33 for
+    minutes, which is the defect the two-phase restructure exists to fix. The denominator is now
+    the number of calls the run will make, known after the local read and before the first call.
+    """
     from client_boq.models import PartSpec
     from client_boq.review import s01_ingest
 
     seen: list[tuple[int, int]] = []
     parts = [
-        (PartSpec(n=1, abbr="BQ", slug="bq", title="Bill", category="pricing"), ""),
-        (PartSpec(n=2, abbr="CC", slug="cc", title="Conditions", category="contract-conditions"), ""),
+        (PartSpec(n=1, abbr="P1", slug="p1", title="Part 1", category="contract-conditions",
+                  start=1, end=6), _part_pdf(tmp_path, "p1.pdf", 6)),
+        (PartSpec(n=2, abbr="P2", slug="p2", title="Part 2", category="contract-conditions",
+                  start=1, end=2), _part_pdf(tmp_path, "p2.pdf", 2)),
     ]
     s01_ingest.ingest_from_parts(parts, "T", count_cb=lambda d, t: seen.append((d, t)))
-    assert seen == [(0, 1), (1, 1)]          # one readable part, not two
+
+    total = seen[0][1]
+    assert total > len(parts)                      # chunks, not parts — the whole point
+    assert seen[0] == (0, total)                   # the denominator before any call is made
+    assert seen[-1] == (total, total)              # and the finished total
+    assert all(t == total for _d, t in seen)       # never contradicted mid-run
+    assert [d for d, _t in seen] == sorted(d for d, _t in seen)   # monotonically nondecreasing
+
+
+def test_a_skipped_part_is_not_counted_as_work(tmp_path):
+    """The count is of what will be READ. Counting a skipped bill would put the bar ahead of the
+    work. Unchanged in intent; the unit it counts in is now calls rather than parts."""
+    from client_boq.models import PartSpec
+    from client_boq.review import s01_ingest
+
+    both: list[tuple[int, int]] = []
+    parts = [
+        (PartSpec(n=1, abbr="BQ", slug="bq", title="Bill", category="pricing",
+                  start=1, end=4), _part_pdf(tmp_path, "bq.pdf", 4)),
+        (PartSpec(n=2, abbr="CC", slug="cc", title="Conditions", category="contract-conditions",
+                  start=1, end=4), _part_pdf(tmp_path, "cc.pdf", 4)),
+    ]
+    s01_ingest.ingest_from_parts(parts, "T", count_cb=lambda d, t: both.append((d, t)))
+
+    alone: list[tuple[int, int]] = []
+    s01_ingest.ingest_from_parts(parts[1:], "T", count_cb=lambda d, t: alone.append((d, t)))
+
+    # The bill contributes NOTHING to the denominator: reading the set with it and without it
+    # gives the same number of calls. A four-page bill would otherwise add its own chunks.
+    assert both[0][1] == alone[0][1]
+    assert both == alone
 
 
 # -- elapsed, and nothing beyond it ---------------------------------------------------------------

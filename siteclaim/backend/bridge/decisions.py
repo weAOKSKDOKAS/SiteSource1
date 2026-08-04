@@ -31,8 +31,14 @@ def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def _note(on_error: Optional[Callable[[str], None]], message: str) -> None:
-    if on_error:
+def _note(on_error: Optional[Callable[[str], None]], message: Optional[str]) -> None:
+    """Record a note, if there is a channel and there is anything to say.
+
+    ``None`` is accepted so a caller can pass a maybe-warning straight through —
+    ``_note(on_error, require_approved_review(...))`` — rather than branching at every site and
+    eventually forgetting at one of them.
+    """
+    if on_error and message:
         on_error(message)
 
 
@@ -40,18 +46,31 @@ class ReviewNotApproved(RuntimeError):
     """The client_boq review register for this set is not approved — the gate both forks inherit."""
 
 
-def require_approved_review(conn: sqlite3.Connection, set_id: str) -> None:
-    """Raise :class:`ReviewNotApproved` unless the set's review register is human-approved.
+def require_approved_review(conn: sqlite3.Connection, set_id: str) -> Optional[str]:
+    """The review gate. Returns a warning string in soft mode, ``None`` when there is nothing to say.
 
     Read-only: it asks client_boq's own ``review_is_approved`` — the authoritative flag — and never
     writes it. Only ``/client-boq/review/approve`` may.
+
+    **V1 DELIBERATE DEPARTURE from the locked review→routing hard-gate decision.** In the default
+    ``REVIEW_GATE=soft`` mode an unapproved register no longer raises: it returns
+    :data:`SOFT_GATE_WARNING`, which the caller MUST surface. ``REVIEW_GATE=hard`` restores the
+    original :class:`ReviewNotApproved` byte-for-byte. See ``client_boq/gates.py`` for why.
+
+    The return value is not optional to handle. A caller that drops it turns a warned bypass into a
+    silent one, which is the failure mode this whole design is trying to avoid — so both call sites
+    below thread it onto their response payload, and there is a test per site.
     """
     from client_boq import store as cb_store
+    from client_boq.gates import SOFT_GATE_WARNING, review_gate_is_soft
 
-    if not cb_store.review_is_approved(conn, set_id):
-        raise ReviewNotApproved(
-            f"The review register for set {set_id!r} is not approved — {REVIEW_GATE_HINT}"
-        )
+    if cb_store.review_is_approved(conn, set_id):
+        return None
+    if review_gate_is_soft():
+        return SOFT_GATE_WARNING
+    raise ReviewNotApproved(
+        f"The review register for set {set_id!r} is not approved — {REVIEW_GATE_HINT}"
+    )
 
 
 def _signals_for(units: list[dict], on_error: Optional[Callable[[str], None]] = None) -> dict[str, dict]:
@@ -107,7 +126,9 @@ def propose_routes(set_id: str, *, on_error: Optional[Callable[[str], None]] = N
     ref = run_ref_for(set_id)
     conn = bridge_conn()
     try:
-        require_approved_review(conn, ref)
+        # Soft mode returns a warning instead of raising; it goes onto the response through the
+        # channel this function already has, so an unread-terms bypass is never silent.
+        _note(on_error, require_approved_review(conn, ref))
         scope = scope_mod.load_scope_on(conn, ref)
         if scope is None:
             raise LookupError(
@@ -278,8 +299,14 @@ def stored_decisions(set_id: str) -> dict:
     }
 
 
-def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = "operator") -> dict:
+def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = "operator",
+                   on_error: Optional[Callable[[str], None]] = None) -> dict:
     """Record the human's route per package for ``set_id`` and return the self-perform/sublet split.
+
+    ``on_error`` is the note channel ``propose_routes`` already had and this did not. It exists for
+    the soft review gate: confirming a route on unread contract terms has to say so on the response
+    that records the confirmation, not only on the proposal that preceded it. The notes also ride
+    on the returned payload under ``notes``, so a caller with no callback still receives them.
 
     Validates every route against ``schemas.routing.ROUTES`` and every package_key against the
     persisted proposal BEFORE writing anything — a decision for a package nobody proposed would
@@ -313,8 +340,10 @@ def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = 
     conn = bridge_conn()
     try:
         # The same gate the proposal is behind: confirming a route IS routing, and a gate that only
-        # covers the advisory step would be bypassed by posting straight here.
-        require_approved_review(conn, ref)
+        # covers the advisory step would be bypassed by posting straight here. In soft mode that
+        # symmetry is what matters most — the bypass is recorded on the act, not just the advice.
+        gate_note = require_approved_review(conn, ref)
+        _note(on_error, gate_note)
         ensure_tables(conn)
         proposed = {p["package_key"] for p in routing.read_proposal(conn, ref)}
         if not proposed:
@@ -348,4 +377,6 @@ def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = 
         "decisions": stored,
         "self_perform_packages": [d["package_key"] for d in stored if d["chosen_route"] == SELF_PERFORM],
         "sublet_packages": [d["package_key"] for d in stored if d["chosen_route"] == SUBLET],
+        # Same field name and shape as `/route/analyze`'s notes, so one renderer serves both.
+        "notes": [gate_note] if gate_note else [],
     }

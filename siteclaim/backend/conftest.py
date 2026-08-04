@@ -45,6 +45,19 @@ _NEUTRALISED = {
     "SITESOURCE_DB": "",              # empty -> the packaged demo sitesource.db
     "GMAIL_TEST_RECIPIENT": "",       # empty -> no draft-recipient override
     "ANTHROPIC_MODEL": ANTHROPIC_MODEL,  # absent-default, so restate the default itself
+    # The review→routing/estimate gate. The SHIPPED default is `soft` (a deliberate V1 demo
+    # departure — see client_boq/gates.py); the SUITE pins `hard`, and the difference is
+    # intentional in both directions.
+    #
+    # Pinning hard here keeps every existing gate test asserting the LOCKED decision, unedited —
+    # a gate whose enforcement is only ever exercised in a mode nobody runs is a gate that has
+    # quietly stopped being tested. Soft mode is then tested where it is the actual subject
+    # (`bridge/tests/test_review_gate_soft.py`), by monkeypatching this back, so both modes have
+    # real coverage rather than the default having all of it and the fallback none.
+    #
+    # It also belongs here on this file's own principle: a developer with REVIEW_GATE=soft in
+    # their .env would otherwise flip six tests without touching a line of code.
+    "REVIEW_GATE": "hard",
 }
 
 for _var, _neutral in _NEUTRALISED.items():
