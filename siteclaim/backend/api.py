@@ -1073,7 +1073,18 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
         # returned and the mock outbox remains the record.
         message = "DEMO mode — Gmail drafting is off; the enquiries are recorded in the mock outbox."
     else:
-        raw_drafted, raw_failed = create_gmail_drafts(drafts)
+        # Record every created draft's MESSAGE id before the poller can ever see it. Each RFQ is
+        # addressed to the operator by `GMAIL_TEST_RECIPIENT` during live testing, so it lands in
+        # the watched mailbox carrying `[SiteSource Ref: …]` and the blank SoR — matching
+        # `DEFAULT_QUERY` exactly. Without this the poller would resolve its ref, parse the blank
+        # sheet as a bid with no rates, and supersede the firm's genuine reply on the same
+        # (firm_id, trade) key. A `-from:me` filter cannot help: here the operator is both sender
+        # and recipient, so it would drop the genuine reply too.
+        raw_drafted, raw_failed = create_gmail_drafts(
+            drafts,
+            on_created=lambda rec: reply_loop.record_outbound(
+                ws, rec["message_id"], ref=rec["ref"], to=rec["to"]),
+        )
         drafted_ids = raw_drafted
         failures = [DraftFailure(**f) for f in raw_failed]
         if failures and not drafted_ids:

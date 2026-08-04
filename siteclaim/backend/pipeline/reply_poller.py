@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from pipeline import reply_loop
 from pipeline.workspace import Workspace
 
 _PROCESSED_FILE = "processed_messages.json"
@@ -139,7 +140,11 @@ def poll_once(process: ProcessReply, *, workspace: Optional[Workspace] = None, s
     from pipeline import gmail_client  # lazy: only a live poll imports the Gmail path
 
     ws = workspace or Workspace()
-    summary = {"found": 0, "processed": 0, "skipped": 0, "unmatched": 0, "failed": 0}
+    # `own` is its own counter, NOT folded into `skipped`. Skipping an already-processed message and
+    # refusing to eat our own outbound RFQ are different events, and a single number would hide the
+    # one worth watching: if `own` climbs while `processed` stays flat, the loop is talking to
+    # itself. See `reply_loop.record_outbound` for why a `-from:me` filter cannot do this job.
+    summary = {"found": 0, "processed": 0, "skipped": 0, "own": 0, "unmatched": 0, "failed": 0}
     try:
         messages = gmail_client.list_replies(poll_query(), service=service)
     except gmail_client.GmailUnavailable as exc:
@@ -148,10 +153,21 @@ def poll_once(process: ProcessReply, *, workspace: Optional[Workspace] = None, s
         return summary
     summary["found"] = len(messages)
     processed_ids = load_processed(ws)
+    own_ids = reply_loop.outbound_message_ids(ws)
     for m in messages:
         mid = m.get("id", "")
         if not mid or mid in processed_ids:
             summary["skipped"] += 1
+            continue
+        if mid in own_ids:
+            # OUR OWN dispatched RFQ, come back to us because `GMAIL_TEST_RECIPIENT` addresses
+            # every draft to the operator. It carries the ref tag and the BLANK Schedule of Rates,
+            # so it matches the query and would resolve, parse as a bid with no rates, and
+            # supersede the firm's genuine reply on the same (firm_id, trade) key.
+            #
+            # NOT marked processed: the ledger is the authority on what is ours, and marking it
+            # would put the same fact in two places where they could disagree.
+            summary["own"] += 1
             continue
         ref = ref_from_subject(m.get("subject", ""))
         try:

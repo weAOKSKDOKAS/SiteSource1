@@ -102,6 +102,46 @@ def outstanding_dispatches(ws: Workspace) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Outbound ledger — the messages WE sent, so the poller cannot ingest its own tail
+# ---------------------------------------------------------------------------
+# Every dispatched RFQ is addressed to the operator by `GMAIL_TEST_RECIPIENT` during live testing,
+# so it lands in the very mailbox the poller watches — carrying `[SiteSource Ref: …]` and an
+# attachment, which is exactly `DEFAULT_QUERY`. Unguarded, `poll_once` would resolve its ref, parse
+# the BLANK Schedule of Rates as a bid with no rates, and `accumulate_replies` would file it —
+# superseding the firm's genuine reply on the same `(firm_id, trade)` key, because that is the
+# supersede identity (`_key` above).
+#
+# Filtering by `-from:me` or `-in:sent` is not available: in this test loop the operator is both
+# sender and recipient, so either drops the genuine reply too. Identity has to be explicit.
+#
+# Additive only, never pruned here. A ledger that forgets is a ledger that lets the message back
+# in, and the file is a few dozen bytes per dispatch.
+_OUTBOUND_FILE = "outbound_messages.json"
+
+
+def _outbound_path(ws: Workspace) -> Path:
+    return ws.root / _OUTBOUND_FILE
+
+
+def record_outbound(ws: Workspace, message_id: str, *, ref: str = "", to: str = "") -> None:
+    """Record a message WE created, so the poller can recognise it as ours.
+
+    The MESSAGE id, not the draft id: `list_replies` returns messages, and a draft id would never
+    match one. ``ref`` and ``to`` are kept for the operator reading the file, never matched on.
+    """
+    if not message_id:
+        return
+    ledger = _read_json(_outbound_path(ws), {})
+    ledger[message_id] = {"ref": ref, "to": to, "recorded_at": _now_iso()}
+    _write_json(_outbound_path(ws), ledger)
+
+
+def outbound_message_ids(ws: Workspace) -> set[str]:
+    """Every message id this system created. Empty when nothing has been drafted."""
+    return set(_read_json(_outbound_path(ws), {}))
+
+
+# ---------------------------------------------------------------------------
 # Per-tender reply accumulation
 # ---------------------------------------------------------------------------
 def _replies_path(ws: Workspace, tender_id: str) -> Path:

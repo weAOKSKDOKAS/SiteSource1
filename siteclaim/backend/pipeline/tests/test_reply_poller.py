@@ -48,7 +48,7 @@ def test_poll_once_feeds_each_new_message_to_the_processor_and_persists_the_id(t
     svc = _service(_message("m1", "t.f1.gi:H", data=b"xlsx-1"))
     rec = Recorder()
     summary = reply_poller.poll_once(rec, workspace=ws, service=svc)
-    assert summary == {"found": 1, "processed": 1, "skipped": 0, "unmatched": 0, "failed": 0}
+    assert summary == {"found": 1, "processed": 1, "skipped": 0, "own": 0, "unmatched": 0, "failed": 0}
     assert rec.calls == [("t.f1.gi:H", [("return.xlsx", b"xlsx-1")])]  # ref + real bytes handed over
     assert reply_poller.load_processed(ws)["m1"]["status"] == "matched"  # persisted for idempotency
 
@@ -62,7 +62,7 @@ def test_poll_once_dedupes_on_the_persisted_message_id(tmp_path):
     reply_poller.poll_once(rec, workspace=ws, service=svc)
     summary2 = reply_poller.poll_once(rec, workspace=ws, service=svc)
     assert len(rec.calls) == 1                                    # processed exactly once
-    assert summary2 == {"found": 1, "processed": 0, "skipped": 1, "unmatched": 0, "failed": 0}
+    assert summary2 == {"found": 1, "processed": 0, "skipped": 1, "own": 0, "unmatched": 0, "failed": 0}
 
 
 def test_an_unresolvable_ref_is_reported_never_dropped(tmp_path):
@@ -81,7 +81,7 @@ def test_gmail_down_records_the_error_and_never_raises(tmp_path):
 
     ws = Workspace(tmp_path)
     summary = reply_poller.poll_once(Recorder(), workspace=ws, service=DownService())
-    assert summary == {"found": 0, "processed": 0, "skipped": 0, "unmatched": 0, "failed": 0}
+    assert summary == {"found": 0, "processed": 0, "skipped": 0, "own": 0, "unmatched": 0, "failed": 0}
     assert "offline" in reply_poller.poller_state()["last_error"]
 
 

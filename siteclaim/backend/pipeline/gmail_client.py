@@ -224,7 +224,25 @@ def create_draft(
 ) -> str:
     """Create ONE Gmail draft (never a send — the operator reviews and sends from Gmail) and
     return its draft id. ``attachments`` is ``[(filename, bytes)]`` — the already-assembled
-    relevant-only bundle. Raises :class:`GmailUnavailable` when Gmail cannot be reached."""
+    relevant-only bundle. Raises :class:`GmailUnavailable` when Gmail cannot be reached.
+
+    See :func:`create_draft_ids` when the MESSAGE id is wanted as well. The two are different
+    things and the difference matters: the poller lists MESSAGES, so the draft id is useless for
+    recognising our own outbound mail in the inbox.
+    """
+    return create_draft_ids(to, subject, body, attachments, service=service)[0]
+
+
+def create_draft_ids(
+    to: str, subject: str, body: str, attachments: list[tuple[str, bytes]], *, service=None,
+) -> tuple[str, str]:
+    """``(draft_id, message_id)`` for one created Gmail draft.
+
+    ``drafts().create`` answers ``{"id": <draft id>, "message": {"id": <message id>, ...}}`` — two
+    different identifiers for one thing. Everything that shows a draft to a person wants the draft
+    id; the outbound ledger wants the MESSAGE id, because ``list_replies`` returns messages and a
+    draft id would never match one.
+    """
     raw = _mime_raw(to, subject, body, attachments)
     try:
         svc = service or build_service()
@@ -240,10 +258,12 @@ def create_draft(
         _set_last_error(str(err))
         raise err from exc
     draft_id = str(draft.get("id", ""))
+    message_id = str((draft.get("message") or {}).get("id", ""))
     _count_draft()
     _set_last_error("")  # this draft succeeded — clear any stale failure so recovery shows through
-    _log("draft_created", to=to, draft_id=draft_id, attachments=len(attachments))
-    return draft_id
+    _log("draft_created", to=to, draft_id=draft_id, message_id=message_id,
+         attachments=len(attachments))
+    return draft_id, message_id
 
 
 def list_replies(query: str, *, after: Optional[float] = None, max_results: int = 100, service=None) -> list[dict]:
