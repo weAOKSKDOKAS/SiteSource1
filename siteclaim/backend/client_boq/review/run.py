@@ -48,7 +48,13 @@ def _set_name(set_id: str) -> str:
 
 
 def _ingested_parts(set_id: str):
-    """The approved, split parts of a set — or an empty list when it never went through ingest."""
+    """The approved, split parts of a set — or an empty list when it never went through ingest.
+
+    Two-tuples, deliberately: ``s08_citation_verify.locate_citations`` consumes this same list and
+    unpacks it as ``(spec, path)``. The interpreted contexts the skip-list needs come from
+    :func:`_part_contexts` instead, as a separate lookup — widening this tuple broke citation
+    verification across the whole suite the first time it was tried.
+    """
     if not set_id:
         return []
     conn = store.get_conn()
@@ -56,6 +62,28 @@ def _ingested_parts(set_id: str):
         if not store.manifest_is_approved(conn, set_id):
             return []
         return [(spec, path) for spec, path, _ctx in store.load_parts(conn, set_id) if path]
+    finally:
+        conn.close()
+
+
+def _part_contexts(set_id: str) -> dict:
+    """``part_id -> PartContext`` for a set: the category the interpreter chose after READING each
+    part's pages and images.
+
+    The planner's ``PartSpec.category`` is a guess from a digest that contains no body text, and on
+    the first real bill of quantities it said ``other`` — so the review's skip-list passed a
+    26-page pricing document through to be read as a contract. The better answer was already
+    persisted; it was simply never asked for.
+    """
+    if not set_id:
+        return {}
+    conn = store.get_conn()
+    try:
+        return {
+            spec.part_id: ctx
+            for spec, _path, ctx in store.load_parts(conn, set_id)
+            if ctx is not None
+        }
     finally:
         conn.close()
 
@@ -86,7 +114,9 @@ def run_review(
     step("ingesting")
     parts = _ingested_parts(set_id)
     if parts and not demo_mode():
-        parsed = s01_ingest.ingest_from_parts(parts, project_name, on_note=on_note)
+        parsed = s01_ingest.ingest_from_parts(
+            parts, project_name, on_note=on_note, contexts=_part_contexts(set_id),
+        )
     else:
         parsed = s01_ingest.ingest_review_documents(uploads, project_name, workspace=ws)
     final_name = (project_name or parsed.name or DEFAULT_REVIEW_NAME).strip() or DEFAULT_REVIEW_NAME

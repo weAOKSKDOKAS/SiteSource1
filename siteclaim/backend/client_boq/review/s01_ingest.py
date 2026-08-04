@@ -110,19 +110,50 @@ def _structure(client: LLMClient, body: str, label: str) -> list[ClauseItem]:
 NON_CONTRACTUAL_CATEGORIES = frozenset({"pricing", "drawings"})
 
 
+def effective_category(part: PartSpec, context: Optional[object] = None) -> tuple[str, str]:
+    """``(category, whose)`` for one part — the INTERPRETED category when there is one.
+
+    There are two categories in this system and they are not equally good.
+
+    ``PartSpec.category`` comes from the planning call, which is shown a digest — filename, page
+    count, bookmark outline, the draft split, the printed contents — and **no body text at all**.
+    ``PartContext.category`` comes from the interpreter, which has read the part's pages and its
+    images. On the first real bill of quantities the planner said ``other`` and the skip-list let a
+    26-page pricing document through to be read as a contract, ten minutes and a dozen
+    ceiling-hitting calls later.
+
+    The interpreted answer was there the whole time — persisted to ``client_boq_part_contexts``,
+    returned by ``store.load_parts`` as the third element of every tuple, and thrown away by both
+    consumers. This function is the correction: prefer the reader over the guesser.
+
+    An UNREADABLE part is the one case where the interpreter's answer is worth nothing — it did not
+    read anything, so its category is its own default — and the planner's guess stands instead.
+    """
+    interpreted = (getattr(context, "category", "") or "").strip().lower()
+    if context is not None and getattr(context, "readable", False) and interpreted:
+        return interpreted, "interpreted"
+    return (part.category or "").strip().lower(), "planned"
+
+
 def ingest_from_parts(
     parts: list[tuple[PartSpec, str]], project_name: str = "",
     *, on_note: Optional[Callable[[str], None]] = None,
+    contexts: Optional[dict] = None,
 ) -> ParsedDocumentSet:
     """Structure an already-split set, one part at a time.
 
     ``parts`` pairs each part with the path of its cut PDF. Reading the part's own file means
     the 200-page extraction cap applies per part instead of per binder, so nothing is dropped.
 
-    Parts whose category is in :data:`NON_CONTRACTUAL_CATEGORIES` are skipped and REPORTED — a
-    skipped document is a fact about the review, not an implementation detail. When every part is
-    skipped the set carries no contractual document at all, and that is said plainly rather than
-    left to be inferred from a register full of findings about documents nobody uploaded.
+    ``contexts`` maps ``part_id`` to that part's interpreted :class:`PartContext`. Passed
+    ALONGSIDE ``parts`` rather than folded into the tuple so the existing two-tuple signature keeps
+    working; a caller that has no contexts gets exactly the old behaviour.
+
+    A part is skipped when its category — the interpreted one where there is one, see
+    :func:`effective_category` — is in :data:`NON_CONTRACTUAL_CATEGORIES`, and the skip is REPORTED
+    with which category decided it. A silent skip and a silent read are equally opaque. When every
+    part is skipped the set carries no contractual document at all, and that is said plainly rather
+    than left to be inferred from a register full of findings about documents nobody uploaded.
     """
     from client_boq.ingest import pdfops  # local import: keeps the review path light
 
@@ -133,14 +164,24 @@ def ingest_from_parts(
     # One pass, two lists — partitioned by identity rather than by re-filtering, so two parts that
     # happen to compare equal cannot land in both.
     readable: list[tuple[PartSpec, str]] = []
-    skipped: list[PartSpec] = []
+    skipped: list[tuple[PartSpec, str, str]] = []   # (part, category, whose)
     for part, pdf_path in parts:
-        if (part.category or "").strip().lower() in NON_CONTRACTUAL_CATEGORIES:
-            skipped.append(part)
+        category, whose = effective_category(part, (contexts or {}).get(part.part_id))
+        if category in NON_CONTRACTUAL_CATEGORIES:
+            skipped.append((part, category, whose))
         else:
             readable.append((part, pdf_path))
     if on_note and skipped:
-        names = ", ".join(f"{p.part_id} ({p.category})" for p in skipped[:8])
+        # Naming WHICH category decided it, because the two disagree and that disagreement is the
+        # whole of this defect: a reader who sees a skip has to be able to tell whether a document
+        # was skipped on evidence or on a guess.
+        # `{part_id} ({category})` first and unchanged, then the authority — a superset of what
+        # this note said before, so a reader (and a test) looking for the old shape still finds it.
+        names = ", ".join(
+            f"{p.part_id} ({cat}) on the "
+            + ("interpreter's reading" if whose == "interpreted" else "planner's guess")
+            for p, cat, whose in skipped[:8]
+        )
         more = f" and {len(skipped) - 8} more" if len(skipped) > 8 else ""
         on_note(
             f"{len(skipped)} part(s) were NOT read for contractual positions — {names}{more}. A "

@@ -20,6 +20,11 @@ from __future__ import annotations
 import datetime as _dt
 import sqlite3
 
+# The one place that decides which of a part's two categories is authoritative. Imported rather
+# than reimplemented so the Route proposal and the review's skip-list can never disagree about
+# what a part IS — they read the same answer from the same function.
+from client_boq.review.s01_ingest import effective_category
+
 BILL_CATEGORY = "pricing"  # PART_CATEGORIES value that proposes a part as the priced bill
 
 
@@ -86,7 +91,15 @@ def candidates_on(conn: sqlite3.Connection, set_id: str) -> dict:
         ).fetchall()
     }
     live_ids = {spec.part_id for spec, _p, _c in parts}
-    proposed = {spec.part_id for spec, _p, _c in parts if spec.category == BILL_CATEGORY}
+    # The INTERPRETED category, not the planner's guess. The planner is shown a digest with no
+    # body text, and on the first real bill it said `other` — so Route reported "No part is
+    # categorised 'pricing', so nothing is proposed" about a 26-page bill of quantities and made
+    # the operator find it by hand. The interpreter had read the pages and knew; its answer was
+    # already the third element of every tuple here, discarded as `_c`.
+    proposed = {
+        spec.part_id for spec, _p, ctx in parts
+        if effective_category(spec, ctx)[0] == BILL_CATEGORY
+    }
     confirmed = stored & live_ids
     # A stored id whose part no longer exists (a re-split dropped or renamed it). Surfaced, never
     # silently discarded — the operator has to know their confirmation no longer covers the set.
@@ -99,8 +112,9 @@ def candidates_on(conn: sqlite3.Connection, set_id: str) -> dict:
     elif not proposed:
         # Degrade honestly: never guess the bill from a title.
         message = (
-            "No part is categorised 'pricing', so nothing is proposed — choose the priced bill "
-            "yourself from the full list below."
+            "No part is categorised 'pricing' — neither by the interpreter that read the pages "
+            "nor by the planner that read the structure — so nothing is proposed. Choose the "
+            "priced bill yourself from the full list below."
         )
     elif len(proposed) == 1:
         message = "One pricing part found and pre-selected. Confirm it, or choose a different set."
