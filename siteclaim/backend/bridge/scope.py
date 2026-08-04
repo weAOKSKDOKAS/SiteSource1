@@ -34,8 +34,10 @@ from pipeline.stage_01_ingest.doc_index import (
     UnrecognisedItem,
     build_doc_index,
     quarantine_unrecognised_items,
+    save_doc_index,
 )
 from pipeline.stage_01_ingest.ingest import ingest_tender
+from pipeline.workspace import Workspace
 from schemas.models import DocType, ScopePackages, TenderDocument, TenderPackage
 
 # Imported rather than repeated: if ingest ever changes its context budget, the warning below must
@@ -188,12 +190,30 @@ def _tender_for(name: str, parts: list, bill_ids: set[str]) -> TenderPackage:
 
 def _apply_quarantine(
     scope: ScopePackages, bill: list, on_error: Optional[Callable[[str], None]] = None,
+    *, tender_id: str = "",
 ) -> tuple[ScopePackages, list[UnrecognisedItem]]:
     """The provenance backstop, on the same terms ``/ingest-upload`` uses.
 
     Index the confirmed bill parts structurally; when at least one declared its OWN section
     headers, drop any extracted item whose section is not among them — surfaced, never routed.
     With no headers to check against, skip the guard rather than block a legitimate split.
+
+    **And PERSIST that index**, which is FIX 10. It was built here, read for ``sor_section_pages``,
+    and thrown away — while ``save_doc_index`` had exactly one call site in the whole codebase
+    (``api.py``'s ``/ingest-upload``). So a tender that entered through the archive/bridge path
+    never had a ``doc_index.json``, ``drafts.load_doc_index`` returned ``[]`` for it, and
+    ``relevant_docs``' ``if not sr_entries`` fired UNCONDITIONALLY — regardless of whether the
+    bill was a PDF or a workbook.
+
+    That is the real root cause of the generated-sheet substitution, and my FIX 9 diagnosis (the
+    workbook) was wrong: the workbook was present and irrelevant. The pack ships BOTH
+    ``E-ND_2025_04_BQ-0.xlsx`` and ``I-ND_2025_04_BQ-0.pdf``, and the PDF would have been discarded
+    just the same.
+
+    The slug matches by construction: ``doc_index_path`` resolves through
+    ``Workspace.tender_dir`` -> ``root / tender_slug(tender_id)``, ``tender_slug`` is idempotent,
+    and ``set_id == run_ref == tender_slug(name)`` — so writing under ``ref`` here and loading
+    under ``scope.project_name`` there reach the same file.
     """
     docs: list[tuple[str, DocType, bytes]] = []
     for spec, pdf_path, _context in bill:
@@ -201,9 +221,13 @@ def _apply_quarantine(
         if data is not None:
             docs.append((_label(spec), BILL_DOC_TYPE, data))
     if not docs:
+        # Nothing readable to index. Notably the workbook-only split arrives here with `bill=[]`,
+        # and correctly writes no index: a workbook has no pages and yields no section spans.
         return scope, []
 
     entries = build_doc_index(docs)
+    if tender_id:
+        save_doc_index(Workspace(), tender_id, entries)
     sr_sections = {c for e in entries if e.kind == "schedule_of_rates" for c in e.sor_section_pages}
     if not sr_sections:
         _note(on_error, (
@@ -330,7 +354,7 @@ def scope_from_set(
     if workbook_items and not bill:
         # Every confirmed bill was a workbook: the split is complete without the extractor.
         scope = _scope_from_items(workbook_items, name)
-        return _apply_quarantine(scope, [], on_error)
+        return _apply_quarantine(scope, [], on_error, tender_id=ref)
 
     doc_text = doc_text_from_parts(bill, on_error)
     if not doc_text.strip() and not workbook_items:
@@ -353,7 +377,7 @@ def scope_from_set(
         # come FIRST so its facts win the dedupe in `_merge_items` — a render cannot establish a
         # lump sum or an Employer rate, so a render's version of a row is strictly the poorer one.
         scope = _merge_items(workbook_items, scope, name)
-    return _apply_quarantine(scope, bill, on_error)
+    return _apply_quarantine(scope, bill, on_error, tender_id=ref)
 
 
 def _project_name(conn: sqlite3.Connection, set_id: str) -> str:

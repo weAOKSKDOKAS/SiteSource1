@@ -5,17 +5,22 @@ the ORIGINAL Schedule of Rates sliced to the unit's section pages — ``relevant
 ``SoR_{unit}_Section_{X}.pdf`` "when an indexed SoR carries the section(s)" — because a
 subcontractor returns what they were sent, and the return format follows the dispatch format.
 
-**Why the slice did not fire, traced rather than guessed.** ``_priced_return_attachment`` filters
-``doc_index`` for ``kind == "schedule_of_rates"``. On this pack the bill arrived as an .xlsx, and
-``doc_index._pages_text`` returns ``None`` for a non-PDF (``ocr.NotAPdf``), so a workbook is
-indexed with ``text_layer=False`` and no ``sor_section_pages`` at all. With no SoR entry the FIRST
-early return fires and emits the generated sheet. The xlsx therefore came from the PLAN itself —
-``mode="generated"`` — not from ``build_attachments`` reaching the draft some other way;
-``api.py`` assembles only ``assemble_firm_attachments(plan, …)``.
+**Why the slice did not fire.** ``_priced_return_attachment`` filters ``doc_index`` for
+``kind == "schedule_of_rates"``; with no entry the first early return emits the generated sheet.
+The xlsx therefore came from the PLAN itself — ``mode="generated"`` — not from
+``build_attachments`` reaching the draft another way; ``api.py`` assembles only
+``assemble_firm_attachments(plan, …)``. That much held up.
 
-So the slice is not merely unfired here, it is IMPOSSIBLE: there is no PDF to cut. Which is the
-brief's own conditional — the fallback stays, and becomes visible on the gate before anything is
-drafted.
+**The CAUSE named here was wrong, and FIX 10 corrects it.** This file originally blamed the
+workbook bill: an .xlsx is indexed with ``text_layer=False`` and no section pages, so there was
+nothing to slice. True of a workbook, and not why. The index was empty because the BRIDGE NEVER
+PERSISTED ONE — ``bridge/scope.py`` built a doc index, read ``sor_section_pages`` off it for the
+provenance guard, and discarded it, while ``save_doc_index``'s only call site was
+``/ingest-upload``. Every archive/bridge tender hit this branch unconditionally, and the pack
+ships ``I-ND_2025_04_BQ-0.pdf`` beside the workbook which would have been discarded just the same.
+
+The tests below are unchanged and still correct: they exercise the branch given an empty or
+unhelpful index, which stays reachable (DEMO, no upload, a genuinely workbook-only bill).
 
 **And the slicer cuts on PAGE BOUNDS, not the heading chain.** ``pages = [p + 1 for p in
 sorted({… hit.sor_section_pages[sk] …})]`` — the span from ``_spans`` over line-start ``SECTION n``
@@ -68,8 +73,8 @@ def test_the_slice_is_not_marked_substituted_even_across_several_sections():
 # The branch this pack actually took
 # ---------------------------------------------------------------------------
 def test_no_sor_in_the_index_emits_the_generated_sheet_and_says_so():
-    """The observed branch. A workbook bill is indexed with text_layer False and no section pages,
-    so there is no `schedule_of_rates` entry to slice and the generated .xlsx goes instead."""
+    """An empty index yields no `schedule_of_rates` entry, so the generated .xlsx goes instead.
+    Still reachable after FIX 10 — DEMO, no upload, or a genuinely workbook-only bill."""
     att = _plan([])
     assert att.mode == "generated"
     assert att.source_doc == "SoR_ground-investigation-G.xlsx"

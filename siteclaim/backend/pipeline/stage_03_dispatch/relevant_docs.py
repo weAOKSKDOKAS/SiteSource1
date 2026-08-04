@@ -233,20 +233,24 @@ def _priced_return_attachment(
     section_keys = list(dict.fromkeys(s.upper() for s in sections if s))  # distinct, order-preserved
     sr_entries = [e for e in doc_index if e.kind == "schedule_of_rates"]
     if not sr_entries:
-        # No original Schedule of Rates in the run's doc index at all. Two ways to arrive here and
-        # they read the same from here: nothing was uploaded (DEMO / offline), or the bill arrived
-        # as a WORKBOOK — `doc_index._pages_text` returns None for a non-PDF, so an .xlsx bill is
-        # indexed with `text_layer=False` and no section pages, and on ND/2025/04 that is exactly
-        # what happened.
+        # No original Schedule of Rates in the run's doc index. Reachable three ways: DEMO, no
+        # upload at all, or a genuinely workbook-only bill (`doc_index._pages_text` returns None
+        # for a non-PDF, so an .xlsx is indexed with `text_layer=False` and no section pages).
         #
-        # A slice is genuinely impossible here: there is no PDF to cut. So the generated sheet
-        # goes, and the gate SAYS SO.
+        # CORRECTION — an earlier version of this comment named ND/2025/04's workbook bill as the
+        # cause, and that was WRONG. On that pack the index was empty because the bridge never
+        # PERSISTED one: it built a doc index in `bridge/scope.py`, read `sor_section_pages` off it
+        # for the provenance guard, and discarded it, while `save_doc_index`'s only call site was
+        # `/ingest-upload`. So every archive/bridge tender reached this branch unconditionally —
+        # the pack ships `I-ND_2025_04_BQ-0.pdf` beside the workbook and it would have been
+        # discarded just the same. Fixed in FIX 10; the diagnosis is corrected here so the wrong
+        # one is not left as a landmark.
         return PlanAttachment(
             source_doc=sor_sheet_name, mode="generated", flags=[PRICED_RETURN, SUBSTITUTED],
             reason=(
                 "GENERATED sheet, not the original bill — no Schedule of Rates PDF is indexed for "
-                "this tender (none uploaded, or the bill arrived as a workbook, which has no pages "
-                "to slice). The firm will be asked to price this .xlsx and will return a workbook."
+                "this tender (none uploaded, or the bill is a workbook, which has no pages to "
+                "slice). The firm will be asked to price this .xlsx and will return a workbook."
             ))
     hit = next(
         (e for e in sr_entries if e.text_layer and any(sk in e.sor_section_pages for sk in section_keys)), None)
