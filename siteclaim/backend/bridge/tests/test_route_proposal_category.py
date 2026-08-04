@@ -19,7 +19,7 @@ def test_route_proposes_the_bill_the_interpreter_identified(make_set, part_spec)
     from client_boq import store as cb_store
 
     spec = part_spec(1, "BQ", "Bills of Quantities", "other", start=1, end=26)
-    make_set("nd-2025-04", "ND/2025/04", [spec], pdf_paths={"01-bq": ""})
+    make_set("nd-2025-04", "ND/2025/04", [spec], pdf_paths={"01-bq": "01-bq.pdf"})
     conn = cb_store.get_conn()
     try:
         cb_store.save_part_context(conn, "nd-2025-04", "01-bq",
@@ -37,7 +37,7 @@ def test_route_proposes_nothing_when_neither_category_says_pricing(make_set, par
 
     make_set("ge-2026-14", "GE/2026/14",
              [part_spec(1, "CT", "Conditions of Tender", "tender-instructions")],
-             pdf_paths={"01-ct": ""})
+             pdf_paths={"01-ct": "01-ct.pdf"})
 
     body = parts_mod.bq_candidates("ge-2026-14")
     assert body["proposed"] == []
@@ -51,7 +51,7 @@ def test_an_unreadable_part_keeps_the_planners_guess(make_set, part_spec):
     from client_boq import store as cb_store
 
     spec = part_spec(1, "BQ", "Bills of Quantities", "pricing", scanned=True)
-    make_set("nd-2025-04", "ND/2025/04", [spec], pdf_paths={"01-bq": ""})
+    make_set("nd-2025-04", "ND/2025/04", [spec], pdf_paths={"01-bq": "01-bq.pdf"})
     conn = cb_store.get_conn()
     try:
         cb_store.save_part_context(conn, "nd-2025-04", "01-bq",

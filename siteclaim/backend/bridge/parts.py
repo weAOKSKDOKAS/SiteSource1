@@ -24,6 +24,7 @@ import sqlite3
 # than reimplemented so the Route proposal and the review's skip-list can never disagree about
 # what a part IS — they read the same answer from the same function.
 from client_boq.review.s01_ingest import effective_category
+from pipeline.stage_01_ingest.workbook import is_workbook
 
 BILL_CATEGORY = "pricing"  # PART_CATEGORIES value that proposes a part as the priced bill
 
@@ -63,13 +64,36 @@ def _set_parts(conn: sqlite3.Connection, set_id: str) -> list[tuple]:
 
 
 def _describe(spec, pdf_path: str, proposed: set[str], confirmed: set[str]) -> dict:
+    # `pages` is None for a WORKBOOK, rather than a number that looks like a measurement.
+    #
+    # `page_count()` is `end - start + 1`. A whole-file part from an archive is given
+    # `start=1, end=1` for want of anything better (bridge/archive.py:377 — the manifest is planned
+    # from the central directory, which decompresses nothing and so cannot know a page count). For
+    # a PDF that bound is corrected as the bytes pass through extraction. For a workbook it never
+    # is, because a workbook HAS no pages — so the Route list read "1 pages" about an xlsx, which
+    # is an arbitrary placeholder rendered as a fact.
+    #
+    # Keyed on the format, not on `has_pdf`: a part with `start=5, end=62` and no cut file spans a
+    # genuine 58 pages of its source document. Not having been cut is a different statement from
+    # not having a page count, and suppressing that number would throw away something true.
+    is_book = is_workbook(spec.source_doc or spec.title)
+    pages = None if is_book else spec.page_count()
     return {
         "part_id": spec.part_id,
         "n": spec.n,
         "title": spec.title,
         "category": spec.category,
-        "pages": spec.page_count(),
+        "pages": pages,
         "scanned": bool(spec.scanned),
+        # WHY this part yields no text, in words, rather than a bare `scanned` chip that reads as
+        # "needs OCR" when the real answer is "needs the Excel reader". Derived from the same
+        # facts the chips are, so the two cannot disagree.
+        "unreadable_reason": (
+            "" if pdf_path
+            else "a workbook (.xlsx) — no page images; the workbook reader handles it"
+            if is_book
+            else "no page file was produced for this part"
+        ),
         # pdf_path can legitimately be "" (client_boq/store.py:649); a part with no cut pdf can
         # contribute no text, so the human sees that BEFORE choosing it as the bill.
         "has_pdf": bool(pdf_path),
@@ -96,9 +120,21 @@ def candidates_on(conn: sqlite3.Connection, set_id: str) -> dict:
     # categorised 'pricing', so nothing is proposed" about a 26-page bill of quantities and made
     # the operator find it by hand. The interpreter had read the pages and knew; its answer was
     # already the third element of every tuple here, discarded as `_c`.
+    # A part with NO cut pdf can contribute no text, so it cannot be the priced bill — whatever
+    # its category says. Observed on the real pack:
+    #
+    #     TA #2/BQ/E-ND_2025_04-BQ-2.xlsx   pricing   proposed   scanned
+    #
+    # A workbook, correctly categorised `pricing` and correctly carrying no PDF, put forward as
+    # the document that produces every priced row. `_describe` has computed `has_pdf` all along
+    # precisely so a human sees this BEFORE choosing — the proposal simply never consulted it.
+    #
+    # It stays SELECTABLE. The gate exists so a person can override a bad proposal, and a
+    # workbook is a real bill that the workbook reader handles; what is wrong is putting it
+    # forward as the answer when nothing here can read it.
     proposed = {
-        spec.part_id for spec, _p, ctx in parts
-        if effective_category(spec, ctx)[0] == BILL_CATEGORY
+        spec.part_id for spec, path, ctx in parts
+        if effective_category(spec, ctx)[0] == BILL_CATEGORY and bool(path)
     }
     confirmed = stored & live_ids
     # A stored id whose part no longer exists (a re-split dropped or renamed it). Surfaced, never
@@ -110,12 +146,27 @@ def candidates_on(conn: sqlite3.Connection, set_id: str) -> dict:
             f"No parts found for set {set_id!r} — ingest and approve the split manifest first."
         )
     elif not proposed:
-        # Degrade honestly: never guess the bill from a title.
-        message = (
-            "No part is categorised 'pricing' — neither by the interpreter that read the pages "
-            "nor by the planner that read the structure — so nothing is proposed. Choose the "
-            "priced bill yourself from the full list below."
-        )
+        # Two different reasons for an empty proposal, and they need different sentences. Telling
+        # someone "no part is categorised pricing" about a set holding four workbooks all
+        # categorised pricing would send them looking for a document that is sitting right there.
+        unreadable = [
+            spec.part_id for spec, path, ctx in parts
+            if effective_category(spec, ctx)[0] == BILL_CATEGORY and not path
+        ]
+        if unreadable:
+            message = (
+                f"{len(unreadable)} pricing part(s) were found — {', '.join(unreadable)} — but none "
+                "has a readable page file, so none is proposed. A workbook (.xlsx) arrives as a "
+                "workbook: it is a real bill and the workbook reader handles it, but nothing here "
+                "can show you its pages to choose from. Select it below if it is the bill."
+            )
+        else:
+            # Degrade honestly: never guess the bill from a title.
+            message = (
+                "No part is categorised 'pricing' — neither by the interpreter that read the pages "
+                "nor by the planner that read the structure — so nothing is proposed. Choose the "
+                "priced bill yourself from the full list below."
+            )
     elif len(proposed) == 1:
         message = "One pricing part found and pre-selected. Confirm it, or choose a different set."
     else:

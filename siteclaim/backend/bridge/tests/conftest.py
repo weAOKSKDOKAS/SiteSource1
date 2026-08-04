@@ -52,7 +52,17 @@ def make_set():
             cb_store.upsert_document_set(
                 conn, set_id=set_id, name=name, slug=set_id, status="ingested"
             )
-            cb_store.save_parts(conn, set_id, parts, pdf_paths or {})
+            # A real split ALWAYS writes a cut-pdf path for every part it cuts, so the default
+            # fixture does too. Omitting it modelled a set whose every part was unreadable, which
+            # nothing but a workbook-only pack actually is — and once "no cut pdf" became load
+            # bearing (a part that can contribute no text is not PROPOSED as the priced bill),
+            # that unrealistic default started deciding outcomes.
+            #
+            # An explicit `pdf_paths` still wins, including `{"01-x": ""}` — that is how a test
+            # says "this part has no file", and it must keep meaning exactly that.
+            if pdf_paths is None:
+                pdf_paths = {p.part_id: f"{p.part_id}.pdf" for p in parts}
+            cb_store.save_parts(conn, set_id, parts, pdf_paths)
             for part_id, context in (contexts or {}).items():
                 cb_store.save_part_context(conn, set_id, part_id, context)
             if review_approved is not None:

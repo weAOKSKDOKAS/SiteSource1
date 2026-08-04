@@ -365,8 +365,20 @@ export function RouteTab({
                       )}
                     </div>
                     <div className="mt-0.5 font-cb-mono text-[10px] text-cb-faint">
-                      {p.part_id} · {p.pages} pages{p.source_doc ? ` · ${p.source_doc}` : ""}
+                      {/* No page count for a workbook: an xlsx has none, and the archive's
+                          placeholder bound rendered "1 pages" as though it were measured. */}
+                      {p.part_id}
+                      {p.pages != null ? ` · ${p.pages} pages` : ""}
+                      {p.source_doc ? ` · ${p.source_doc}` : ""}
                     </div>
+                    {/* The reason, in words. A bare `scanned` chip reads as "needs OCR" when the
+                        real answer is usually "needs the Excel reader" — a different problem with
+                        a different answer, and the operator was left to guess which. */}
+                    {p.unreadable_reason && (
+                      <div className="mt-0.5 font-cb-sans text-[10px] text-cb-amber">
+                        {p.unreadable_reason}
+                      </div>
+                    )}
                   </div>
                 </Card>
               );

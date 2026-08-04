@@ -741,9 +741,14 @@ export interface BqCandidatePart {
   n: number;
   title: string;
   category: string;
-  pages: number;
+  /** NULL for a workbook — an xlsx has no pages, and `end - start + 1` over the archive's
+   *  placeholder bound rendered "1 pages" as though it were a measurement. */
+  pages: number | null;
   scanned: boolean;
   has_pdf: boolean;
+  /** Why this part yields no text, in words. `scanned` alone reads as "needs OCR" when the real
+   *  answer is often "needs the Excel reader". Empty when the part is readable. */
+  unreadable_reason?: string;
   source_doc: string;
   rev: number;
   proposed: boolean;
