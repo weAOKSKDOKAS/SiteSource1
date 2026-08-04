@@ -324,8 +324,16 @@ def scope_from_set(
     bill = [t for t in parts if t[0].part_id in bill_ids]
     context = [t for t in parts if t[0].part_id not in bill_ids]
 
+    # A confirmed bill that is a WORKBOOK is read deterministically — no model call, no chunking,
+    # and the three facts a render cannot carry. Everything else goes down the PDF path unchanged.
+    workbook_items, bill = _read_confirmed_workbooks(bill, name, on_error)
+    if workbook_items and not bill:
+        # Every confirmed bill was a workbook: the split is complete without the extractor.
+        scope = _scope_from_items(workbook_items, name)
+        return _apply_quarantine(scope, [], on_error)
+
     doc_text = doc_text_from_parts(bill, on_error)
-    if not doc_text.strip():
+    if not doc_text.strip() and not workbook_items:
         raise ValueError(
             f"The confirmed bill part(s) for set {ref!r} produced no readable text, so there is "
             "nothing to split. Check the parts are cut and carry a text layer."
@@ -340,6 +348,11 @@ def scope_from_set(
         context_text=context_text,
         on_error=on_error,
     )
+    if workbook_items:
+        # Both kinds of bill were confirmed and neither shadowed the other. The workbook's items
+        # come FIRST so its facts win the dedupe in `_merge_items` — a render cannot establish a
+        # lump sum or an Employer rate, so a render's version of a row is strictly the poorer one.
+        scope = _merge_items(workbook_items, scope, name)
     return _apply_quarantine(scope, bill, on_error)
 
 
@@ -347,3 +360,99 @@ def _project_name(conn: sqlite3.Connection, set_id: str) -> str:
     from bridge.identity import set_name
 
     return set_name(conn, set_id) or set_id
+
+
+# ---------------------------------------------------------------------------
+# Workbook bills
+# ---------------------------------------------------------------------------
+def _read_confirmed_workbooks(bill: list, name: str, on_error=None):
+    """Read every confirmed bill part that is a workbook. Returns ``(items, remaining_pdf_parts)``.
+
+    THE PACK CONTAINS BOTH. CEDD ND/2025/04 ships `BQ/E-ND_2025_04_BQ-0.xlsx` and a PDF render of
+    the same bill, and pricing one bill twice is worse than reading it from the wrong one. So where
+    a confirmed PDF shares its stem with a confirmed workbook, the WORKBOOK wins and the render is
+    dropped from the split — reported, never silently. A render can establish neither a lump sum
+    nor an Employer-fixed rate, so it is strictly the poorer source for the same rows.
+
+    A PDF that shares no stem with any workbook is a DIFFERENT bill and is read as normal.
+    """
+    from pathlib import Path as _Path
+
+    from pipeline.stage_01_ingest import workbook as wb
+
+    books = [t for t in bill if wb.is_workbook(_label(t[0]) or t[1] or "")]
+    if not books:
+        return [], bill
+
+    items = []
+    stems = set()
+    for spec, pdf_path, _ctx in books:
+        label = _label(spec)
+        stems.add(_Path(label).stem.lower())
+        data = _part_bytes(pdf_path)
+        if data is None:
+            _note(on_error, (
+                f"bill part {label!r} ({spec.part_id}) is a workbook with no file on disk, so it "
+                "contributes NO priced items to this split"
+            ))
+            continue
+        try:
+            read = wb.read_workbook(data, on_note=lambda m: _note(on_error, f"{label}: {m}"))
+        except Exception as exc:  # noqa: BLE001 — an unreadable workbook is a gap, not a crash
+            _note(on_error, (
+                f"bill part {label!r} could not be read as a workbook ({exc}); it contributes no "
+                "priced items. If it is really a PDF, re-confirm the PDF part instead."
+            ))
+            continue
+        counts = ", ".join(f"bill {b}: {n}" for b, n in sorted(read.per_bill.items()))
+        _note(on_error, (
+            f"{label}: read deterministically from the workbook — {len(read.items)} priced "
+            f"item(s) across {len(read.sheets_read)} bill sheet(s) ({counts}), with zero model "
+            "calls."
+        ))
+        items.extend(read.items)
+
+    remaining = []
+    for spec, pdf_path, ctx in bill:
+        label = _label(spec)
+        if wb.is_workbook(label or pdf_path or ""):
+            continue
+        if _Path(label).stem.lower() in stems:
+            _note(on_error, (
+                f"bill part {label!r} is a PDF render of a bill this set also carries as a "
+                "workbook, so it was NOT read: pricing the same bill twice is worse than reading "
+                "it from the wrong one, and a render can establish neither a lump sum nor an "
+                "Employer-fixed rate."
+            ))
+            continue
+        remaining.append((spec, pdf_path, ctx))
+    return items, remaining
+
+
+def _scope_from_items(items: list, name: str) -> ScopePackages:
+    """The workbook's items as a `ScopePackages`, in the shape `ingest_tender` emits.
+
+    One package, `ground_investigation` being wrong to assume, so the trade is left for the routing
+    split to divide by section — the bill numbers are already on every item, and `route_units`
+    splits by section exactly as it does for an extracted bill.
+    """
+    from pipeline.stage_01_ingest.ingest import annotate_sections
+    from schemas.models import TradeWorkPackage
+
+    scope = ScopePackages(project_name=name, packages=[TradeWorkPackage(
+        trade="general_building", scope_summary=f"{len(items)} priced items read from the workbook",
+        sor_items=items, source_refs=["the priced bill (workbook)"],
+    )])
+    return annotate_sections(scope, "")
+
+
+def _merge_items(workbook_items: list, scope: ScopePackages, name: str) -> ScopePackages:
+    """Add the workbook's items to an extracted scope, workbook winning on a shared ``item_ref``."""
+    have = {it.item_ref for it in workbook_items}
+    packages = []
+    for pkg in scope.packages:
+        kept = [it for it in pkg.sor_items if it.item_ref not in have]
+        if kept:
+            packages.append(pkg.model_copy(update={"sor_items": kept}))
+    merged = _scope_from_items(workbook_items, name)
+    return merged.model_copy(update={"packages": merged.packages + packages})

@@ -675,6 +675,57 @@ function ContextCard({
   onLocate: (quote: string) => void;
 }) {
   const unread = part.scanned && !part.readable;
+  // NOT YET INTERPRETED is a different state from "interpreted, nothing to note", and they must
+  // not look alike. A tender pack arrives as 203 parts and interpretation is deferred — one model
+  // call each was never acceptable per tender — so most cards legitimately have no context yet.
+  // An empty summary field would read as "there wasn't much in it", which is a claim nobody made.
+  const uninterpreted = !unread && context === undefined;
+
+  if (uninterpreted) {
+    return (
+      <div
+        onClick={onSelect}
+        className={cx(
+          "cb-row cursor-pointer rounded-cb-card border border-dashed border-cb-border-strong bg-white p-[12px_13px]",
+          selected && "border-l-[3px] border-l-cb-brass",
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <span className="font-cb-mono text-[11px] font-semibold text-cb-muted">
+            {part.part_id}
+          </span>
+          <span className="font-cb-sans text-[12.5px] font-semibold text-cb-ink-text">
+            {part.title}
+          </span>
+          <Chip className="border border-cb-border-strong text-cb-muted">NOT YET INTERPRETED</Chip>
+          <span className="ml-auto flex-none font-cb-mono text-[10px] font-semibold text-cb-muted">
+            pp. {part.pages}
+          </span>
+        </div>
+        <p className="mt-2 font-cb-sans text-[11.5px] leading-[1.5] text-cb-muted">
+          Nobody has read this part yet — its category comes from where it sat in the pack, which
+          is enough to route it and to keep it out of the contract review. Read it when you need
+          what it says.
+        </p>
+        <div className="mt-3 flex items-center gap-2 border-t border-dashed border-cb-border pt-2">
+          <IconButton
+            filled
+            title="Read this part now"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              onReinterpret();
+            }}
+          >
+            <span className={busy ? "inline-block animate-spin" : undefined}>⟳</span>
+          </IconButton>
+          <span className="font-cb-sans text-[10.5px] text-cb-faint">
+            One model call, this part only.
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   // A part that could not be read gets its own card, not a sparse version of the normal one.
   // An empty summary field reads as "there wasn't much in it"; this has to read as "nobody has

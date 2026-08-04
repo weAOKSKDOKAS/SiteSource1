@@ -152,6 +152,17 @@ class SorItem(BaseModel):
     # layout established no chain — never a guess, and never a substitute for ``description``,
     # which stays exactly the leaf text that was extracted.
     heading_path: list[str] = Field(default_factory=list)
+    # Whether this row is priced as a LUMP SUM rather than quantity × rate. In the workbook this is
+    # a fact — `=G38` versus `=E8*G8` — and in a PDF render both are blank cells, so only the
+    # workbook reader can set it. Default False means "not established", which is what a render
+    # can honestly say.
+    is_lump_sum: bool = False
+    # A rate the EMPLOYER has already fixed, where the tender arrives with column G filled in.
+    # Every Bill 9 rate in CEDD ND/2025/04 is pre-set under the Pay for Safety Scheme — 9.1 is
+    # 16 nr-mth at 4,860 — and an engine that generates a rate for one of those is wrong by
+    # definition, in a way none of the current validation flags would catch. None means the
+    # tender left it for us to price.
+    employer_rate: Optional[float] = None
     # The reference tokens from this row's "Clause Ref" column, verbatim — GS/PS/PB clauses
     # (e.g. ["GS 7.34", "PS 7.34A", "PB 71"]). Captured at ingest; the dispatch assembler
     # parses these deterministically to slice each firm's spec bundle to exactly the clauses
