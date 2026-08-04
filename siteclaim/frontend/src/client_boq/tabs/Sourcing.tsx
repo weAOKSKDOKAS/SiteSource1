@@ -25,6 +25,7 @@ import type {
   BridgeRouteProposalRead,
   Coverage,
   DispatchSet,
+  GmailIntegrationStatus,
   LevelledBid,
   MisdirectedHint,
   Recommendation,
@@ -118,6 +119,15 @@ export function SourcingTab({
   const [replies, setReplies] = useState<BidReply[]>([]);
   const [levelStale, setLevelStale] = useState(false);
   const [tenderReplies, setTenderReplies] = useState<TenderReplies | null>(null);
+  /** FIX 4 — the Gmail transport's own state. `polling_enabled` defaults FALSE on the server, so a
+   *  default install is not watching for replies at all and this screen is otherwise
+   *  indistinguishable from an inbox with nothing in it. The endpoint already returned every field
+   *  needed; none of it was shown where the operator is actually waiting. */
+  const [gmail, setGmail] = useState<GmailIntegrationStatus | null>(null);
+  /** FIX 5 — the active-reply count at the last look, so an INCREASE can be noticed. Written and
+   *  read only inside the poll's own setter, so it never triggers a render of its own. */
+  const [, setReplyMark] = useState<number | null>(null);
+  const [landed, setLanded] = useState(0);
   const [recommendations, setRecommendations] = useState<Record<string, Recommendation> | null>(null);
   const [awards, setAwards] = useState<Record<string, string>>({});
 
@@ -240,6 +250,49 @@ export function SourcingTab({
       .tenderReplies(setId)
       .then(setTenderReplies)
       .catch(() => setTenderReplies(null)); // 404 = nothing has landed yet, which is a state
+
+  // FIX 4 — the transport's own state, read once when the tab opens. Cheap (no network call on
+  // the server side: token_state is checked without one) and it never fails the screen.
+  useEffect(() => {
+    if (demoMode) return; // DEMO reports "demo" and there is no inbox to describe
+    void api.sourcing.gmailStatus().then(setGmail).catch(() => setGmail(null));
+  }, [demoMode]);
+
+  // FIX 5 — while Level & compare is VISIBLE and the server is actually polling, re-read the
+  // tender's replies on the server's own cadence. `api.ts` said it outright: refreshed on demand,
+  // no polling loop — so the poller could file a reply while this screen still showed "awaiting".
+  //
+  // Bounded deliberately: it stops on unmount and when the step is not visible, and there is no
+  // always-on timer in the shell. Polling a screen nobody is looking at buys nothing.
+  //
+  // It NEVER calls runLevel(). A comparison must not silently recompute under someone
+  // mid-decision — a new arrival is offered, and the re-level is theirs to press.
+  const pollSeconds = Math.max(15, gmail?.poll_seconds ?? 120);
+  const watching = step === "level" && !demoMode && Boolean(gmail?.polling_enabled);
+  useEffect(() => {
+    if (!watching) return;
+    let live = true;
+    const tick = () => {
+      void api.sourcing
+        .tenderReplies(setId)
+        .then((next) => {
+          if (!live) return;
+          setTenderReplies(next);
+          const n = next.replies.filter((r) => r.status === "active").length;
+          setReplyMark((mark) => {
+            if (mark !== null && n > mark) setLanded(n - mark);
+            return n;
+          });
+        })
+        .catch(() => undefined); // a 404 is "nothing yet", and a blip is not worth a banner
+    };
+    tick();
+    const timer = window.setInterval(tick, pollSeconds * 1000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [watching, setId, pollSeconds]);
 
   const runLevel = () =>
     run(async () => {
@@ -410,7 +463,43 @@ export function SourcingTab({
               </WaitingOn>
             )
           ) : step === "level" ? (
-            levelled ? (
+            <>
+              {/* FIX 4 — one status line, from the endpoint that already returned all of this.
+                  `polling_enabled` defaults false, so a default install watches nothing and this
+                  screen looks exactly like an empty inbox. Amber border and text when it is off,
+                  because that is a condition to act on rather than a failure that happened. */}
+              {gmail && !gmail.polling_enabled && (
+                <p className="mb-3 border border-cb-amber px-3 py-2 font-cb-sans text-[11px] leading-[1.5] text-cb-amber">
+                  Replies are <strong>not being watched</strong>. Returns have to be uploaded by
+                  hand on each package below. Set <code>GMAIL_POLLING_ENABLED=true</code> in
+                  backend/.env and restart to have them collected automatically.
+                  {gmail.last_error ? ` Last transport error: ${gmail.last_error}` : ""}
+                </p>
+              )}
+              {gmail?.polling_enabled && (
+                <p className="mb-3 font-cb-sans text-[11px] leading-[1.5] text-cb-muted">
+                  Watching for replies
+                  {gmail.last_poll_at ? ` — last checked ${new Date(gmail.last_poll_at).toLocaleTimeString()}` : ""}
+                  {` · ${gmail.replies_processed} processed, ${gmail.replies_unmatched} unmatched this run`}
+                  {gmail.last_error ? ` · ${gmail.last_error}` : ""}
+                </p>
+              )}
+              {/* FIX 5 — an arrival is ANNOUNCED, never acted on: re-levelling under someone
+                  mid-decision would move numbers they are reading. */}
+              {landed > 0 && (
+                <p className="mb-3 flex items-center gap-2 border border-cb-amber px-3 py-2 font-cb-sans text-[11px] text-cb-amber">
+                  {landed} new return{landed === 1 ? "" : "s"} landed — re-level to include{" "}
+                  {landed === 1 ? "it" : "them"}.
+                  <button
+                    type="button"
+                    onClick={() => setLanded(0)}
+                    className="cb-press ml-auto underline"
+                  >
+                    dismiss
+                  </button>
+                </p>
+              )}
+            {levelled ? (
               <Level
                 sections={levelled}
                 replies={replies}
@@ -438,7 +527,8 @@ export function SourcingTab({
                   {busy ? "Levelling…" : "Level the returns"}
                 </Button>
               </div>
-            )
+            )}
+            </>
           ) : recommendations ? (
             <Recommend
               sections={recommendations}

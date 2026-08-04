@@ -22,6 +22,7 @@ import type {
   EstimateResponse,
   FirmsPage,
   GateState,
+  GmailIntegrationStatus,
   Highlight,
   JobState,
   LLMSettingsResponse,
@@ -526,9 +527,19 @@ export const api = {
       );
     },
 
-    /** Which replies have landed for a tender. Refreshed on demand — there is no polling loop. */
+    /** Which replies have landed for a tender.
+     *
+     *  Polled on `poll_seconds` while Level & compare is the visible step AND the server's poller
+     *  is enabled — otherwise refreshed on demand. Nothing here auto-levels: a comparison must not
+     *  silently recompute under someone mid-decision, so a new arrival offers a re-level and never
+     *  performs one. */
     tenderReplies: (slug: string) =>
       rget<TenderReplies>(`/tender/${encodeURIComponent(slug)}/replies`),
+
+    /** The Gmail integration's state: credential, token, and — the part Level & compare needs —
+     *  whether the reply poller is actually watching. `polling_enabled` defaults FALSE, so a
+     *  default install watches nothing and an empty comparison looks exactly like an empty inbox. */
+    gmailStatus: () => rget<GmailIntegrationStatus>("/integrations/gmail"),
     tenderComparisonUrl: (slug: string) =>
       `${BASE}/tender/${encodeURIComponent(slug)}/comparison.xlsx`,
     /** The human gate: take a firm's reply out of the comparison for one unit. The reply is KEPT

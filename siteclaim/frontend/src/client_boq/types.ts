@@ -1317,3 +1317,24 @@ export interface VarianceReasonSuggestions {
   eos_attached: boolean;
   candidates: ReasonCandidate[];
 }
+
+
+/** GET /integrations/gmail — the transport's own health, plus this run's poller counters.
+ *
+ *  `polling_enabled` is the field Level & compare exists to surface: it defaults FALSE, so a
+ *  default install is not watching for replies at all and the screen is otherwise indistinguishable
+ *  from an inbox with nothing in it. */
+export interface GmailIntegrationStatus {
+  status: string; // "connected" | "not_configured" | "error" | "demo"
+  detail: string;
+  credentials_configured: boolean;
+  token_state: string;
+  polling_enabled: boolean;
+  poll_seconds: number;
+  last_poll_at: string | null;
+  last_error: string;
+  last_draft_error?: string;
+  drafts_created?: number;
+  replies_processed: number;
+  replies_unmatched: number;
+}
