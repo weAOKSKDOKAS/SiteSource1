@@ -130,6 +130,36 @@ def _live_enabled(dry_run: bool, config: MailerConfig) -> bool:
     return not demo_mode() and not dry_run and config.configured
 
 
+# ---------------------------------------------------------------------------
+# The live-testing override — ONE owner, every outbound path
+# ---------------------------------------------------------------------------
+# `GMAIL_TEST_RECIPIENT` existed on the Gmail DRAFT path only, while this module — the one that
+# opens a socket to a real subcontractor — never read it. That is worse than having no valve at
+# all: it covered the reversible route and left the irreversible one open, and it read as
+# protection. A draft can be deleted before it is sent; an SMTP send cannot be recalled.
+#
+# So the policy lives here, once, and both paths call it. Not because this module is the natural
+# home of an environment variable, but because two copies of a safety rule is how one of them
+# comes to be forgotten — which is exactly what happened.
+def test_recipient() -> str:
+    """The address every outbound message is redirected to, or ``''`` when the valve is off.
+
+    Opt-in, off by default, and FORCED off in DEMO — DEMO sends nothing, so a redirect there would
+    only be a misleading notice on a screen. Read from the environment on every call rather than
+    cached, so turning it on does not need a restart.
+    """
+    return "" if demo_mode() else os.getenv("GMAIL_TEST_RECIPIENT", "").strip()
+
+
+def test_mode_notice(address: str, what: str = "message") -> str:
+    """The sentence shown wherever the override is active. Never a silent redirect: an operator
+    who cannot see that the valve is on will eventually trust it when it is off."""
+    return (
+        f"TEST MODE — every {what} addressed to {address} (GMAIL_TEST_RECIPIENT), "
+        "not the firms' real emails."
+    )
+
+
 def send_bundles(
     dispatch_set: DispatchSet,
     *,
@@ -154,6 +184,12 @@ def send_bundles(
     transport = transport or _smtplib_transport
     own_conn = conn is None
     conn = conn or store.get_connection()
+    # The live-testing valve. When it is set NOTHING resolved from the register is used as a
+    # recipient — including for a firm that has no address at all, which without the override is a
+    # send_failed. That match with the drafts path is the point: a valve that redirects some firms
+    # and fails others is one an operator has to reason about, and a safety valve you have to
+    # reason about is one you eventually get wrong.
+    redirect = test_recipient()
     sent_bundles: list[DispatchBundle] = []
     records: list[dict] = []
     try:
@@ -163,8 +199,9 @@ def send_bundles(
             # silent empty To). Prefer the full Contact for its name; fall back to the register
             # address alone.
             contact = store.contact_for(conn, bundle.firm_id, bundle.trade)
-            to = (contact.email if contact and (contact.email or "").strip()
-                  else store.firm_enquiry_email(conn, bundle.firm_id))
+            resolved = (contact.email if contact and (contact.email or "").strip()
+                        else store.firm_enquiry_email(conn, bundle.firm_id))
+            to = redirect or resolved
             if not to:
                 sent_bundles.append(bundle.model_copy(update={"status": DispatchStatus.SEND_FAILED}))
                 records.append({
@@ -172,19 +209,36 @@ def send_bundles(
                     "status": DispatchStatus.SEND_FAILED.value, "reason": "no contact email (address book or register)",
                 })
                 continue
-            recipient = contact or Contact(firm_id=bundle.firm_id, trade=bundle.trade, email=to)
+            # Built from `to`, not from `contact`: `build_message` reads `.email` for the To
+            # header, so synthesising the Contact here is the single point where the redirect can
+            # take effect. A contact object carrying the firm's real address must never reach it.
+            recipient = Contact(
+                firm_id=bundle.firm_id, trade=bundle.trade, email=to,
+                contact_name=(contact.contact_name if contact else ""),
+            )
             message = build_message(bundle, recipient, config)
             attached = [a.filename for a in bundle.attachments if a.source_path and Path(a.source_path).is_file()]
             transport(config, message)
             sent_bundles.append(bundle.model_copy(update={"status": DispatchStatus.SENT}))
-            records.append({
+            record = {
                 "firm_id": bundle.firm_id, "firm_name": bundle.firm_name, "trade": bundle.trade,
-                "to": contact.email, "email_subject": bundle.email_subject,
+                # What was ACTUALLY used. Previously this read `contact.email`, which raised
+                # AttributeError on the register-fallback path (contact is None there) and would
+                # have written the firm's real address into the audit trail under a redirect.
+                "to": to, "email_subject": bundle.email_subject,
                 "attachments": attached, "status": DispatchStatus.SENT.value,
-            })
+            }
+            if redirect:
+                # The trail has to show both, or a reader cannot tell a test run from a real one.
+                record["test_mode"] = True
+                record["redirected_from"] = resolved
+            records.append(record)
     finally:
         if own_conn:
             conn.close()
 
     _record(outbox_path, records)
-    return DispatchSet(bundles=sent_bundles)
+    return DispatchSet(
+        bundles=sent_bundles,
+        notice=test_mode_notice(redirect, "email") if redirect else "",
+    )

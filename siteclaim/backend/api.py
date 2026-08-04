@@ -49,7 +49,11 @@ _quarantine_unrecognised_items = quarantine_unrecognised_items
 from pipeline.stage_01_ingest.ingest import ingest_tender  # noqa: E402
 from pipeline.stage_02_shortlist.shortlist import shortlist  # noqa: E402
 from pipeline.stage_03_dispatch.dispatch import build_dispatch  # noqa: E402
-from pipeline.stage_03_dispatch.mailer import send_bundles  # noqa: E402
+from pipeline.stage_03_dispatch.mailer import (  # noqa: E402
+    send_bundles,
+    test_mode_notice as mailer_test_mode_notice,
+    test_recipient as mailer_test_recipient,
+)
 from pipeline.stage_04_level.export_xlsx import OUT_PATH, export_leveling_xlsx  # noqa: E402
 from pipeline.stage_04_level.level import level_bids, load_demo_replies, merge_replies, parse_bid_reply  # noqa: E402
 from pipeline.stage_04_level.reply_xlsx import is_xlsx_upload, parse_sor_xlsx  # noqa: E402
@@ -1030,7 +1034,10 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     # Live-testing safety valve: when set, every draft is addressed here instead of the firm's
     # resolved recipient, so a test round-trip never emails a real subcontractor. Opt-in, off by
     # default, forced off in DEMO. Shown per-firm on the gate (never a silent redirect).
-    test_recipient = "" if demo_mode() else os.getenv("GMAIL_TEST_RECIPIENT", "").strip()
+    # ONE owner for this policy — `mailer.test_recipient()`. It was derived independently here
+    # and nowhere else, which is precisely how the SMTP path in the same file came to be missing
+    # it: a second copy of a safety rule is how the first one gets forgotten.
+    test_recipient = mailer_test_recipient()
     if test_recipient:
         print(f"[dispatch] test_recipient override active -> {test_recipient} ({len(dispatch.bundles)} firms)", flush=True)
     conn = store.get_connection()
@@ -1072,7 +1079,7 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
                 "The enquiries are prepared in the outbox and can be drafted again."
             )
     if test_recipient:
-        note = f"TEST MODE — every draft addressed to {test_recipient} (GMAIL_TEST_RECIPIENT), not the firms' real emails."
+        note = mailer_test_mode_notice(test_recipient, "draft")
         message = f"{note} {message}".strip() if message else note
     drafted_set = set(drafted_ids)
     bundles = [

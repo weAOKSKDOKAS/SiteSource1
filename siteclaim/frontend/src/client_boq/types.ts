@@ -909,6 +909,11 @@ export interface DispatchBundle {
 
 export interface DispatchSet {
   bundles: DispatchBundle[];
+  /** A sentence about the RUN rather than about any one bundle — today, that the
+   *  `GMAIL_TEST_RECIPIENT` valve redirected every recipient away from the firms. Empty on a
+   *  normal run. Shown, always: a redirect an operator cannot see is one they will eventually
+   *  trust when it is not there. */
+  notice?: string;
 }
 
 export interface AttachmentOverride {

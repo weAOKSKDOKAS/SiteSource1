@@ -337,6 +337,12 @@ class DispatchSet(BaseModel):
     """Stage 03 output: the per-firm bundles."""
 
     bundles: list[DispatchBundle] = Field(default_factory=list)
+    # A sentence about the run itself rather than about any one bundle — today, that the
+    # `GMAIL_TEST_RECIPIENT` valve redirected every recipient. It rides the response so the UI can
+    # show it, exactly as the drafts path's `message` already does: a redirect an operator cannot
+    # see is one they will eventually trust when it is not there. Empty on a normal run, and the
+    # model never writes it — the compose call returns bundles, this is set by the send path.
+    notice: str = ""
 
     @model_validator(mode="before")
     @classmethod

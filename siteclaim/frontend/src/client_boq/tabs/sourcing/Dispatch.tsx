@@ -157,6 +157,14 @@ export function Dispatch({
         </div>
       </Card>
 
+      {dispatch?.notice && (
+        // Brass, because a run-level notice is not a failure and not a register fact — and this
+        // one is the difference between "the enquiries went to the firms" and "they went to your
+        // own inbox". It reads before the outbox list for that reason.
+        <div className="rounded-cb-card border border-cb-brass-line bg-cb-brass-tint px-3 py-2 font-cb-sans text-[11px] font-medium text-cb-brass-text">
+          {dispatch.notice}
+        </div>
+      )}
       {dispatch && (
         <Card flush>
           <div className="flex items-center justify-between border-b border-cb-divider bg-cb-ok-tint px-3 py-2">
