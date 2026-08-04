@@ -1258,6 +1258,16 @@ def post_level_upload(
     scope: if it priced nothing for ``trade`` but matches another unit strongly, a hint is returned
     so the operator can reattach it — nothing moves automatically.
 
+    **This runs the SAME path a polled reply runs** (:func:`process_inbound_reply`), entered with
+    explicit identity because the operator picked the firm and the package on the screen.
+
+    It did not, and that was the defect: it parsed the upload, called ``level_bids`` on that ONE
+    reply, wrote ``OUT_PATH`` and returned. It never accumulated onto the tender, never wrote the
+    replies registry, and never regenerated the tender comparison — so a returned Schedule of Rates
+    was levelled alone, in memory, and gone on the next refresh, while ``tenderReplies`` (which
+    reads the registry the upload never wrote) kept showing the firm as awaiting. Two intake
+    channels that are meant to be one path were not.
+
     Sync handler (threadpool): the blocking parse/level below never stalls the loop."""
     if demo_mode():
         levelled = level_bids([], demo_fixture=REPLIES_FIXTURE)
@@ -1265,12 +1275,27 @@ def post_level_upload(
         return LevelUploadResponse(levelled=levelled)
 
     sheets, images = _read_reply_uploads(files)
-    reply = _parse_reply(sheets, images, firm_id=firm_id, trade=trade)
-    levelled = level_bids([reply])
-    export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
-    scope = load_scope(Workspace(), tender_slug(tender)) if tender else None
-    hint = _misdirect_hint(reply.line_items, scope, trade)
-    return LevelUploadResponse(levelled=levelled, misdirected=hint)
+    if not tender:
+        # No tender means no registry to file against — accumulation is per tender, and inventing a
+        # slug would file the return under a tender that does not exist. The old in-memory
+        # behaviour is kept for this case rather than failing an upload the UI can still make;
+        # every caller in this repo passes the set id, so it is the unreachable branch, not the one
+        # the operator hits.
+        reply = _parse_reply(sheets, images, firm_id=firm_id, trade=trade)
+        levelled = level_bids([reply])
+        export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
+        return LevelUploadResponse(levelled=levelled, misdirected=None)
+
+    filed = process_inbound_reply(
+        "", sheets, images,
+        # Explicit identity: no ref is invented, and the AI fallback is not consulted to re-derive
+        # what the operator already told us.
+        identity={"tender_id": tender_slug(tender), "firm_id": firm_id, "trade": trade},
+    )
+    # `LevelUploadResponse` is unchanged so the frontend contract does not move: `comparison` is
+    # the re-levelled set of every reply on the tender, which is what `levelled` always meant —
+    # it was simply a set of one before.
+    return LevelUploadResponse(levelled=filed.comparison, misdirected=filed.misdirected)
 
 
 class SectionCoverage(BaseModel):
@@ -1308,18 +1333,33 @@ class InboundReplyResponse(BaseModel):
 
 def process_inbound_reply(
     ref: str, sheets: list[BidReply], images: list[str], *, workspace: Optional[Workspace] = None,
+    identity: Optional[dict] = None,
 ) -> InboundReplyResponse:
     """The ONE inbound-reply processing path — shared verbatim by the HTTP route and the Gmail
     poller (neither reimplements it): resolve the correlation ref deterministically (AI matching
     only for a ref-less reply), parse, route each priced line to its true SoR section by item
     identity, accumulate/supersede onto the tender, re-level, and regenerate the comparison xlsx.
-    This fills the comparison only — a human still awards."""
+    This fills the comparison only — a human still awards.
+
+    ``identity`` is the EXPLICIT-IDENTITY entry, used by ``/level-upload``: the operator picked the
+    firm and the package on the screen, so ``{tender_id, firm_id, trade}`` is already known and
+    both correlation steps are skipped. It must not invent a ref (the upload never had one and a
+    fabricated ref would pollute the registry a real reply resolves against), and it must not run
+    the AI fallback to re-derive identity a human already supplied.
+
+    Everything AFTER identity is the same code on both paths, which is the point: an uploaded
+    return accumulates, supersedes and re-levels exactly as a polled one does. They used to
+    diverge, and an uploaded return was levelled alone in memory and gone on refresh.
+    """
     workspace = workspace or Workspace()
-    resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
-    if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
-        resolved = reply_loop.fallback_match(
-            images, workspace, demo_fixture=INBOUND_FALLBACK_FIXTURE if demo_mode() else None
-        )
+    if identity is not None:
+        resolved = identity
+    else:
+        resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
+        if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
+            resolved = reply_loop.fallback_match(
+                images, workspace, demo_fixture=INBOUND_FALLBACK_FIXTURE if demo_mode() else None
+            )
     if resolved is None:
         return InboundReplyResponse(status="unmatched", detail="unmatched — needs manual assignment")
 
