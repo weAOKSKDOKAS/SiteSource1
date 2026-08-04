@@ -440,6 +440,34 @@ export function SourcingTab({
             )
           ) : step === "dispatch" ? (
             shortlist ? (
+              <>
+              {/* FIX 9 — the priced-return document is not always the artifact the design intends.
+                  The design sends the ORIGINAL Schedule of Rates sliced to this unit's section
+                  pages, because a subcontractor returns what they were sent. On the real pack the
+                  draft carried SoR_ground-investigation-4.xlsx instead — correctly, since the bill
+                  arrived as a workbook and there was no PDF to slice — and nothing said so.
+                  Stated here, BEFORE drafting, from the flag the plan already carries. */}
+              {(plans ?? []).some((pl) =>
+                (pl.attachments ?? []).some((a) => (a.flags ?? []).includes("substituted_priced_return")),
+              ) && (
+                <div className="mb-3 border border-cb-amber px-3 py-2">
+                  <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-amber">
+                    PRICED-RETURN DOCUMENT SUBSTITUTED
+                  </div>
+                  {(plans ?? []).flatMap((pl) =>
+                    (pl.attachments ?? [])
+                      .filter((a) => (a.flags ?? []).includes("substituted_priced_return"))
+                      .map((a) => (
+                        <p
+                          key={`${pl.package_key}:${a.source_doc}`}
+                          className="mt-1 font-cb-sans text-[11px] leading-[1.5] text-cb-amber"
+                        >
+                          <strong>{pl.package_key}</strong> — {a.reason}
+                        </p>
+                      )),
+                  )}
+                </div>
+              )}
               <Dispatch
                 shortlist={shortlist}
                 approvals={approvals}
@@ -457,6 +485,7 @@ export function SourcingTab({
                 onPrepareDrafts={demoMode ? undefined : prepareDrafts}
                 onSend={sendDispatch}
               />
+              </>
             ) : (
               <WaitingOn title="Waits on the shortlist">
                 Run the shortlist first — dispatch sends enquiries to the firms selected there.

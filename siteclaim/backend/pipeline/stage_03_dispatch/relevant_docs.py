@@ -52,6 +52,18 @@ class PlanAttachment(BaseModel):
 # regardless of its mode (a slice, a whole-SoR fallback, or the generated sheet).
 PRICED_RETURN = "priced_return"
 
+# The dispatched priced-return document is NOT the artifact the design intends. The design sends
+# the ORIGINAL Schedule of Rates, sliced to this unit's section pages, because a subcontractor
+# returns what they were sent and the return format follows the dispatch format. This flag marks
+# every case where something else went out instead — and it exists because the substitution was
+# silent: on CEDD ND/2025/04 the draft carried `SoR_ground-investigation-4.xlsx` (7K) and nothing
+# on the gate said the original bill had not been sliced, or why.
+#
+# The gate shows it BEFORE anything is drafted, and the operator decides. That is the whole of the
+# fix: not "never substitute" — sometimes there is genuinely nothing to slice — but "never
+# substitute quietly".
+SUBSTITUTED = "substituted_priced_return"
+
 
 class MissingSpec(BaseModel):
     spec: str          # e.g. "PS Section 28"
@@ -221,9 +233,21 @@ def _priced_return_attachment(
     section_keys = list(dict.fromkeys(s.upper() for s in sections if s))  # distinct, order-preserved
     sr_entries = [e for e in doc_index if e.kind == "schedule_of_rates"]
     if not sr_entries:
+        # No original Schedule of Rates in the run's doc index at all. Two ways to arrive here and
+        # they read the same from here: nothing was uploaded (DEMO / offline), or the bill arrived
+        # as a WORKBOOK — `doc_index._pages_text` returns None for a non-PDF, so an .xlsx bill is
+        # indexed with `text_layer=False` and no section pages, and on ND/2025/04 that is exactly
+        # what happened.
+        #
+        # A slice is genuinely impossible here: there is no PDF to cut. So the generated sheet
+        # goes, and the gate SAYS SO.
         return PlanAttachment(
-            source_doc=sor_sheet_name, mode="generated", flags=[PRICED_RETURN],
-            reason="Priced Schedule of Rates for this section")
+            source_doc=sor_sheet_name, mode="generated", flags=[PRICED_RETURN, SUBSTITUTED],
+            reason=(
+                "GENERATED sheet, not the original bill — no Schedule of Rates PDF is indexed for "
+                "this tender (none uploaded, or the bill arrived as a workbook, which has no pages "
+                "to slice). The firm will be asked to price this .xlsx and will return a workbook."
+            ))
     hit = next(
         (e for e in sr_entries if e.text_layer and any(sk in e.sor_section_pages for sk in section_keys)), None)
     if hit is not None:
@@ -245,8 +269,15 @@ def _priced_return_attachment(
     label = ", ".join(section_keys) or "?"
     return PlanAttachment(
         source_doc=e.filename, out_filename=_unit_out_name(trade, package_key, ""), mode="whole",
-        flags=[PRICED_RETURN, "scanned_whole" if scanned else "whole_section_not_located"],
-        reason=f"Schedule of Rates — whole ({'scanned' if scanned else f'Section {label} not located'})")
+        flags=[PRICED_RETURN, SUBSTITUTED,
+               "scanned_whole" if scanned else "whole_section_not_located"],
+        reason=(
+            f"WHOLE bill, not this unit's section — "
+            + ("the Schedule of Rates has no text layer (scanned), so its section pages cannot be "
+               "located." if scanned else
+               f"Section {label} could not be located in the Schedule of Rates' section index.")
+            + " The firm receives the entire bill and may price sections it was not enquired on."
+        ))
 
 
 def resolve_section_plan(

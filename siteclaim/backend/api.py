@@ -967,12 +967,46 @@ class DispatchPlanRequest(BaseModel):
     project_name: str = ""
 
 
+
+def _substitution_notice(plans) -> str:
+    """One sentence naming every package whose priced-return document is NOT the sliced original.
+
+    The design sends the ORIGINAL Schedule of Rates, sliced to the unit's section pages, because a
+    subcontractor returns what they were sent. On CEDD ND/2025/04 the draft carried
+    ``SoR_ground-investigation-4.xlsx`` instead and nothing said so — the substitution was correct
+    (the bill arrived as a workbook, so there was no PDF to slice) and completely silent.
+
+    So it is stated on the gate, BEFORE anything is drafted, and the operator decides.
+    """
+    from pipeline.stage_03_dispatch.relevant_docs import SUBSTITUTED
+
+    swapped = [
+        (key, att) for key, plan in plans.items()
+        for att in plan.attachments if SUBSTITUTED in att.flags
+    ]
+    if not swapped:
+        return ""
+    modes = {att.mode for _k, att in swapped}
+    which = ", ".join(sorted(key for key, _a in swapped))
+    return (
+        f"PRICED-RETURN DOCUMENT SUBSTITUTED for {len(swapped)} package(s) ({which}): sending the "
+        f"{'generated .xlsx sheet' if 'generated' in modes else 'whole bill'} rather than the "
+        "original Schedule of Rates sliced to each unit's section. " + swapped[0][1].reason
+    )
+
+
 @app.post("/dispatch/plan")
 def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
     """The relevant-only attachment plan per dispatched section (the human-gate preview): each
     document with its mode (sliced / whole / generated), page range, reason, flags, plus any
     referenced-but-unsupplied spec sections. Reads the run's persisted doc_index; empty in DEMO
-    (no upload) so the plan is just the SoR sheet. Sync handler."""
+    (no upload) so the plan is just the SoR sheet. Sync handler.
+
+    Every attachment carries its ``flags``, and a priced-return document that is NOT the sliced
+    original is flagged ``substituted_priced_return`` with a reason saying why — so the gate can
+    show the substitution BEFORE drafting from data it already receives. The response shape is
+    unchanged: two frontends read this as a list, and moving it to carry one sentence would break
+    both to say something the list already contains."""
     from pipeline.stage_03_dispatch.drafts import plan_for_firms
 
     plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name)
@@ -1092,6 +1126,12 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
                 f"Gmail drafts unavailable — {failures[0].reason} "
                 "The enquiries are prepared in the outbox and can be drafted again."
             )
+    # Belt and braces on the gate: the plan preview flags the substitution, and so does the
+    # response that actually created the drafts. If the operator skipped the preview, this is the
+    # last place the swap is stated before the enquiry leaves.
+    swap = _substitution_notice(plans)
+    if swap:
+        message = f"{swap} {message}".strip() if message else swap
     if test_recipient:
         note = mailer_test_mode_notice(test_recipient, "draft")
         message = f"{note} {message}".strip() if message else note
