@@ -235,6 +235,9 @@ export function DocumentsTab({
    *  the row by hand in SQLite. The approve endpoint has always taken `approved`, so this is the
    *  same single writer moving the same flag the other way — not a second path to the gate. */
   async function reopen() {
+    // A new run makes the previous refusal history: clear the shell banner at the START,
+    // before the work, so it can never describe a run that has been superseded.
+    onError("");
     setBusy(true);
     try {
       await api.approveManifest(data.setId, undefined, false);
@@ -254,6 +257,9 @@ export function DocumentsTab({
   }
 
   async function split() {
+    // A new run makes the previous refusal history: clear the shell banner at the START,
+    // before the work, so it can never describe a run that has been superseded.
+    onError("");
     setBusy(true);
     try {
       // Through runJob, not a bare call: in LIVE this returns `queued` and the work happens on a

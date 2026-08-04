@@ -378,6 +378,9 @@ export function RegisterTab({
    *  job — reading the first response would work offline and do nothing with a real key. */
   async function runReview() {
     setBusy(true);
+    // A new run makes the previous refusal history: clear the shell banner at the START,
+    // before the work, so it can never describe a run that has been superseded.
+    onError("");
     try {
       const finished = await runJob(
         () => api.runReview(data.setId, data.name, includeSpecs),

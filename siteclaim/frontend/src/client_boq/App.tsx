@@ -252,11 +252,32 @@ export default function ClientBoqApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // An error describes a MOMENT, and this one outlived every moment it described. `error` had
+  // exactly one clear — the banner's own dismiss button — so a refusal stayed on screen after the
+  // condition passed. Observed live: a 409 banner still up while the review it complained about
+  // ran normally beside it.
+  //
+  // Cleared when the surface changes, which is the only place the shell can know the message is
+  // about somewhere the person no longer is. Keyed on kind+setId rather than the object, because
+  // `parseHash` builds a fresh one on every hash event and an object identity would clear on
+  // every re-parse. Set→set and set→list both change this key; a tab change within one set does
+  // not, because an error about that set is still about the set you are looking at.
+  //
+  // Deliberately NOT a timeout: an error that vanishes on a timer is worse than one that lingers,
+  // because the person who looked away has no way to know it was ever there.
+  const surfaceKey = `${surface.kind}:${"setId" in surface ? surface.setId : ""}`;
+  useEffect(() => {
+    setError(null);
+  }, [surfaceKey]);
+
   // --- upload: drop anywhere on the home page, or browse --------------------
   const fileInput = useRef<HTMLInputElement>(null);
 
   const uploadFiles = useCallback(
     async (files: File[]) => {
+      // A new run makes the previous failure history. Cleared at the START, before the work, so
+      // the banner never describes a run that has been superseded.
+      setError(null);
       const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
       if (!pdfs.length) {
         setError("Drop a PDF — the binder is read as one document.");

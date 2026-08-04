@@ -197,6 +197,9 @@ export function RouteTab({
   const run = async (kind: typeof busy, fn: () => Promise<void>) => {
     setBusy(kind);
     setError("");
+    // The shell banner too, not just this tab's own: a 409 raised here was reaching
+    // `onError` and then outliving the condition it described.
+    onError("");
     try {
       await (onTrack ? onTrack(LABEL[kind as Exclude<typeof busy, "">] ?? "Working", fn) : fn());
     } catch (e: unknown) {

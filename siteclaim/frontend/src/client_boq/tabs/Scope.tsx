@@ -131,6 +131,9 @@ export function ScopeTab({
   /** Draft the scope. A background job in LIVE, inline in DEMO — runJob covers both. */
   async function runScope() {
     setBusy(true);
+    // A new run makes the previous refusal history: clear the shell banner at the START,
+    // before the work, so it can never describe a run that has been superseded.
+    onError("");
     try {
       await runJob(
         () => api.runScope(data.setId),

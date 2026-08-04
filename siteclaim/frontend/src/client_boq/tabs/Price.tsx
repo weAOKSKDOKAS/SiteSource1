@@ -133,6 +133,9 @@ export function PriceTab({
 
   const run = useCallback(async () => {
     setBusy(true);
+    // A new run makes the previous refusal history: clear the shell banner at the START,
+    // before the work, so it can never describe a run that has been superseded.
+    onError("");
     try {
       // DEMO runs inline and returns the estimate; LIVE queues a job. `runJob` covers both — the
       // defect that made LIVE inert everywhere else is not worth repeating here.
