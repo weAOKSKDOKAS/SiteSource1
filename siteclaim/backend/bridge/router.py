@@ -9,7 +9,10 @@ The set is addressed by ``set_id``, which IS the procurement ``run_ref`` (see ``
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
@@ -163,3 +166,116 @@ def post_route_confirm(set_id: str, req: ConfirmBridgeRoutesRequest) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# The archive: a whole tender pack, at constant memory
+# ---------------------------------------------------------------------------
+def _archive_path(ws, name: str):
+    """Where the uploaded archive is kept between the proposal and the approval.
+
+    In `artifacts/`, not `docs/`: `docs/` is what `run_split` reads as the set's documents, and a
+    232 MB zip sitting among them would be read as one.
+    """
+    return ws.artifacts_dir(name, create=True) / "archive.zip"
+
+
+@router.post("/archive/upload")
+def post_archive_upload(
+    file: UploadFile = File(...),
+    project_name: str = Form(""),
+) -> dict:
+    """Receive a tender pack and PROPOSE a manifest from its folder tree. Extracts nothing.
+
+    The upload streams to disk a chunk at a time — `.read()` here is what would materialise 232 MB,
+    and Starlette has already spooled the body to a real file, so there is nothing to gain by it.
+    The total UNCOMPRESSED size is then checked against the ceiling from the central directory,
+    before any member is opened: that ordering is what makes it a zip-bomb guard rather than a
+    limit discovered too late.
+
+    The manifest is saved UNAPPROVED. The human approves it through the existing gate
+    (`/client-boq/ingest/manifest/approve`), and `/bridge/archive/extract` does the rest — so a
+    tender pack passes through exactly the gate a single PDF does.
+    """
+    from client_boq import store
+    from pipeline.workspace import Workspace
+
+    from bridge import archive
+
+    name = (project_name or Path(file.filename or "tender pack").stem).strip() or "Tender pack"
+    set_id = archive.set_id_for(name)
+    ws = Workspace()
+    target = _archive_path(ws, name)
+    try:
+        written = archive.stream_to(file.file, target)
+        report = archive.read_tree(target)
+        archive.check_size(report)
+        manifest = archive.plan_manifest(report, set_id=set_id, source_name=file.filename or "archive.zip")
+    except ValueError as exc:
+        # A refused archive leaves nothing behind — an unusable 232 MB file in the workspace would
+        # be the operator's problem to find and delete.
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    conn = store.get_conn()
+    try:
+        store.upsert_document_set(conn, set_id=set_id, name=name, slug=set_id, status="inspected")
+        store.save_manifest(conn, manifest)
+        # Explicitly closed. `save_manifest` preserves the flag by design, and a new pack landing
+        # on an existing tender must not inherit an approval given for a manifest nobody can see.
+        store.approve_manifest(conn, set_id, False)
+    finally:
+        conn.close()
+
+    return {
+        "set_id": set_id,
+        "name": name,
+        "archive_bytes": written,
+        "uncompressed_bytes": report.uncompressed_bytes,
+        "entries": len(report.members),
+        "content_files": len(report.content),
+        "signature_files": len(report.signatures),
+        "skipped_files": len(report.skipped),
+        # Grouped, because a 203-row gate is a wall. The person is checking the SHAPE.
+        "folders": archive.folder_summary(report),
+        "tier_reason": manifest.tier_reason,
+        "parts": len(manifest.parts),
+        "manifest_approved": False,
+    }
+
+
+class ArchiveExtractRequest(BaseModel):
+    set_id: str
+
+
+@router.post("/archive/extract")
+def post_archive_extract(req: ArchiveExtractRequest) -> dict:
+    """Extract the approved pack. 409 until the manifest gate is passed.
+
+    Runs as a job on the same pool, reporting through the same strip, stoppable with the same STOP
+    — a 232 MB extraction is the longest-running operation in the product and must not be the one
+    thing a person cannot see or interrupt.
+    """
+    from client_boq import jobs, store
+
+    from bridge.archive_job import run_archive_extract_job
+
+    conn = store.get_conn()
+    try:
+        approved = store.manifest_is_approved(conn, req.set_id)
+        row = conn.execute(
+            "SELECT name FROM client_boq_document_sets WHERE set_id = ?", (req.set_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No document set {req.set_id!r}.")
+    if not approved:
+        raise HTTPException(
+            status_code=409,
+            detail=("The split manifest for this pack is not approved yet. A tender pack passes "
+                    "the same gate a single document does — approve it, then extract."),
+        )
+    job_id = jobs.JOBS.create("archive")
+    jobs.POOL.submit(run_archive_extract_job, job_id, req.set_id, row["name"])
+    return {"job_id": job_id, "kind": "archive", "status": "queued", "stage": "reading"}

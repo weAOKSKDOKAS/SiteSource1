@@ -115,6 +115,7 @@ class ManifestGateState(BaseModel):
 _WORKFLOW_STAGES: dict[str, list[str]] = {
     "ingest": ["reading", "inspecting", "planning", "saving"],
     "split": ["splitting", "interpreting", "ingested"],
+    "archive": ["reading", "extracting", "recording", "ingested"],   # bridge/archive.py
     "review": ["ingesting", "summarising", "matching", "scope", "program", "cashflow",
                "assembling", "verifying", "locating"],
 }
