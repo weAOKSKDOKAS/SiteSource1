@@ -42,6 +42,47 @@ const FAINT = "#8a97a3"; // cb-faint   — every other bar
 const BAND_FILL = "#eef3f8"; // cb-info    — the historical band
 const BAND_LINE = "#2f6e8a"; // cb-blue    — the median line
 
+/** How the recommended bid sits against the others and against history — READ OFF the numbers
+ *  already on this screen, never recomputed from anything else.
+ *
+ *  Presentation only. The ranking, the recommendation and the demotion are the engine's and are
+ *  untouched; this states what the ranked list and the chart already contain so a person does not
+ *  have to subtract two figures in their head or read a bar chart to answer "by how much?".
+ *
+ *  `null` wherever the comparison does not exist — one bid has no runner-up, and a package with no
+ *  historical band has no position against one. An absent comparison is shown as absent. */
+function margins(rec: Recommendation) {
+  const winner = rec.ranked.find((r) => r.firm_id === rec.recommended_firm_id) ?? null;
+  if (!winner) return null;
+  // Priced, awardable bids only: a firm that priced nothing is not a comparison, it is a gap, and
+  // "cheaper than the firm that quoted zero" would be a meaningless saving.
+  const priced = rec.ranked.filter((r) => !r.no_priced_coverage);
+  const next = priced.filter((r) => r.firm_id !== winner.firm_id && !r.recommended_against)[0] ?? null;
+  const cheapest = priced[0] ?? null;
+  const band = rec.historical_band;
+  return {
+    winner,
+    /** vs the next CLEAN bid — the real alternative, not merely the next row. */
+    overNext: next ? next.corrected_total - winner.corrected_total : null,
+    nextName: next?.firm_name ?? "",
+    /** What the demotion costs, when the cheapest bid overall is one we recommend against. */
+    demotionCost:
+      cheapest && cheapest.recommended_against && cheapest.firm_id !== winner.firm_id
+        ? winner.corrected_total - cheapest.corrected_total
+        : null,
+    demotedName: cheapest?.recommended_against ? cheapest.firm_name : "",
+    band,
+    /** below / within / above the historical band — the chart's shaded region, as a word. */
+    vsBand: band
+      ? winner.corrected_total < band.low
+        ? "below"
+        : winner.corrected_total > band.high
+          ? "above"
+          : "within"
+      : null,
+  };
+}
+
 function tradeLabel(trade: string): string {
   const [base, section] = trade.split(":");
   const label = base.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -157,6 +198,7 @@ function TradeRecommendation({
   onOpenDetail: (firm: RankedFirm, recommended: boolean) => void;
 }) {
   const winner = rec.ranked.find((r) => r.firm_id === rec.recommended_firm_id) ?? null;
+  const m = margins(rec);
   const against = rec.ranked.filter((r) => r.recommended_against);
   const awaiting = rec.awaiting_valid_return;
   const skipped = award === "";
@@ -194,17 +236,54 @@ function TradeRecommendation({
           </div>
         )}
         {winner && (
-          <div className="flex flex-wrap items-center gap-3 border-b border-cb-divider bg-cb-ok-tint px-3 py-2.5">
-            <span className="text-[16px]">✅</span>
-            <div>
-              <div className="text-[12px] font-bold text-cb-ink-text">
-                Recommend {winner.firm_name}
+          <div className="border-b border-cb-divider bg-cb-ok-tint px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-[16px]">✅</span>
+              <div>
+                <div className="text-[12px] font-bold text-cb-ink-text">
+                  Recommend {winner.firm_name}
+                </div>
+                <div className="font-cb-mono text-[10px] text-cb-body">
+                  {winner.firm_id} · {hkd(winner.corrected_total)}
+                </div>
               </div>
-              <div className="font-cb-mono text-[10px] text-cb-body">
-                {winner.firm_id} · {hkd(winner.corrected_total)}
-              </div>
+              <Chip className="bg-white text-cb-ok-dark">cheapest clean bid</Chip>
             </div>
-            <Chip className="bg-white text-cb-ok-dark">cheapest clean bid</Chip>
+            {/* BY HOW MUCH — subtraction the reader was doing in their head, or reading off a bar
+                chart. Every figure here is already on this screen; nothing is recomputed and
+                nothing about the ranking changes. An absent comparison is shown as absent. */}
+            {m && (m.overNext != null || m.demotionCost != null || m.vsBand) && (
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-cb-mono text-[10px] text-cb-body">
+                {m.overNext != null && (
+                  <span>
+                    {hkd(Math.abs(m.overNext))} {m.overNext >= 0 ? "under" : "over"} {m.nextName}
+                    <span className="text-cb-faint"> · next clean bid</span>
+                  </span>
+                )}
+                {m.demotionCost != null && (
+                  <span className="text-cb-bad-dark">
+                    {hkd(Math.abs(m.demotionCost))} more than {m.demotedName}
+                    <span className="opacity-70"> · the flagged cheapest</span>
+                  </span>
+                )}
+                {m.vsBand && m.band && (
+                  <span>
+                    {m.vsBand} the historical band
+                    <span className="text-cb-faint">
+                      {" "}
+                      · {hkd(m.band.low)}–{hkd(m.band.high)}
+                    </span>
+                  </span>
+                )}
+              </div>
+            )}
+            {/* A clean winner can still carry NON-fatal flags. Showing them makes "clean" a thing
+                the reader can see rather than infer from the absence of a red block below. */}
+            {winner.risk_flags.some((f) => f.severity !== "fatal") && (
+              <div className="mt-2">
+                <RiskFlagList flags={winner.risk_flags.filter((f) => f.severity !== "fatal")} />
+              </div>
+            )}
           </div>
         )}
         {against.map((r) => (
@@ -219,7 +298,11 @@ function TradeRecommendation({
               </span>
               <Chip className="bg-cb-bad-tint text-cb-bad-dark">cheapest overall</Chip>
             </div>
-            <p className="mt-1 text-[12px] text-cb-body">{r.reason}</p>
+            {/* The reason, given the weight of the claim it supports. It was body text under a
+                bold headline; a person scanning for WHY had to stop and look for it. */}
+            <p className="mt-1.5 border-l-[3px] border-cb-bad bg-cb-bad-tint/40 px-3 py-2 text-[12px] leading-relaxed text-cb-ink-text">
+              {r.reason}
+            </p>
             <div className="mt-2">
               <RiskFlagList flags={r.risk_flags.filter((f) => f.severity === "fatal")} />
             </div>
@@ -276,11 +359,22 @@ function TradeRecommendation({
               {r.no_priced_coverage && (
                 <Chip className="bg-cb-panel text-cb-muted">no priced return</Chip>
               )}
-              <span className="ml-auto font-cb-mono text-[12px] font-semibold text-cb-ink-text">
+              <span className="ml-auto text-right font-cb-mono text-[12px] font-semibold text-cb-ink-text">
                 {r.no_priced_coverage ? (
                   <span className="text-cb-faint">{r.reason || "priced nothing"}</span>
                 ) : (
-                  hkd(r.corrected_total)
+                  <>
+                    {hkd(r.corrected_total)}
+                    {/* The gap to the recommended bid, so the list reads as a comparison rather
+                        than four unrelated numbers. Pure subtraction of two figures already in
+                        this row and the banner above; the ORDER is the engine's and is untouched. */}
+                    {winner && r.firm_id !== winner.firm_id && (
+                      <span className="ml-2 font-normal text-cb-faint">
+                        {r.corrected_total >= winner.corrected_total ? "+" : "−"}
+                        {hkd(Math.abs(r.corrected_total - winner.corrected_total))}
+                      </span>
+                    )}
+                  </>
                 )}
               </span>
             </li>

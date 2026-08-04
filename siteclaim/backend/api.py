@@ -1472,8 +1472,21 @@ def post_inbound_reply(
 def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]]) -> str:
     """The Gmail poller's adapter onto the SHARED processing path: read the downloaded attachment
     bytes exactly as the route reads uploads, then run :func:`process_inbound_reply`. Returns the
-    outcome status ("matched" / "unmatched") the poller records against the message id."""
-    sheets, images = _read_reply_files([(fn, None, data) for fn, data in attachments])
+    outcome status ("matched" / "unmatched") the poller records against the message id.
+
+    The content type is derived from the FILENAME, because a Gmail attachment arrives as
+    ``(filename, bytes)`` and this adapter used to pass ``None``.
+
+    That was fine for a workbook — ``is_xlsx_upload`` falls back to the filename — and fatal for a
+    PDF: ``to_images(data, None)`` raises ``Unsupported document type None``, ``poll_once`` catches
+    it, records ``error: …`` and MARKS THE MESSAGE PROCESSED so it is never retried. A priced PDF
+    return arriving by email was dropped with an error record. Never exercised until now, because
+    polling has never been on.
+    """
+    import mimetypes
+
+    typed = [(fn, mimetypes.guess_type(fn)[0], data) for fn, data in attachments]
+    sheets, images = _read_reply_files(typed)
     return process_inbound_reply(ref, sheets, images).status
 
 
