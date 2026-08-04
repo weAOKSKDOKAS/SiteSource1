@@ -95,6 +95,7 @@ _FOLDER_CATEGORY: dict[str, str] = {
     "bq": "pricing",                 # bills of quantities
     "drg": "drawings",
     "s": "specifications",           # S/ holds the Particular Specification tree
+    "ps": "specifications",          # S/PS/PS7, S/PS/PS26, S/PS/PS31 — nested three deep
     "si": "site-information",        # ground investigation, surveys, existing conditions
     "gct": "contract-conditions",    # General Conditions
     "sct": "contract-conditions",    # Special Conditions
@@ -111,20 +112,86 @@ _FOLDER_CATEGORY: dict[str, str] = {
 }
 
 
-def top_folder(name: str) -> str:
-    """The archive path's first segment, or ``''`` for a member at the root."""
-    parts = Path(name).parts
+# ---------------------------------------------------------------------------
+# The wrapper directory, which disabled every category on the first real pack
+# ---------------------------------------------------------------------------
+def strip_common_root(names: list[str]) -> tuple[list[str], int]:
+    """Drop the leading directories that wrap the whole archive. Returns ``(paths, levels)``.
+
+    Every path in the real pack began ``ND202504 Contract Dcos/`` — `BQ/`, `DRG/` and the rest sat
+    one level down. That is how Windows, OneDrive and most zip tools package a folder, so it is the
+    COMMON case, not an edge one. Taking the first segment as the folder therefore returned the
+    wrapper 206 times: one folder, and every file categorised `other`. The tree was there and
+    nothing read it.
+
+    A wrapper is identifiable because it contains the ENTIRE archive — a real folder never does,
+    because a sibling exists. So: strip while every entry shares its first segment. Two guards stop
+    it eating real structure:
+
+    * an entry already at the root means there IS no single wrapper;
+    * an entry left with only its filename means the segment about to be dropped was its FOLDER,
+      not packaging. `wrapper/BQ/x.pdf` alone must become `BQ/x.pdf`, never `x.pdf`.
+
+    Loops, because two wrappers are possible — a folder zipped inside a folder.
+    """
+    current = list(names)
+    levels = 0
+    while current:
+        parts = [Path(n).parts for n in current]
+        if len({p[0] for p in parts}) != 1:
+            break                       # siblings at the top: this is the real tree
+        if any(len(p) < 2 for p in parts):
+            break                       # something sits at the root, so nothing wraps everything
+        if any(len(p) == 2 for p in parts):
+            break                       # stripping would take a file's own folder, not packaging
+        current = ["/".join(p[1:]) for p in parts]
+        levels += 1
+    return current, levels
+
+
+def folder_of(rel_path: str) -> str:
+    """The full directory a member sits in, root already stripped — ``S/PS/PS7``, not ``S``.
+
+    The real tree has 37 folders and the specification sections are nested three deep, so the
+    folder a person recognises is the whole path, not its first segment.
+    """
+    parent = Path(rel_path).parent
+    return "" if str(parent) == "." else str(parent).replace("\\", "/")
+
+
+def top_folder(rel_path: str) -> str:
+    """The first directory segment of a root-stripped path, or ``''`` at the root."""
+    parts = Path(rel_path).parts
     return parts[0] if len(parts) > 1 else ""
 
 
-def category_for(name: str) -> str:
-    """The `PART_CATEGORIES` value this member's folder implies. Unmapped -> ``other``."""
-    folder = top_folder(name).strip().lower()
-    # `TA #1` and `TA #2` are the same folder kind; `TC No. 1 & 2` likewise. Match on the leading
-    # alphabetic token so a numbered addendum does not need its own entry per issue.
+def _category_key(segment: str) -> Optional[str]:
+    folder = segment.strip().lower()
+    if folder in _FOLDER_CATEGORY:
+        return _FOLDER_CATEGORY[folder]
+    # `TA #1` and `TA #2` are the same folder kind; `PS7`, `PS26` and `PS31` likewise. Match on the
+    # leading alphabetic token so a numbered folder needs no entry per number.
     key = re.match(r"[a-z&]+", folder)
-    guess = _FOLDER_CATEGORY.get(folder) or (_FOLDER_CATEGORY.get(key.group(0)) if key else None)
-    return guess if guess in PART_CATEGORIES else "other"
+    return _FOLDER_CATEGORY.get(key.group(0)) if key else None
+
+
+def category_for(rel_path: str) -> str:
+    """The `PART_CATEGORIES` value this member's folder implies, root already stripped.
+
+    Read DEEPEST FIRST, because the innermost folder is the most specific thing the issuer said
+    about the document. `TA #1/BQ/E-ND_2025_04-BQ-1.xlsx` is a BILL that arrived with addendum 1 —
+    reading only `TA #1` would call an addendum's bill `other` and the bill proposal would miss it.
+    `S/PS/PS7/x.pdf` resolves at `PS` when `PS7` itself is unmapped.
+
+    Unmapped at every level -> `other`, the honest-unknown bucket, and never a guess at the
+    filename.
+    """
+    segments = list(Path(rel_path).parts[:-1])          # directories only, never the basename
+    for segment in reversed(segments):
+        guess = _category_key(segment)
+        if guess in PART_CATEGORIES:
+            return guess
+    return "other"
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +265,23 @@ class ArchiveReport:
             m for m in members
             if not m.filename.endswith("/") and not is_content(m.filename) and not is_signature(m.filename)
         ]
+        # The packaging wrapper, dropped once here so every consumer sees the SAME tree. Derived
+        # from the CONTENT entries only: a stray `__MACOSX/` sibling would otherwise look like a
+        # second top-level folder and stop the strip that every real pack needs.
+        rel, self.root_levels = strip_common_root([m.filename for m in self.content])
+        self.rel: dict[str, str] = {
+            m.filename: r for m, r in zip(self.content, rel)
+        }
+
+    @property
+    def root_level_text(self) -> str:
+        return ("One leading directory" if self.root_levels == 1
+                else f"{self.root_levels} leading directories")
+
+    def rel_of(self, member) -> str:
+        """This member's path with the packaging wrapper removed."""
+        name = member.filename if hasattr(member, "filename") else str(member)
+        return self.rel.get(name, name)
 
     @property
     def uncompressed_bytes(self) -> int:
@@ -205,12 +289,14 @@ class ArchiveReport:
 
     @property
     def folders(self) -> list[str]:
+        """Every distinct directory, at its FULL depth — `S/PS/PS7`, not `S`. The real pack has 37
+        of them and its specification sections nest three deep."""
         seen: list[str] = []
         for m in self.content:
-            folder = top_folder(m.filename) or "(root)"
+            folder = folder_of(self.rel_of(m)) or "(root)"
             if folder not in seen:
                 seen.append(folder)
-        return seen
+        return sorted(seen)
 
 
 def read_tree(path: Path) -> ArchiveReport:
@@ -257,10 +343,10 @@ def plan_manifest(report: ArchiveReport, *, set_id: str, source_name: str) -> Sp
     bytes pass through, where it is free. Nothing depends on it at the gate — `pdfops.validate`
     measures only parts belonging to the BINDER, and a tree manifest has none.
     """
-    assert_unique([m.filename for m in report.content])
+    assert_unique([report.rel_of(m) for m in report.content])
     parts: list[PartSpec] = []
     for n, member in enumerate(sorted(report.content, key=lambda m: m.filename), start=1):
-        name = member.filename
+        name = report.rel_of(member)
         stem = Path(name).stem
         rev = parse_revision(name)
         parts.append(PartSpec(
@@ -276,9 +362,15 @@ def plan_manifest(report: ArchiveReport, *, set_id: str, source_name: str) -> Sp
             rev=rev if rev is not None else 0,
         ))
 
-    folders = ", ".join(f"{f}/" for f in report.folders)
+    shown = report.folders[:12]
+    folders = ", ".join(f"{f}/" for f in shown) + (
+        f" and {len(report.folders) - len(shown)} more" if len(report.folders) > len(shown) else "")
     sig = (f" {len(report.signatures)} .p7s signature file(s) were present and were NOT read as "
            "content." if report.signatures else "")
+    wrapper = (
+        f" {report.root_level_text} was packaging and was stripped before the tree was read."
+        if report.root_levels else ""
+    )
     manifest = SplitManifest(
         set_id=set_id, source_doc="", pages=0, prefix=_slug(Path(source_name).stem),
         tier=TIER_WHOLE,
@@ -286,7 +378,7 @@ def plan_manifest(report: ArchiveReport, *, set_id: str, source_name: str) -> Sp
             f"the archive's own folder tree — {len(report.folders)} folder(s): {folders}. "
             f"{len(parts)} content file(s); one whole-file part each. The issuer split this "
             "binder deliberately, which is a strong signal and still a proposal."
-            + sig
+            + wrapper + sig
         ),
         parts=parts,
     )
@@ -308,14 +400,14 @@ def folder_summary(report: ArchiveReport) -> list[dict]:
     """
     groups: dict[str, list[zipfile.ZipInfo]] = {}
     for m in report.content:
-        groups.setdefault(top_folder(m.filename) or "(root)", []).append(m)
+        groups.setdefault(folder_of(report.rel_of(m)) or "(root)", []).append(m)
     out: list[dict] = []
     for folder in report.folders:
         members = groups.get(folder, [])
         out.append({
             "folder": folder,
             "files": len(members),
-            "category": category_for(members[0].filename) if members else "other",
+            "category": category_for(report.rel_of(members[0])) if members else "other",
             "bytes": sum(m.file_size for m in members),
             "names": sorted(Path(m.filename).name for m in members),
         })
@@ -360,7 +452,7 @@ def extract(
         for index, member in enumerate(sorted(report.content, key=lambda m: m.filename)):
             if count_cb is not None:
                 count_cb(index, total)
-            flat = flatten(member.filename)
+            flat = flatten(report.rel_of(member))
             target = ws.doc_path(tender_name, flat)
             with zf.open(member) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst, length=_CHUNK)

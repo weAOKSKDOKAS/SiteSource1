@@ -423,3 +423,172 @@ def test_a_cancelled_extraction_stops_and_is_not_an_error(client, pack):
     run_archive_extract_job(job_id, set_id, "ND 2025 04")
     job = jobs.JOBS.get(job_id)
     assert job.status == "cancelled" and job.error == ""
+
+
+# ---------------------------------------------------------------------------
+# The wrapper directory — the bug that disabled every category on the real pack
+# ---------------------------------------------------------------------------
+WRAPPER = "ND202504 Contract Dcos"
+
+
+def _wrapped_pack(path: Path, *, root: str = WRAPPER, levels: int = 1) -> Path:
+    """The REAL shape. Every path in the live pack began with one wrapper directory, which is how
+    Windows, OneDrive and most zip tools package a folder — the common case, not an edge one. The
+    tree beneath it has 37 folders, and the specification sections nest three deep."""
+    prefix = "/".join([root] * levels)
+    two_page = _pdf_bytes(2)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf:
+        for member in (
+            "BQ/E-ND_2025_04_BQ-0.xlsx",
+            "BQ/E-ND_2025_04_BQ-0.pdf",
+            "DRG/GA-01.pdf",
+            "GP&PP/preambles.pdf",
+            "S/PS/PS7/ps7.pdf",
+            "S/PS/PS31/ps31.pdf",
+            "SI/borehole-log.pdf",
+            "TA #1/BQ/E-ND_2025_04-BQ-1.xlsx",
+        ):
+            zf.writestr(f"{prefix}/{member}", two_page)
+        zf.writestr(f"{prefix}/BQ/E-ND_2025_04_BQ-0.pdf.p7s", b"\x30\x82 sig" * 50)
+    return path
+
+
+def test_a_single_wrapper_directory_is_stripped(tmp_path):
+    """`ND202504 Contract Dcos/BQ/...` — the folder derivation took the first segment, got the
+    wrapper every time, and reported ONE folder with all 206 files categorised `other`."""
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
+    assert report.root_levels == 1
+    assert WRAPPER not in " ".join(report.folders)
+    assert set(report.folders) == {"BQ", "DRG", "GP&PP", "S/PS/PS7", "S/PS/PS31", "SI", "TA #1/BQ"}
+
+
+def test_categories_survive_the_wrapper(tmp_path):
+    """The whole consequence of the bug: with the wrapper in place every one of these was
+    `other`."""
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
+    manifest = archive.plan_manifest(report, set_id="s", source_name="w.zip")
+    by_title = {p.title: p.category for p in manifest.parts}
+    assert by_title["BQ/E-ND_2025_04_BQ-0.pdf"] == "pricing"
+    assert by_title["DRG/GA-01.pdf"] == "drawings"
+    assert by_title["SI/borehole-log.pdf"] == "site-information"
+    assert by_title["GP&PP/preambles.pdf"] == "safety-requirements"
+    assert not any(c == "other" for c in by_title.values())
+
+
+def test_two_wrappers_are_both_stripped(tmp_path):
+    """This archive had one. A folder zipped inside a folder gives two, and the strip loops."""
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w2.zip", levels=2))
+    assert report.root_levels == 2
+    assert "BQ" in report.folders
+
+
+def test_a_pack_with_no_wrapper_is_untouched(pack):
+    report = archive.read_tree(pack)
+    assert report.root_levels == 0
+    assert "BQ" in report.folders
+
+
+def test_a_wrapper_is_never_stripped_down_to_a_bare_filename(tmp_path):
+    """`wrapper/BQ/x.pdf` alone shares BOTH segments. Stripping twice would take the file's own
+    folder — the structure — rather than the packaging, and lose the only category signal there is."""
+    p = tmp_path / "one.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr("wrapper/BQ/x.pdf", _pdf_bytes())
+    report = archive.read_tree(p)
+    assert report.root_levels == 1
+    assert report.folders == ["BQ"]
+    assert archive.category_for(report.rel_of(report.content[0])) == "pricing"
+
+
+def test_a_file_at_the_root_means_nothing_wraps_everything(tmp_path):
+    p = tmp_path / "mixed.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr("readme.pdf", _pdf_bytes())
+        zf.writestr("BQ/x.pdf", _pdf_bytes())
+    report = archive.read_tree(p)
+    assert report.root_levels == 0
+    assert set(report.folders) == {"(root)", "BQ"}
+
+
+def test_the_strip_ignores_packaging_when_deciding(tmp_path):
+    """A stray `__MACOSX/` sibling would otherwise look like a second top-level folder and stop the
+    strip that every real pack needs."""
+    p = tmp_path / "mac.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr(f"{WRAPPER}/BQ/x.pdf", _pdf_bytes())
+        zf.writestr(f"{WRAPPER}/DRG/y.pdf", _pdf_bytes())
+        zf.writestr("__MACOSX/._junk", b"not content")
+    report = archive.read_tree(p)
+    assert report.root_levels == 1
+    assert set(report.folders) == {"BQ", "DRG"}
+
+
+def test_the_reason_says_the_wrapper_was_packaging(tmp_path):
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
+    manifest = archive.plan_manifest(report, set_id="s", source_name="w.zip")
+    assert "One leading directory was packaging" in manifest.tier_reason
+
+
+# -- folder matching cannot assume a single level -------------------------------------------------
+def test_a_nested_specification_section_resolves(tmp_path):
+    """`S/PS/PS7` is three deep. `PS7` itself is unmapped and it resolves at `PS`."""
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
+    manifest = archive.plan_manifest(report, set_id="s", source_name="w.zip")
+    by_title = {p.title: p.category for p in manifest.parts}
+    assert by_title["S/PS/PS7/ps7.pdf"] == "specifications"
+    assert by_title["S/PS/PS31/ps31.pdf"] == "specifications"
+
+
+def test_the_category_is_read_deepest_first(tmp_path):
+    """`TA #1/BQ/...` is a BILL that arrived with addendum 1. Reading only the outermost folder
+    would call it `other` and the bill proposal would miss it entirely."""
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
+    manifest = archive.plan_manifest(report, set_id="s", source_name="w.zip")
+    addendum = next(p for p in manifest.parts if p.title.startswith("TA #1/"))
+    assert addendum.category == "pricing"
+    assert archive.category_for("TA #2/DRG/x.pdf") == "drawings"
+
+
+def test_folders_are_reported_at_their_full_depth(tmp_path):
+    """A person recognises `S/PS/PS7`, not `S`. The real tree has 37 folders on that basis."""
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
+    groups = {g["folder"]: g for g in archive.folder_summary(report)}
+    assert "S/PS/PS7" in groups and "S/PS/PS31" in groups
+    assert groups["S/PS/PS7"]["category"] == "specifications"
+    assert groups["TA #1/BQ"]["category"] == "pricing"
+
+
+# -- the collision guard, actually exercised ------------------------------------------------------
+def test_two_folders_holding_the_same_basename_survive_end_to_end(tmp_path, workspace):
+    """Basenames were unique in the real pack BY COINCIDENCE, so the flattening was never proven.
+    `_safe_name` is `Path(name).name`: without flattening both of these become `a.pdf` in one flat
+    `docs/` directory and the second silently overwrites the first."""
+    p = tmp_path / "clash.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr(f"{WRAPPER}/DRG/GA-01.pdf", _pdf_bytes(2))
+        zf.writestr(f"{WRAPPER}/SI/GA-01.pdf", _pdf_bytes(3))
+        zf.writestr(f"{WRAPPER}/S/PS/PS7/GA-01.pdf", _pdf_bytes(4))
+
+    report = archive.read_tree(p)
+    manifest = archive.plan_manifest(report, set_id="s", source_name="clash.zip")
+    # Three parts, three distinct stored names, three distinct titles.
+    assert sorted(x.source_doc for x in manifest.parts) == [
+        "DRG__GA-01.pdf", "SI__GA-01.pdf", "S__PS__PS7__GA-01.pdf",
+    ]
+    assert len({x.title for x in manifest.parts}) == 3
+    assert {x.category for x in manifest.parts} == {"drawings", "site-information", "specifications"}
+
+    written = archive.extract(report, workspace, "clash")
+    assert len(written) == 3
+    # Three real files on disk, each with its own bytes — not one file written three times.
+    sizes = {Path(v).stat().st_size for v in written.values()}
+    assert len(sizes) == 3
+
+
+def test_the_flattening_uses_the_stripped_path_not_the_wrapper(tmp_path):
+    """The wrapper must not bloat every stored filename — it is packaging, and it is identical on
+    every one of them, so it distinguishes nothing."""
+    report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
+    manifest = archive.plan_manifest(report, set_id="s", source_name="w.zip")
+    assert all(WRAPPER not in x.source_doc for x in manifest.parts)
+    assert "DRG__GA-01.pdf" in {x.source_doc for x in manifest.parts}
