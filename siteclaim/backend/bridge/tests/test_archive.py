@@ -1,10 +1,16 @@
 """A whole tender pack, as one archive, at constant memory.
 
 Built against the shape measured on CEDD ND/2025/04 (`OneDrive_2026-07-21.zip`): 232.3 MB, 441
-entries, 203 PDFs, 3 XLSX, 201 `.p7s` signatures, seventeen top-level folders, filenames carrying a
-document code and a revision. The real pack is not in the repo, so the fixture below reproduces its
-SHAPE — a folder tree, mixed PDFs and one workbook, signature files, and a filename that carries a
-revision beside one that does not.
+entries, 206 content files (203 PDFs + 3 XLSX), 201 `.p7s` signatures, seventeen top-level folders —
+37 distinct directories once the nesting is counted — and filenames carrying a document code and a
+revision.
+
+**Everything below is a FIXTURE, and its counts are its own.** The real pack is not in the repo and
+is not reproduced here: these archives are a dozen members, not 441, so a count asserted in this file
+is a fact about the fixture and never evidence about the tender. What IS carried over from the real
+pack is its SHAPE — a folder tree, mixed PDFs and one workbook, signature files, a wrapper directory,
+folders nested three deep, and a filename that carries a revision beside one that does not — because
+shape is the thing the code has to get right and the thing a small archive can hold honestly.
 
 The load-bearing assertion is the memory one, and it is MEASURED rather than asserted in prose: an
 archive that gets ten times bigger must not make the process ten times bigger.
@@ -170,7 +176,7 @@ def test_categories_derive_from_folders(pack):
     assert by_title["DRG/GA-01.pdf"] == "drawings"
     assert by_title["S/PS-S07.pdf"] == "specifications"
     assert by_title["SI/borehole-log.pdf"] == "site-information"
-    assert by_title["GP&PP/preambles.pdf"] == "safety-requirements"
+    assert by_title["GP&PP/preambles.pdf"] == "specifications"
     assert by_title["TC No. 1 & 2/cover.pdf"] == "tender-conditions"
 
 
@@ -183,6 +189,83 @@ def test_an_unmapped_folder_is_other_never_a_guess(pack):
 
 def test_a_numbered_addendum_folder_needs_no_entry_per_issue(pack):
     assert archive.category_for("TA #1/BQ/x.pdf") == archive.category_for("TA #2/BQ/x.pdf")
+
+
+# ---------------------------------------------------------------------------
+# The standard Hong Kong government tender codes, pinned one per line
+# ---------------------------------------------------------------------------
+# These recur on every pack from these departments, so each is worth getting right ONCE rather than
+# re-derived per tender — and four were wrong on the first pass. A wrong category here is not a
+# cosmetic mislabel: `PartSpec.category` is what `effective_category` falls back to when a part has
+# no context card, so it is what reaches the review's skip-list. Filed as `admin-forms`, 127 pages of
+# amended NEC conditions would have been skipped as a probity declaration.
+_STANDARD_CODES = {
+    # code        expected category        what the abbreviation stands for
+    "ACC":       ("contract-conditions",   "Additional Conditions of Contract"),
+    "AoA":       ("contract-conditions",   "Articles of Agreement"),
+    "GCT":       ("tender-conditions",     "General Conditions of Tender"),
+    "SCT":       ("tender-conditions",     "Special Conditions of Tender"),
+    "GP&PP":     ("specifications",        "General and Particular Preambles"),
+    "BQ":        ("pricing",               "Bills of Quantities"),
+    "DRG":       ("drawings",              "Drawings"),
+    "SI":        ("site-information",      "Site Information"),
+    "FoT":       ("bid-forms",             "Form of Tender"),
+    "NTT":       ("tender-instructions",   "Notice to Tenderers"),
+    "CDP1":      ("contract-data",         "Contract Data part 1"),
+    "CDP2":      ("contract-data",         "Contract Data part 2"),
+    "TC No. 1 & 2": ("tender-conditions",  "Technical Circulars"),
+}
+
+
+@pytest.mark.parametrize("code", sorted(_STANDARD_CODES))
+def test_a_standard_tender_code_maps_to_its_real_category(code):
+    expected, meaning = _STANDARD_CODES[code]
+    got = archive.category_for(f"{code}/doc.pdf")
+    assert got == expected, f"{code} is {meaning} — expected {expected!r}, got {got!r}"
+
+
+def test_the_four_corrected_codes_reach_the_manifest_end_to_end(tmp_path):
+    """Through `read_tree` and `plan_manifest`, not just `category_for` — the four that were wrong
+    were wrong in the manifest a person approves, which is the only place it matters."""
+    p = tmp_path / "codes.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        for member in ("ACC/additional-conditions.pdf", "AoA/articles.pdf",
+                       "GCT/general-conditions-of-tender.pdf", "SCT/special-conditions.pdf",
+                       "GP&PP/preambles.pdf"):
+            zf.writestr(member, _pdf_bytes())
+    manifest = archive.plan_manifest(
+        archive.read_tree(p), set_id="s", source_name="codes.zip")
+    assert {x.title: x.category for x in manifest.parts} == {
+        # The document the departure register exists to read. Was `admin-forms`.
+        "ACC/additional-conditions.pdf": "contract-conditions",
+        # The executed contract instrument, not a form a bidder fills in. Was `bid-forms`.
+        "AoA/articles.pdf": "contract-conditions",
+        # Conditions of TENDER govern the process and expire at award. Were `contract-conditions`,
+        # which put terms that die at award beside terms that bind for the whole job.
+        "GCT/general-conditions-of-tender.pdf": "tender-conditions",
+        "SCT/special-conditions.pdf": "tender-conditions",
+        # The Standard Method of Measurement rules — what a rate must include. Was
+        # `safety-requirements`, a guess from the ampersand.
+        "GP&PP/preambles.pdf": "specifications",
+    }
+
+
+def test_sct_is_not_read_as_the_specification_folder():
+    """`S/` is the Particular Specification tree and `_category_key` falls back to a leading
+    alphabetic token, so a bare prefix rule would resolve `SCT` at `S`. The exact key must win —
+    otherwise Special Conditions of Tender are filed as specification and read as scope."""
+    assert archive.category_for("S/PS-S07.pdf") == "specifications"
+    assert archive.category_for("SCT/x.pdf") == "tender-conditions"
+    assert archive.category_for("SI/x.pdf") == "site-information"
+
+
+def test_every_mapped_category_is_a_real_part_category():
+    """A typo here would not raise — `category_for` checks membership and silently returns `other`,
+    so a mistyped value degrades to the unknown bucket with no error anywhere. Caught at the table."""
+    from client_boq.models import PART_CATEGORIES
+
+    bad = {k: v for k, v in archive._FOLDER_CATEGORY.items() if v not in PART_CATEGORIES}
+    assert bad == {}
 
 
 def test_revisions_parse_where_the_convention_matches_and_are_absent_where_it_does_not():
@@ -432,9 +515,13 @@ WRAPPER = "ND202504 Contract Dcos"
 
 
 def _wrapped_pack(path: Path, *, root: str = WRAPPER, levels: int = 1) -> Path:
-    """The REAL shape. Every path in the live pack began with one wrapper directory, which is how
-    Windows, OneDrive and most zip tools package a folder — the common case, not an edge one. The
-    tree beneath it has 37 folders, and the specification sections nest three deep."""
+    """A FIXTURE carrying the wrapped shape — eight members, where the real pack has 206.
+
+    What it reproduces is the arrangement, not the size: one wrapper directory over the whole tree,
+    which is how Windows, OneDrive and most zip tools package a folder and therefore the common case
+    rather than an edge one; and a specification branch nested three deep, because the real tree's 37
+    directories include `S/PS/PS7` and the folder match cannot assume a single level.
+    """
     prefix = "/".join([root] * levels)
     two_page = _pdf_bytes(2)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf:
@@ -471,7 +558,7 @@ def test_categories_survive_the_wrapper(tmp_path):
     assert by_title["BQ/E-ND_2025_04_BQ-0.pdf"] == "pricing"
     assert by_title["DRG/GA-01.pdf"] == "drawings"
     assert by_title["SI/borehole-log.pdf"] == "site-information"
-    assert by_title["GP&PP/preambles.pdf"] == "safety-requirements"
+    assert by_title["GP&PP/preambles.pdf"] == "specifications"
     assert not any(c == "other" for c in by_title.values())
 
 
@@ -550,7 +637,8 @@ def test_the_category_is_read_deepest_first(tmp_path):
 
 
 def test_folders_are_reported_at_their_full_depth(tmp_path):
-    """A person recognises `S/PS/PS7`, not `S`. The real tree has 37 folders on that basis."""
+    """A person recognises `S/PS/PS7`, not `S`. Counted that way the real tree has 37 directories
+    under its seventeen top-level folders; this fixture has seven, and asserts the depth rule."""
     report = archive.read_tree(_wrapped_pack(tmp_path / "w.zip"))
     groups = {g["folder"]: g for g in archive.folder_summary(report)}
     assert "S/PS/PS7" in groups and "S/PS/PS31" in groups
@@ -560,7 +648,7 @@ def test_folders_are_reported_at_their_full_depth(tmp_path):
 
 # -- the collision guard, actually exercised ------------------------------------------------------
 def test_two_folders_holding_the_same_basename_survive_end_to_end(tmp_path, workspace):
-    """Basenames were unique in the real pack BY COINCIDENCE, so the flattening was never proven.
+    """Basenames happened to be unique in the real pack, so the flattening was never proven there.
     `_safe_name` is `Path(name).name`: without flattening both of these become `a.pdf` in one flat
     `docs/` directory and the second silently overwrites the first."""
     p = tmp_path / "clash.zip"

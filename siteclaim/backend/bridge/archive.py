@@ -8,8 +8,9 @@ member 41.3 MB, central directory read in 226 ms with ZERO bytes decompressed.
 
 **The tree is the manifest.** The issuer already split the binder into seventeen top-level folders —
 `ACC/ AoA/ BQ/ CDP1/ CDP2/ Covers/ DRG/ FoT/ GCT/ GP&PP/ NTT/ S/ SCT/ SI/ TA #1/ TA #2/ TC No. 1 & 2/`
-— and a person at the issuing authority made that tree deliberately. It is a strong signal. It is
-still a proposal: the human approves the manifest exactly as they do today, through the same gate.
+— which are 37 distinct directories once the nesting below `S/PS/` and `TA #n/` is counted. A person
+at the issuing authority made that tree deliberately. It is a strong signal. It is still a proposal:
+the human approves the manifest exactly as they do today, through the same gate.
 
 Three properties this module exists to hold:
 
@@ -91,24 +92,41 @@ def is_content(name: str) -> bool:
 #
 # An unmapped folder becomes `other` — the honest-unknown bucket — and NEVER a guess from the
 # filename. A tender that arrives with a folder nobody has seen should say so, not invent a fit.
+# These are STANDARD Hong Kong government tender codes. They recur on every pack from these
+# departments, so each one is worth getting right once rather than re-deriving per tender — and
+# four of them were wrong on the first pass, in ways that mattered.
 _FOLDER_CATEGORY: dict[str, str] = {
-    "bq": "pricing",                 # bills of quantities
+    "bq": "pricing",                 # Bills of Quantities
     "drg": "drawings",
     "s": "specifications",           # S/ holds the Particular Specification tree
     "ps": "specifications",          # S/PS/PS7, S/PS/PS26, S/PS/PS31 — nested three deep
     "si": "site-information",        # ground investigation, surveys, existing conditions
-    "gct": "contract-conditions",    # General Conditions
-    "sct": "contract-conditions",    # Special Conditions
     "cdp1": "contract-data",
     "cdp2": "contract-data",
-    "fot": "bid-forms",              # Form of Tender
-    "aoa": "bid-forms",              # Articles of Agreement
+    "fot": "bid-forms",              # Form of Tender — what the bidder fills in and signs
     "ntt": "tender-instructions",    # Notice to Tenderers
     "tc": "tender-conditions",       # "TC No. 1 & 2"
-    "acc": "admin-forms",            # declarations / probity
-    "gp&pp": "safety-requirements",  # General & Particular Preambles carry the safety regime
     "covers": "other",
     "ta": "other",                   # an addendum is a KIND, not a category — its contents vary
+
+    # --- the four corrections, and why each label matters ---------------------------------------
+    # ACC — ADDITIONAL CONDITIONS OF CONTRACT: 127 pages of amended NEC conditions, and the single
+    # document the departure register exists to read. Filed as `admin-forms` it read as a probity
+    # declaration.
+    "acc": "contract-conditions",
+    # AoA — ARTICLES OF AGREEMENT: the executed contract instrument, not something a bidder fills
+    # in. `bid-forms` confused the thing being signed with the form for signing it.
+    "aoa": "contract-conditions",
+    # GCT / SCT — GENERAL and SPECIAL CONDITIONS OF **TENDER**. These govern the tender PROCESS and
+    # expire at award; they are not conditions of the contract that follows. Filing them as
+    # `contract-conditions` put terms that die at award beside terms that bind for the whole job.
+    "gct": "tender-conditions",
+    "sct": "tender-conditions",
+    # GP&PP — GENERAL AND PARTICULAR PREAMBLES: the Standard Method of Measurement rules, which say
+    # how each item is measured and therefore what a rate must include. That is specification, and
+    # it is what an estimator reads before pricing. `safety-requirements` was a guess from the
+    # ampersand.
+    "gp&pp": "specifications",
 }
 
 
