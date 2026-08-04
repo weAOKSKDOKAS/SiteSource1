@@ -93,6 +93,7 @@ def run_review(
     progress_cb: Optional[ProgressCB] = None,
     on_note: Optional[Callable[[str], None]] = None,
     count_cb: Optional[Callable[[int, int], None]] = None,
+    include_specifications: bool = False,
 ) -> DepartureRegister:
     """Run the review end to end and persist it. Returns the assembled, citation-checked register.
 
@@ -103,6 +104,12 @@ def run_review(
     ``on_note`` carries what the person reading the register needs to know that is not IN it —
     today, which parts were not read for contractual positions, and whether the set contained a
     contractual document at all.
+
+    ``include_specifications`` reads the specification tree as well. It is off by default because a
+    real government pack is mostly specification appendices — 150 of ND/2025/04's 206 parts — and
+    those are borehole logs and test schedules rather than contractual positions. The parts are
+    NAMED in the notes rather than dropped, and this flag brings them back. See
+    :func:`s01_ingest.skip_set` for why this is a skip-list rather than an allow-list.
     """
 
     def step(stage: str) -> None:
@@ -118,6 +125,7 @@ def run_review(
         parsed = s01_ingest.ingest_from_parts(
             parts, project_name, on_note=on_note, contexts=_part_contexts(set_id),
             count_cb=count_cb,
+            skip_categories=s01_ingest.skip_set(include_specifications=include_specifications),
         )
     else:
         parsed = s01_ingest.ingest_review_documents(uploads, project_name, workspace=ws)

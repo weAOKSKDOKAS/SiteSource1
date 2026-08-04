@@ -157,8 +157,17 @@ export interface JobState {
   done?: number;
   total?: number;
   /** Elapsed only. There is deliberately no remaining-time estimate anywhere in this system: a
-   *  countdown that lies is worse than a bar that admits it does not know. */
+   *  countdown that lies is worse than a bar that admits it does not know.
+   *
+   *  THREE numbers, because two of them used to be added together and shown as one. The server
+   *  pool has two workers shared by every workflow, so a job can wait behind another having spent
+   *  nothing — and `elapsed_seconds` counts from the request, so that wait was displayed as run
+   *  time. A "34 minute" review that queued for 20 was doing 14 minutes of work, and there was no
+   *  way to tell a slow review from a queued one. `elapsed_seconds` keeps its meaning (total);
+   *  the other two decompose it, and `queued_seconds` freezes when the work starts. */
   elapsed_seconds?: number;
+  queued_seconds?: number;
+  running_seconds?: number;
   /** A stop was asked for and the current stage has not finished. `cancel_requested` true with
    *  status still "running" is the state the strip reads to say "stopping at the next step" —
    *  which is true — rather than "stopped", which would not be. */

@@ -29,6 +29,9 @@ class Job:
     """One background job's live state (mirrors the main app's ``_IngestJob``)."""
 
     kind: str = ""                 # "review" | "estimate"
+    # Which document set this job is for, so "is one already in flight for this set?" is
+    # answerable. Empty for a job over loose uploads, which belongs to no set.
+    set_id: str = ""
     status: str = "queued"         # queued | running | done | error | cancelled
     stage: str = ""                # workflow-specific stage label
     # Where this stage sits in its workflow, and how many there are. `stage_total` is 0 when the
@@ -42,10 +45,19 @@ class Job:
     # it does not know.
     done: int = 0
     total: int = 0
-    # Wall-clock seconds since the job was created, computed on read. Elapsed ONLY: nothing in this
-    # system can honestly estimate remaining time, and a countdown that lies is worse than a bar
-    # that says it does not know.
+    # TWO clocks, because they measure different things and reporting one as the other hid a
+    # 20-minute queue wait inside a "34 minute" run.
+    #
+    # `started_at` is stamped at CREATE — when the job was enqueued. The pool holds two workers
+    # shared by every workflow, so a job can sit here for a long time having spent nothing.
+    # `running_at` is stamped when a worker actually picks it up (`mark_running`) and is None
+    # until then. Waiting is not working, and a screen that adds them together is telling the
+    # operator that the machine is slow when it is in fact busy elsewhere.
+    #
+    # Elapsed ONLY, in both directions: nothing in this system can honestly estimate remaining
+    # time, and a countdown that lies is worse than a bar that says it does not know.
     started_at: float = field(default_factory=time.monotonic)
+    running_at: Optional[float] = None
     result: Optional[dict] = None
     error: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -64,11 +76,43 @@ class JobStore:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
 
-    def create(self, kind: str) -> str:
+    def create(self, kind: str, set_id: str = "") -> str:
         job_id = uuid.uuid4().hex
         with self._lock:
-            self._jobs[job_id] = Job(kind=kind)
+            self._jobs[job_id] = Job(kind=kind, set_id=set_id)
         return job_id
+
+    def live_for(self, kind: str, set_id: str) -> Optional[str]:
+        """The id of a job of this kind already in flight for this set, or None.
+
+        In flight means `queued` OR `running`. A queued job counts: it has a worker coming, and
+        the whole point of refusing is that a second run must not be lined up behind the first.
+
+        Loose-upload jobs carry no `set_id` and are never matched — they belong to no set, so
+        "another one for the same set" is not a question that can be asked about them.
+        """
+        if not set_id:
+            return None
+        with self._lock:
+            for job_id, job in self._jobs.items():
+                if job.kind == kind and job.set_id == set_id and job.status in ("queued", "running"):
+                    return job_id
+        return None
+
+    def mark_running(self, job_id: str, stage: str) -> None:
+        """A worker has picked this job up. Stops the queue clock and starts the run clock.
+
+        `running_at` is stamped once and never restamped, so a job that reaches this twice (it
+        should not) still reports the moment work actually began.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.status = "running"
+            job.stage = stage
+            if job.running_at is None:
+                job.running_at = time.monotonic()
 
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:

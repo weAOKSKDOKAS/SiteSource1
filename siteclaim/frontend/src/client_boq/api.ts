@@ -299,10 +299,15 @@ export const api = {
     }>(`/ingest/parts/${setId}/${partId}/locate`, { quote }),
 
   // --- review --------------------------------------------------------------
-  runReview(setId: string, projectName: string): Promise<JobState> {
+  /** `includeSpecifications` reads the specification tree too. Off by default: on a real
+   *  government pack that category is most of the set and is mostly appendices — borehole logs,
+   *  test schedules — which carry no contractual position. The deferred parts are named in the
+   *  run's notes rather than dropped, so this is a reversible choice, not a silent exclusion. */
+  runReview(setId: string, projectName: string, includeSpecifications = false): Promise<JobState> {
     const form = new FormData();
     form.append("project_name", projectName);
     form.append("set_id", setId);
+    form.append("include_specifications", String(includeSpecifications));
     return fetch(`${ROOT}/review/run`, { method: "POST", body: form }).then((r) =>
       handle<JobState>(r),
     );
@@ -581,25 +586,69 @@ export const api = {
   },
 };
 
-/** Poll a background job to completion. No ceiling — a 400-page binder takes as long as it takes. */
+/** Every job id with a poll loop running for it right now, and everyone listening to that loop.
+ *
+ *  ONE LOOP PER JOB, EVER. Four review job ids were once being polled at once on a single set —
+ *  four independent `setTimeout` chains, each writing through `onProgress` into the shell's single
+ *  `job` slot, so the strip showed whichever loop happened to answer last and the progress jumped
+ *  between unrelated runs. Two things produced that, and both are now closed: the server refuses a
+ *  second review on a set that already has one (409, `_no_review_in_flight_or_409`), and this map
+ *  makes a second loop for one job impossible.
+ *
+ *  Note what is deliberately NOT done here: a loop is not aborted when the component that started
+ *  it unmounts. Tabs render through a ternary, so `Register` unmounts the moment you navigate
+ *  away, and the whole point of the shell-level strip is that a run you walked away from is still
+ *  reported. Killing the loop on unmount would blank the strip — the exact failure `track()` was
+ *  added to fix. A loop is bounded by its JOB, not by a component: it ends when the server says
+ *  done, error or cancelled, when the job 404s, or after six consecutive transport failures. */
+const LIVE_POLLS = new Map<
+  string,
+  { promise: Promise<JobState>; subscribers: Set<(s: JobState) => void> }
+>();
+
+/** Which jobs are being polled right now. Exported so the condition can be asserted rather than
+ *  eyeballed in a network tab — "four ids at once" was diagnosed from a screenshot. */
+export function pollingJobIds(): string[] {
+  return [...LIVE_POLLS.keys()];
+}
+
+/** Poll a background job to completion. No ceiling — a 400-page binder takes as long as it takes.
+ *
+ *  Calling this for a job already being polled JOINS the existing loop instead of starting a
+ *  second: the caller gets the same promise, and its `onProgress` is added to the subscribers the
+ *  one loop feeds. */
 export function pollJob(
   poll: (jobId: string) => Promise<JobState>,
   jobId: string,
   onProgress?: (s: JobState) => void,
 ): Promise<JobState> {
-  return new Promise((resolve, reject) => {
+  const existing = LIVE_POLLS.get(jobId);
+  if (existing) {
+    if (onProgress) existing.subscribers.add(onProgress);
+    return existing.promise;
+  }
+
+  const subscribers = new Set<(s: JobState) => void>(onProgress ? [onProgress] : []);
+  const promise = new Promise<JobState>((resolve, reject) => {
     let failures = 0;
+    // Every exit drops the registry entry FIRST, so a finished or failed job is never left
+    // looking live and a re-run gets a fresh loop rather than a settled promise.
+    const finish = (fn: () => void) => {
+      LIVE_POLLS.delete(jobId);
+      fn();
+    };
     const tick = () => {
       poll(jobId)
         .then((state) => {
           failures = 0;
-          onProgress?.(state);
-          if (state.status === "done") resolve(state);
-          else if (state.status === "error") reject(new Error(state.error || "The job failed"));
+          subscribers.forEach((fn) => fn(state));
+          if (state.status === "done") finish(() => resolve(state));
+          else if (state.status === "error")
+            finish(() => reject(new Error(state.error || "The job failed")));
           // A cancelled run RESOLVES. It is not a failure — somebody asked for it — so it must
           // not reach an error banner; the caller reads `.status` and refreshes as it would after
           // any other ending.
-          else if (state.status === "cancelled") resolve(state);
+          else if (state.status === "cancelled") finish(() => resolve(state));
           else setTimeout(tick, 1500);
         })
         .catch((e: unknown) => {
@@ -613,12 +662,15 @@ export function pollJob(
           // and retried six times, while the strip claimed a run that had stopped existing.
           // `handle()` already sets `error.status`; read the property, not the prose.
           const status = (e as { status?: number } | null)?.status;
-          if (status === 404 || ++failures > 5) reject(new Error(message));
+          if (status === 404 || ++failures > 5) finish(() => reject(new Error(message)));
           else setTimeout(tick, 2000);
         });
     };
     tick();
   });
+
+  LIVE_POLLS.set(jobId, { promise, subscribers });
+  return promise;
 }
 
 /** Start a job and see it through, whichever mode the backend is in.

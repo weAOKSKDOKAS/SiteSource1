@@ -90,6 +90,13 @@ export function RegisterTab({
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [criteriaRows, setCriteriaRows] = useState<Criterion[]>([]);
   const [busy, setBusy] = useState(false);
+  /** Read the specification tree as well. Off by default — on a real government pack that is ~150
+   *  of 206 parts, mostly appendices (borehole logs, test schedules) that carry no contractual
+   *  position, and reading them is most of a long run. It is a DEFERRAL, not an exclusion: the
+   *  parts are named in the run's notes and this brings them back. */
+  const [includeSpecs, setIncludeSpecs] = useState(false);
+  /** The finished run's notes — chiefly which parts it did not read, and why. */
+  const [runNotes, setRunNotes] = useState<string[]>([]);
   const panes = usePanes("register", 224, 520, railOpen);
 
   // The acceptable-terms library, so a row can say what `PS-01` actually means. Loaded once per
@@ -357,11 +364,15 @@ export function RegisterTab({
   async function runReview() {
     setBusy(true);
     try {
-      await runJob(
-        () => api.runReview(data.setId, data.name),
+      const finished = await runJob(
+        () => api.runReview(data.setId, data.name, includeSpecs),
         api.reviewStatus,
         (s) => onProgress?.(s),
       );
+      // What the run did NOT read, kept where the person reading the register will see it. The
+      // backend has always written these notes; nothing displayed them for a review, so a part
+      // skipped on the operator's behalf was invisible. A deferral nobody can see is an exclusion.
+      setRunNotes(finished.warnings ?? []);
       onProgress?.(null);
       await onRefresh();
     } catch (e: unknown) {
@@ -402,9 +413,26 @@ export function RegisterTab({
         title="The register has not been run yet"
         action={
           data.gates.manifest ? (
-            <Button variant="brass" onClick={runReview} disabled={busy}>
-              Run the review
-            </Button>
+            <div className="flex flex-col items-center gap-2.5">
+              <Button variant="brass" onClick={runReview} disabled={busy}>
+                Run the review
+              </Button>
+              {/* The skip, made visible and reversible at the point of decision — not a constant
+                  buried in the engine. A departure register concerns the conditions of contract;
+                  on a real government pack the specification tree is most of the set and mostly
+                  appendices. Naming the choice here, before the run, is the difference between a
+                  deferral the operator made and an exclusion the code made for them. */}
+              <label className="flex items-center gap-1.5 font-cb-sans text-[10px] text-cb-muted">
+                <input
+                  type="checkbox"
+                  checked={includeSpecs}
+                  onChange={(e) => setIncludeSpecs(e.target.checked)}
+                  disabled={busy}
+                  className="accent-[#BD9A5F]"
+                />
+                Read the specifications too — slower, and mostly appendices
+              </label>
+            </div>
           ) : undefined
         }
       >
@@ -617,6 +645,37 @@ export function RegisterTab({
                   {mismatch.note}
                 </p>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* What this run did not read. Amber border and text, no fill claim: it is not a failure
+            and not a finding — it is the boundary of what was looked at, which the person reading
+            a register has to know to read it correctly. */}
+        {runNotes.length > 0 && (
+          <div className="flex-none border-b border-cb-amber bg-cb-brass-tint px-4 py-2.5">
+            <div className="flex items-start gap-2">
+              <span className="flex-none font-cb-mono text-[11px] text-cb-brass-text">◑</span>
+              <div className="min-w-0 flex-1">
+                <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
+                  WHAT THIS RUN DID NOT READ
+                </div>
+                {runNotes.map((note) => (
+                  <p
+                    key={note}
+                    className="mt-1 font-cb-sans text-[11px] leading-[1.5] text-cb-brass-text"
+                  >
+                    {note}
+                  </p>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setRunNotes([])}
+                className="cb-press flex-none font-cb-sans text-[10px] text-cb-brass-text underline"
+              >
+                dismiss
+              </button>
             </div>
           </div>
         )}

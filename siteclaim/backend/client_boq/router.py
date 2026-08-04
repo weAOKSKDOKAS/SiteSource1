@@ -97,7 +97,17 @@ class JobState(BaseModel):
     total: int = 0
     # Elapsed only. Nothing here can honestly estimate what REMAINS, and a countdown that lies is
     # worse than a bar that says it does not know.
+    #
+    # THREE numbers, because two of them were being added together and reported as one. The pool
+    # holds two workers shared by every workflow, so a job can wait minutes behind another having
+    # spent nothing — and `elapsed_seconds` counts from enqueue, so that wait was being shown as
+    # run time. A 34-minute review that queued for 20 was doing 14 minutes of work.
+    #
+    # `elapsed_seconds` keeps its meaning (total since the request) so nothing reading it changes
+    # under it; the split is additive. `queued_seconds` freezes when the work starts.
     elapsed_seconds: float = 0.0
+    queued_seconds: float = 0.0      # waiting for a pool worker; frozen once running
+    running_seconds: float = 0.0     # actually working; 0 while still queued
     # A cancel has been asked for but the current stage has not finished yet. The distinction
     # matters on screen: "stopping at the next step" is true, "stopped" would not be.
     cancel_requested: bool = False
@@ -146,7 +156,9 @@ def _begin(job_id: str, stage: str) -> None:
     """
     if jobs.JOBS.cancelled(job_id):
         raise jobs.JobCancelled(stage)
-    jobs.JOBS.update(job_id, status="running", stage=stage)
+    # `mark_running` rather than `update(status="running")`: this is the moment the queue clock
+    # stops and the run clock starts, and it is the only place in the system that knows it.
+    jobs.JOBS.mark_running(job_id, stage)
 
 
 def _stage_cb(job_id: str, workflow: str = ""):
@@ -177,12 +189,19 @@ def _stage_cb(job_id: str, workflow: str = ""):
 
 def _job_state(job_id: str, job) -> JobState:
     """One shape for every poll endpoint, so all three workflows report progress alike."""
+    now = _time.monotonic()
+    # Still queued: the queue clock is live and nothing has been spent. Running or finished: the
+    # queue clock froze at `running_at`, and the run clock has been going since.
+    queued = (job.running_at if job.running_at is not None else now) - job.started_at
+    running = (now - job.running_at) if job.running_at is not None else 0.0
     return JobState(
         job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
         error=job.error or None, result=job.result if job.status == "done" else None,
         warnings=list(job.warnings), done=job.done, total=job.total,
         stage_index=job.stage_index, stage_total=job.stage_total,
-        elapsed_seconds=round(_time.monotonic() - job.started_at, 1),
+        elapsed_seconds=round(now - job.started_at, 1),
+        queued_seconds=round(max(0.0, queued), 1),
+        running_seconds=round(max(0.0, running), 1),
         cancel_requested=job.cancel_requested,
     )
 
@@ -506,6 +525,35 @@ def _manifest_gate_or_409(set_id: str) -> None:
             )
     finally:
         conn.close()
+
+
+def _no_review_in_flight_or_409(set_id: str) -> None:
+    """Refuse a second review on a set that already has one running or queued.
+
+    REFUSED, not queued. Four reviews were once started on one set — four separate POSTs, four
+    real job ids — because the Run button's `busy` flag lived in a tab component that unmounts
+    when you navigate away, so leaving the tab and coming back re-armed it. Nothing on the server
+    objected: `/review/run` created and submitted unconditionally.
+
+    Queueing the second one would be the wrong repair. The pool has two workers shared by every
+    workflow, so duplicates do not merely waste a run — they occupy a worker the FIRST review's
+    successor stages need, and they push unrelated ingest and estimate work behind them. And two
+    reviews of one set race to write the same register: the second overwrites the first's verdicts
+    with its own, which is the same document reviewed twice and the operator's own judgement lost.
+
+    A cancelled or finished job is not in flight and does not block a re-run. The id is named so
+    the answer is actionable — the caller can poll it, or cancel it, rather than guess.
+    """
+    live = jobs.JOBS.live_for("review", set_id)
+    if live:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A review is already running on this document set (job {live}). Starting a "
+                "second one would overwrite the first's register, so it was refused rather than "
+                "queued. Wait for it, or cancel it and start again."
+            ),
+        )
 
 
 def _run_split_job(job_id: str, set_id: str, actor: str = "") -> None:
@@ -1440,7 +1488,7 @@ def get_ingest_download(set_id: str, include_source: bool = False) -> Response:
 # REVIEW — run (job in live, inline in DEMO), status, register
 # ---------------------------------------------------------------------------
 def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str,
-                    set_id: str = "") -> None:
+                    set_id: str = "", include_specifications: bool = False) -> None:
     """Background worker: run the review and record progress/result/error on the job."""
     try:
         _begin(job_id, "ingesting")
@@ -1449,6 +1497,7 @@ def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str,
             progress_cb=_stage_cb(job_id, "review"),
             count_cb=_count_cb(job_id),
             on_note=lambda m: jobs.JOBS.add_warning(job_id, m),
+            include_specifications=include_specifications,
         )
         jobs.JOBS.update(job_id, status="done", stage="verifying", result=_result_payload(register))
     except jobs.JobCancelled as stop:
@@ -1462,6 +1511,7 @@ def post_review_run(
     files: Optional[list[UploadFile]] = File(None),
     project_name: str = Form(""),
     set_id: str = Form(""),
+    include_specifications: bool = Form(False),
 ) -> JobState:
     """Run REVIEW (s01→…→s08) over a document set. Live: kick off a background job and poll
     ``/review/status/{job_id}``. DEMO: run inline and return the register offline (no job, no
@@ -1473,18 +1523,28 @@ def post_review_run(
       at a time, and each clause carries the part it came from. Refuses with a 409 if that set's
       split manifest has not been approved.
     * ``files`` — loose documents reviewed directly, for a single document with nothing to split.
+
+    ``include_specifications`` reads the specification tree too. Off by default: on CEDD
+    ND/2025/04 that category is ~150 of 206 parts and is mostly appendices — borehole logs, test
+    schedules — which carry no contractual position. The deferred parts are NAMED in the run's
+    notes rather than dropped, and re-running with this set reads them.
     """
     uploads: list[RawUpload] = [
         (f.filename or "document", f.content_type, f.file.read()) for f in (files or [])
     ]
     if set_id:
         _manifest_gate_or_409(set_id)
+        _no_review_in_flight_or_409(set_id)
     if demo_mode():
-        register = review_run.run_review(uploads, project_name, set_id=set_id)
+        register = review_run.run_review(
+            uploads, project_name, set_id=set_id,
+            include_specifications=include_specifications,
+        )
         return JobState(status="done", stage="verifying", result=_result_payload(register))
 
-    job_id = jobs.JOBS.create("review")
-    jobs.POOL.submit(_run_review_job, job_id, uploads, project_name, set_id)
+    job_id = jobs.JOBS.create("review", set_id=set_id)
+    jobs.POOL.submit(_run_review_job, job_id, uploads, project_name, set_id,
+                     include_specifications)
     return JobState(job_id=job_id, status="queued", stage="uploading")
 
 

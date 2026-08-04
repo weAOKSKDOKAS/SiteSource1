@@ -760,6 +760,9 @@ function JobStrip({
 }) {
   const running = Boolean(job) || work?.status === "running";
   const done = !running && (work?.status === "done" || Boolean(next));
+  // Queued is a THIRD state, not a flavour of running: nothing has been spent, no stage has been
+  // entered, and the bar must not imply otherwise.
+  const queuing = job?.status === "queued";
   // A DETERMINATE bar only where the total is genuinely known. Everywhere else the bar is
   // indeterminate and says so by moving on nothing — a bar that advances on a timer rather than on
   // work is worse than one that admits it does not know.
@@ -815,9 +818,21 @@ function JobStrip({
       {!done && job?.elapsed_seconds != null && (
         <span
           className="flex-none font-cb-mono text-[10px] text-cb-brass-text"
-          title="Time since this run started. There is no estimate of what remains — nothing here can honestly make one."
+          title={
+            queuing
+              ? "Waiting for a worker. The pool holds two, shared by every workflow, so this run has spent nothing yet."
+              : (job.queued_seconds ?? 0) >= 1
+                ? `Working for ${elapsed(job.running_seconds ?? 0)}, after waiting ${elapsed(job.queued_seconds ?? 0)} for a worker. There is no estimate of what remains — nothing here can honestly make one.`
+                : "Time spent working. There is no estimate of what remains — nothing here can honestly make one."
+          }
         >
-          {elapsed(job.elapsed_seconds)}
+          {/* Waiting is not working, and adding them together said the machine was slow when it
+              was in fact busy elsewhere. A queued job shows its wait, labelled as a wait; a
+              running one shows work time, and names the wait behind it only when there was one. */}
+          {queuing ? `QUEUED ${elapsed(job.queued_seconds ?? 0)}` : elapsed(job.running_seconds ?? job.elapsed_seconds)}
+          {!queuing && (job.queued_seconds ?? 0) >= 1 && (
+            <span className="opacity-60"> · queued {elapsed(job.queued_seconds ?? 0)}</span>
+          )}
         </span>
       )}
       <span
@@ -827,7 +842,9 @@ function JobStrip({
           ? next?.hint ?? "Finished. Open the tab that started it to see the result."
           : job?.cancel_requested
             ? "Stopping at the next step. The call already in flight has to finish first — it cannot be interrupted."
-            : "Still running — it keeps going wherever you navigate."}
+            : queuing
+              ? "Waiting for a free worker — nothing has been spent yet, and stopping it now costs nothing."
+              : "Still running — it keeps going wherever you navigate."}
       </span>
       {!done && job?.job_id && !job.cancel_requested && (
         <button

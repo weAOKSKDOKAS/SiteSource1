@@ -109,6 +109,44 @@ def _structure(client: LLMClient, body: str, label: str) -> list[ClauseItem]:
 # default rather than dropped by omission. Spending a call is cheaper than losing a clause.
 NON_CONTRACTUAL_CATEGORIES = frozenset({"pricing", "drawings"})
 
+# Categories that CAN carry a contractual position but, on a real government pack, are dominated by
+# material that cannot. Skipped BY DEFAULT and read on request — never dropped by omission.
+#
+# The evidence. CEDD ND/2025/04 extracted to 206 parts. 35 are drawings and 4 are bills, so the old
+# skip-list left 167 to read, of which roughly 150 are `specifications` — 38 lab-testing appendices
+# under S/PS/PS31, 28 geotechnical under S/PS/PS7, 25 under S/PS/PS1, and so on. Borehole logs and
+# test-result schedules are DATA. A departure register concerns the conditions of contract, and
+# reading 150 appendices for departures is where a 34-minute review goes.
+#
+# But `specifications` is too coarse a category to condemn wholesale, which is exactly why this is
+# a second set and not four more members of the first. GP&PP is the General and Particular
+# Preambles — the Standard Method of Measurement rules, which say what a rate must include, and
+# that is commercial. The Particular Specification body carries real obligations: defects periods,
+# testing regimes, attendance. Those are departures by any practical definition. So the honest
+# statement is "usually not worth 150 calls", not "never contractual", and the operator decides per
+# tender rather than the code deciding once.
+#
+# STILL A SKIP-LIST, deliberately, and this is the whole argument for the shape. An allow-list —
+# read only contract-conditions, contract-data, tender-conditions, bid-forms, tender-instructions —
+# would be faster to write and would silently omit any category added to PART_CATEGORIES later.
+# Its failure mode is a MISSING FINDING: invisible, and discovered when somebody is caught by a
+# clause nobody reviewed. A skip-list's failure mode is a SLOW RUN: visible, and discovered in 34
+# minutes. Prefer the failure you can see. A category added next month is still read by default.
+OPTIONAL_CATEGORIES = frozenset({"specifications"})
+
+
+def skip_set(*, include_specifications: bool = False) -> frozenset[str]:
+    """Which categories one review run will not read.
+
+    The DEFAULT of this function skips specifications; the default of ``ingest_from_parts`` does
+    not. That is not an inconsistency — it is where the policy lives. The stage keeps the contract
+    it always had, so every existing caller and test behaves exactly as before; the decision about
+    what a REQUEST means belongs at the boundary that interprets the request.
+    """
+    if include_specifications:
+        return NON_CONTRACTUAL_CATEGORIES
+    return NON_CONTRACTUAL_CATEGORIES | OPTIONAL_CATEGORIES
+
 
 def effective_category(part: PartSpec, context: Optional[object] = None) -> tuple[str, str]:
     """``(category, whose)`` for one part — the INTERPRETED category when there is one.
@@ -140,6 +178,7 @@ def ingest_from_parts(
     *, on_note: Optional[Callable[[str], None]] = None,
     contexts: Optional[dict] = None,
     count_cb: Optional[Callable[[int, int], None]] = None,
+    skip_categories: frozenset[str] = NON_CONTRACTUAL_CATEGORIES,
 ) -> ParsedDocumentSet:
     """Structure an already-split set, one part at a time.
 
@@ -168,10 +207,32 @@ def ingest_from_parts(
     skipped: list[tuple[PartSpec, str, str]] = []   # (part, category, whose)
     for part, pdf_path in parts:
         category, whose = effective_category(part, (contexts or {}).get(part.part_id))
-        if category in NON_CONTRACTUAL_CATEGORIES:
+        if category in skip_categories:
             skipped.append((part, category, whose))
         else:
             readable.append((part, pdf_path))
+
+    # Two REASONS to skip, reported separately because they are different statements and the
+    # difference is the whole point of the design. A bill was never going to be read. A
+    # specification was deferred by this run's settings and one click brings it back.
+    deferred = [x for x in skipped if x[1] not in NON_CONTRACTUAL_CATEGORIES]
+    skipped = [x for x in skipped if x[1] in NON_CONTRACTUAL_CATEGORIES]
+    if on_note and deferred:
+        by_category: dict[str, int] = {}
+        for _p, cat, _w in deferred:
+            by_category[cat] = by_category.get(cat, 0) + 1
+        breakdown = ", ".join(f"{n} {cat}" for cat, n in sorted(by_category.items()))
+        names = ", ".join(f"{p.part_id} ({cat})" for p, cat, _w in deferred[:8])
+        more = f" and {len(deferred) - 8} more" if len(deferred) > 8 else ""
+        on_note(
+            f"{len(deferred)} part(s) were NOT read on this run because their category is read "
+            f"only on request — {breakdown}. Named here rather than dropped: {names}{more}. On a "
+            "real government pack this category is mostly appendices — borehole logs, test "
+            "schedules — which carry no contractual position, and reading them is most of a long "
+            "run. It is not a claim that they carry none: the preambles are the measurement rules "
+            "and the specification body carries obligations. Re-run with specifications included "
+            "to read them."
+        )
     if on_note and skipped:
         # Naming WHICH category decided it, because the two disagree and that disagreement is the
         # whole of this defect: a reader who sees a skip has to be able to tell whether a document
@@ -189,7 +250,16 @@ def ingest_from_parts(
             "bill of quantities carries priced items, not clauses, and a drawing set carries "
             "geometry; reading them for contractual positions produces padding, not findings."
         )
-    if on_note and parts and not readable:
+    if on_note and parts and not readable and deferred:
+        # A different statement entirely, and getting it wrong here would be the worst kind of
+        # wrong: telling someone to upload conditions of contract they already uploaded, because
+        # this run chose not to read them. The documents are present. They were deferred.
+        on_note(
+            "Nothing was read on this run. Every part of this set is either pricing/drawings or a "
+            "category read only on request, so the register has no contractual document to report "
+            "on — but the documents ARE here. Re-run with specifications included to read them."
+        )
+    elif on_note and parts and not readable:
         on_note(
             "This set contains NO contractual document — every part is pricing or drawings. The "
             "review has nothing to read, so it reports nothing. A finding that a letter of offer "
