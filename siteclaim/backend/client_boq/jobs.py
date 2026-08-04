@@ -100,25 +100,43 @@ class JobStore:
         return None
 
     def live_any_for(self, set_id: str) -> Optional[str]:
-        """The id of a job of ANY kind in flight for this set, or None.
+        """The id of a job of ANY kind in flight for this set, or None. Oldest first.
 
         `live_for` answers "may this workflow start?"; this answers "what is this set doing right
         now?" — the question a screen has to ask when it opens. Without it a tab that mounts while
         a run is in flight knows nothing about it, renders its Run button, and the operator gets a
         409 from a button the UI had just told them to press.
 
-        First match wins. The pool serialises anyway, and where two jobs are live for one set (one
-        running, one queued behind it) either answer is true — the screen shows the set as busy,
-        which is the fact it needs. Insertion order makes it the oldest, which is the one that will
-        finish first.
+        **A first-match answer is not enough on its own, and the reasoning that said it was, was
+        wrong.** This used to argue that either answer is true because "the pool serialises
+        anyway". It does not: `POOL` has TWO workers, so an ingest and a review genuinely run at
+        the same time — and the strip then named the wrong one. Observed live, reading
+        ``INGEST · INTERPRETING · STAGE 2 OF 3`` while a review ran on the same set and the banner
+        beside it discussed the review.
+
+        So this stays the cheap "is the set busy" answer and :meth:`live_all_for` is the one a
+        screen with a tab in view should use — it can prefer the job that tab owns instead of
+        being handed an arbitrary one.
+        """
+        ids = self.live_all_for(set_id)
+        return ids[0] if ids else None
+
+    def live_all_for(self, set_id: str) -> list[str]:
+        """EVERY job in flight for this set, oldest first.
+
+        Plural because the pool is two wide and the singular answer was being asked to carry a
+        choice it could not make. A caller that knows which tab is in view can pick the job that
+        tab owns; a caller that does not still gets the oldest, which is the one that will finish
+        first. And a screen can see that there is more than one, which is the fact that makes the
+        difference visible rather than silently resolved.
         """
         if not set_id:
-            return None
+            return []
         with self._lock:
-            for job_id, job in self._jobs.items():
-                if job.set_id == set_id and job.status in ("queued", "running"):
-                    return job_id
-        return None
+            return [
+                job_id for job_id, job in self._jobs.items()
+                if job.set_id == set_id and job.status in ("queued", "running")
+            ]
 
     def mark_running(self, job_id: str, stage: str) -> None:
         """A worker has picked this job up. Stops the queue clock and starts the run clock.

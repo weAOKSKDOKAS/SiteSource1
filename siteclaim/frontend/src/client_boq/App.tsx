@@ -104,6 +104,13 @@ export default function ClientBoqApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [job, setJob] = useState<JobState | null>(null);
+  /** Every run in flight on the open set, recovered from the server by `SetView`.
+   *
+   *  Plural because the server pool is TWO workers wide, so an ingest and a review genuinely run
+   *  at the same time. The strip used to be handed whichever one `live_any_for` returned first and
+   *  described that: observed reading `INGEST · INTERPRETING · STAGE 2 OF 3` while a review ran on
+   *  the same set and the banner beside it discussed the review. */
+  const [liveJobs, setLiveJobs] = useState<JobState[]>([]);
   // What long-running work is in flight, ABOVE the tab that started it.
   //
   // A split on the Route tab looked like it paused when you navigated away. It did not: the work
@@ -265,6 +272,27 @@ export default function ClientBoqApp() {
   //
   // Deliberately NOT a timeout: an error that vanishes on a timer is worse than one that lingers,
   // because the person who looked away has no way to know it was ever there.
+  // Every run in flight, deduped: the recovered list plus whatever a tab is reporting live.
+  const inFlight = useMemo(() => {
+    const byId = new Map<string, JobState>();
+    liveJobs.forEach((j) => j.job_id && byId.set(j.job_id, j));
+    if (job?.job_id && (job.status === "queued" || job.status === "running")) {
+      byId.set(job.job_id, job);
+    }
+    return [...byId.values()];
+  }, [liveJobs, job]);
+
+  // WHICH run the strip describes. Prefer the one belonging to the tab in view; otherwise the most
+  // recently started, whose progress is the least stale. The strip belongs to the shell, so the
+  // choice does too — SetView reports the list and does not pick.
+  const openTab = surface.kind === "set" ? surface.tab : null;
+  const shownJob = useMemo(() => {
+    if (!inFlight.length) return job;
+    const mine = openTab ? inFlight.find((j) => TAB_FOR_JOB[j.kind] === openTab) : null;
+    if (mine) return mine;
+    return [...inFlight].sort((a, b) => (a.elapsed_seconds ?? 0) - (b.elapsed_seconds ?? 0))[0];
+  }, [inFlight, openTab, job]);
+
   const surfaceKey = `${surface.kind}:${"setId" in surface ? surface.setId : ""}`;
   useEffect(() => {
     setError(null);
@@ -421,7 +449,8 @@ export default function ClientBoqApp() {
       {(work || job || nextUp) && (
         <JobStrip
           work={work}
-          job={job}
+          job={shownJob}
+          liveCount={inFlight.length}
           onStop={stopJob}
           next={nextUp}
           onDismissNext={() => setNextUp(null)}
@@ -490,7 +519,8 @@ export default function ClientBoqApp() {
             reviewGateSoft={reviewGateSoft}
             onError={setError}
             onJob={noteJob}
-            job={job}
+            onLiveJobs={setLiveJobs}
+            job={shownJob}
             onTrack={track}
             onSetsChanged={() => void loadSets()}
             docTarget={docTarget}
@@ -577,6 +607,7 @@ function SetView({
   reviewGateSoft,
   onError,
   onJob,
+  onLiveJobs,
   job,
   onTrack,
   onSetsChanged,
@@ -594,6 +625,9 @@ function SetView({
   reviewGateSoft: boolean;
   onError: (msg: string) => void;
   onJob: (job: JobState | null) => void;
+  /** Report EVERY run in flight on this set up to the shell, which owns the strip and therefore
+   *  owns the choice of which one it describes. */
+  onLiveJobs: React.Dispatch<React.SetStateAction<JobState[]>>;
   /** The run in flight, so the step chips and the tab bodies say the same thing the strip does. */
   job: JobState | null;
   /** Register long work with the shell, so it stays visible after this tab unmounts. */
@@ -603,6 +637,7 @@ function SetView({
   onDocTargetUsed: () => void;
 }) {
   const [data, setData] = useState<SetData | null>(null);
+
   const [opened, setOpened] = useState<Set<TabId>>(() => new Set<TabId>([tab]));
   const [panel, setPanel] = useState<PanelRequest | null>(null);
   const [loading, setLoading] = useState(true);
@@ -686,32 +721,40 @@ function SetView({
   useEffect(() => {
     let adopted = true;
     void api
-      .liveJob(setId)
-      .then((state) => {
-        if (!adopted || !state.job_id) return;
-        if (state.status !== "queued" && state.status !== "running") return;
-        onJob(state);
-        const status =
-          state.kind === "review"
-            ? api.reviewStatus
-            : state.kind === "ingest" || state.kind === "archive"
-              ? api.ingestStatus
-              : api.estimateStatus; // scope and estimate share the estimate poll endpoint
-        return pollJob(status, state.job_id, onJob)
-          .catch(() => undefined) // the banner belongs to whoever STARTED the run, not to a re-join
-          .finally(() => {
-            onJob(null);
-            void refresh();
-          });
+      .liveJobs(setId)
+      .then(({ jobs: live }) => {
+        if (!adopted) return;
+        const running = live.filter(
+          (j) => j.job_id && (j.status === "queued" || j.status === "running"),
+        );
+        onLiveJobs(running);
+        // Adopt EVERY one. `pollJob` dedupes by id, so joining costs nothing and cannot start a
+        // second loop — and adopting only the first would leave the other invisible again, which
+        // is the defect this plural exists to close.
+        running.forEach((state) => {
+          const status =
+            state.kind === "review"
+              ? api.reviewStatus
+              : state.kind === "ingest" || state.kind === "archive"
+                ? api.ingestStatus
+                : api.estimateStatus; // scope and estimate share the estimate poll endpoint
+          void pollJob(status, state.job_id as string, onJob)
+            .catch(() => undefined) // the banner belongs to whoever STARTED the run, not a re-join
+            .finally(() => {
+              if (!adopted) return;
+              onLiveJobs((cur) => cur.filter((j) => j.job_id !== state.job_id));
+              void refresh();
+            });
+        });
       })
       .catch(() => undefined); // a set with no job is the normal case, and never an error
     return () => {
-      // Stops THIS effect adopting a late answer after the set changed. The poll loop itself is
-      // deliberately left alone: it belongs to the job, and the shell-level strip is what makes a
-      // run survive navigation in the first place.
+      // Stops THIS effect adopting a late answer after the set changed. The poll loops themselves
+      // are deliberately left alone: they belong to their jobs, and the shell-level strip is what
+      // makes a run survive navigation in the first place.
       adopted = false;
     };
-  }, [setId, onJob, refresh]);
+  }, [setId, refresh, onJob, onLiveJobs]);
 
   // Which tab's work is running, translated from the job's own vocabulary. Only while it is
   // actually in flight: a finished or cancelled job leaves the chips to `data`, which by then
@@ -828,12 +871,17 @@ function elapsed(seconds: number): string {
 function JobStrip({
   work,
   job,
+  liveCount,
   onStop,
   next,
   onDismissNext,
 }: {
   work: { label: string; status: "running" | "done" } | null;
   job: JobState | null;
+  /** How many runs are in flight on this set. More than one is SAID rather than resolved
+   *  silently — the strip can only describe one, and hiding the other is how it came to describe
+   *  the wrong one. */
+  liveCount?: number;
   onStop: (jobId: string) => void;
   /** The next action, offered — never taken. Outlives the six-second DONE strip, because an offer
    *  nobody had time to read is not an offer. */
@@ -878,6 +926,11 @@ function JobStrip({
       >
         {done ? `${heading} · DONE` : heading}
       </span>
+      {!done && (liveCount ?? 0) > 1 && (
+        <Chip className="flex-none border border-cb-amber text-cb-amber">
+          +{(liveCount ?? 1) - 1} MORE RUNNING
+        </Chip>
+      )}
       {!done && position && (
         <Chip className="flex-none border border-cb-brass-line text-cb-brass-text">{position}</Chip>
       )}

@@ -113,6 +113,18 @@ class JobState(BaseModel):
     cancel_requested: bool = False
 
 
+class LiveJobsState(BaseModel):
+    """Every job in flight for one set, so a screen can pick the one its tab owns.
+
+    The singular answer was being asked to carry a choice it could not make: the pool is two wide,
+    so an ingest and a review genuinely run at once, and whichever the server named was the one the
+    strip described — regardless of which tab the operator was looking at.
+    """
+
+    set_id: str
+    jobs: list[JobState] = Field(default_factory=list)
+
+
 class ManifestGateState(BaseModel):
     set_id: str
     manifest_approved: bool
@@ -462,13 +474,34 @@ def get_live_job(set_id: str) -> JobState:
     routed. A 404 here would make the caller distinguish "no job" from "no set" on every poll, and
     both answers mean the same thing to a screen: render normally.
     """
-    job_id = jobs.JOBS.live_any_for(set_id)
+    live = jobs.JOBS.live_all_for(set_id)
+    job_id = live[0] if live else None
     job = jobs.JOBS.get(job_id) if job_id else None
     if job_id is None or job is None:
         # `job_id` stays None and the status enum is NOT widened — the client reads a null id as
         # "nothing running" rather than learning a sixth status that means the same thing.
         return JobState(status="queued", stage="")
     return _job_state(job_id, job)
+
+
+@router.get("/jobs/live-all/{set_id}", response_model=LiveJobsState)
+def get_live_jobs(set_id: str) -> LiveJobsState:
+    """EVERY job in flight for this set, oldest first — the plural of ``/jobs/live/{set_id}``.
+
+    The pool is two wide, so an ingest and a review genuinely run at the same time. The singular
+    endpoint hands back the oldest, and the strip then named whichever that was: observed live
+    reading ``INGEST · INTERPRETING · STAGE 2 OF 3`` while a review ran on the same set and the
+    banner beside it discussed the review.
+
+    With the list, a screen can show the job belonging to the tab in view, fall back to the most
+    recently started when none maps to it, and — where more than one is live — SAY SO rather than
+    silently picking one and presenting it as the answer.
+
+    Never 404s, for the same reason as the singular: no job is a state, not an error.
+    """
+    live = jobs.JOBS.live_all_for(set_id)
+    states = [_job_state(jid, job) for jid in live if (job := jobs.JOBS.get(jid)) is not None]
+    return LiveJobsState(set_id=set_id, jobs=states)
 
 
 @router.get("/ingest/status/{job_id}", response_model=JobState)

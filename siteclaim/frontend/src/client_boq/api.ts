@@ -325,6 +325,14 @@ export const api = {
    *  So a review ran on the server while the Register tab rendered a Run button, and pressing it
    *  produced a 409 the UI had invited. Never 404s — "no job" is a state, not an error. */
   liveJob: (setId: string) => get<JobState>(`/jobs/live/${encodeURIComponent(setId)}`),
+  /** EVERY job in flight for a set, oldest first.
+   *
+   *  The plural exists because the server pool is two wide: an ingest and a review genuinely run
+   *  at the same time, so a singular answer was being asked to carry a choice it could not make.
+   *  The shell picks the job belonging to the tab in view, and where more than one is live it says
+   *  so rather than silently presenting one as the answer. */
+  liveJobs: (setId: string) =>
+    get<{ set_id: string; jobs: JobState[] }>(`/jobs/live-all/${encodeURIComponent(setId)}`),
   register: (setId: string) => get<RegisterResponse>(`/review/register/${setId}`),
   citations: (setId: string) => get<CitationsResponse>(`/review/${setId}/citations`),
   /** Gate 2. The only writer of a verdict. `approved: false` records verdicts without
