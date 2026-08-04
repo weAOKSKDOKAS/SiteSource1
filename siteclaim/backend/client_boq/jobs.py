@@ -17,6 +17,7 @@ that would submit actual review/estimate work are the stage stubs, still ``NotIm
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -30,8 +31,21 @@ class Job:
     kind: str = ""                 # "review" | "estimate"
     status: str = "queued"         # queued | running | done | error | cancelled
     stage: str = ""                # workflow-specific stage label
+    # Where this stage sits in its workflow, and how many there are. `stage_total` is 0 when the
+    # sequence is not statically known — the UI then shows the position with no total rather than
+    # a total it might contradict two stages later.
+    stage_index: int = 0
+    stage_total: int = 0
+    # Progress WITHIN the current stage, written as the loop runs rather than once at the end.
+    # 0/0 means "this stage is not batched, or its length is not known" — never a stand-in for
+    # "starting", because a bar that moves without work behind it is worse than one that admits
+    # it does not know.
     done: int = 0
     total: int = 0
+    # Wall-clock seconds since the job was created, computed on read. Elapsed ONLY: nothing in this
+    # system can honestly estimate remaining time, and a countdown that lies is worse than a bar
+    # that says it does not know.
+    started_at: float = field(default_factory=time.monotonic)
     result: Optional[dict] = None
     error: str = ""
     warnings: list[str] = field(default_factory=list)

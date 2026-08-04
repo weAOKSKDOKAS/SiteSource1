@@ -159,7 +159,10 @@ def run_inspect(
     return manifest
 
 
-def run_split(set_id: str, *, progress_cb: Progress = None) -> list[PartSpec]:
+Count = Optional[Callable[[int, int], None]]
+
+
+def run_split(set_id: str, *, progress_cb: Progress = None, count_cb: Count = None) -> list[PartSpec]:
     """Cut the approved manifest into parts and interpret each one.
 
     The cut itself costs no model calls, so re-splitting after a manifest edit is free. Each
@@ -226,7 +229,12 @@ def run_split(set_id: str, *, progress_cb: Progress = None) -> list[PartSpec]:
     _note(progress_cb, "interpreting")
     total = len(cut)
     for index, (part, part_bytes) in enumerate(cut, start=1):
-        _note(progress_cb, f"interpreting {index}/{total}")
+        # The count as NUMBERS. It was already known here and already reported — as
+        # `"interpreting 3/12"`, a stage string nothing downstream could read as a quantity, so the
+        # bar stayed indeterminate over a loop whose length was in hand the whole time.
+        if count_cb is not None:
+            count_cb(index - 1, total)
+        _note(progress_cb, "interpreting")
         context = s02_interpret.interpret_part(
             part, part_bytes, source_doc=part.source_doc or manifest.source_doc,
         )
@@ -244,6 +252,8 @@ def run_split(set_id: str, *, progress_cb: Progress = None) -> list[PartSpec]:
                 f"{part.n:02d}_{(part.abbr or part.slug or 'part').upper()}"
             ) / "context.md").write_text(card, encoding="utf-8")
 
+    if count_cb is not None:
+        count_cb(total, total)
     _note(progress_cb, "ingested")
     conn = store.get_conn()
     try:

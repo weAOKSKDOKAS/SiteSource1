@@ -92,6 +92,7 @@ def run_review(
     uploads: list[RawUpload], project_name: str = "", *, set_id: str = "",
     progress_cb: Optional[ProgressCB] = None,
     on_note: Optional[Callable[[str], None]] = None,
+    count_cb: Optional[Callable[[int, int], None]] = None,
 ) -> DepartureRegister:
     """Run the review end to end and persist it. Returns the assembled, citation-checked register.
 
@@ -116,6 +117,7 @@ def run_review(
     if parts and not demo_mode():
         parsed = s01_ingest.ingest_from_parts(
             parts, project_name, on_note=on_note, contexts=_part_contexts(set_id),
+            count_cb=count_cb,
         )
     else:
         parsed = s01_ingest.ingest_review_documents(uploads, project_name, workspace=ws)

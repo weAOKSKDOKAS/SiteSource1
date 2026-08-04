@@ -12,6 +12,8 @@ scaffold.
 
 from __future__ import annotations
 
+import time as _time
+
 import io
 import zipfile
 from datetime import datetime, timezone
@@ -87,8 +89,15 @@ class JobState(BaseModel):
     error: str | None = None
     result: dict | None = None
     warnings: list[str] = Field(default_factory=list)
-    done: int = 0                    # per-part progress (ingest); 0/0 when not applicable
+    # Where this stage sits, and how many there are. `stage_total` 0 means the workflow's length
+    # is not certain — show the position alone rather than a total that might be contradicted.
+    stage_index: int = 0
+    stage_total: int = 0
+    done: int = 0                    # per-part progress within the stage; 0/0 when not counted
     total: int = 0
+    # Elapsed only. Nothing here can honestly estimate what REMAINS, and a countdown that lies is
+    # worse than a bar that says it does not know.
+    elapsed_seconds: float = 0.0
     # A cancel has been asked for but the current stage has not finished yet. The distinction
     # matters on screen: "stopping at the next step" is true, "stopped" would not be.
     cancel_requested: bool = False
@@ -99,6 +108,32 @@ class ManifestGateState(BaseModel):
     manifest_approved: bool
     parts: int = 0
     tier: int = 0
+
+
+# The stage sequence of each workflow, where the sequence is STATIC in the code that runs it.
+# `stage_total` is printed from this, so a workflow appears here only if its stages are certain.
+_WORKFLOW_STAGES: dict[str, list[str]] = {
+    "ingest": ["reading", "inspecting", "planning", "saving"],
+    "split": ["splitting", "interpreting", "ingested"],
+    "review": ["ingesting", "summarising", "matching", "scope", "program", "cashflow",
+               "assembling", "verifying", "locating"],
+}
+# The review's last stage (`locating`) runs only when the set has parts to locate citations in, so
+# its length is 8 OR 9. Rather than print a total the run might contradict two stages later, these
+# workflows report the POSITION with no total — "stage 4", not "stage 4 of 9". The estimate and
+# scope workflows are absent from `_WORKFLOW_STAGES` entirely because their runners live under
+# `client_boq/estimate/`, which this work may not read into.
+_UNCERTAIN_LENGTH = frozenset({"review"})
+
+
+def _count_cb(job_id: str):
+    """Progress WITHIN a stage — written as the loop runs, not once at the end.
+
+    `run_split` already knew it was on part 3 of 12; it said so in the stage STRING, where nothing
+    could read it as a number. This is that same fact, as numbers."""
+    def _cb(done: int, total: int) -> None:
+        jobs.JOBS.update(job_id, done=int(done), total=int(total))
+    return _cb
 
 
 def _begin(job_id: str, stage: str) -> None:
@@ -113,9 +148,9 @@ def _begin(job_id: str, stage: str) -> None:
     jobs.JOBS.update(job_id, status="running", stage=stage)
 
 
-def _stage_cb(job_id: str):
-    """The progress callback every worker is given: record the stage it just reached, and STOP
-    if a cancel was requested while the previous stage ran.
+def _stage_cb(job_id: str, workflow: str = ""):
+    """The progress callback every worker is given: record the stage it just reached, where that
+    stage sits in the workflow, and STOP if a cancel was requested while the previous stage ran.
 
     A stage boundary is the only place a cancel can take effect. The work between boundaries is a
     blocking model call on a pool thread, and Python cannot interrupt one — so cancelling does not
@@ -123,10 +158,19 @@ def _stage_cb(job_id: str):
     seconds each that is nearly all of the saving, and the UI says exactly that rather than
     implying the current call died.
     """
+    stages = _WORKFLOW_STAGES.get(workflow, [])
+    total = 0 if (workflow in _UNCERTAIN_LENGTH or not stages) else len(stages)
+
     def _cb(stage: str) -> None:
         if jobs.JOBS.cancelled(job_id):
             raise jobs.JobCancelled(stage)
-        jobs.JOBS.update(job_id, stage=stage)
+        # A stage's own count starts unknown: the previous stage's 8/8 must not be left standing
+        # over a stage that has not counted anything yet.
+        jobs.JOBS.update(
+            job_id, stage=stage, done=0, total=0,
+            stage_index=(stages.index(stage) + 1) if stage in stages else 0,
+            stage_total=total,
+        )
     return _cb
 
 
@@ -136,6 +180,8 @@ def _job_state(job_id: str, job) -> JobState:
         job_id=job_id, kind=job.kind, status=job.status, stage=job.stage,
         error=job.error or None, result=job.result if job.status == "done" else None,
         warnings=list(job.warnings), done=job.done, total=job.total,
+        stage_index=job.stage_index, stage_total=job.stage_total,
+        elapsed_seconds=round(_time.monotonic() - job.started_at, 1),
         cancel_requested=job.cancel_requested,
     )
 
@@ -298,7 +344,7 @@ def _run_ingest_job(job_id: str, uploads: list[RawUpload], project_name: str, ac
     try:
         _begin(job_id, "reading")
         manifest = ingest_run.run_inspect(
-            uploads, project_name, progress_cb=_stage_cb(job_id),
+            uploads, project_name, progress_cb=_stage_cb(job_id, "ingest"),
             on_note=lambda m: jobs.JOBS.add_warning(job_id, m),
         )
         _stamp_new_set(manifest.set_id, actor)
@@ -464,7 +510,8 @@ def _manifest_gate_or_409(set_id: str) -> None:
 def _run_split_job(job_id: str, set_id: str, actor: str = "") -> None:
     try:
         _begin(job_id, "splitting")
-        ingest_run.run_split(set_id, progress_cb=_stage_cb(job_id))
+        ingest_run.run_split(set_id, progress_cb=_stage_cb(job_id, "split"),
+                             count_cb=_count_cb(job_id))
         conn = store.get_conn()
         try:
             rows = store.load_parts(conn, set_id)
@@ -1398,7 +1445,8 @@ def _run_review_job(job_id: str, uploads: list[RawUpload], project_name: str,
         _begin(job_id, "ingesting")
         register = review_run.run_review(
             uploads, project_name, set_id=set_id,
-            progress_cb=_stage_cb(job_id),
+            progress_cb=_stage_cb(job_id, "review"),
+            count_cb=_count_cb(job_id),
             on_note=lambda m: jobs.JOBS.add_warning(job_id, m),
         )
         jobs.JOBS.update(job_id, status="done", stage="verifying", result=_result_payload(register))

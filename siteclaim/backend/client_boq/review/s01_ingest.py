@@ -139,6 +139,7 @@ def ingest_from_parts(
     parts: list[tuple[PartSpec, str]], project_name: str = "",
     *, on_note: Optional[Callable[[str], None]] = None,
     contexts: Optional[dict] = None,
+    count_cb: Optional[Callable[[int, int], None]] = None,
 ) -> ParsedDocumentSet:
     """Structure an already-split set, one part at a time.
 
@@ -197,7 +198,13 @@ def ingest_from_parts(
             "review them."
         )
 
-    for part, pdf_path in readable:
+    # This loop's length IS known — it is `len(readable)` — so it is counted. (The ruling assumed
+    # otherwise from my Phase 0 report, which said only that there was no progress callback here;
+    # the absence of a callback is not the absence of a length. The per-CHUNK loop inside remains
+    # uncounted, because a part's chunk count is not known until its text is read.)
+    for index, (part, pdf_path) in enumerate(readable):
+        if count_cb is not None:
+            count_cb(index, len(readable))
         source = part.source_doc or pdf_path
         if source not in doc_names:
             doc_names.append(source)
@@ -219,6 +226,8 @@ def ingest_from_parts(
                     clause.source_doc = source
                 clauses.append(clause)
 
+    if count_cb is not None and readable:
+        count_cb(len(readable), len(readable))
     return ParsedDocumentSet(name=project_name, documents=doc_names, clauses=clauses)
 
 

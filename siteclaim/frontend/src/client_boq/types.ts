@@ -147,8 +147,18 @@ export interface JobState {
   error?: string | null;
   result?: unknown;
   warnings?: string[];
+  /** Where this stage sits in its workflow. `stage_total` 0 means the workflow's length is not
+   *  certain — show the position alone rather than a total that could be contradicted two stages
+   *  later. */
+  stage_index?: number;
+  stage_total?: number;
+  /** Progress WITHIN the current stage. 0/0 means this stage is not batched, or its length is not
+   *  known — which is an indeterminate bar, never a bar moving on a timer. */
   done?: number;
   total?: number;
+  /** Elapsed only. There is deliberately no remaining-time estimate anywhere in this system: a
+   *  countdown that lies is worse than a bar that admits it does not know. */
+  elapsed_seconds?: number;
   /** A stop was asked for and the current stage has not finished. `cancel_requested` true with
    *  status still "running" is the state the strip reads to say "stopping at the next step" —
    *  which is true — rather than "stopped", which would not be. */

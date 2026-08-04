@@ -47,7 +47,7 @@ import type {
   SetRow,
   TeamMember,
 } from "./types";
-import { Avatar, ErrorNote, WaitingOn, cx } from "./ui";
+import { Avatar, Chip, ErrorNote, WaitingOn, cx } from "./ui";
 // tokens.css is imported from src/index.css, not here — see the note there.
 
 /** Everything loaded for the open set. Null fields are "not run yet", which the tabs render as
@@ -686,6 +686,12 @@ function SetView({
 /** What a background job is doing. Only ever visible in LIVE — DEMO runs everything inline, which
  *  is exactly why the polling this reports on was so easy to leave out. `done`/`total` have been
  *  on the Job model since ingest was built and this is the first thing to show them. */
+/** `4m 12s`. Elapsed only — see `JobState.elapsed_seconds`. */
+function elapsed(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
 function JobStrip({
   work,
   job,
@@ -695,11 +701,18 @@ function JobStrip({
   job: JobState | null;
   onStop: (jobId: string) => void;
 }) {
-  const pct = job?.total ? Math.round(((job.done ?? 0) / job.total) * 100) : null;
   const done = work?.status === "done" && !job;
-  // The label reads left to right as: what is running · which stage it is on. `work` names the
-  // operation (it survives the tab); `job` names the stage (it only exists where the server keeps
-  // a job id). Either alone is enough to render.
+  // A DETERMINATE bar only where the total is genuinely known. Everywhere else the bar is
+  // indeterminate and says so by moving on nothing — a bar that advances on a timer rather than on
+  // work is worse than one that admits it does not know.
+  const pct = job?.total ? Math.round(((job.done ?? 0) / job.total) * 100) : null;
+  // "stage 4 of 8" where the workflow's length is certain; "stage 4" where its tail is
+  // conditional; neither where the sequence is not known at all.
+  const position = job?.stage_index
+    ? job.stage_total
+      ? `STAGE ${job.stage_index} OF ${job.stage_total}`
+      : `STAGE ${job.stage_index}`
+    : "";
   const heading = [work?.label ?? job?.kind, job?.stage?.replace(/-/g, " ")]
     .filter(Boolean)
     .join(" · ")
@@ -712,10 +725,7 @@ function JobStrip({
       )}
     >
       <span
-        className={cx(
-          "h-2 w-2 flex-none rounded-full",
-          done ? "bg-cb-ok" : "ssDot bg-cb-brass",
-        )}
+        className={cx("h-2 w-2 flex-none rounded-full", done ? "bg-cb-ok" : "ssDot bg-cb-brass")}
       />
       <span
         className={cx(
@@ -725,7 +735,10 @@ function JobStrip({
       >
         {done ? `${heading} · DONE` : heading}
       </span>
-      {pct != null && (
+      {!done && position && (
+        <Chip className="flex-none border border-cb-brass-line text-cb-brass-text">{position}</Chip>
+      )}
+      {!done && pct != null && (
         <span className="flex-none font-cb-mono text-[10px] text-cb-brass-text">
           {job?.done}/{job?.total}
         </span>
@@ -741,20 +754,23 @@ function JobStrip({
           />
         </div>
       )}
+      {!done && job?.elapsed_seconds != null && (
+        <span
+          className="flex-none font-cb-mono text-[10px] text-cb-brass-text"
+          title="Time since this run started. There is no estimate of what remains — nothing here can honestly make one."
+        >
+          {elapsed(job.elapsed_seconds)}
+        </span>
+      )}
       <span
-        className={cx(
-          "font-cb-sans text-[10px]",
-          done ? "text-cb-ok-dark" : "ml-0 text-cb-brass-text",
-        )}
+        className={cx("font-cb-sans text-[10px]", done ? "text-cb-ok-dark" : "text-cb-brass-text")}
       >
         {done
           ? "Finished. Open the tab that started it to see the result."
           : job?.cancel_requested
             ? "Stopping at the next step. The call already in flight has to finish first — it cannot be interrupted."
-            : "Still running — it keeps going wherever you navigate. Live model runs take as long as they take."}
+            : "Still running — it keeps going wherever you navigate."}
       </span>
-      {/* Only where the server keeps a job id. A blocking endpoint has nothing to cancel, and a
-          button that quietly did nothing would be worse than no button. */}
       {!done && job?.job_id && !job.cancel_requested && (
         <button
           type="button"
