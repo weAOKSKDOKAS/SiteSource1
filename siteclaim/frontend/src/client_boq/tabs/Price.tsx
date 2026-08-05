@@ -18,13 +18,18 @@ import { api, runJob } from "../api";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
 import { PageView } from "../PageView";
 import type {
+  CompanySettings,
   CostActivity,
   CostLine,
   EstimateFlag,
   EstimateResponse,
+  EstimateScheduleInput,
   JobState,
+  RateRowFull,
 } from "../types";
-import { Button, Chip, SectionLabel, WaitingOn, cx, money } from "../ui";
+import { Button, Chip, SectionLabel, Segmented, WaitingOn, cx, money } from "../ui";
+import { Costing } from "./Costing";
+import { EMPTY_SCHEDULE, ScheduleEditor, useScheduleDraft } from "./ScheduleEditor";
 
 /** What each rule flag means for the number standing next to it. The backend sends `kind` and a
  *  message about the item; this is the consequence, which is what a reader actually needs. */
@@ -66,7 +71,53 @@ function flagCopy(kind: string) {
   );
 }
 
-export function PriceTab({
+type PriceView = "costing" | "estimate";
+
+/**
+ * Two engines behind one step, while the older one is retired.
+ *
+ * **Costing** is the current one: it prices the client's bill from a bottom-up build-up and hands
+ * back a live Excel model. It needs only the bill, so it deliberately sits OUTSIDE the register and
+ * scope gates — reading a bill and costing it is not downstream of either.
+ *
+ * **Estimate** is the earlier resource-schedule engine, kept until it is deleted so no work in
+ * progress is stranded.
+ */
+export function PriceTab(props: {
+  data: SetData;
+  railOpen: boolean;
+  onRefresh: () => Promise<void>;
+  onError: (message: string) => void;
+  onProgress?: (job: JobState | null) => void;
+}) {
+  const [view, setView] = useState<PriceView>("costing");
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex flex-none items-center gap-2 border-b border-cb-border bg-cb-surface px-4 py-2">
+        <Segmented
+          value={view}
+          options={[
+            { value: "costing" as PriceView, label: "COSTING" },
+            { value: "estimate" as PriceView, label: "ESTIMATE (OLD)" },
+          ]}
+          onChange={setView}
+        />
+        <span className="font-cb-mono text-[9px] text-cb-faint">
+          {view === "costing"
+            ? "prices the client's bill · needs no gate"
+            : "the earlier resource-schedule engine, being retired"}
+        </span>
+      </div>
+      {view === "costing" ? (
+        <Costing setId={props.data.setId} onError={props.onError} />
+      ) : (
+        <EstimateView {...props} />
+      )}
+    </div>
+  );
+}
+
+function EstimateView({
   data,
   railOpen,
   onRefresh,
@@ -85,6 +136,15 @@ export function PriceTab({
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [flagFilter, setFlagFilter] = useState<string | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
+  // The schedule is the estimate's INPUT; the estimate is its output. One tab, two modes, because
+  // they are the same subject at two stages — and in LIVE you cannot have the second without
+  // building the first.
+  const [loaded, setLoaded] = useState<{ schedule: EstimateScheduleInput; margin: number } | null>(null);
+  const [savedMeta, setSavedMeta] = useState<{ at: string | null; by: string }>({ at: null, by: "" });
+  const [rates, setRates] = useState<RateRowFull[]>([]);
+  const [company, setCompany] = useState<CompanySettings | null>(null);
+  const [mode, setMode] = useState<"estimate" | "schedule">("estimate");
+  const { draft, setDraft, margin, setMargin, dirty } = useScheduleDraft(loaded);
   const panes = usePanes("price", 236, 620, railOpen);
 
   useEffect(() => {
@@ -100,6 +160,27 @@ export function PriceTab({
     };
   }, [data.setId, data.hasEstimate]);
 
+  // The schedule, the rate book the editor picks from, and the letterhead the run stamps on.
+  useEffect(() => {
+    let live = true;
+    void api
+      .schedule(data.setId)
+      .then((r) => {
+        if (!live) return;
+        setLoaded({ schedule: r.schedule, margin: r.margin_pct });
+        setSavedMeta({ at: r.updated_at, by: r.updated_by });
+        // Never priced and never scheduled: open on the editor, because that is the only thing
+        // there is to do here.
+        if (!r.saved) setMode("schedule");
+      })
+      .catch(() => live && setLoaded({ schedule: EMPTY_SCHEDULE, margin: 0 }));
+    void api.rates().then((r) => live && setRates(r.rows.filter((x) => !x.archived)));
+    void api.settings().then((s) => live && setCompany(s.company));
+    return () => {
+      live = false;
+    };
+  }, [data.setId]);
+
   // Open on a document, the same as every other tab — the estimate is read beside the tender.
   useEffect(() => {
     const parts = data.parts?.parts ?? [];
@@ -108,14 +189,50 @@ export function PriceTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.parts]);
 
+  const save = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await api.saveSchedule(data.setId, draft, margin);
+      setLoaded({ schedule: r.schedule, margin: r.margin_pct });
+      setSavedMeta({ at: r.updated_at, by: r.updated_by });
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [data.setId, draft, margin, onError]);
+
   const run = useCallback(async () => {
     setBusy(true);
     try {
-      // DEMO runs inline and returns the estimate; LIVE queues a job. `runJob` covers both — the
-      // defect that made LIVE inert everywhere else is not worth repeating here.
-      await runJob(() => api.runEstimate(data.setId), api.estimateStatus, onProgress);
+      // Save first when there are unsaved edits: pricing something the server has not been told
+      // about would produce a figure nobody can reproduce from what is stored.
+      if (dirty) {
+        const r = await api.saveSchedule(data.setId, draft, margin);
+        setLoaded({ schedule: r.schedule, margin: r.margin_pct });
+        setSavedMeta({ at: r.updated_at, by: r.updated_by });
+      }
+      // DEMO ignores what is sent and prices its fixture; LIVE requires both, and used to 422 here
+      // because nothing sent them. The letter header is code-injected the same way: the company
+      // from app settings, the client and project from THIS tender's desk card, the date today.
+      await runJob(
+        () =>
+          api.runEstimate(data.setId, {
+            margin_pct: margin,
+            schedule: draft,
+            letter: {
+              ...(company ?? {}),
+              project: data.name,
+              client_name: data.meta?.client || "the Client",
+              date: new Date().toISOString().slice(0, 10),
+            },
+          }),
+        api.estimateStatus,
+        onProgress,
+      );
       onProgress?.(null);
       setResult(await api.estimate(data.setId));
+      setMode("estimate");
       await onRefresh();
     } catch (e: unknown) {
       onProgress?.(null);
@@ -123,7 +240,7 @@ export function PriceTab({
     } finally {
       setBusy(false);
     }
-  }, [data.setId, onError, onProgress, onRefresh]);
+  }, [company, data, dirty, draft, margin, onError, onProgress, onRefresh]);
 
   const estimate = result?.estimate ?? null;
   const totals = result?.totals ?? null;
@@ -275,32 +392,75 @@ export function PriceTab({
       >
         <header className="flex flex-none flex-wrap items-center gap-2 border-b border-cb-border px-4 py-3">
           <div className="min-w-0 flex-1">
-            <SectionLabel>PRICED ESTIMATE</SectionLabel>
+            <SectionLabel>{mode === "schedule" ? "PRICING SCHEDULE" : "PRICED ESTIMATE"}</SectionLabel>
             <h2 className="mt-0.5 font-cb-serif text-[17px] font-semibold text-cb-ink-text">
-              {estimate
-                ? `${estimate.activities.length} activities, ${estimate.indirects.length} indirect${estimate.indirects.length === 1 ? "" : "s"}`
-                : "Not priced yet"}
+              {mode === "schedule"
+                ? `${draft.items.filter((i) => i.category === "direct").length} activities, ${draft.items.filter((i) => i.category === "indirect").length} indirect${draft.items.filter((i) => i.category === "indirect").length === 1 ? "" : "s"}`
+                : estimate
+                  ? `${estimate.activities.length} activities, ${estimate.indirects.length} indirect${estimate.indirects.length === 1 ? "" : "s"}`
+                  : "Not priced yet"}
             </h2>
           </div>
-          {estimate && (
+
+          {/* Input and output of the same thing — so one control, not two screens. */}
+          <div className="flex flex-none rounded-cb-btn border border-cb-border-strong">
+            {(["schedule", "estimate"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={cx(
+                  "cb-press px-2.5 py-1 font-cb-sans text-[10.5px] font-medium first:rounded-l-cb-btn last:rounded-r-cb-btn",
+                  mode === m ? "bg-cb-ink text-white" : "bg-white text-cb-body",
+                )}
+              >
+                {m === "schedule" ? `Schedule${dirty ? " •" : ""}` : "Estimate"}
+              </button>
+            ))}
+          </div>
+
+          {mode === "estimate" && estimate && (
             <a
               href={api.workbookUrl(data.setId)}
               className="cb-press flex-none rounded-cb-btn border border-cb-border-strong bg-white px-3 py-1.5 font-cb-sans text-[10.5px] font-medium text-cb-ink-text"
             >
-              Download workbook (.xlsx)
+              Workbook (.xlsx)
             </a>
           )}
-          <Button variant={estimate ? "outline" : "brass"} onClick={() => void run()} disabled={busy}>
-            {busy ? "Pricing…" : estimate ? "Re-run" : "Run the estimate"}
-          </Button>
+          {mode === "estimate" && (
+            <Button variant={estimate ? "outline" : "brass"} onClick={() => void run()} disabled={busy}>
+              {busy ? "Pricing…" : estimate ? "Re-run" : "Run the estimate"}
+            </Button>
+          )}
         </header>
 
-        {!estimate ? (
+        {mode === "schedule" ? (
+          <ScheduleEditor
+            schedule={draft}
+            marginPct={margin}
+            rates={rates}
+            savedAt={savedMeta.at}
+            savedBy={savedMeta.by}
+            dirty={dirty}
+            busy={busy}
+            onChange={setDraft}
+            onMargin={setMargin}
+            onSave={() => void save()}
+            onRun={() => void run()}
+          />
+        ) : !estimate ? (
           <div className="p-5">
             <WaitingOn title="The estimate has not been run">
               Both gates are passed, so it can run now. The cost spine is deterministic — quantities
               × rates from the book, indirects by their stated basis, then the margin. No model
               touches a number.
+              {!loaded?.schedule.items.length && (
+                <>
+                  {" "}
+                  Offline it prices a sample schedule; against a real tender it needs yours, which
+                  you build under <strong>Schedule</strong>.
+                </>
+              )}
             </WaitingOn>
           </div>
         ) : (

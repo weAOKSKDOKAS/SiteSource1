@@ -76,6 +76,9 @@ export function PageView({
   const [searchNote, setSearchNote] = useState("");
   const [visible, setVisible] = useState<number | null>(null);
   const [flash, setFlash] = useState<number | null>(null);
+  /** Marks hidden by the reader — Escape or the Clear chip. Reset by anything that changes what
+   *  would be marked; see the effect beside `marksFor`. */
+  const [dismissed, setDismissed] = useState(false);
 
   const scroller = useRef<HTMLDivElement | null>(null);
   const pageEls = useRef(new Map<number, HTMLDivElement>());
@@ -203,12 +206,41 @@ export function PageView({
   // different questions ("where does this claim sit" vs "where does this word appear") and a
   // reader needs both at once.
   const marksFor = useCallback(
-    (n: number): Highlight[] => [
-      ...highlights.filter((h) => h.page === n),
-      ...(query.trim() ? (hits ?? []).filter((h) => h.page === n).flatMap((h) => h.highlights) : []),
-    ],
-    [query, hits, highlights],
+    (n: number): Highlight[] =>
+      dismissed
+        ? []
+        : [
+            ...highlights.filter((h) => h.page === n),
+            ...(query.trim()
+              ? (hits ?? []).filter((h) => h.page === n).flatMap((h) => h.highlights)
+              : []),
+          ],
+    [dismissed, query, hits, highlights],
   );
+
+  // Dismissal is per-answer, not permanent: a new citation or a new search is a new question, and
+  // marks that stayed hidden would read as "nothing was found" rather than "you cleared the last
+  // one". Anything that changes what would be marked brings the marks back.
+  //
+  // Keyed BY VALUE, not by array identity. The Register tab builds its highlights inline
+  // (`[...(citation?.highlights ?? []), ...located]`), so the array is a new object on every
+  // render; an identity-based dependency would fire this effect continuously and clearing would
+  // never appear to do anything — on the one tab where citations matter most.
+  const markKey = useMemo(
+    () =>
+      [
+        highlights.map((h) => `${h.page}:${h.x0.toFixed(4)},${h.y0.toFixed(4)}`).join("|"),
+        query.trim(),
+        (hits ?? []).length,
+      ].join("#"),
+    [highlights, query, hits],
+  );
+  useEffect(() => {
+    setDismissed(false);
+  }, [markKey]);
+
+  const hasMarks =
+    !dismissed && (highlights.length > 0 || (query.trim() !== "" && (hits ?? []).length > 0));
 
   function commitZoom(raw: string) {
     const parsed = parseFloat(raw.replace(/[^0-9.]/g, ""));
@@ -325,6 +357,18 @@ export function PageView({
           >
             Fit
           </button>
+          {/* Only while there is something to clear. Escape does the same thing, but a
+              keyboard-only affordance is one nobody discovers. */}
+          {hasMarks && (
+            <button
+              type="button"
+              title="Hide the highlights (Esc). Choosing another citation brings them back."
+              onClick={() => setDismissed(true)}
+              className="cb-press whitespace-nowrap rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-1.5 py-0.5 font-cb-sans text-[9.5px] font-medium text-cb-brass-text"
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         <div className="flex min-w-[140px] flex-1 items-center gap-2">
@@ -357,7 +401,19 @@ export function PageView({
       {banner}
 
       {/* --- the pages, scrolled --- */}
-      <div ref={scroller} className="min-h-0 flex-1 overflow-auto p-5">
+      <div
+        ref={scroller}
+        // Focusable so Escape reaches it. -1 keeps it out of the tab order: this is a scroll
+        // region, not a control, and it should not sit between the toolbar and the pages.
+        tabIndex={-1}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && hasMarks) {
+            e.stopPropagation();
+            setDismissed(true);
+          }
+        }}
+        className="min-h-0 flex-1 overflow-auto p-5 outline-none"
+      >
         {!part ? (
           <EmptyPane>Select a part to read it here.</EmptyPane>
         ) : (
@@ -481,10 +537,13 @@ const PageImage = forwardRef<HTMLDivElement, PageImageProps>(
               height: `${(h.y1 - h.y0) * 100}%`,
             }}
             className={cx(
-              "pointer-events-none absolute rounded-cb-mark bg-cb-brass-tint/70 shadow-cb-ring",
+              // .cb-mark carries the fill and the multiply blend — see tokens.css. No border:
+              // multiplying keeps the clause text readable through the mark, so it does not need
+              // an outline to be findable.
+              "cb-mark pointer-events-none absolute",
               // A one-shot pulse when you arrive from a citation: without it, scrolling to a page
               // that is already highlighted gives no signal that anything happened.
-              flash && "animate-[cbFlash_1.4s_ease-out_1]",
+              flash && "animate-[cbMarkFlash_1.4s_ease-out_1]",
             )}
           />
         ))}

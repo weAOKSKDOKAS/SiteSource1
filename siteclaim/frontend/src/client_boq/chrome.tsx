@@ -8,12 +8,13 @@ import { Chip, cx } from "./ui";
 // ---------------------------------------------------------------------------
 // Steps
 // ---------------------------------------------------------------------------
-export type TabId = "documents" | "register" | "scope" | "price" | "offer";
+export type TabId = "documents" | "register" | "scope" | "site" | "price" | "offer";
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: "documents", label: "Documents" },
   { id: "register", label: "Register" },
   { id: "scope", label: "Scope" },
+  { id: "site", label: "Site" },
   { id: "price", label: "Price" },
   { id: "offer", label: "Offer" },
 ];
@@ -30,8 +31,20 @@ export type StepState =
  *  409; a tab that opens and explains itself does not. */
 export function stepStates(
   gates: GateStates,
-  has: { parts: boolean; register: boolean; scope: boolean; estimate: boolean },
+  has: {
+    parts: boolean;
+    register: boolean;
+    scope: boolean;
+    estimate: boolean;
+    /** The take-off has been read. Site has no gate, so this only decides what its chip says. */
+    site?: boolean;
+    /** Holes with no access class. Carried on PRICE, not on Site — an unclassed hole cannot stop
+     *  you pricing, but it is the sweep that will refuse, and the warning belongs where the
+     *  consequence lands. */
+    unassignedHoles?: number;
+  },
 ): Record<TabId, StepState> {
+  const unassigned = has.unassignedHoles ?? 0;
   return {
     documents: gates.manifest ? { kind: "done" } : has.parts ? { kind: "open" } : { kind: "open" },
     register: gates.review
@@ -48,11 +61,17 @@ export function stepStates(
         : gates.review
           ? { kind: "waiting", label: "NOT YET RUN" }
           : { kind: "waiting", label: "WAITS ON THE REGISTER" },
-    price: has.estimate
-      ? { kind: "done" }
-      : gates.scope
-        ? { kind: "waiting", label: "NOT YET RUN" }
-        : { kind: "waiting", label: "WAITS ON THE SCOPE" },
+    // Site never waits and never blocks. The take-off is a thing you look up, and there is no
+    // point at which looking something up should be refused.
+    site: has.site ? { kind: "open" } : { kind: "waiting", label: "NO TAKE-OFF YET" },
+    price:
+      unassigned > 0
+        ? { kind: "waiting", label: `⚠ ${unassigned} HOLES UNASSIGNED` }
+        : has.estimate
+          ? { kind: "done" }
+          : gates.scope
+            ? { kind: "waiting", label: "NOT YET RUN" }
+            : { kind: "waiting", label: "WAITS ON THE SCOPE" },
     offer: has.estimate ? { kind: "open" } : { kind: "waiting", label: "WAITS ON THE PRICE" },
   };
 }

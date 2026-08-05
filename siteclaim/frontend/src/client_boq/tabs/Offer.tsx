@@ -20,6 +20,10 @@ import { api } from "../api";
 import type { LetterAppendixItem, LetterResponse } from "../types";
 import { Button, Chip, SectionLabel, WaitingOn, cx, money } from "../ui";
 
+/** `LetterMeta`'s built-in fallback. Matching it is how the screen knows the letterhead has never
+ *  been set — the backend deliberately keeps a renderable default so a letter always assembles. */
+const DEFAULT_COMPANY = "SiteSource Contracting Ltd";
+
 export function OfferTab({
   data,
   onError,
@@ -90,6 +94,20 @@ export function OfferTab({
               <p className="mt-0.5 font-cb-sans text-[11px] text-cb-muted">
                 to {doc.meta.client_name} · from {doc.meta.company_name}
               </p>
+              {/* The letterhead is app-wide and set once. Saying it is still the default is more
+                  use than silently sending a letter under a placeholder company. */}
+              {doc.meta.company_name === DEFAULT_COMPANY && (
+                <p className="mt-1 font-cb-sans text-[10.5px] text-cb-brass-text">
+                  That is the built-in placeholder, not your firm.{" "}
+                  <a
+                    href="#/tender/settings"
+                    className="underline underline-offset-2"
+                  >
+                    Set your company details
+                  </a>{" "}
+                  and re-run the estimate to stamp them on.
+                </p>
+              )}
             </div>
             <div className="text-right">
               <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">

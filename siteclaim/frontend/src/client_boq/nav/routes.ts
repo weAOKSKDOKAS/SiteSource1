@@ -5,14 +5,14 @@
 //   #/tender                      the desk (home)
 //   #/tender/archived             submitted / won / lost — off the shelf, on the record
 //   #/tender/awaiting             tenders with open queries
-//   #/tender/criteria|rates|team|settings     the management screens
+//   #/tender/criteria|rates|outputs|team|settings   the library screens
 //   #/tender/letters|positions|clients|audit  entry points without screens yet
 //   #/tender/s/{setId}/{tab}      one tender, one tab
 
 import type { TabId } from "../chrome";
 
 export type ShelfFilter = "desk" | "archived" | "awaiting";
-export type ScreenId = "criteria" | "rates" | "team" | "settings";
+export type ScreenId = "criteria" | "rates" | "outputs" | "team" | "settings";
 export type NotDesignedId = "letters" | "positions" | "clients" | "audit";
 
 export type Surface =
@@ -21,9 +21,12 @@ export type Surface =
   | { kind: "notdesigned"; screen: NotDesignedId }
   | { kind: "set"; setId: string; tab: TabId };
 
-const SCREENS: ScreenId[] = ["criteria", "rates", "team", "settings"];
+const SCREENS: ScreenId[] = ["criteria", "rates", "outputs", "team", "settings"];
 const NOT_DESIGNED: NotDesignedId[] = ["letters", "positions", "clients", "audit"];
-const TAB_IDS: TabId[] = ["documents", "register", "scope", "price", "offer"];
+// Adding a tab means editing this AND chrome.tsx's TabId, TABS and stepStates, AND the render
+// chain in App.tsx. The other three are compile errors if missed; this one is not — an unlisted
+// tab silently falls back to `documents`, so it is the edit that has to be remembered.
+const TAB_IDS: TabId[] = ["documents", "register", "scope", "site", "price", "offer"];
 
 export function parseHash(hash: string): Surface {
   const parts = hash.replace(/^#\/tender\/?/, "").split("/").filter(Boolean);

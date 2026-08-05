@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
+import { BillPicker } from "../BillPicker";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
 import { PageView } from "../PageView";
 // `Highlight` is imported explicitly because the DOM lib declares a global of the same name
@@ -301,7 +302,13 @@ export function DocumentsTab({
 
   const coverage = manifest.coverage_detail;
   const clean = coverage.gaps.length === 0 && coverage.overlaps.length === 0;
-  const tier = TIER_LABEL[manifest.tier] ?? TIER_LABEL[4];
+  // A folder set has no binder, so page coverage is not a fact about it and the split UI has
+  // nothing to describe. The tier chip still carries the reason on hover.
+  const isFolder = manifest.layout === "folder";
+  const tier = TIER_LABEL[manifest.tier] ?? {
+    text: "ORGANISED FOLDER",
+    cls: "bg-cb-info text-cb-navy border border-cb-disabled",
+  };
 
   return (
     <div ref={panes.container} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -310,14 +317,25 @@ export function DocumentsTab({
         <Rail width={panes.railWidth} onResize={panes.dragRail}>
           <div className="flex flex-col gap-2 border-b border-cb-border p-3">
             <div className="truncate font-cb-sans text-[12px] font-semibold text-cb-ink-text">
-              {manifest.source_doc}
+              {manifest.source_doc || "An organised folder"}
             </div>
             <div className="font-cb-mono text-[10px] font-medium text-cb-muted">
-              {manifest.pages} pages · one file in, {manifest.parts.length} parts out
+              {isFolder
+                ? manifest.summary ??
+                  `${manifest.file_count ?? manifest.parts.length} files · ${manifest.file_pages ?? 0} pages`
+                : `${manifest.pages} pages · one file in, ${manifest.parts.length} parts out`}
             </div>
             <Chip className={tier.cls} title={manifest.tier_reason}>
               {tier.text}
             </Chip>
+            {isFolder && manifest.auto_approved && (
+              // Not a green tick. The gate passed itself because there was nothing to confirm, and
+              // saying so is the difference between "approved" and "somebody looked at this".
+              <p className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-faint">
+                Nothing was split, so there was no split to approve — this step passed
+                automatically and nobody reviewed it.
+              </p>
+            )}
             <a
               href={api.downloadUrl(data.setId)}
               className={cx(
@@ -418,9 +436,11 @@ export function DocumentsTab({
         <div className="flex-none border-b border-cb-border px-4 py-3">
           <div className="flex items-center gap-3">
             <SectionLabel>
-              SPLIT MANIFEST · {manifest.parts.length} PARTS · {coverage.covered} /{" "}
-              {coverage.pages} PAGES COVERED
+              {isFolder
+                ? `WHAT ARRIVED · ${manifest.parts.length} PARTS`
+                : `SPLIT MANIFEST · ${manifest.parts.length} PARTS · ${coverage.covered} / ${coverage.pages} PAGES COVERED`}
             </SectionLabel>
+            {!isFolder && (
             <Chip
               className={cx(
                 "ml-auto",
@@ -429,12 +449,14 @@ export function DocumentsTab({
             >
               {coverage.gaps.length} GAPS · {coverage.overlaps.length} OVERLAPS
             </Chip>
+            )}
           </div>
 
           {/* One segment per part, width proportional to its page count, plus an explicit
               empty segment wherever pages belong to no part. A gap has to be *visible*: a
               number saying "1 gap" is easy to skim past on the way to Approve; a hole in the
               bar is not. */}
+          {!isFolder && (
           <div className="mt-3 flex h-[11px] gap-[1.5px] overflow-hidden rounded-[3px]">
             {segments(manifest.parts, coverage.gaps).map((seg) =>
               seg.kind === "gap" ? (
@@ -464,7 +486,8 @@ export function DocumentsTab({
               ),
             )}
           </div>
-          {!clean && (
+          )}
+          {!isFolder && !clean && (
             <p className="mt-2 font-cb-sans text-[10.5px] leading-[1.45] text-cb-bad-dark">
               {coverage.gaps.length > 0 && (
                 <>
@@ -487,7 +510,15 @@ export function DocumentsTab({
           <div className="mt-3 flex items-center gap-3">
             {manifest.approved ? (
               <>
-                <Chip className="bg-cb-ok-tint text-cb-ok-dark">✓ MANIFEST APPROVED</Chip>
+                <Chip
+                  className={
+                    manifest.auto_approved
+                      ? "bg-cb-info-fill text-cb-navy"
+                      : "bg-cb-ok-tint text-cb-ok-dark"
+                  }
+                >
+                  {manifest.auto_approved ? "NOTHING TO APPROVE" : "✓ MANIFEST APPROVED"}
+                </Chip>
                 <Button variant="outline" onClick={split} disabled={busy}>
                   {parts.length ? "Re-split from this manifest" : "Split into parts"}
                 </Button>
@@ -510,6 +541,45 @@ export function DocumentsTab({
               </>
             )}
           </div>
+
+          {/* What arrived and is NOT a part. A file may be un-read; it may not be un-mentioned —
+              before this, a workbook was written to disk and then absent from every screen. */}
+          {/* The bills are the one thing here you can ACT on, so they get the real control rather
+              than a read-only row. Before this they were listed and unclickable while the app told
+              you to go and pick one somewhere that had no picker either. */}
+          {isFolder && (manifest.bills?.length ?? 0) > 0 && (
+            <div className="mt-3">
+              <BillPicker setId={data.setId} onImported={onRefresh} onError={onError} />
+            </div>
+          )}
+
+          {isFolder && (manifest.held?.length ?? 0) > 0 && (
+            <div className="mt-3 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2">
+              {manifest.held?.map((file) => (
+                <div key={file.relative_path} className="flex items-baseline gap-2">
+                  <Chip className="bg-cb-panel text-cb-faint">HELD</Chip>
+                  <span
+                    title={file.note}
+                    className="min-w-0 flex-1 truncate font-cb-mono text-[9.5px] text-cb-muted"
+                  >
+                    {file.relative_path}
+                  </span>
+                </div>
+              ))}
+              <p className="mt-1.5 font-cb-sans text-[9.5px] leading-[1.5] text-cb-faint">
+                Held files are stored and can be opened, but nothing in the app reads them.
+              </p>
+            </div>
+          )}
+          {isFolder &&
+            manifest.problems?.map((problem) => (
+              <p
+                key={problem}
+                className="mt-2 font-cb-sans text-[10.5px] leading-[1.5] text-cb-brass-text"
+              >
+                {problem}
+              </p>
+            ))}
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-[9px] overflow-y-auto p-4">

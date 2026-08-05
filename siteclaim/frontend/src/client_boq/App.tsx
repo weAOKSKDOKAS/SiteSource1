@@ -16,12 +16,15 @@ import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
 import type { Surface } from "./nav/routes";
 import { go, hashFor, parseHash } from "./nav/routes";
+import { commonRoot, fromDrop, fromInput } from "./upload";
+import type { PickedFile } from "./upload";
 import { AddendumPanel, RfiPanel } from "./panels";
 import type { PanelRequest } from "./panels";
 import { ProfilePicker } from "./profile/ProfilePicker";
 import { CommandSearch } from "./search/CommandSearch";
 import { CriteriaLibrary } from "./screens/CriteriaLibrary";
 import { NotDesigned } from "./screens/NotDesigned";
+import { Outputs } from "./screens/Outputs";
 import { Rates } from "./screens/Rates";
 import { Settings } from "./screens/Settings";
 import { Team } from "./screens/Team";
@@ -30,6 +33,7 @@ import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
 import { RegisterTab } from "./tabs/Register";
 import { ScopeTab } from "./tabs/Scope";
+import { SiteTab } from "./tabs/Site";
 import type {
   CitationsResponse,
   CriteriaResponse,
@@ -39,7 +43,10 @@ import type {
   PartsResponse,
   RegisterResponse,
   ScopeResponse,
+  SetMeta,
   SetRow,
+  Station,
+  StationScheduleResponse,
   TeamMember,
 } from "./types";
 import { Avatar, ErrorNote, WaitingOn, cx } from "./ui";
@@ -56,6 +63,11 @@ export interface SetData {
   register: RegisterResponse | null;
   citations: CitationsResponse | null;
   scope: ScopeResponse | null;
+  /** The take-off. Null until the borehole details schedule has been read. */
+  site: StationScheduleResponse | null;
+  /** The desk metadata — the client's name feeds the offer letter's header, so it is never
+   *  typed a second time on the Offer screen. */
+  meta: SetMeta | null;
   hasEstimate: boolean;
 }
 
@@ -145,6 +157,17 @@ export default function ClientBoqApp() {
 
   // --- upload: drop anywhere on the home page, or browse --------------------
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+
+  const afterUpload = useCallback(
+    async (done: { result?: unknown }) => {
+      setJob(null);
+      await loadSets();
+      const result = done.result as { set_id?: string } | undefined;
+      if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" });
+    },
+    [loadSets],
+  );
 
   const uploadFiles = useCallback(
     async (files: File[]) => {
@@ -155,21 +178,48 @@ export default function ClientBoqApp() {
       }
       const projectName = pdfs[0].name.replace(/\.pdf$/i, "");
       try {
-        const done = await runJob(
-          () => api.upload(pdfs, projectName),
-          api.ingestStatus,
-          setJob,
+        await afterUpload(
+          await runJob(() => api.upload(pdfs, projectName), api.ingestStatus, setJob),
         );
-        setJob(null);
-        await loadSets();
-        const result = done.result as { set_id?: string } | undefined;
-        if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" });
       } catch (e) {
         setJob(null);
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [loadSets],
+    [afterUpload],
+  );
+
+  /** A folder that is already organised. Nothing is filtered to PDFs here: a workbook is routed
+   *  to the bill importer and anything else is listed as held, so dropping the whole tender folder
+   *  keeps everything rather than quietly discarding the parts the ingest cannot read. */
+  const uploadFolder = useCallback(
+    async (picked: PickedFile[]) => {
+      if (!picked.length) {
+        setError("That folder had no files in it.");
+        return;
+      }
+      // The folder's own name, not whichever PDF happens to sort first.
+      const projectName = commonRoot(picked) || picked[0].path.split("/")[0] || "Tender folder";
+      // Two hundred files take a while to send before the job even starts, so the strip goes up
+      // immediately — an unresponsive page is the same thing as a broken one to whoever is
+      // watching it.
+      setJob({ kind: "ingest", status: "running", stage: `sending ${picked.length} files` });
+      try {
+        // Polled like the binder path: the folder job runs all the way to interpreted parts, so
+        // the response is a queued job rather than a finished one.
+        await afterUpload(
+          await runJob(
+            () => api.uploadFolder(picked, projectName),
+            api.ingestStatus,
+            setJob,
+          ),
+        );
+      } catch (e) {
+        setJob(null);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [afterUpload],
   );
 
   useEffect(() => {
@@ -186,8 +236,19 @@ export default function ClientBoqApp() {
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
       setDropActive(false);
-      const files = [...(e.dataTransfer?.files ?? [])];
-      if (files.length) void uploadFiles(files);
+      // A dropped DIRECTORY is absent from `dataTransfer.files` — it only exists behind
+      // `items[i].webkitGetAsEntry()`. Without this branch, dropping a folder does nothing at all.
+      // `fromDrop` returns null when no directory was involved, so two loose PDFs still take the
+      // binder path rather than silently switching the whole ingest to folder mode.
+      const transfer = e.dataTransfer;
+      void fromDrop(transfer).then((picked) => {
+        if (picked) {
+          void uploadFolder(picked);
+          return;
+        }
+        const files = [...(transfer?.files ?? [])];
+        if (files.length) void uploadFiles(files);
+      });
     };
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("dragleave", onDragLeave);
@@ -197,7 +258,7 @@ export default function ClientBoqApp() {
       window.removeEventListener("dragleave", onDragLeave);
       window.removeEventListener("drop", onDrop);
     };
-  }, [surface.kind, uploadFiles]);
+  }, [surface.kind, uploadFiles, uploadFolder]);
 
   // --- desk actions ---------------------------------------------------------
   const confirmCloseDate = useCallback(
@@ -244,6 +305,7 @@ export default function ClientBoqApp() {
         : {
             criteria: "Criteria library",
             rates: "Pricing & rates",
+            outputs: "Outputs and norms",
             team: "Team & access",
             settings: "AI model",
             letters: "Letter templates",
@@ -320,6 +382,7 @@ export default function ClientBoqApp() {
               onOpenCitation={openCitation}
               onConfirmCloseDate={(setId, date) => void confirmCloseDate(setId, date)}
               onBrowse={() => fileInput.current?.click()}
+              onBrowseFolder={() => folderInput.current?.click()}
             />
           )
         ) : surface.kind === "screen" ? (
@@ -327,6 +390,8 @@ export default function ClientBoqApp() {
             <CriteriaLibrary criteria={criteria} onChanged={() => void loadCriteria()} onError={setError} />
           ) : surface.screen === "rates" ? (
             <RatesScreen onError={setError} />
+          ) : surface.screen === "outputs" ? (
+            <OutputsScreen onError={setError} />
           ) : surface.screen === "team" ? (
             <Team
               team={team}
@@ -379,6 +444,23 @@ export default function ClientBoqApp() {
         }}
       />
 
+      {/* A second input, because `webkitdirectory` turns a picker into a folder picker outright —
+          it cannot be a mode on the one above. No `accept`: a tender folder holds workbooks and
+          images too, and the point of this route is that none of them are dropped. */}
+      <input
+        ref={folderInput}
+        type="file"
+        multiple
+        className="hidden"
+        // React does not know these attributes; they are what makes it a directory picker.
+        {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+        onChange={(e) => {
+          const picked = fromInput(e.target.files);
+          e.target.value = "";
+          if (picked.length) void uploadFolder(picked);
+        }}
+      />
+
       {searchOpen && (
         <CommandSearch
           sets={sets}
@@ -423,6 +505,22 @@ function RatesScreen({ onError }: { onError: (msg: string) => void }) {
   return <Rates rates={rates} onChanged={() => void load()} onError={onError} />;
 }
 
+/** The output book, same shape as Rates: its own fetch cycle, the screen stays pure. */
+function OutputsScreen({ onError }: { onError: (msg: string) => void }) {
+  const [outputs, setOutputs] = useState<Parameters<typeof Outputs>[0]["outputs"]>(null);
+  const load = useCallback(async () => {
+    try {
+      setOutputs(await api.outputs());
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }, [onError]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  return <Outputs outputs={outputs} onChanged={() => void load()} onError={onError} />;
+}
+
 // ---------------------------------------------------------------------------
 // One tender — the five steps. The subtree the first build was; unchanged in behaviour, but
 // the open set and tab now come from the hash instead of localStorage.
@@ -458,11 +556,14 @@ function SetView({
     const setRow = rows.sets.find((r) => r.set_id === setId);
     const optional = <T,>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
 
-    const [manifest, parts, register, scope] = await Promise.all([
+    const [manifest, parts, register, scope, site] = await Promise.all([
       optional(api.manifest(setId)),
       optional(api.parts(setId)),
       optional(api.register(setId)),
       optional(api.scope(setId)),
+      // The take-off, for the step strip: the Site chip must not say "not read yet" about a
+      // schedule somebody has read, and Price carries the unassigned-hole count live.
+      optional(api.stationSchedule(setId)),
     ]);
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
@@ -477,6 +578,8 @@ function SetView({
       register,
       citations,
       scope,
+      site,
+      meta: setRow?.meta ?? null,
       hasEstimate: setRow?.price != null,
     });
   }, [setId]);
@@ -517,6 +620,10 @@ function SetView({
         register: Boolean(data?.register),
         scope: Boolean(data?.scope),
         estimate: Boolean(data?.hasEstimate),
+        site: Boolean(data?.site?.stations.length),
+        unassignedHoles: (data?.site?.stations ?? []).filter(
+          (s: Station) => !data?.site?.classes[s.station]?.access_class,
+        ).length,
       }),
     [data],
   );
@@ -559,6 +666,8 @@ function SetView({
             onError={onError}
             onProgress={onJob}
           />
+        ) : tab === "site" ? (
+          <SiteTab data={data} railOpen={railOpen} onError={onError} />
         ) : tab === "price" ? (
           <PriceTab
             data={data}
@@ -568,6 +677,8 @@ function SetView({
             onProgress={onJob}
           />
         ) : (
+          // The fallthrough renders Offer. A new tab appended after `offer` would silently show
+          // the letter instead of itself, so every tab above needs an explicit branch.
           <OfferTab data={data} onError={onError} />
         )}
       </main>
