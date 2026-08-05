@@ -18,6 +18,7 @@ the vision model. ``to_images`` is unchanged (pure vision).
 """
 
 import base64
+import os
 from typing import Optional
 
 # Caps decoupled by modality: text is cheap, so allow many text pages; vision is
@@ -27,23 +28,57 @@ IMAGE_MAX_PAGES = 8
 DEFAULT_DPI = 150
 MIN_TEXT_CHARS = 20  # a page with fewer usable characters is treated as scanned (image)
 
+# A PRICED RETURN is not an arbitrary document, and 8 pages is the wrong cap for it.
+#
+# `IMAGE_MAX_PAGES` bounds vision on documents we are sampling — a scanned page here and there
+# inside a binder we are mostly reading as text. A return is different in kind: it is the whole
+# answer, every page of it is a priced row, and a page nobody looked at reads downstream as a
+# SCOPE GAP rather than as a page nobody looked at. The firm was sent a sliced section and replied
+# with that section priced, so the length is set by the section, not by our sampling budget.
+#
+# 40 covers a CEDD bill section end to end. Cost is bounded by `IMAGE_PAGES_PER_CHUNK = 3`, so the
+# worst case is 14 vision calls for a return — several minutes and real money, but a return arrives
+# once per firm per package and the alternative is levelling a bid against rows nobody read.
+#
+# The cap still exists, and when it bites it is now REPORTED (`on_note`) rather than silent.
+# Env-overridable, the same way `DEEPSEEK_MIN_MAX_TOKENS` is: the operator who meets a longer
+# return should be able to raise it without a code change, and the warning names the variable.
+def _reply_max_pages() -> int:
+    try:
+        return max(1, int(os.getenv("DOCUMENTS_REPLY_MAX_PAGES", "").strip() or 40))
+    except ValueError:
+        return 40
+
+
+REPLY_MAX_PAGES = _reply_max_pages()
+
 
 def _b64_png(png_bytes: bytes) -> str:
     return base64.b64encode(png_bytes).decode("ascii")
 
 
-def _pdf_to_pngs(data: bytes, max_pages: int, dpi: int) -> list[str]:
+def _pdf_to_pngs(data: bytes, max_pages: int, dpi: int, on_note=None) -> list[str]:
     import fitz  # PyMuPDF — lazy
 
     zoom = dpi / 72.0
     matrix = fitz.Matrix(zoom, zoom)
     images: list[str] = []
     with fitz.open(stream=data, filetype="pdf") as doc:
-        for index in range(min(len(doc), max_pages)):
+        total = len(doc)
+        for index in range(min(total, max_pages)):
             pix = doc[index].get_pixmap(matrix=matrix, alpha=False)
             images.append(_b64_png(pix.tobytes("png")))
     if not images:
         raise ValueError("PDF has no rasterisable pages.")
+    if total > max_pages and on_note:
+        # NEVER SILENT. `range(min(total, max_pages))` used to drop the tail with no warning, no
+        # exception and no note, so a priced return past the cap came back short and the missing
+        # rows read downstream as a scope gap — a fact about the document rather than about us.
+        on_note(
+            f"pages {max_pages + 1}-{total} of {total} were NOT read (the {max_pages}-page render "
+            "cap). Anything priced on them is missing from this reply; re-send those pages, or "
+            "raise DOCUMENTS_REPLY_MAX_PAGES."
+        )
     return images
 
 
@@ -62,13 +97,20 @@ def to_images(
     *,
     max_pages: int = IMAGE_MAX_PAGES,
     dpi: int = DEFAULT_DPI,
+    on_note=None,
 ) -> list[str]:
-    """Rasterise an uploaded document to a list of base64-encoded PNG images."""
+    """Rasterise an uploaded document to a list of base64-encoded PNG images.
+
+    ``on_note`` is called with one sentence when the page cap actually drops pages. Optional and
+    off by default, so every existing caller behaves exactly as it did — but a caller that is
+    reading an ANSWER rather than sampling a document should pass it, because a dropped page there
+    is indistinguishable downstream from a row the firm chose not to price.
+    """
     if not file_bytes:
         raise ValueError("Empty file — nothing to extract.")
     ct = (content_type or "").split(";")[0].strip().lower()
     if ct == "application/pdf" or ct.endswith("/pdf"):
-        return _pdf_to_pngs(file_bytes, max_pages=max_pages, dpi=dpi)
+        return _pdf_to_pngs(file_bytes, max_pages=max_pages, dpi=dpi, on_note=on_note)
     if ct.startswith("image/"):
         return [_image_to_png(file_bytes)]
     raise ValueError(

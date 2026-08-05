@@ -33,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
+from pipeline import documents  # noqa: E402
 from pipeline.documents import extract_document, to_images  # noqa: E402
 from pipeline.llm_client import demo_mode  # noqa: E402
 from pipeline.stage_01_ingest.classify import classify_documents  # noqa: E402
@@ -1205,30 +1206,49 @@ def post_level_all(req: LevelRequest) -> LevelAllResponse:
     return LevelAllResponse(sections=sections)
 
 
-def _read_reply_files(items: list[tuple[str, Optional[str], bytes]]) -> tuple[list[BidReply], list[str]]:
+def _read_reply_files(
+    items: list[tuple[str, Optional[str], bytes]], notes: Optional[list[str]] = None,
+) -> tuple[list[BidReply], list[str]]:
     """Split reply files (``(filename, content_type, bytes)``) into deterministically-parsed SoR
     sheets and rasterised pages.
 
     An xlsx reply is our own dispatched SoR sheet returned with the Rate column filled — we
     authored the format, so it parses with openpyxl and NO model call (``parse_sor_xlsx``). PDFs
     and images keep the existing vision/text parse path. Raises ``ValueError`` on an unreadable
-    file — the HTTP route maps it to a 400; the poller records it against that message."""
+    file — the HTTP route maps it to a 400; the poller records it against that message.
+
+    **A return is rendered to ``REPLY_MAX_PAGES``, not ``IMAGE_MAX_PAGES``.** The 8-page cap is
+    right for sampling a binder we are mostly reading as text, and wrong for an answer: firms are
+    sent a sliced section and reply in kind, a CEDD section runs past 8 pages, and a page nobody
+    looked at reads downstream as a scope gap rather than as a page nobody looked at.
+
+    ``notes`` — pass a list and any page actually dropped is named on it, per file. The truncation
+    used to be entirely silent. Optional, and the return shape is unchanged, so every existing
+    caller keeps working exactly as it did.
+    """
     sheets: list[BidReply] = []
     images: list[str] = []
     for filename, content_type, data in items:
         if is_xlsx_upload(filename, content_type):
             sheets.append(parse_sor_xlsx(data))
         else:
-            images += to_images(data, content_type)
+            images += to_images(
+                data, content_type, max_pages=documents.REPLY_MAX_PAGES,
+                on_note=(lambda m, fn=filename: notes.append(f"{fn or 'the return'}: {m}"))
+                if notes is not None else None,
+            )
     return sheets, images
 
 
-def _read_reply_uploads(files: list[UploadFile]) -> tuple[list[BidReply], list[str]]:
+def _read_reply_uploads(
+    files: list[UploadFile], notes: Optional[list[str]] = None,
+) -> tuple[list[BidReply], list[str]]:
     """The multipart wrapper over :func:`_read_reply_files`. Sync (called from sync route
     handlers): reads the spooled upload directly so the blocking render/parse runs in FastAPI's
     threadpool, not on the event loop."""
     try:
-        return _read_reply_files([(f.filename or "", f.content_type, f.file.read()) for f in files])
+        return _read_reply_files(
+            [(f.filename or "", f.content_type, f.file.read()) for f in files], notes)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1293,6 +1313,11 @@ class LevelUploadResponse(BaseModel):
 
     levelled: list[LevelledBid] = Field(default_factory=list)
     misdirected: Optional[MisdirectedHint] = None
+    # NO `notes` field here, deliberately. A page the render cap dropped IS reported on this path —
+    # it reaches `process_inbound_reply`'s `extras`, which is written into the comparison workbook
+    # the operator opens — but it is not on this JSON response, because
+    # `test_level_upload_files.py::test_the_response_shape_did_not_move` pins this shape as the
+    # frontend contract. Widening it is a one-line change and that test's call to make.
 
 
 @app.post("/level-upload", response_model=LevelUploadResponse)
@@ -1327,7 +1352,8 @@ def post_level_upload(
         export_leveling_xlsx(levelled, load_demo_replies(REPLIES_FIXTURE), path=OUT_PATH)
         return LevelUploadResponse(levelled=levelled)
 
-    sheets, images = _read_reply_uploads(files)
+    notes: list[str] = []
+    sheets, images = _read_reply_uploads(files, notes)
     if not tender:
         # No tender means no registry to file against — accumulation is per tender, and inventing a
         # slug would file the return under a tender that does not exist. The old in-memory
@@ -1344,6 +1370,7 @@ def post_level_upload(
         # Explicit identity: no ref is invented, and the AI fallback is not consulted to re-derive
         # what the operator already told us.
         identity={"tender_id": tender_slug(tender), "firm_id": firm_id, "trade": trade},
+        notes=notes,
     )
     # `LevelUploadResponse` is unchanged so the frontend contract does not move: `comparison` is
     # the re-levelled set of every reply on the tender, which is what `levelled` always meant —
@@ -1386,7 +1413,7 @@ class InboundReplyResponse(BaseModel):
 
 def process_inbound_reply(
     ref: str, sheets: list[BidReply], images: list[str], *, workspace: Optional[Workspace] = None,
-    identity: Optional[dict] = None,
+    identity: Optional[dict] = None, notes: Optional[list[str]] = None,
 ) -> InboundReplyResponse:
     """The ONE inbound-reply processing path — shared verbatim by the HTTP route and the Gmail
     poller (neither reimplements it): resolve the correlation ref deterministically (AI matching
@@ -1433,6 +1460,10 @@ def process_inbound_reply(
     new_replies, extras_notes, coverage = _route_reply(
         parsed, scope, firm_id=firm_id, trade=trade, tender_id=tender_id
     )
+    # Pages the render cap dropped, FIRST — before the routing notes. A reply built from part of a
+    # document is a different thing from a reply that priced part of a schedule, and the reader has
+    # to know which one they are looking at before anything else on this list means what it says.
+    extras_notes = (notes or []) + extras_notes
 
     replies = reply_loop.accumulate_replies(workspace, tender_id, new_replies)
     levelled = level_bids(replies, scope)  # scope-aware leveling (reserved param now populated)
@@ -1466,9 +1497,10 @@ def post_inbound_reply(
     # deterministically, a PDF/image is rasterised for parse + fallback; DEMO uses fixtures.
     sheets: list[BidReply] = []
     images: list[str] = []
+    notes: list[str] = []
     if not demo_mode():
-        sheets, images = _read_reply_uploads(files)
-    return process_inbound_reply(ref, sheets, images)
+        sheets, images = _read_reply_uploads(files, notes)
+    return process_inbound_reply(ref, sheets, images, notes=notes)
 
 
 def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]]) -> str:
@@ -1488,8 +1520,12 @@ def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]]) -> str
     import mimetypes
 
     typed = [(fn, mimetypes.guess_type(fn)[0], data) for fn, data in attachments]
-    sheets, images = _read_reply_files(typed)
-    return process_inbound_reply(ref, sheets, images).status
+    notes: list[str] = []
+    sheets, images = _read_reply_files(typed, notes)
+    status = process_inbound_reply(ref, sheets, images, notes=notes).status
+    # The poller records ONE string per message id, and it is the only place a dropped page would
+    # ever be visible on this path — so it is said here rather than left to the comparison alone.
+    return f"{status} ({len(notes)} page-cap warning(s))" if notes else status
 
 
 def _awaiting_by_unit(workspace: Workspace, tender_id: str, active_replies: list[BidReply]) -> dict[str, list[str]]:
