@@ -68,26 +68,61 @@ def post_bq_part(set_id: str, req: ConfirmBillPartsRequest) -> dict:
 def post_scope(set_id: str) -> dict:
     """Run the scope split over the confirmed bill parts, persist it, and return it.
 
-    Sync ``def`` on purpose: this reads pdfs and runs the extraction, and must not block the
-    event loop. ``notes`` carries every honest-degradation message the split produced (an
-    unreadable part, a quarantined item) — nothing is dropped quietly.
+    **A JOB on the live path, inline in DEMO** — the shape ``/ingest/split`` already uses. This
+    reads every part's pdf, runs the extraction and indexes every document; on the real pack that
+    is ~170 documents and minutes of work. Sync ``def`` kept the event loop free, so the server
+    stayed up and the only symptom was one request that never came back — no progress, no stage,
+    no way to stop it.
+
+    DEMO has nothing to wait for (no model call, fixtures on disk), so it answers directly and the
+    caller gets the finished payload in one round trip.
+
+    Live returns the job envelope; poll ``/client-boq/ingest/status/{job_id}`` and stop it with
+    ``/client-boq/jobs/{job_id}/cancel`` — one job store, so the existing endpoints already serve
+    this without a second poll route to keep in step. **The finished ``result`` is byte-for-byte
+    the dict this used to return**: set_id, scope, unrecognised_items, notes.
     """
+    from pipeline.llm_client import demo_mode
+
     from bridge import scope as scope_mod
 
-    notes: list[str] = []
-    try:
-        scope, unrecognised = scope_mod.scope_from_set(set_id, on_error=notes.append)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    scope_mod.save_scope(set_id, scope)
-    return {
-        "set_id": set_id,
-        "scope": scope.model_dump(),
-        "unrecognised_items": [u.model_dump() for u in unrecognised],
-        "notes": notes,
-    }
+    if demo_mode():
+        notes: list[str] = []
+        try:
+            scope, unrecognised = scope_mod.scope_from_set(set_id, on_error=notes.append)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        scope_mod.save_scope(set_id, scope)
+        return {
+            "set_id": set_id,
+            "scope": scope.model_dump(),
+            "unrecognised_items": [u.model_dump() for u in unrecognised],
+            "notes": notes,
+        }
+
+    from client_boq import jobs
+
+    from bridge.scope_job import run_scope_split_job
+
+    # One split per set at a time. A second would index the same ~170 documents concurrently on a
+    # two-wide pool and overwrite the first's scope — refused rather than queued, the same ruling
+    # the review runs under.
+    live = jobs.JOBS.live_for("scope_split", set_id)
+    if live:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"A scope split is already running for set {set_id!r} (job {live}). A second "
+                    "would overwrite the first's split, so it was refused rather than queued. "
+                    "Wait for it, or cancel it and start again."),
+        )
+    # `scope_split`, NOT `scope`: `/client-boq/estimate/scope` already owns the kind `scope`, and
+    # `live_for` is keyed on it — sharing the name would have each workflow refuse the other with a
+    # 409 naming a job the operator never started.
+    job_id = jobs.JOBS.create("scope_split", set_id=set_id)
+    jobs.POOL.submit(run_scope_split_job, job_id, set_id)
+    return {"job_id": job_id, "kind": "scope_split", "status": "queued", "stage": "reading"}
 
 
 @router.get("/{set_id}/scope")

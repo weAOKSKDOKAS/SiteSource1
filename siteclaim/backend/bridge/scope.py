@@ -32,7 +32,7 @@ from typing import Callable, Optional
 
 from pipeline.stage_01_ingest.doc_index import (
     UnrecognisedItem,
-    build_doc_index,
+    build_doc_entry,
     quarantine_unrecognised_items,
     save_doc_index,
 )
@@ -200,9 +200,33 @@ def _tender_for(name: str, parts: list, bill_ids: set[str]) -> TenderPackage:
 _NEVER_INDEXED = {"drawings"}
 
 
+def _index_each(
+    docs: list, count_cb: Optional[Callable[[int, int], None]], done: int, total: int,
+) -> tuple[list, int]:
+    """``build_doc_index`` one document at a time, ticking after each. Returns ``(entries, done)``.
+
+    Same entries in the same order — ``build_doc_index`` is a list comprehension over
+    ``build_doc_entry`` and carries no cross-document state, so per-document is not a different
+    reading of the pack, only a slower-looking one.
+
+    The tick is the reason. Indexing ~170 parts took minutes with nothing to show for it, and a
+    document is the only boundary this loop has. ``count_cb`` MAY RAISE — that is how a cancel
+    takes effect here, at a part boundary, exactly as a stage callback stops a workflow between
+    stages. Nothing is left half-written: the index is only persisted once the whole loop is past.
+    """
+    entries = []
+    for name, doc_type, data in docs:
+        entries.append(build_doc_entry(name, doc_type, data))
+        done += 1
+        if count_cb:
+            count_cb(done, total)
+    return entries, done
+
+
 def _apply_quarantine(
     scope: ScopePackages, bill: list, on_error: Optional[Callable[[str], None]] = None,
     *, tender_id: str = "", context: Optional[list] = None,
+    count_cb: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[ScopePackages, list[UnrecognisedItem]]:
     """The provenance backstop, on the same terms ``/ingest-upload`` uses.
 
@@ -237,16 +261,13 @@ def _apply_quarantine(
         # and correctly writes no index: a workbook has no pages and yields no section spans.
         return scope, []
 
-    bill_entries = build_doc_index(docs)
-    # The GUARD reads the BILL only. A context part misclassified as a schedule of rates would
-    # otherwise contribute section codes the bill never declared, and the quarantine would start
-    # accepting items on another document's authority.
-    sr_sections = {c for e in bill_entries if e.kind == "schedule_of_rates" for c in e.sor_section_pages}
-
     # The CONTEXT parts, indexed for dispatch. `relevant_docs` iterates the persisted doc_index for
     # every kind it attaches, so a bill-only index means an enquiry carries a Schedule of Rates and
     # nothing else — no Particular Specification, no Method of Measurement, no General
     # Specification, no addendum. That was the observed one-attachment draft.
+    #
+    # Collected BEFORE the bill is indexed so the total is known from the first tick: a progress
+    # bar that discovers its own denominator halfway through is worse than none.
     context_docs: list[tuple[str, DocType, bytes]] = []
     for spec, pdf_path, _ctx in (context or []):
         category = (spec.category or "").strip().lower()
@@ -255,7 +276,15 @@ def _apply_quarantine(
         data = _part_bytes(pdf_path)
         if data is not None:
             context_docs.append((_label(spec), doc_type_for(category, is_bill=False), data))
-    context_entries = build_doc_index(context_docs) if context_docs else []
+
+    total = len(docs) + len(context_docs)
+    bill_entries, done = _index_each(docs, count_cb, 0, total)
+    # The GUARD reads the BILL only. A context part misclassified as a schedule of rates would
+    # otherwise contribute section codes the bill never declared, and the quarantine would start
+    # accepting items on another document's authority.
+    sr_sections = {c for e in bill_entries if e.kind == "schedule_of_rates" for c in e.sor_section_pages}
+
+    context_entries, _done = _index_each(context_docs, count_cb, done, total)
     if tender_id:
         save_doc_index(Workspace(), tender_id, bill_entries + context_entries)
     if on_error and context_docs:
@@ -355,17 +384,28 @@ def scope_from_set(
     on_error: Optional[Callable[[str], None]] = None,
     client=None,
     demo_fixture: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    count_cb: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[ScopePackages, list[UnrecognisedItem]]:
     """Split a client_boq set's confirmed bill into ``ScopePackages`` — one package per trade.
 
     Raises ``LookupError`` when the set has no parts and ``ValueError`` when no bill part has been
     confirmed. It never guesses which part is the bill: that is the Phase-3 gate, and guessing
     here would defeat it.
+
+    ``progress_cb(stage)`` and ``count_cb(done, total)`` are the job hooks, and both are optional —
+    called directly with no import of the job store, so this module still knows nothing about
+    jobs. EITHER MAY RAISE: that is how a cancel takes effect, at a stage or a part boundary.
     """
     from bridge import parts as parts_mod
     from bridge.identity import bridge_conn, register_set_on, run_ref_for
     from client_boq import store as cb_store
 
+    def _stage(name: str) -> None:
+        if progress_cb:
+            progress_cb(name)
+
+    _stage("reading")
     ref = run_ref_for(set_id)
     conn = bridge_conn()
     try:
@@ -392,8 +432,10 @@ def scope_from_set(
     if workbook_items and not bill:
         # Every confirmed bill was a workbook: the split is complete without the extractor.
         scope = _scope_from_items(workbook_items, name)
-        return _apply_quarantine(scope, [], on_error, tender_id=ref)
+        _stage("indexing")
+        return _apply_quarantine(scope, [], on_error, tender_id=ref, count_cb=count_cb)
 
+    _stage("splitting")
     doc_text = doc_text_from_parts(bill, on_error)
     if not doc_text.strip() and not workbook_items:
         raise ValueError(
@@ -415,7 +457,9 @@ def scope_from_set(
         # come FIRST so its facts win the dedupe in `_merge_items` — a render cannot establish a
         # lump sum or an Employer rate, so a render's version of a row is strictly the poorer one.
         scope = _merge_items(workbook_items, scope, name)
-    return _apply_quarantine(scope, bill, on_error, tender_id=ref, context=context)
+    _stage("indexing")
+    return _apply_quarantine(scope, bill, on_error, tender_id=ref, context=context,
+                             count_cb=count_cb)
 
 
 def _project_name(conn: sqlite3.Connection, set_id: str) -> str:

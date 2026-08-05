@@ -612,8 +612,37 @@ export const api = {
     confirmBillParts: (setId: string, partIds: string[]) =>
       bpost<BqCandidates>(`${setPath(setId)}/bq-part`, { part_ids: partIds }),
 
-    /** Run the bill split. 409 until a bill part is confirmed — the message names bq-part. */
-    runSplit: (setId: string) => bpost<BridgeSplitResponse>(`${setPath(setId)}/scope`, {}),
+    /** Run the bill split. 409 until a bill part is confirmed — the message names bq-part; also
+     *  409 when a split is already running for this set.
+     *
+     *  Answers in ONE of two shapes. DEMO has nothing to wait for and returns the finished payload
+     *  directly. Live returns a job envelope — the split reads every part's pdf and indexes ~170
+     *  documents on the real pack, which is minutes — and the finished `result` is byte-for-byte
+     *  that same payload. `runSplitToCompletion` below is the caller that does not care which. */
+    runSplit: (setId: string) =>
+      bpost<BridgeSplitResponse | JobState>(`${setPath(setId)}/scope`, {}),
+    /** Run the split and hand back the finished payload, whichever shape the server answered in.
+     *
+     *  `onJob` sees every poll, so the caller can render the stage and the N/M the way the ingest
+     *  and review screens already do. A cancelled split resolves to `null` — it is a decision the
+     *  operator made, not an error to put a red banner over. */
+    async runSplitToCompletion(
+      setId: string, onJob?: (job: JobState) => void,
+    ): Promise<BridgeSplitResponse | null> {
+      const first = await api.bridge.runSplit(setId);
+      if ("scope" in first) return first as BridgeSplitResponse;   // DEMO answered inline
+      let job = first as JobState;
+      onJob?.(job);
+      while (job.job_id && (job.status === "queued" || job.status === "running")) {
+        await new Promise((r) => setTimeout(r, 1500));
+        job = await api.ingestStatus(job.job_id);
+        onJob?.(job);
+      }
+      if (job.status === "cancelled") return null;
+      if (job.status === "error") throw new Error(job.error || "The scope split failed.");
+      return (job.result ?? null) as BridgeSplitResponse | null;
+    },
+
     /** The persisted split. 404 before it has been run. */
     split: (setId: string) => bget<BridgeSplitRead>(`${setPath(setId)}/scope`),
 

@@ -30,6 +30,7 @@ import type {
   BridgeRouteDecisions,
   BridgeRoutePackage,
   BridgeRouteProposalRead,
+  JobState,
   ScopePackages,
   SorItem,
 } from "../types";
@@ -144,6 +145,8 @@ export function RouteTab({
   const [picked, setPicked] = useState<string[]>([]);
   const [split, setSplit] = useState<ScopePackages | null>(null);
   const [splitNotes, setSplitNotes] = useState<string[]>([]);
+  /** The live split job, while one is running. Null in DEMO, where the split answers inline. */
+  const [splitJob, setSplitJob] = useState<JobState | null>(null);
   const [proposal, setProposal] = useState<BridgeRouteProposalRead | null>(null);
   const [decisions, setDecisions] = useState<BridgeRouteDecisions | null>(null);
   const [chosen, setChosen] = useState<Record<string, string>>({});
@@ -223,13 +226,23 @@ export function RouteTab({
       await onRefresh();
     });
 
+  // Live, the split is a job: it reads every part's pdf and indexes each one, which on a real pack
+  // is ~170 documents and minutes of work. So the stage and the per-document count are shown while
+  // it runs, and STOP is offered — the same treatment ingest and review already get, rather than a
+  // button that goes quiet and a request that never comes back.
   const runSplit = () =>
     run("split", async () => {
-      const res = await api.bridge.runSplit(setId);
+      const res = await api.bridge.runSplitToCompletion(setId, setSplitJob);
+      setSplitJob(null);
+      if (!res) return;            // cancelled — the operator's decision, not a failure
       setSplit(res.scope);
       setSplitNotes(res.notes);
       await onRefresh();
     });
+
+  const cancelSplit = async () => {
+    if (splitJob?.job_id) await api.cancelJob(splitJob.job_id).catch(() => undefined);
+  };
 
   const analyze = () =>
     run("analyze", async () => {
@@ -421,7 +434,18 @@ export function RouteTab({
                 <Button variant={split ? "outline" : "brass"} onClick={runSplit} disabled={busy !== ""}>
                   {busy === "split" ? "Splitting…" : split ? "Re-run the split" : "Run the split"}
                 </Button>
-                {split && (
+                {splitJob && splitJob.status !== "done" && (
+                  <>
+                    <span className="text-[11px] uppercase tracking-wide text-cb-muted">
+                      {splitJob.stage || splitJob.status}
+                      {(splitJob.total ?? 0) > 0 && ` · ${splitJob.done}/${splitJob.total} documents`}
+                    </span>
+                    <Button variant="outline" onClick={cancelSplit} disabled={splitJob.cancel_requested}>
+                      {splitJob.cancel_requested ? "Stopping…" : "Stop"}
+                    </Button>
+                  </>
+                )}
+                {split && !splitJob && (
                   <span className="text-[11px] text-cb-muted">
                     {split.packages.length} packages ·{" "}
                     {split.packages.reduce((n, p) => n + p.sor_items.length, 0)} priced lines
