@@ -151,7 +151,11 @@ def create_gmail_drafts(
         attachments = [(a["filename"], base64.b64decode(a["content_b64"])) for a in d.get("attachments", [])]
         try:
             _draft_id, message_id = gmail_client.create_draft_ids(
-                to, d.get("subject", ""), d.get("body", ""), attachments, service=svc)
+                to, d.get("subject", ""), d.get("body", ""), attachments, service=svc,
+                # Stamps X-SiteSource-Outbound. The message id ledger cannot survive the send
+                # (Gmail replaces the id), so the header is what actually identifies our own RFQ
+                # when it lands back in the watched mailbox.
+                ref=d.get("ref", ""))
             drafted.append(firm_id)
             if on_created is not None:
                 on_created({"firm_id": firm_id, "message_id": message_id,

@@ -206,11 +206,33 @@ def build_service():
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
-def _mime_raw(to: str, subject: str, body: str, attachments: list[tuple[str, bytes]]) -> str:
+# The header that says "we sent this".
+#
+# The outbound ledger records the MESSAGE id returned when a draft is created — and the Gmail API
+# replaces that id when the draft is sent: "the draft is automatically deleted and a new message
+# with an updated ID is created with the SENT system label", and the drafts resource exists to give
+# a stable id precisely "because the underlying message IDs change every time the message is
+# replaced" (developers.google.com/workspace/gmail/api/guides/drafts).
+#
+# So the ledger MISSES every hand-sent draft, which is every draft: the operator sends from Gmail.
+# With GMAIL_TEST_RECIPIENT addressing each RFQ back to the operator, our own enquiry lands in the
+# watched mailbox carrying the ref and the blank SoR, and would be ingested as a rateless bid that
+# supersedes the firm's genuine reply on the same (firm_id, trade) key.
+#
+# A header travels WITH the message through the send, so it survives the id change. It is not part
+# of the draft's subject, body, recipient chain or human gate — all of which are out of scope and
+# untouched — and the operator never sees it.
+OUTBOUND_HEADER = "X-SiteSource-Outbound"
+
+
+def _mime_raw(to: str, subject: str, body: str, attachments: list[tuple[str, bytes]],
+              *, ref: str = "") -> str:
     """The RFC-2822 message for one enquiry, base64url-encoded the way the Gmail API wants it."""
     msg = EmailMessage()
     msg["To"] = to
     msg["Subject"] = subject
+    if ref:
+        msg[OUTBOUND_HEADER] = ref
     msg.set_content(body)
     for filename, data in attachments:
         mime, _ = mimetypes.guess_type(filename)
@@ -221,6 +243,7 @@ def _mime_raw(to: str, subject: str, body: str, attachments: list[tuple[str, byt
 
 def create_draft(
     to: str, subject: str, body: str, attachments: list[tuple[str, bytes]], *, service=None,
+    ref: str = "",
 ) -> str:
     """Create ONE Gmail draft (never a send — the operator reviews and sends from Gmail) and
     return its draft id. ``attachments`` is ``[(filename, bytes)]`` — the already-assembled
@@ -230,11 +253,12 @@ def create_draft(
     things and the difference matters: the poller lists MESSAGES, so the draft id is useless for
     recognising our own outbound mail in the inbox.
     """
-    return create_draft_ids(to, subject, body, attachments, service=service)[0]
+    return create_draft_ids(to, subject, body, attachments, service=service, ref=ref)[0]
 
 
 def create_draft_ids(
     to: str, subject: str, body: str, attachments: list[tuple[str, bytes]], *, service=None,
+    ref: str = "",
 ) -> tuple[str, str]:
     """``(draft_id, message_id)`` for one created Gmail draft.
 
@@ -243,7 +267,7 @@ def create_draft_ids(
     id; the outbound ledger wants the MESSAGE id, because ``list_replies`` returns messages and a
     draft id would never match one.
     """
-    raw = _mime_raw(to, subject, body, attachments)
+    raw = _mime_raw(to, subject, body, attachments, ref=ref)
     try:
         svc = service or build_service()
         draft = svc.users().drafts().create(userId="me", body={"message": {"raw": raw}}).execute()
@@ -268,8 +292,10 @@ def create_draft_ids(
 
 def list_replies(query: str, *, after: Optional[float] = None, max_results: int = 100, service=None) -> list[dict]:
     """Messages matching ``query`` (e.g. ``subject:\"SiteSource Ref\" has:attachment newer_than:7d``),
-    each as ``{"id", "subject"}``. ``after`` (epoch seconds) narrows with Gmail's ``after:`` filter.
-    Read-only; raises :class:`GmailUnavailable` when Gmail cannot be reached."""
+    each as ``{"id", "subject", "outbound"}``. ``outbound`` is our own
+    :data:`OUTBOUND_HEADER` when present — non-empty means WE sent this message, which is how the
+    poller recognises its own RFQ coming back. ``after`` (epoch seconds) narrows with Gmail's
+    ``after:`` filter. Read-only; raises :class:`GmailUnavailable` when Gmail cannot be reached."""
     svc = service or build_service()
     q = f"{query} after:{int(after)}" if after else query
     try:
@@ -277,10 +303,15 @@ def list_replies(query: str, *, after: Optional[float] = None, max_results: int 
         out: list[dict] = []
         for m in listing.get("messages", []) or []:
             meta = svc.users().messages().get(
-                userId="me", id=m["id"], format="metadata", metadataHeaders=["Subject"],
+                userId="me", id=m["id"], format="metadata",
+                metadataHeaders=["Subject", OUTBOUND_HEADER],
             ).execute()
             headers = {h["name"].lower(): h["value"] for h in meta.get("payload", {}).get("headers", [])}
-            out.append({"id": m["id"], "subject": headers.get("subject", "")})
+            out.append({
+                "id": m["id"],
+                "subject": headers.get("subject", ""),
+                "outbound": headers.get(OUTBOUND_HEADER.lower(), ""),
+            })
         return out
     except GmailUnavailable:
         raise

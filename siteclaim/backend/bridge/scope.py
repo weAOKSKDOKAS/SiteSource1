@@ -188,9 +188,21 @@ def _tender_for(name: str, parts: list, bill_ids: set[str]) -> TenderPackage:
     )
 
 
+# Categories whose parts nothing downstream reads, and which are the most expensive to index.
+#
+# `relevant_docs` attaches exactly five kinds — clarification, general_specification,
+# method_of_measurement, particular_specification, appendix — plus the priced-return SoR. A
+# DRAWING is none of them: it is raster, so every page goes through the OCR/word-box path at
+# roughly 150-200 ms even with no OCR engine installed and 1-3 s with one, and nothing would ever
+# read the result. On ND/2025/04 that is 35 of 206 parts, and the most costly 35.
+#
+# Skipping them is not a guess about content — it is declining to index what no consumer reads.
+_NEVER_INDEXED = {"drawings"}
+
+
 def _apply_quarantine(
     scope: ScopePackages, bill: list, on_error: Optional[Callable[[str], None]] = None,
-    *, tender_id: str = "",
+    *, tender_id: str = "", context: Optional[list] = None,
 ) -> tuple[ScopePackages, list[UnrecognisedItem]]:
     """The provenance backstop, on the same terms ``/ingest-upload`` uses.
 
@@ -225,10 +237,36 @@ def _apply_quarantine(
         # and correctly writes no index: a workbook has no pages and yields no section spans.
         return scope, []
 
-    entries = build_doc_index(docs)
+    bill_entries = build_doc_index(docs)
+    # The GUARD reads the BILL only. A context part misclassified as a schedule of rates would
+    # otherwise contribute section codes the bill never declared, and the quarantine would start
+    # accepting items on another document's authority.
+    sr_sections = {c for e in bill_entries if e.kind == "schedule_of_rates" for c in e.sor_section_pages}
+
+    # The CONTEXT parts, indexed for dispatch. `relevant_docs` iterates the persisted doc_index for
+    # every kind it attaches, so a bill-only index means an enquiry carries a Schedule of Rates and
+    # nothing else — no Particular Specification, no Method of Measurement, no General
+    # Specification, no addendum. That was the observed one-attachment draft.
+    context_docs: list[tuple[str, DocType, bytes]] = []
+    for spec, pdf_path, _ctx in (context or []):
+        category = (spec.category or "").strip().lower()
+        if category in _NEVER_INDEXED:
+            continue
+        data = _part_bytes(pdf_path)
+        if data is not None:
+            context_docs.append((_label(spec), doc_type_for(category, is_bill=False), data))
+    context_entries = build_doc_index(context_docs) if context_docs else []
     if tender_id:
-        save_doc_index(Workspace(), tender_id, entries)
-    sr_sections = {c for e in entries if e.kind == "schedule_of_rates" for c in e.sor_section_pages}
+        save_doc_index(Workspace(), tender_id, bill_entries + context_entries)
+    if on_error and context_docs:
+        kinds: dict[str, int] = {}
+        for e in context_entries:
+            kinds[e.kind] = kinds.get(e.kind, 0) + 1
+        _note(on_error, (
+            f"indexed {len(context_docs)} context document(s) for dispatch — "
+            + (", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "none classified")
+            + ". The enquiry's relevant-only attachments are assembled from this index."
+        ))
     if not sr_sections:
         _note(on_error, (
             "the confirmed bill declared no Schedule-of-Rates section headers, so the provenance "
@@ -377,7 +415,7 @@ def scope_from_set(
         # come FIRST so its facts win the dedupe in `_merge_items` — a render cannot establish a
         # lump sum or an Employer rate, so a render's version of a row is strictly the poorer one.
         scope = _merge_items(workbook_items, scope, name)
-    return _apply_quarantine(scope, bill, on_error, tender_id=ref)
+    return _apply_quarantine(scope, bill, on_error, tender_id=ref, context=context)
 
 
 def _project_name(conn: sqlite3.Connection, set_id: str) -> str:
