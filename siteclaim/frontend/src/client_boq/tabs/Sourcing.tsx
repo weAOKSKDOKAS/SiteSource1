@@ -20,11 +20,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api } from "../api";
 import type {
+  AwaitingFirm,
   AwaitingPackage,
   BidReply,
   BridgeRouteProposalRead,
   Coverage,
   DispatchSet,
+  GmailIntegrationStatus,
   LevelledBid,
   MisdirectedHint,
   Recommendation,
@@ -102,6 +104,10 @@ export function SourcingTab({
   // The state the wizard held in App.tsx, lifted here so the tab owns its own.
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
+  /** What the SERVER holds for this set, as read on mount. Kept beside `approvals` so a re-run of
+   *  the shortlist can honour a package the operator has already decided on instead of resetting
+   *  it to the default — including a package they emptied, which is a decision, not an absence. */
+  const [storedApprovals, setStoredApprovals] = useState<Record<string, string[]> | null>(null);
   const [dispatch, setDispatch] = useState<DispatchSet | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
 
@@ -118,21 +124,40 @@ export function SourcingTab({
   const [replies, setReplies] = useState<BidReply[]>([]);
   const [levelStale, setLevelStale] = useState(false);
   const [tenderReplies, setTenderReplies] = useState<TenderReplies | null>(null);
+  /** FIX 4 — the Gmail transport's own state. `polling_enabled` defaults FALSE on the server, so a
+   *  default install is not watching for replies at all and this screen is otherwise
+   *  indistinguishable from an inbox with nothing in it. The endpoint already returned every field
+   *  needed; none of it was shown where the operator is actually waiting. */
+  const [gmail, setGmail] = useState<GmailIntegrationStatus | null>(null);
+  /** FIX 5 — the active-reply count at the last look, so an INCREASE can be noticed. Written and
+   *  read only inside the poll's own setter, so it never triggers a render of its own. */
+  const [, setReplyMark] = useState<number | null>(null);
+  const [landed, setLanded] = useState(0);
   const [recommendations, setRecommendations] = useState<Record<string, Recommendation> | null>(null);
   const [awards, setAwards] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [spl, prop, dec, cov] = await Promise.all([
+    const [spl, prop, dec, cov, appr, reps] = await Promise.all([
       api.bridge.split(setId).catch(() => null),
       api.bridge.proposal(setId).catch(() => null),
       api.bridge.decisions(setId).catch(() => null),
       api.sourcing.coverage().catch(() => null),
+      // The selection this set already carries. Read before the shortlist runs, so a reload lands
+      // on the same selection the operator left rather than back on the default.
+      api.bridge.approvals(setId).catch(() => null),
+      // What has actually been dispatched and what has landed. Read ON MOUNT, not only while the
+      // reply poller is running: six replies sat on disk and Level & compare said "No dispatched
+      // packages yet" because it had nothing but this session's own memory to build from.
+      api.sourcing.tenderReplies(setId).catch(() => null),
     ]);
     setSplit(spl?.scope ?? null);
     setProposal(prop);
     setSublet(dec?.sublet_packages ?? []);
     setCoverage(cov);
+    setStoredApprovals(appr?.approvals ?? null);
+    if (appr?.approvals && Object.keys(appr.approvals).length) setApprovals(appr.approvals);
+    setTenderReplies(reps);
     setLoading(false);
   }, [setId]);
 
@@ -169,9 +194,19 @@ export function SourcingTab({
       setShortlist(result);
       // Default the enquiry selection to the top clean firm per package. A default, not a
       // decision: every row still shows its flags and the person can change any of it.
+      //
+      // A package the operator has ALREADY decided keeps their decision — the default only fills
+      // the ones nobody has touched. Presence in `storedApprovals` is the test, not truthiness: an
+      // empty list means "none of them" and must not be overwritten with a suggestion. Stored
+      // firms are filtered to this shortlist so a selection can never point at a firm not on screen.
       setApprovals(
         Object.fromEntries(
           Object.entries(result.per_trade).map(([trade, cands]) => {
+            const stored = storedApprovals?.[trade];
+            if (stored) {
+              const ids = new Set(cands.map((c) => c.firm.firm_id));
+              return [trade, stored.filter((f) => ids.has(f))];
+            }
             const first = cands.find((c) => !c.recommended_against) ?? cands[0];
             return [trade, first ? [first.firm.firm_id] : []];
           }),
@@ -194,14 +229,20 @@ export function SourcingTab({
     };
   }, [demoMode, scope, approvals, step]);
 
-  const toggleApprove = (trade: string, firmId: string) =>
-    setApprovals((cur) => {
-      const ids = cur[trade] ?? [];
-      return {
-        ...cur,
-        [trade]: ids.includes(firmId) ? ids.filter((f) => f !== firmId) : [...ids, firmId],
-      };
-    });
+  // Selecting a firm is now recorded server-side. Persisting a selection is NOT approving a
+  // dispatch: nothing is composed, drafted or sent here, and the operator still presses
+  // Compose/Prepare on the Dispatch step. The gate has not moved — only the selection now survives
+  // a reload. Only the toggled package is sent, so a click cannot rewrite a package off-screen.
+  const toggleApprove = (trade: string, firmId: string) => {
+    const ids = approvals[trade] ?? [];
+    const next = ids.includes(firmId) ? ids.filter((f) => f !== firmId) : [...ids, firmId];
+    setApprovals((cur) => ({ ...cur, [trade]: next }));
+    setStoredApprovals((cur) => ({ ...(cur ?? {}), [trade]: next }));
+    // Fire and forget, and silent on failure: losing the write costs the persistence this change
+    // adds, nothing the operator is doing right now. An error banner over a click that visibly
+    // worked would be the worse lie.
+    void api.bridge.saveApprovals(setId, { [trade]: next }).catch(() => undefined);
+  };
 
   const dispatchBody = (send: boolean) => ({
     shortlist,
@@ -240,6 +281,49 @@ export function SourcingTab({
       .tenderReplies(setId)
       .then(setTenderReplies)
       .catch(() => setTenderReplies(null)); // 404 = nothing has landed yet, which is a state
+
+  // FIX 4 — the transport's own state, read once when the tab opens. Cheap (no network call on
+  // the server side: token_state is checked without one) and it never fails the screen.
+  useEffect(() => {
+    if (demoMode) return; // DEMO reports "demo" and there is no inbox to describe
+    void api.sourcing.gmailStatus().then(setGmail).catch(() => setGmail(null));
+  }, [demoMode]);
+
+  // FIX 5 — while Level & compare is VISIBLE and the server is actually polling, re-read the
+  // tender's replies on the server's own cadence. `api.ts` said it outright: refreshed on demand,
+  // no polling loop — so the poller could file a reply while this screen still showed "awaiting".
+  //
+  // Bounded deliberately: it stops on unmount and when the step is not visible, and there is no
+  // always-on timer in the shell. Polling a screen nobody is looking at buys nothing.
+  //
+  // It NEVER calls runLevel(). A comparison must not silently recompute under someone
+  // mid-decision — a new arrival is offered, and the re-level is theirs to press.
+  const pollSeconds = Math.max(15, gmail?.poll_seconds ?? 120);
+  const watching = step === "level" && !demoMode && Boolean(gmail?.polling_enabled);
+  useEffect(() => {
+    if (!watching) return;
+    let live = true;
+    const tick = () => {
+      void api.sourcing
+        .tenderReplies(setId)
+        .then((next) => {
+          if (!live) return;
+          setTenderReplies(next);
+          const n = next.replies.filter((r) => r.status === "active").length;
+          setReplyMark((mark) => {
+            if (mark !== null && n > mark) setLanded(n - mark);
+            return n;
+          });
+        })
+        .catch(() => undefined); // a 404 is "nothing yet", and a blip is not worth a banner
+    };
+    tick();
+    const timer = window.setInterval(tick, pollSeconds * 1000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [watching, setId, pollSeconds]);
 
   const runLevel = () =>
     run(async () => {
@@ -289,23 +373,54 @@ export function SourcingTab({
 
   // What was dispatched, and whether each firm's return has landed — by EITHER path (an active
   // reply aligned to the unit, or a manual upload that levelled into its section).
+  //
+  // Built from the SERVER's record of who was asked (`tenderReplies.dispatched`, the reply
+  // registry written at dispatch time), not from `dispatch.bundles`. That was React state: it died
+  // with the browser session, so six replies sitting on disk rendered as "No dispatched packages
+  // yet" whenever the dispatch had happened in some other tab, yesterday, or on another machine.
+  // A reply that exists must be visible regardless of what this session did.
+  //
+  // This session's bundles are still merged in where they exist, for the two things the registry
+  // does not carry: the bundle `status`, and a freshly-composed bundle in the seconds before the
+  // registry read catches up.
   const awaiting: AwaitingPackage[] = useMemo(() => {
-    if (!dispatch) return [];
     const byUnit = new Map<string, AwaitingPackage>();
-    for (const b of dispatch.bundles) {
-      const received =
-        (tenderReplies?.replies ?? []).some(
-          (r) => r.trade === b.trade && r.firm_id === b.firm_id && r.status === "active",
-        ) || (levelled?.[b.trade] ?? []).some((l) => l.firm_id === b.firm_id);
-      const pkg = byUnit.get(b.trade) ?? { trade: b.trade, firms: [] };
-      pkg.firms.push({
+    const seen = new Set<string>();
+
+    const landed = (trade: string, firmId: string) =>
+      (tenderReplies?.replies ?? []).some(
+        (r) => r.trade === trade && r.firm_id === firmId && r.status === "active",
+      ) || (levelled?.[trade] ?? []).some((l) => l.firm_id === firmId);
+
+    const push = (trade: string, firm: AwaitingFirm) => {
+      const key = `${trade} ${firm.firm_id}`;
+      if (seen.has(key)) return; // the in-session bundle already covered this firm
+      seen.add(key);
+      const pkg = byUnit.get(trade) ?? { trade, firms: [] };
+      pkg.firms.push(firm);
+      byUnit.set(trade, pkg);
+    };
+
+    // In-session bundles first — they are the richer record while the tab is open.
+    for (const b of dispatch?.bundles ?? []) {
+      push(b.trade, {
         firm_id: b.firm_id,
         firm_name: b.firm_name,
         ref: (b.email_subject.match(/\[SiteSource Ref:\s*([^\]]+)\]/) ?? [])[1]?.trim() ?? "",
-        received,
+        received: landed(b.trade, b.firm_id),
         status: b.status,
       });
-      byUnit.set(b.trade, pkg);
+    }
+    // Then everything the server says was dispatched. `status` is "sent": a registry row exists
+    // only because an enquiry went out, which is the fact this screen is reporting.
+    for (const d of tenderReplies?.dispatched ?? []) {
+      push(d.trade, {
+        firm_id: d.firm_id,
+        firm_name: d.firm_name,
+        ref: d.ref,
+        received: d.received || landed(d.trade, d.firm_id),
+        status: "sent",
+      });
     }
     return [...byUnit.values()];
   }, [dispatch, tenderReplies, levelled]);
@@ -387,6 +502,34 @@ export function SourcingTab({
             )
           ) : step === "dispatch" ? (
             shortlist ? (
+              <>
+              {/* FIX 9 — the priced-return document is not always the artifact the design intends.
+                  The design sends the ORIGINAL Schedule of Rates sliced to this unit's section
+                  pages, because a subcontractor returns what they were sent. On the real pack the
+                  draft carried SoR_ground-investigation-4.xlsx instead — correctly, since the bill
+                  arrived as a workbook and there was no PDF to slice — and nothing said so.
+                  Stated here, BEFORE drafting, from the flag the plan already carries. */}
+              {(plans ?? []).some((pl) =>
+                (pl.attachments ?? []).some((a) => (a.flags ?? []).includes("substituted_priced_return")),
+              ) && (
+                <div className="mb-3 border border-cb-amber px-3 py-2">
+                  <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-amber">
+                    PRICED-RETURN DOCUMENT SUBSTITUTED
+                  </div>
+                  {(plans ?? []).flatMap((pl) =>
+                    (pl.attachments ?? [])
+                      .filter((a) => (a.flags ?? []).includes("substituted_priced_return"))
+                      .map((a) => (
+                        <p
+                          key={`${pl.package_key}:${a.source_doc}`}
+                          className="mt-1 font-cb-sans text-[11px] leading-[1.5] text-cb-amber"
+                        >
+                          <strong>{pl.package_key}</strong> — {a.reason}
+                        </p>
+                      )),
+                  )}
+                </div>
+              )}
               <Dispatch
                 shortlist={shortlist}
                 approvals={approvals}
@@ -404,13 +547,50 @@ export function SourcingTab({
                 onPrepareDrafts={demoMode ? undefined : prepareDrafts}
                 onSend={sendDispatch}
               />
+              </>
             ) : (
               <WaitingOn title="Waits on the shortlist">
                 Run the shortlist first — dispatch sends enquiries to the firms selected there.
               </WaitingOn>
             )
           ) : step === "level" ? (
-            levelled ? (
+            <>
+              {/* FIX 4 — one status line, from the endpoint that already returned all of this.
+                  `polling_enabled` defaults false, so a default install watches nothing and this
+                  screen looks exactly like an empty inbox. Amber border and text when it is off,
+                  because that is a condition to act on rather than a failure that happened. */}
+              {gmail && !gmail.polling_enabled && (
+                <p className="mb-3 border border-cb-amber px-3 py-2 font-cb-sans text-[11px] leading-[1.5] text-cb-amber">
+                  Replies are <strong>not being watched</strong>. Returns have to be uploaded by
+                  hand on each package below. Set <code>GMAIL_POLLING_ENABLED=true</code> in
+                  backend/.env and restart to have them collected automatically.
+                  {gmail.last_error ? ` Last transport error: ${gmail.last_error}` : ""}
+                </p>
+              )}
+              {gmail?.polling_enabled && (
+                <p className="mb-3 font-cb-sans text-[11px] leading-[1.5] text-cb-muted">
+                  Watching for replies
+                  {gmail.last_poll_at ? ` — last checked ${new Date(gmail.last_poll_at).toLocaleTimeString()}` : ""}
+                  {` · ${gmail.replies_processed} processed, ${gmail.replies_unmatched} unmatched this run`}
+                  {gmail.last_error ? ` · ${gmail.last_error}` : ""}
+                </p>
+              )}
+              {/* FIX 5 — an arrival is ANNOUNCED, never acted on: re-levelling under someone
+                  mid-decision would move numbers they are reading. */}
+              {landed > 0 && (
+                <p className="mb-3 flex items-center gap-2 border border-cb-amber px-3 py-2 font-cb-sans text-[11px] text-cb-amber">
+                  {landed} new return{landed === 1 ? "" : "s"} landed — re-level to include{" "}
+                  {landed === 1 ? "it" : "them"}.
+                  <button
+                    type="button"
+                    onClick={() => setLanded(0)}
+                    className="cb-press ml-auto underline"
+                  >
+                    dismiss
+                  </button>
+                </p>
+              )}
+            {levelled ? (
               <Level
                 sections={levelled}
                 replies={replies}
@@ -438,7 +618,8 @@ export function SourcingTab({
                   {busy ? "Levelling…" : "Level the returns"}
                 </Button>
               </div>
-            )
+            )}
+            </>
           ) : recommendations ? (
             <Recommend
               sections={recommendations}

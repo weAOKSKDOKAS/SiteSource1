@@ -22,6 +22,7 @@ export function Home({
   onOpenCitation,
   onConfirmCloseDate,
   onBrowse,
+  onBrowseFolder,
 }: {
   rows: SetRow[];
   shelf: ShelfFilter;
@@ -33,6 +34,7 @@ export function Home({
   onOpenCitation: (setId: string, partId: string, page: number) => void;
   onConfirmCloseDate: (setId: string, date: string) => void;
   onBrowse: () => void;
+  onBrowseFolder: () => void;
 }) {
   const [owner, setOwner] = useState<OwnerFilter>("everyone");
   const [sort, setSort] = useState<SortKey>("closing");
@@ -144,7 +146,7 @@ export function Home({
           navOpen ? "grid-cols-4" : "grid-cols-5",
         )}
       >
-        {shelf === "desk" && <DropTile onBrowse={onBrowse} />}
+        {shelf === "desk" && <DropTile onBrowse={onBrowse} onBrowseFolder={onBrowseFolder} />}
         {visible.map((row) => (
           <FolderCard
             key={row.set_id}
@@ -193,28 +195,48 @@ function Figure({ label, value, tone }: { label: string; value: number; tone?: "
 }
 
 /** The first cell of the grid. The affordance, not the drop target — the whole page accepts a
- *  drop; this tile is where that is stated, with the sentence that sets expectations. */
-function DropTile({ onBrowse }: { onBrowse: () => void }) {
+ *  drop; this tile is where that is stated, with the sentence that sets expectations.
+ *
+ *  Two routes in, because tenders arrive both ways. A binder gets split and the split gets
+ *  approved; a folder is already organised, so each file is a part and there is nothing to
+ *  approve. The tile says which is which rather than making somebody find out by trying. */
+function DropTile({ onBrowse, onBrowseFolder }: { onBrowse: () => void; onBrowseFolder: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onBrowse}
-      className="cb-press flex min-h-[250px] flex-col items-center justify-center gap-3 self-stretch rounded-[8px] border-[1.5px] border-dashed border-cb-brass bg-cb-selected p-4 text-center"
+    <div
+      className="flex min-h-[250px] flex-col items-center justify-center gap-3 self-stretch rounded-[8px] border-[1.5px] border-dashed border-cb-brass bg-cb-selected p-4 text-center"
       style={{ marginTop: 13 /* aligns with card bodies below their tabs */ }}
     >
-      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-cb-brass font-cb-sans text-[20px] font-semibold text-cb-on-brass">
-        +
-      </span>
-      <span className="font-cb-sans text-[12px] font-semibold text-cb-ink-text">
-        Start a new tender
-      </span>
-      <span className="max-w-[210px] font-cb-sans text-[10px] leading-[1.55] text-cb-muted">
-        Drop the binder anywhere on this page. Splitting starts on drop, and the close date is
-        read from the Conditions of Tender for you to confirm.
-      </span>
-      <span className="font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2">
-        or browse for a file
-      </span>
-    </button>
+      <button
+        type="button"
+        onClick={onBrowse}
+        className="cb-press flex flex-col items-center gap-3"
+      >
+        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-cb-brass font-cb-sans text-[20px] font-semibold text-cb-on-brass">
+          +
+        </span>
+        <span className="font-cb-sans text-[12px] font-semibold text-cb-ink-text">
+          Start a new tender
+        </span>
+        <span className="max-w-[210px] font-cb-sans text-[10px] leading-[1.55] text-cb-muted">
+          Drop the binder anywhere on this page and the split starts, with the close date read
+          from the Conditions of Tender for you to confirm.
+        </span>
+        <span className="font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2">
+          or browse for a file
+        </span>
+      </button>
+
+      <span className="my-1 h-px w-24 bg-cb-brass-line" />
+
+      <button type="button" onClick={onBrowseFolder} className="cb-press flex flex-col items-center gap-1">
+        <span className="font-cb-sans text-[11px] font-semibold text-cb-ink-text">
+          Or upload a whole folder
+        </span>
+        <span className="max-w-[210px] font-cb-sans text-[10px] leading-[1.55] text-cb-muted">
+          Already organised into subfolders? Each file becomes its own part — nothing is split
+          and there is nothing to approve.
+        </span>
+      </button>
+    </div>
   );
 }

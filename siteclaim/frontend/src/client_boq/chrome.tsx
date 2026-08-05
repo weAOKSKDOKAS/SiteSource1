@@ -12,6 +12,7 @@ export type TabId =
   | "documents"
   | "register"
   | "scope"
+  | "site"
   | "route"
   | "sourcing"
   | "price"
@@ -27,6 +28,7 @@ export const TABS: { id: TabId; label: string }[] = [
   { id: "documents", label: "Documents" },
   { id: "register", label: "Register" },
   { id: "scope", label: "Scope" },
+  { id: "site", label: "Site" },
   { id: "route", label: "Route" },
   { id: "sourcing", label: "Sourcing" },
   { id: "price", label: "Price" },
@@ -55,6 +57,12 @@ export function stepStates(
     // than remembered, so a reload does not reset a chip to a state the tender is past.
     proposal: boolean;
     decisions: boolean;
+    /** The take-off has been read. Site has no gate, so this only decides what its chip says. */
+    site?: boolean;
+    /** Holes with no access class. Carried on PRICE, not on Site — an unclassed hole cannot stop
+     *  you pricing, but it is the sweep that will refuse, and the warning belongs where the
+     *  consequence lands. */
+    unassignedHoles?: number;
   },
   /** The tab whose work is RUNNING right now, if any.
    *
@@ -66,7 +74,24 @@ export function stepStates(
    *  A display fix, deliberately: the job is still owned where it was, and this only stops one
    *  surface saying something the surface beside it contradicts. */
   running: TabId | null = null,
+  /** V1: the review gate is soft, so an unapproved register no longer BLOCKS scope or routing —
+   *  it warns on the response and the tab renders that warning in amber.
+   *
+   *  The chips have to agree with that or they become the lie: a step reading `WAITS ON THE
+   *  REGISTER` beside a Run button that works is the same class of contradiction as a tab saying
+   *  `NOT YET RUN` above a strip saying `RUNNING`. Soft mode reads these two steps exactly as it
+   *  would with the register approved.
+   *
+   *  Only these two. `sourcing` still waits on a route DECISION and `price` on the scope gate —
+   *  those are data dependencies (there is nothing to source without a decision, nothing to price
+   *  without a frozen scope), not the review gate, and the soft switch must not reach them. */
+  reviewGateSoft = false,
 ): Record<TabId, StepState> {
+  // The review gate as the downstream steps should read it. Soft mode does not mark the register
+  // approved — `gates.review` is untouched and the Register tab still shows the real state — it
+  // only stops scope and route from claiming they are blocked by something that is not blocking.
+  const reviewClear = gates.review || reviewGateSoft;
+  const unassigned = has.unassignedHoles ?? 0;
   const states = {
     documents: gates.manifest ? { kind: "done" } : has.parts ? { kind: "open" } : { kind: "open" },
     register: gates.review
@@ -80,9 +105,12 @@ export function stepStates(
       ? { kind: "done" }
       : has.scope
         ? { kind: "open" }
-        : gates.review
+        : reviewClear
           ? { kind: "waiting", label: "NOT YET RUN" }
           : { kind: "waiting", label: "WAITS ON THE REGISTER" },
+    // Site never waits and never blocks. The take-off is a thing you look up, and there is no
+    // point at which looking something up should be refused.
+    site: has.site ? { kind: "open" } : { kind: "waiting", label: "NO TAKE-OFF YET" },
     // Routing sits behind the review gate and both forks inherit it: you cannot decide
     // self-perform vs sublet without knowing the contract terms, and you should not send an RFQ
     // on terms nobody has read. Same chain as `scope` above, ending at the human decision.
@@ -90,7 +118,7 @@ export function stepStates(
       ? { kind: "done" }
       : has.proposal
         ? { kind: "open" }
-        : gates.review
+        : reviewClear
           ? { kind: "waiting", label: "NOT YET RUN" }
           : { kind: "waiting", label: "WAITS ON THE REGISTER" },
     // Sourcing prices only what we sublet, so it waits on the decision that says which packages
@@ -98,13 +126,18 @@ export function stepStates(
     sourcing: has.decisions
       ? { kind: "open" }
       : { kind: "waiting", label: "WAITS ON THE ROUTE" },
-    // Unchanged. `gates.scope` is client_boq's ESTIMATE scope gate — a different thing from the
-    // bill split the Route tab runs, which is never called "scope" in this UI.
-    price: has.estimate
-      ? { kind: "done" }
-      : gates.scope
-        ? { kind: "waiting", label: "NOT YET RUN" }
-        : { kind: "waiting", label: "WAITS ON THE SCOPE" },
+    // `gates.scope` is client_boq's ESTIMATE scope gate — a different thing from the bill split
+    // the Route tab runs, which is never called "scope" in this UI. Unassigned access-class holes
+    // warn HERE, not on Site — the sweep is what will refuse, so the warning sits where the
+    // consequence lands.
+    price:
+      unassigned > 0
+        ? { kind: "waiting", label: `⚠ ${unassigned} HOLES UNASSIGNED` }
+        : has.estimate
+          ? { kind: "done" }
+          : gates.scope
+            ? { kind: "waiting", label: "NOT YET RUN" }
+            : { kind: "waiting", label: "WAITS ON THE SCOPE" },
     offer: has.estimate ? { kind: "open" } : { kind: "waiting", label: "WAITS ON THE PRICE" },
   } as Record<TabId, StepState>;
   // A running step says so, whatever it would otherwise have said — including over a `done`,
@@ -121,6 +154,11 @@ export const TAB_FOR_JOB: Record<string, TabId> = {
   review: "register",
   scope: "scope",
   estimate: "price",
+  // The bridge's whole-pack archive extract. It lands parts in Documents, exactly as an ingest
+  // does. Absent before `/jobs/live` existed and harmless then — nothing looked a job's kind up
+  // except a loop that already had one — but a recovered archive job would have mapped to nothing
+  // and left the chips silent while the strip said it was running.
+  archive: "documents",
 };
 
 function chipFor(state: StepState, current: boolean) {

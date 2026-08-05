@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import mimetypes
-from typing import Optional
+from typing import Callable, Optional
 
 from pipeline.stage_01_ingest.doc_index import load_doc_index
 from pipeline.stage_03_dispatch.relevant_docs import SectionPlan, resolve_section_plan, slice_pdf
@@ -107,8 +107,22 @@ def assemble_firm_attachments(
     return out
 
 
-def create_gmail_drafts(drafts: list[dict], *, service=None) -> tuple[list[str], list[dict]]:
+def create_gmail_drafts(
+    drafts: list[dict], *, service=None,
+    on_created: Optional[Callable[[dict], None]] = None,
+) -> tuple[list[str], list[dict]]:
     """One Gmail DRAFT per assembled enquiry — ``(drafted firm ids, failed [{firm_id, reason}])``.
+
+    ``on_created`` is called once per successful draft with
+    ``{firm_id, message_id, ref, to}`` — the OUTBOUND LEDGER's raw material. Every dispatched RFQ
+    is addressed to the operator during live testing, so it lands in the mailbox the poller watches
+    carrying the ref tag and the blank SoR, indistinguishable from a genuine reply by query alone.
+    The MESSAGE id is the explicit identity that makes it distinguishable, and this is the only
+    moment it is in hand.
+
+    A callback rather than a third return value on purpose: the return shape is what four existing
+    tests and the route both unpack, and widening it would break them to carry a fact only one
+    caller wants.
 
     NEVER raises: the enquiries are already prepared in the outbox before drafting, so a Gmail
     failure (no credential, expired token, API error, offline) must not fail the dispatch — it
@@ -136,8 +150,16 @@ def create_gmail_drafts(drafts: list[dict], *, service=None) -> tuple[list[str],
             continue
         attachments = [(a["filename"], base64.b64decode(a["content_b64"])) for a in d.get("attachments", [])]
         try:
-            gmail_client.create_draft(to, d.get("subject", ""), d.get("body", ""), attachments, service=svc)
+            _draft_id, message_id = gmail_client.create_draft_ids(
+                to, d.get("subject", ""), d.get("body", ""), attachments, service=svc,
+                # Stamps X-SiteSource-Outbound. The message id ledger cannot survive the send
+                # (Gmail replaces the id), so the header is what actually identifies our own RFQ
+                # when it lands back in the watched mailbox.
+                ref=d.get("ref", ""))
             drafted.append(firm_id)
+            if on_created is not None:
+                on_created({"firm_id": firm_id, "message_id": message_id,
+                            "ref": d.get("ref", ""), "to": to})
         except gmail_client.GmailUnavailable as exc:
             failed.append({"firm_id": firm_id, "reason": str(exc)})
     return drafted, failed

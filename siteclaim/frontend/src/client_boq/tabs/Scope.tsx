@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Rail } from "../chrome";
+import { Rail, TAB_FOR_JOB } from "../chrome";
 import type { JobState, ScopeItem, ScopeSection, ScopeSource, ScopeSourcesResponse } from "../types";
 import { Button, Chip, SectionLabel, WaitingOn, cx, money } from "../ui";
 
@@ -53,12 +53,19 @@ const GROUPS: { id: ScopeSource["group"]; label: string; head: string; badge: st
 
 export function ScopeTab({
   data,
+  job,
   railOpen,
   onRefresh,
   onError,
   onProgress,
 }: {
   data: SetData;
+  /** The run in flight anywhere in this set, from the shell. A tab's own `busy` flag dies
+   *  with the component, so a run started here and navigated away from left this tab able to
+   *  offer its Run button again — over a job that was still going, which the server then
+   *  refused with a 409 the UI had invited. `busy` covers work THIS mount started; `job`
+   *  covers work the set is doing at all. */
+  job?: JobState | null;
   railOpen: boolean;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
@@ -69,6 +76,14 @@ export function ScopeTab({
   const [draft, setDraft] = useState("");
   const [justMapped, setJustMapped] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  // The shell's job, narrowed to work that belongs to THIS tab. `TAB_FOR_JOB` is the one
+  // place that translates a workflow name into a tab, so this cannot drift from the chips.
+  const jobRunning =
+    !!job &&
+    (job.status === "queued" || job.status === "running") &&
+    TAB_FOR_JOB[job.kind] === "scope";
+  // Everything that used to gate on `busy` gates on this instead.
+  const running = busy || jobRunning;
 
   const load = useCallback(
     () =>
@@ -116,6 +131,9 @@ export function ScopeTab({
   /** Draft the scope. A background job in LIVE, inline in DEMO — runJob covers both. */
   async function runScope() {
     setBusy(true);
+    // A new run makes the previous refusal history: clear the shell banner at the START,
+    // before the work, so it can never describe a run that has been superseded.
+    onError("");
     try {
       await runJob(
         () => api.runScope(data.setId),
@@ -138,7 +156,7 @@ export function ScopeTab({
         title="The scope has not been drafted yet"
         action={
           data.gates.review ? (
-            <Button variant="brass" onClick={runScope} disabled={busy}>
+            <Button variant="brass" onClick={runScope} disabled={running}>
               Draft the scope
             </Button>
           ) : undefined

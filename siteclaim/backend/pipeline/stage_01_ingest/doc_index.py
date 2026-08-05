@@ -38,6 +38,21 @@ _APPENDIX_COVER = re.compile(r"\bAppendix\s+(\d+)(?!\.\d)", re.I)
 # (a scanned cover, or a file that starts mid-section) so the clause index can still scope.
 _FILENAME_SECTION = re.compile(r"(?:^|[^A-Za-z])S0*(\d+)\b", re.I)
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
+# The Standard Method of Measurement, recovered from page 1 or the filename.
+#
+# `_kind_for` could reach `method_of_measurement` only from an explicit DocType, so a bridge part
+# — which arrives as GENERAL, or as PARTICULAR_SPECIFICATION when its category is `specifications`
+# — could never become one. On ND/2025/04 the SMM ships in `GP&PP/` as `SMM_*` files categorised
+# `specifications`, so without this they would index as PS and the preamble slice would never fire.
+#
+# DELIBERATELY NARROW: the full "Standard Method of Measurement" title, or a bare SMM token. A PS
+# that merely CITES the method of measurement in its preamble says "Method of Measurement" without
+# "Standard", and must not be stolen.
+_METHOD_OF_MEASUREMENT = re.compile(r"Standard\s+Method\s+of\s+Measurement|(?:^|[^A-Za-z])SMM(?![A-Za-z])", re.I)
+# A tender addendum / clarification, same reasoning: reachable only from DocType.TENDER_ADDENDUM
+# before this. The archive files these under `TA #1` / `TA #2` and categorises them `other` — an
+# addendum is a KIND, not a category — so the folder in the part's title is the signal.
+_ADDENDUM = re.compile(r"Tender\s+Addendum|Addendum\s+No|(?:^|[^A-Za-z])TA\s*#?\s*\d", re.I)
 # A Schedule-of-Rates section header — "SECTION A : PRELIMINARIES ITEMS", "SECTION BA : GENERAL".
 # LETTER codes (A, BA), unlike the numeric PS/GS `_SECTION_DECL`; the separator + a title are
 # required so a bare "SECTION A" mention is not taken as a header. Mirrors the stage-01 ingest
@@ -112,6 +127,25 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     # SPECIFICATION is reclassified appendix ONLY on such a cover, so a PS whose page-1 SECTION header
     # was lost (scanned / starts mid-section) and merely cites an appendix still indexes as a PS.
     is_appendix_cover = bool(_APPENDIX_COVER.search(hay)) and not _SECTION_DECL.search(page1)
+    # BEFORE the PS branch, and only these two, because a bridge part whose category is
+    # `specifications` arrives as PARTICULAR_SPECIFICATION — which would otherwise claim the SMM
+    # before it could be recognised. Both patterns are narrow enough that an ordinary PS citing
+    # either does not match; see their definitions.
+    if _METHOD_OF_MEASUREMENT.search(hay):
+        return "method_of_measurement"
+    if _ADDENDUM.search(hay):
+        return "clarification"
+    # A GENERAL Specification whose page 1 declares itself and carries no `SECTION n` header of its
+    # own. `_GENERAL_SPEC` is a loose pattern, so it is checked here against PAGE 1 ONLY and behind
+    # the same no-competing-header guard the appendix cover uses — a Particular Specification that
+    # merely cites the General Specification has a SECTION header and is never stolen.
+    #
+    # Needed for the same reason as the two above: a bridge part categorised `specifications`
+    # arrives as PARTICULAR_SPECIFICATION, so the PS branch would claim the GS before the existing
+    # `_GENERAL_SPEC` check below could ever see it — and a PS entry with no section number is then
+    # skipped by the assembler entirely, so the General Specification reached no enquiry at all.
+    if _GENERAL_SPEC.search(page1) and not _SECTION_DECL.search(page1):
+        return "general_specification"
     if doc_type == DocType.PARTICULAR_SPECIFICATION:
         return "appendix" if is_appendix_cover else "particular_specification"
     if is_appendix_cover:

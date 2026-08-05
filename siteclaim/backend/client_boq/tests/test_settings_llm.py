@@ -48,6 +48,52 @@ class TestRouting:
         assert c._model_for("anthropic") == "claude-opus-5"
 
 
+class TestWhoReadsTheDocuments:
+    """Ingest chooses its own provider, because reading the tender is a different job from the
+    stages that reason about what was read — and it decides what all of them are looking at."""
+
+    def test_extraction_provider_names_the_reader(self, monkeypatch):
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "openai")
+        assert llm_mod.make_client(stage=llm_mod.STAGE_INGEST)._provider_arg == "openai"
+
+    def test_it_leaves_every_other_stage_alone(self, monkeypatch):
+        # Naming a reader must not silently move the eight reasoning stages with it.
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "openai")
+        assert llm_mod.make_client()._provider_arg is None
+
+    def test_an_unset_extraction_provider_does_not_pin_ingest(self, monkeypatch):
+        # "Nobody configured this" must not become an explicit choice of Anthropic — that would
+        # quietly move ingest off the cheap text provider for anyone with a DeepSeek key.
+        monkeypatch.delenv("EXTRACTION_PROVIDER", raising=False)
+        assert llm_mod.make_client(stage=llm_mod.STAGE_INGEST)._provider_arg is None
+
+    def test_the_stored_ingest_setting_outranks_the_env(self, monkeypatch):
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "openai")
+        conn = store.get_conn()
+        try:
+            store.set_setting(conn, llm_mod.SETTING_PROVIDER_INGEST, "anthropic", "r-lam")
+        finally:
+            conn.close()
+        assert llm_mod.make_client(stage=llm_mod.STAGE_INGEST)._provider_arg == "anthropic"
+
+    def test_the_readers_own_model_setting_rides_with_it(self, monkeypatch):
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "openai")
+        conn = store.get_conn()
+        try:
+            store.set_setting(conn, llm_mod.SETTING_MODEL_OPENAI, "gpt-5.6-luna", "r-lam")
+        finally:
+            conn.close()
+        assert llm_mod.make_client(stage=llm_mod.STAGE_INGEST)._model_arg == "gpt-5.6-luna"
+
+    def test_with_nothing_set_ingest_falls_back_to_the_app_wide_setting(self):
+        conn = store.get_conn()
+        try:
+            store.set_setting(conn, llm_mod.SETTING_PROVIDER, "deepseek", "r-lam")
+        finally:
+            conn.close()
+        assert llm_mod.make_client(stage=llm_mod.STAGE_INGEST)._provider_arg == "deepseek"
+
+
 class TestMakeClient:
     def test_no_settings_means_a_bare_client(self):
         c = llm_mod.make_client()
@@ -88,14 +134,31 @@ class TestRoutes:
         row = next(r for r in payload["rows"] if r["key"] == llm_mod.SETTING_PROVIDER)
         assert row["updated_by"] == "r-lam"
 
-    def test_vision_is_always_anthropic_and_the_payload_says_so(self, client: TestClient):
+    def test_vision_follows_the_reader_when_it_can_read_an_image(self, client: TestClient):
+        # It is not a law that images belong to Anthropic — it is a fact about DeepSeek. A provider
+        # that can read a page keeps its pages.
+        client.post("/client-boq/settings", json={"provider": "", "provider_ingest": "openai"})
+        payload = client.get("/client-boq/settings").json()
+        assert payload["effective"]["ingest_provider"] == "openai"
+        assert payload["effective"]["vision_provider"] == "openai"
+
+    def test_vision_falls_back_when_the_reader_cannot_take_images(self, client: TestClient):
+        # DeepSeek's chat API rejects image_url outright. A scanned page must not be silently read
+        # as empty text, so it goes to Anthropic and the payload says so rather than implying it.
         client.post("/client-boq/settings", json={"provider": "deepseek"})
         payload = client.get("/client-boq/settings").json()
+        assert payload["effective"]["ingest_provider"] == "deepseek"
         assert payload["effective"]["vision_provider"] == "anthropic"
+        assert "deepseek" not in payload["effective"]["vision_capable"]
 
     def test_a_nonsense_provider_is_refused(self, client: TestClient):
         assert client.post("/client-boq/settings",
-                           json={"provider": "openai"}).status_code == 422
+                           json={"provider": "wat"}).status_code == 422
+
+    def test_a_nonsense_ingest_provider_is_refused_too(self, client: TestClient):
+        response = client.post("/client-boq/settings",
+                               json={"provider": "", "provider_ingest": "wat"})
+        assert response.status_code == 422 and "provider_ingest" in response.json()["detail"]
 
     def test_empty_means_auto_not_off(self, client: TestClient):
         client.post("/client-boq/settings", json={"provider": ""})

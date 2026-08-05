@@ -9,13 +9,15 @@
 //   #/tender/awaiting           open queries    #/tender/s/{setId}/{tab}   one tender
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, health, runJob, setActor } from "./api";
+import { api, health, pollJob, runJob, setActor } from "./api";
 import { GlobalBar, StepStrip, TAB_FOR_JOB, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
 import type { NotDesignedId, ScreenId, Surface } from "./nav/routes";
 import { go, hashFor, parseHash } from "./nav/routes";
+import { commonRoot, fromDrop, fromInput } from "./upload";
+import type { PickedFile } from "./upload";
 import { AddendumPanel, RfiPanel } from "./panels";
 import type { PanelRequest } from "./panels";
 import { ProfilePicker } from "./profile/ProfilePicker";
@@ -23,6 +25,7 @@ import { CommandSearch } from "./search/CommandSearch";
 import { Benchmarks } from "./screens/Benchmarks";
 import { CriteriaLibrary } from "./screens/CriteriaLibrary";
 import { NotDesigned } from "./screens/NotDesigned";
+import { Outputs } from "./screens/Outputs";
 import { Projects } from "./screens/Projects";
 import { Rates } from "./screens/Rates";
 import { Settings } from "./screens/Settings";
@@ -34,6 +37,7 @@ import { PriceTab } from "./tabs/Price";
 import { RegisterTab } from "./tabs/Register";
 import { RouteTab } from "./tabs/Route";
 import { ScopeTab } from "./tabs/Scope";
+import { SiteTab } from "./tabs/Site";
 import { SourcingTab } from "./tabs/Sourcing";
 import type {
   CitationsResponse,
@@ -44,7 +48,10 @@ import type {
   PartsResponse,
   RegisterResponse,
   ScopeResponse,
+  SetMeta,
   SetRow,
+  Station,
+  StationScheduleResponse,
   TeamMember,
 } from "./types";
 import { Avatar, Chip, ErrorNote, WaitingOn, cx } from "./ui";
@@ -61,6 +68,11 @@ export interface SetData {
   register: RegisterResponse | null;
   citations: CitationsResponse | null;
   scope: ScopeResponse | null;
+  /** The take-off. Null until the borehole details schedule has been read. */
+  site: StationScheduleResponse | null;
+  /** The desk metadata — the client's name feeds the offer letter's header, so it is never
+   *  typed a second time on the Offer screen. */
+  meta: SetMeta | null;
   hasEstimate: boolean;
   /** The routing fork, read back from the bridge rather than remembered — a reload must not reset
    *  a step chip to a state the tender is already past. Both reads are pure: they never re-run the
@@ -77,6 +89,7 @@ const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false }
 const SCREEN_TITLES: Record<ScreenId | NotDesignedId, string> = {
   criteria: "Criteria library",
   rates: "Pricing & rates",
+  outputs: "Outputs and norms",
   team: "Team & access",
   settings: "AI model",
   subcontractors: "Subcontractors",
@@ -91,6 +104,9 @@ const SCREEN_TITLES: Record<ScreenId | NotDesignedId, string> = {
 export default function ClientBoqApp() {
   const [surface, setSurface] = useState<Surface>(() => parseHash(window.location.hash));
   const [demoMode, setDemoMode] = useState(false);
+  /** V1: an unapproved review register warns rather than blocking. The step chips have to
+   *  agree, or `WAITS ON THE REGISTER` sits beside a button that works. */
+  const [reviewGateSoft, setReviewGateSoft] = useState(false);
   const [sets, setSets] = useState<SetRow[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [criteria, setCriteria] = useState<CriteriaResponse | null>(null);
@@ -101,6 +117,13 @@ export default function ClientBoqApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [job, setJob] = useState<JobState | null>(null);
+  /** Every run in flight on the open set, recovered from the server by `SetView`.
+   *
+   *  Plural because the server pool is TWO workers wide, so an ingest and a review genuinely run
+   *  at the same time. The strip used to be handed whichever one `live_any_for` returned first and
+   *  described that: observed reading `INGEST · INTERPRETING · STAGE 2 OF 3` while a review ran on
+   *  the same set and the banner beside it discussed the review. */
+  const [liveJobs, setLiveJobs] = useState<JobState[]>([]);
   // What long-running work is in flight, ABOVE the tab that started it.
   //
   // A split on the Route tab looked like it paused when you navigated away. It did not: the work
@@ -187,8 +210,16 @@ export default function ClientBoqApp() {
   // --- global data ----------------------------------------------------------
   useEffect(() => {
     health()
-      .then((h) => setDemoMode(h.demo_mode))
-      .catch(() => setDemoMode(false));
+      .then((h) => {
+        setDemoMode(h.demo_mode);
+        // Absent on an older server. The safe reading of a missing value is the STRICTER one:
+        // claiming the gate is soft when it is hard would put a Run button in front of a 409.
+        setReviewGateSoft(h.review_gate === "soft");
+      })
+      .catch(() => {
+        setDemoMode(false);
+        setReviewGateSoft(false);
+      });
   }, []);
 
   const loadSets = useCallback(async () => {
@@ -241,11 +272,54 @@ export default function ClientBoqApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // An error describes a MOMENT, and this one outlived every moment it described. `error` had
+  // exactly one clear — the banner's own dismiss button — so a refusal stayed on screen after the
+  // condition passed. Observed live: a 409 banner still up while the review it complained about
+  // ran normally beside it.
+  //
+  // Cleared when the surface changes, which is the only place the shell can know the message is
+  // about somewhere the person no longer is. Keyed on kind+setId rather than the object, because
+  // `parseHash` builds a fresh one on every hash event and an object identity would clear on
+  // every re-parse. Set→set and set→list both change this key; a tab change within one set does
+  // not, because an error about that set is still about the set you are looking at.
+  //
+  // Deliberately NOT a timeout: an error that vanishes on a timer is worse than one that lingers,
+  // because the person who looked away has no way to know it was ever there.
+  // Every run in flight, deduped: the recovered list plus whatever a tab is reporting live.
+  const inFlight = useMemo(() => {
+    const byId = new Map<string, JobState>();
+    liveJobs.forEach((j) => j.job_id && byId.set(j.job_id, j));
+    if (job?.job_id && (job.status === "queued" || job.status === "running")) {
+      byId.set(job.job_id, job);
+    }
+    return [...byId.values()];
+  }, [liveJobs, job]);
+
+  // WHICH run the strip describes. Prefer the one belonging to the tab in view; otherwise the most
+  // recently started, whose progress is the least stale. The strip belongs to the shell, so the
+  // choice does too — SetView reports the list and does not pick.
+  const openTab = surface.kind === "set" ? surface.tab : null;
+  const shownJob = useMemo(() => {
+    if (!inFlight.length) return job;
+    const mine = openTab ? inFlight.find((j) => TAB_FOR_JOB[j.kind] === openTab) : null;
+    if (mine) return mine;
+    return [...inFlight].sort((a, b) => (a.elapsed_seconds ?? 0) - (b.elapsed_seconds ?? 0))[0];
+  }, [inFlight, openTab, job]);
+
+  const surfaceKey = `${surface.kind}:${"setId" in surface ? surface.setId : ""}`;
+  useEffect(() => {
+    setError(null);
+  }, [surfaceKey]);
+
   // --- upload: drop anywhere on the home page, or browse --------------------
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
 
   const uploadFiles = useCallback(
     async (files: File[]) => {
+      // A new run makes the previous failure history. Cleared at the START, before the work, so
+      // the banner never describes a run that has been superseded.
+      setError(null);
       const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
       if (!pdfs.length) {
         setError("Drop a PDF — the binder is read as one document.");
@@ -272,6 +346,46 @@ export default function ClientBoqApp() {
     [loadSets, track, noteJob],
   );
 
+  /** A folder that is already organised. Nothing is filtered to PDFs here: a workbook is routed
+   *  to the bill importer and anything else is listed as held, so dropping the whole tender folder
+   *  keeps everything rather than quietly discarding the parts the ingest cannot read. */
+  const uploadFolder = useCallback(
+    async (picked: PickedFile[]) => {
+      setError(null);
+      if (!picked.length) {
+        setError("That folder had no files in it.");
+        return;
+      }
+      // The folder's own name, not whichever PDF happens to sort first.
+      const projectName = commonRoot(picked) || picked[0].path.split("/")[0] || "Tender folder";
+      // Two hundred files take a while to send before the job even starts, so the strip goes up
+      // immediately — an unresponsive page is the same thing as a broken one to whoever is
+      // watching it.
+      setJob({ kind: "ingest", status: "running", stage: `sending ${picked.length} files` });
+      try {
+        // Polled like the binder path: the folder job runs all the way to interpreted parts, so
+        // the response is a queued job rather than a finished one.
+        const done = await track(`Reading ${projectName}`, async () => {
+          const state = await runJob(
+            () => api.uploadFolder(picked, projectName),
+            api.ingestStatus,
+            noteJob,
+          );
+          setJob(null);
+          return state;
+        });
+        for (const note of done.warnings ?? []) setError(note);
+        await loadSets();
+        const result = done.result as { set_id?: string } | undefined;
+        if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" });
+      } catch (e) {
+        setJob(null);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [loadSets, track, noteJob],
+  );
+
   useEffect(() => {
     if (surface.kind !== "home") return;
     const onDragOver = (e: DragEvent) => {
@@ -286,8 +400,19 @@ export default function ClientBoqApp() {
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
       setDropActive(false);
-      const files = [...(e.dataTransfer?.files ?? [])];
-      if (files.length) void uploadFiles(files);
+      // A dropped DIRECTORY is absent from `dataTransfer.files` — it only exists behind
+      // `items[i].webkitGetAsEntry()`. Without this branch, dropping a folder does nothing at all.
+      // `fromDrop` returns null when no directory was involved, so two loose PDFs still take the
+      // binder path rather than silently switching the whole ingest to folder mode.
+      const transfer = e.dataTransfer;
+      void fromDrop(transfer).then((picked) => {
+        if (picked) {
+          void uploadFolder(picked);
+          return;
+        }
+        const files = [...(transfer?.files ?? [])];
+        if (files.length) void uploadFiles(files);
+      });
     };
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("dragleave", onDragLeave);
@@ -297,7 +422,7 @@ export default function ClientBoqApp() {
       window.removeEventListener("dragleave", onDragLeave);
       window.removeEventListener("drop", onDrop);
     };
-  }, [surface.kind, uploadFiles]);
+  }, [surface.kind, uploadFiles, uploadFolder]);
 
   // --- desk actions ---------------------------------------------------------
   const confirmCloseDate = useCallback(
@@ -389,7 +514,8 @@ export default function ClientBoqApp() {
       {(work || job || nextUp) && (
         <JobStrip
           work={work}
-          job={job}
+          job={shownJob}
+          liveCount={inFlight.length}
           onStop={stopJob}
           next={nextUp}
           onDismissNext={() => setNextUp(null)}
@@ -420,6 +546,7 @@ export default function ClientBoqApp() {
               onOpenCitation={openCitation}
               onConfirmCloseDate={(setId, date) => void confirmCloseDate(setId, date)}
               onBrowse={() => fileInput.current?.click()}
+              onBrowseFolder={() => folderInput.current?.click()}
             />
           )
         ) : surface.kind === "screen" ? (
@@ -427,6 +554,8 @@ export default function ClientBoqApp() {
             <CriteriaLibrary criteria={criteria} onChanged={() => void loadCriteria()} onError={setError} />
           ) : surface.screen === "rates" ? (
             <RatesScreen onError={setError} />
+          ) : surface.screen === "outputs" ? (
+            <OutputsScreen onError={setError} />
           ) : surface.screen === "team" ? (
             <Team
               team={team}
@@ -455,9 +584,11 @@ export default function ClientBoqApp() {
             tab={surface.tab}
             railOpen={railOpen}
             demoMode={demoMode}
+            reviewGateSoft={reviewGateSoft}
             onError={setError}
             onJob={noteJob}
-            job={job}
+            onLiveJobs={setLiveJobs}
+            job={shownJob}
             onTrack={track}
             onSetsChanged={() => void loadSets()}
             docTarget={docTarget}
@@ -485,6 +616,23 @@ export default function ClientBoqApp() {
           const files = [...(e.target.files ?? [])];
           e.target.value = "";
           if (files.length) void uploadFiles(files);
+        }}
+      />
+
+      {/* A second input, because `webkitdirectory` turns a picker into a folder picker outright —
+          it cannot be a mode on the one above. No `accept`: a tender folder holds workbooks and
+          images too, and the point of this route is that none of them are dropped. */}
+      <input
+        ref={folderInput}
+        type="file"
+        multiple
+        className="hidden"
+        // React does not know these attributes; they are what makes it a directory picker.
+        {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+        onChange={(e) => {
+          const picked = fromInput(e.target.files);
+          e.target.value = "";
+          if (picked.length) void uploadFolder(picked);
         }}
       />
 
@@ -532,6 +680,22 @@ function RatesScreen({ onError }: { onError: (msg: string) => void }) {
   return <Rates rates={rates} onChanged={() => void load()} onError={onError} />;
 }
 
+/** The output book, same shape as Rates: its own fetch cycle, the screen stays pure. */
+function OutputsScreen({ onError }: { onError: (msg: string) => void }) {
+  const [outputs, setOutputs] = useState<Parameters<typeof Outputs>[0]["outputs"]>(null);
+  const load = useCallback(async () => {
+    try {
+      setOutputs(await api.outputs());
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }, [onError]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  return <Outputs outputs={outputs} onChanged={() => void load()} onError={onError} />;
+}
+
 // ---------------------------------------------------------------------------
 // One tender — the five steps. The subtree the first build was; unchanged in behaviour, but
 // the open set and tab now come from the hash instead of localStorage.
@@ -541,8 +705,10 @@ function SetView({
   tab,
   railOpen,
   demoMode,
+  reviewGateSoft,
   onError,
   onJob,
+  onLiveJobs,
   job,
   onTrack,
   onSetsChanged,
@@ -555,8 +721,14 @@ function SetView({
   /** DEMO means uploaded files were not read. Sourcing needs it: the live path shows the assembled
    *  attachment plan and can hand bundles to Gmail; DEMO does neither. */
   demoMode: boolean;
+  /** V1: an unapproved register warns rather than blocking, so the step chips must not claim
+   *  scope and route are waiting on it. */
+  reviewGateSoft: boolean;
   onError: (msg: string) => void;
   onJob: (job: JobState | null) => void;
+  /** Report EVERY run in flight on this set up to the shell, which owns the strip and therefore
+   *  owns the choice of which one it describes. */
+  onLiveJobs: React.Dispatch<React.SetStateAction<JobState[]>>;
   /** The run in flight, so the step chips and the tab bodies say the same thing the strip does. */
   job: JobState | null;
   /** Register long work with the shell, so it stays visible after this tab unmounts. */
@@ -566,6 +738,7 @@ function SetView({
   onDocTargetUsed: () => void;
 }) {
   const [data, setData] = useState<SetData | null>(null);
+
   const [opened, setOpened] = useState<Set<TabId>>(() => new Set<TabId>([tab]));
   const [panel, setPanel] = useState<PanelRequest | null>(null);
   const [loading, setLoading] = useState(true);
@@ -577,13 +750,16 @@ function SetView({
     const setRow = rows.sets.find((r) => r.set_id === setId);
     const optional = <T,>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
 
-    const [manifest, parts, register, scope, proposal, decisions] = await Promise.all([
+    const [manifest, parts, register, scope, proposal, decisions, site] = await Promise.all([
       optional(api.manifest(setId)),
       optional(api.parts(setId)),
       optional(api.register(setId)),
       optional(api.scope(setId)),
       optional(api.bridge.proposal(setId)),
       optional(api.bridge.decisions(setId)),
+      // The take-off, for the step strip: the Site chip must not say "not read yet" about a
+      // schedule somebody has read, and Price carries the unassigned-hole count live.
+      optional(api.stationSchedule(setId)),
     ]);
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
@@ -598,6 +774,8 @@ function SetView({
       register,
       citations,
       scope,
+      site,
+      meta: setRow?.meta ?? null,
       hasEstimate: setRow?.price != null,
       route: {
         hasProposal: Boolean(proposal?.packages.length),
@@ -635,6 +813,55 @@ function SetView({
     }
   }, [docTarget, tab, data, onDocTargetUsed]);
 
+  // Ask the server what this set is already doing, and adopt it.
+  //
+  // Without this the screen's only knowledge of a run was the poll loop that started it — which
+  // lived in a tab component, and tabs unmount on navigation. So: start a review, switch tabs,
+  // come back, and the Register tab rendered a Run button over a review that was still running.
+  // Pressing it got a 409 refusing an action the UI had just invited. A hard browser refresh was
+  // worse: nothing anywhere knew, and the strip stayed blank for the rest of the run.
+  //
+  // `pollJob` dedupes by job id (`LIVE_POLLS` in api.ts), so joining a loop that is already
+  // running costs nothing and cannot produce a second one. Re-runs per `setId`, because that is
+  // the question being asked — what is THIS set doing.
+  useEffect(() => {
+    let adopted = true;
+    void api
+      .liveJobs(setId)
+      .then(({ jobs: live }) => {
+        if (!adopted) return;
+        const running = live.filter(
+          (j) => j.job_id && (j.status === "queued" || j.status === "running"),
+        );
+        onLiveJobs(running);
+        // Adopt EVERY one. `pollJob` dedupes by id, so joining costs nothing and cannot start a
+        // second loop — and adopting only the first would leave the other invisible again, which
+        // is the defect this plural exists to close.
+        running.forEach((state) => {
+          const status =
+            state.kind === "review"
+              ? api.reviewStatus
+              : state.kind === "ingest" || state.kind === "archive"
+                ? api.ingestStatus
+                : api.estimateStatus; // scope and estimate share the estimate poll endpoint
+          void pollJob(status, state.job_id as string, onJob)
+            .catch(() => undefined) // the banner belongs to whoever STARTED the run, not a re-join
+            .finally(() => {
+              if (!adopted) return;
+              onLiveJobs((cur) => cur.filter((j) => j.job_id !== state.job_id));
+              void refresh();
+            });
+        });
+      })
+      .catch(() => undefined); // a set with no job is the normal case, and never an error
+    return () => {
+      // Stops THIS effect adopting a late answer after the set changed. The poll loops themselves
+      // are deliberately left alone: they belong to their jobs, and the shell-level strip is what
+      // makes a run survive navigation in the first place.
+      adopted = false;
+    };
+  }, [setId, refresh, onJob, onLiveJobs]);
+
   // Which tab's work is running, translated from the job's own vocabulary. Only while it is
   // actually in flight: a finished or cancelled job leaves the chips to `data`, which by then
   // reflects the result.
@@ -652,8 +879,12 @@ function SetView({
         estimate: Boolean(data?.hasEstimate),
         proposal: Boolean(data?.route.hasProposal),
         decisions: Boolean(data?.route.hasDecisions),
-      }, runningTab),
-    [data, runningTab],
+        site: Boolean(data?.site?.stations.length),
+        unassignedHoles: (data?.site?.stations ?? []).filter(
+          (s: Station) => !data?.site?.classes[s.station]?.access_class,
+        ).length,
+      }, runningTab, reviewGateSoft),
+    [data, runningTab, reviewGateSoft],
   );
 
   return (
@@ -671,6 +902,7 @@ function SetView({
         ) : tab === "documents" ? (
           <DocumentsTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}
@@ -681,6 +913,7 @@ function SetView({
         ) : tab === "register" ? (
           <RegisterTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}
@@ -690,11 +923,14 @@ function SetView({
         ) : tab === "scope" ? (
           <ScopeTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}
             onProgress={onJob}
           />
+        ) : tab === "site" ? (
+          <SiteTab data={data} railOpen={railOpen} onError={onError} />
         ) : tab === "route" ? (
           <RouteTab data={data} onError={onError} onRefresh={refresh} onTrack={onTrack} />
         ) : tab === "sourcing" ? (
@@ -702,6 +938,7 @@ function SetView({
         ) : tab === "price" ? (
           <PriceTab
             data={data}
+            job={job}
             railOpen={railOpen}
             onRefresh={refresh}
             onError={onError}
@@ -709,6 +946,8 @@ function SetView({
             onTrack={onTrack}
           />
         ) : (
+          // The fallthrough renders Offer. A new tab appended after `offer` would silently show
+          // the letter instead of itself, so every tab above needs an explicit branch.
           <OfferTab data={data} onError={onError} />
         )}
       </main>
@@ -746,12 +985,17 @@ function elapsed(seconds: number): string {
 function JobStrip({
   work,
   job,
+  liveCount,
   onStop,
   next,
   onDismissNext,
 }: {
   work: { label: string; status: "running" | "done" } | null;
   job: JobState | null;
+  /** How many runs are in flight on this set. More than one is SAID rather than resolved
+   *  silently — the strip can only describe one, and hiding the other is how it came to describe
+   *  the wrong one. */
+  liveCount?: number;
   onStop: (jobId: string) => void;
   /** The next action, offered — never taken. Outlives the six-second DONE strip, because an offer
    *  nobody had time to read is not an offer. */
@@ -796,6 +1040,11 @@ function JobStrip({
       >
         {done ? `${heading} · DONE` : heading}
       </span>
+      {!done && (liveCount ?? 0) > 1 && (
+        <Chip className="flex-none border border-cb-amber text-cb-amber">
+          +{(liveCount ?? 1) - 1} MORE RUNNING
+        </Chip>
+      )}
       {!done && position && (
         <Chip className="flex-none border border-cb-brass-line text-cb-brass-text">{position}</Chip>
       )}

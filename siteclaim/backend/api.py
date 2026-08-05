@@ -24,7 +24,9 @@ from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent / ".env")  # before anything reads env
+# Before anything reads env. The test suite is unaffected: conftest.py pre-sets every
+# outcome-changing variable, and load_dotenv(override=False) leaves present keys alone.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
@@ -196,8 +198,11 @@ app.include_router(bridge_router)
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict[str, object]:
-    """Liveness probe; reports whether the server is offline (DEMO_MODE)."""
-    return {"status": "ok", "demo_mode": demo_mode()}
+    """Liveness probe; reports whether the server is offline (DEMO_MODE) and how hard the
+    review gate bites (``soft`` is the V1 default — see ``client_boq/gates.py``)."""
+    from client_boq.gates import review_gate_mode
+
+    return {"status": "ok", "demo_mode": demo_mode(), "review_gate": review_gate_mode()}
 
 
 class GmailStatus(BaseModel):
@@ -964,12 +969,46 @@ class DispatchPlanRequest(BaseModel):
     project_name: str = ""
 
 
+
+def _substitution_notice(plans) -> str:
+    """One sentence naming every package whose priced-return document is NOT the sliced original.
+
+    The design sends the ORIGINAL Schedule of Rates, sliced to the unit's section pages, because a
+    subcontractor returns what they were sent. On CEDD ND/2025/04 the draft carried
+    ``SoR_ground-investigation-4.xlsx`` instead and nothing said so — the substitution was correct
+    (the bill arrived as a workbook, so there was no PDF to slice) and completely silent.
+
+    So it is stated on the gate, BEFORE anything is drafted, and the operator decides.
+    """
+    from pipeline.stage_03_dispatch.relevant_docs import SUBSTITUTED
+
+    swapped = [
+        (key, att) for key, plan in plans.items()
+        for att in plan.attachments if SUBSTITUTED in att.flags
+    ]
+    if not swapped:
+        return ""
+    modes = {att.mode for _k, att in swapped}
+    which = ", ".join(sorted(key for key, _a in swapped))
+    return (
+        f"PRICED-RETURN DOCUMENT SUBSTITUTED for {len(swapped)} package(s) ({which}): sending the "
+        f"{'generated .xlsx sheet' if 'generated' in modes else 'whole bill'} rather than the "
+        "original Schedule of Rates sliced to each unit's section. " + swapped[0][1].reason
+    )
+
+
 @app.post("/dispatch/plan")
 def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
     """The relevant-only attachment plan per dispatched section (the human-gate preview): each
     document with its mode (sliced / whole / generated), page range, reason, flags, plus any
     referenced-but-unsupplied spec sections. Reads the run's persisted doc_index; empty in DEMO
-    (no upload) so the plan is just the SoR sheet. Sync handler."""
+    (no upload) so the plan is just the SoR sheet. Sync handler.
+
+    Every attachment carries its ``flags``, and a priced-return document that is NOT the sliced
+    original is flagged ``substituted_priced_return`` with a reason saying why — so the gate can
+    show the substitution BEFORE drafting from data it already receives. The response shape is
+    unchanged: two frontends read this as a list, and moving it to carry one sentence would break
+    both to say something the list already contains."""
     from pipeline.stage_03_dispatch.drafts import plan_for_firms
 
     plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name)
@@ -1070,7 +1109,18 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
         # returned and the mock outbox remains the record.
         message = "DEMO mode — Gmail drafting is off; the enquiries are recorded in the mock outbox."
     else:
-        raw_drafted, raw_failed = create_gmail_drafts(drafts)
+        # Record every created draft's MESSAGE id before the poller can ever see it. Each RFQ is
+        # addressed to the operator by `GMAIL_TEST_RECIPIENT` during live testing, so it lands in
+        # the watched mailbox carrying `[SiteSource Ref: …]` and the blank SoR — matching
+        # `DEFAULT_QUERY` exactly. Without this the poller would resolve its ref, parse the blank
+        # sheet as a bid with no rates, and supersede the firm's genuine reply on the same
+        # (firm_id, trade) key. A `-from:me` filter cannot help: here the operator is both sender
+        # and recipient, so it would drop the genuine reply too.
+        raw_drafted, raw_failed = create_gmail_drafts(
+            drafts,
+            on_created=lambda rec: reply_loop.record_outbound(
+                ws, rec["message_id"], ref=rec["ref"], to=rec["to"]),
+        )
         drafted_ids = raw_drafted
         failures = [DraftFailure(**f) for f in raw_failed]
         if failures and not drafted_ids:
@@ -1078,6 +1128,12 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
                 f"Gmail drafts unavailable — {failures[0].reason} "
                 "The enquiries are prepared in the outbox and can be drafted again."
             )
+    # Belt and braces on the gate: the plan preview flags the substitution, and so does the
+    # response that actually created the drafts. If the operator skipped the preview, this is the
+    # last place the swap is stated before the enquiry leaves.
+    swap = _substitution_notice(plans)
+    if swap:
+        message = f"{swap} {message}".strip() if message else swap
     if test_recipient:
         note = mailer_test_mode_notice(test_recipient, "draft")
         message = f"{note} {message}".strip() if message else note
@@ -1255,6 +1311,16 @@ def post_level_upload(
     scope: if it priced nothing for ``trade`` but matches another unit strongly, a hint is returned
     so the operator can reattach it — nothing moves automatically.
 
+    **This runs the SAME path a polled reply runs** (:func:`process_inbound_reply`), entered with
+    explicit identity because the operator picked the firm and the package on the screen.
+
+    It did not, and that was the defect: it parsed the upload, called ``level_bids`` on that ONE
+    reply, wrote ``OUT_PATH`` and returned. It never accumulated onto the tender, never wrote the
+    replies registry, and never regenerated the tender comparison — so a returned Schedule of Rates
+    was levelled alone, in memory, and gone on the next refresh, while ``tenderReplies`` (which
+    reads the registry the upload never wrote) kept showing the firm as awaiting. Two intake
+    channels that are meant to be one path were not.
+
     Sync handler (threadpool): the blocking parse/level below never stalls the loop."""
     if demo_mode():
         levelled = level_bids([], demo_fixture=REPLIES_FIXTURE)
@@ -1262,12 +1328,27 @@ def post_level_upload(
         return LevelUploadResponse(levelled=levelled)
 
     sheets, images = _read_reply_uploads(files)
-    reply = _parse_reply(sheets, images, firm_id=firm_id, trade=trade)
-    levelled = level_bids([reply])
-    export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
-    scope = load_scope(Workspace(), tender_slug(tender)) if tender else None
-    hint = _misdirect_hint(reply.line_items, scope, trade)
-    return LevelUploadResponse(levelled=levelled, misdirected=hint)
+    if not tender:
+        # No tender means no registry to file against — accumulation is per tender, and inventing a
+        # slug would file the return under a tender that does not exist. The old in-memory
+        # behaviour is kept for this case rather than failing an upload the UI can still make;
+        # every caller in this repo passes the set id, so it is the unreachable branch, not the one
+        # the operator hits.
+        reply = _parse_reply(sheets, images, firm_id=firm_id, trade=trade)
+        levelled = level_bids([reply])
+        export_leveling_xlsx(levelled, [reply], path=OUT_PATH)
+        return LevelUploadResponse(levelled=levelled, misdirected=None)
+
+    filed = process_inbound_reply(
+        "", sheets, images,
+        # Explicit identity: no ref is invented, and the AI fallback is not consulted to re-derive
+        # what the operator already told us.
+        identity={"tender_id": tender_slug(tender), "firm_id": firm_id, "trade": trade},
+    )
+    # `LevelUploadResponse` is unchanged so the frontend contract does not move: `comparison` is
+    # the re-levelled set of every reply on the tender, which is what `levelled` always meant —
+    # it was simply a set of one before.
+    return LevelUploadResponse(levelled=filed.comparison, misdirected=filed.misdirected)
 
 
 class SectionCoverage(BaseModel):
@@ -1305,18 +1386,33 @@ class InboundReplyResponse(BaseModel):
 
 def process_inbound_reply(
     ref: str, sheets: list[BidReply], images: list[str], *, workspace: Optional[Workspace] = None,
+    identity: Optional[dict] = None,
 ) -> InboundReplyResponse:
     """The ONE inbound-reply processing path — shared verbatim by the HTTP route and the Gmail
     poller (neither reimplements it): resolve the correlation ref deterministically (AI matching
     only for a ref-less reply), parse, route each priced line to its true SoR section by item
     identity, accumulate/supersede onto the tender, re-level, and regenerate the comparison xlsx.
-    This fills the comparison only — a human still awards."""
+    This fills the comparison only — a human still awards.
+
+    ``identity`` is the EXPLICIT-IDENTITY entry, used by ``/level-upload``: the operator picked the
+    firm and the package on the screen, so ``{tender_id, firm_id, trade}`` is already known and
+    both correlation steps are skipped. It must not invent a ref (the upload never had one and a
+    fabricated ref would pollute the registry a real reply resolves against), and it must not run
+    the AI fallback to re-derive identity a human already supplied.
+
+    Everything AFTER identity is the same code on both paths, which is the point: an uploaded
+    return accumulates, supersedes and re-levels exactly as a polled one does. They used to
+    diverge, and an uploaded return was levelled alone in memory and gone on refresh.
+    """
     workspace = workspace or Workspace()
-    resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
-    if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
-        resolved = reply_loop.fallback_match(
-            images, workspace, demo_fixture=INBOUND_FALLBACK_FIXTURE if demo_mode() else None
-        )
+    if identity is not None:
+        resolved = identity
+    else:
+        resolved = reply_loop.resolve_ref(workspace, ref)  # primary: deterministic
+        if resolved is None:  # secondary: best-effort AI, only for a ref-less reply
+            resolved = reply_loop.fallback_match(
+                images, workspace, demo_fixture=INBOUND_FALLBACK_FIXTURE if demo_mode() else None
+            )
     if resolved is None:
         return InboundReplyResponse(status="unmatched", detail="unmatched — needs manual assignment")
 
@@ -1378,8 +1474,21 @@ def post_inbound_reply(
 def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]]) -> str:
     """The Gmail poller's adapter onto the SHARED processing path: read the downloaded attachment
     bytes exactly as the route reads uploads, then run :func:`process_inbound_reply`. Returns the
-    outcome status ("matched" / "unmatched") the poller records against the message id."""
-    sheets, images = _read_reply_files([(fn, None, data) for fn, data in attachments])
+    outcome status ("matched" / "unmatched") the poller records against the message id.
+
+    The content type is derived from the FILENAME, because a Gmail attachment arrives as
+    ``(filename, bytes)`` and this adapter used to pass ``None``.
+
+    That was fine for a workbook — ``is_xlsx_upload`` falls back to the filename — and fatal for a
+    PDF: ``to_images(data, None)`` raises ``Unsupported document type None``, ``poll_once`` catches
+    it, records ``error: …`` and MARKS THE MESSAGE PROCESSED so it is never retried. A priced PDF
+    return arriving by email was dropped with an error record. Never exercised until now, because
+    polling has never been on.
+    """
+    import mimetypes
+
+    typed = [(fn, mimetypes.guess_type(fn)[0], data) for fn, data in attachments]
+    sheets, images = _read_reply_files(typed)
     return process_inbound_reply(ref, sheets, images).status
 
 
@@ -1507,10 +1616,50 @@ class TenderRepliesResponse(BaseModel):
     last_received: str | None = None
     replies: list[TenderReplyInfo] = Field(default_factory=list)
     outstanding: list[dict] = Field(default_factory=list)  # dispatched, not yet replied
+    # EVERY dispatched enquiry for this tender, replied or not — the persisted record of who was
+    # asked. `outstanding` is this list minus whoever has answered, which is the wrong shape for a
+    # screen that must show landed AND awaiting side by side.
+    #
+    # Level & compare used to rebuild this from `dispatch.bundles`, which is React state and dies
+    # with the browser session: six replies sat on disk and the screen said "No dispatched packages
+    # yet", because no dispatch had happened in THAT tab. A reply that exists must be visible
+    # regardless of what the session did.
+    #
+    # `firm_name` is resolved from the firm register where it is known and falls back to the id —
+    # the correlation registry stores identity, not display text, and a missing name is not a
+    # reason to hide a dispatched enquiry.
+    dispatched: list[dict] = Field(default_factory=list)
     comparison_available: bool = False
     # routed-unit package_key -> that unit's SoR item count (the denominator for a reply's coverage,
     # so the operator reads "31/31 H items priced" not a bare count). Empty when no scope is persisted.
     unit_totals: dict[str, int] = Field(default_factory=dict)
+
+
+def _firm_names(firm_ids: set[str]) -> dict[str, str]:
+    """``firm_id -> firm_name`` for the ids we can resolve. Never raises.
+
+    The correlation registry stores identity, not display text, so a rebuilt dispatch list has ids
+    and no names. An unreadable or unseeded firm database is not a reason to hide a dispatched
+    enquiry — the caller falls back to the id.
+    """
+    if not firm_ids:
+        return {}
+    try:
+        conn = store.get_connection()
+    except Exception:  # noqa: BLE001 — no database is a display problem, not a failure
+        return {}
+    try:
+        # `name_en` is the display column — `store.firm_from_row` maps it to `.name`, and there is
+        # no `name` column to select.
+        rows = conn.execute(
+            f"SELECT firm_id, name_en FROM firms WHERE firm_id IN ({','.join('?' * len(firm_ids))})",
+            tuple(sorted(firm_ids)),
+        ).fetchall()
+        return {r["firm_id"]: r["name_en"] for r in rows if r["name_en"]}
+    except Exception:  # noqa: BLE001 — an unseeded/absent table degrades to ids
+        return {}
+    finally:
+        conn.close()
 
 
 @app.get("/tender/{slug}/replies", response_model=TenderRepliesResponse)
@@ -1528,10 +1677,20 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
     records = reply_loop.tender_reply_records(workspace, canonical)
     active = [r for r in records if r.get("status") == "active"]
     replied = {(r["reply"].get("firm_id"), r["reply"].get("trade")) for r in active}  # aligned keys
+    mine = [d for d in reply_loop.outstanding_dispatches(workspace)
+            if tender_slug(d["tender_id"]) == canonical]
     outstanding = [
         {"firm_id": d["firm_id"], "trade": d["trade"]}
-        for d in reply_loop.outstanding_dispatches(workspace)
-        if tender_slug(d["tender_id"]) == canonical and (d["firm_id"], d["trade"]) not in replied
+        for d in mine if (d["firm_id"], d["trade"]) not in replied
+    ]
+    names = _firm_names({d["firm_id"] for d in mine})
+    dispatched = [
+        {
+            "firm_id": d["firm_id"], "trade": d["trade"], "ref": d.get("ref", ""),
+            "firm_name": names.get(d["firm_id"], d["firm_id"]),
+            "received": (d["firm_id"], d["trade"]) in replied,
+        }
+        for d in mine
     ]
     return TenderRepliesResponse(
         tender_slug=canonical,
@@ -1546,6 +1705,7 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
             for r in records
         ],
         outstanding=outstanding,
+        dispatched=dispatched,
         comparison_available=reply_loop.comparison_file(workspace, canonical).is_file(),
         unit_totals=section_totals(scope) if scope is not None else {},
     )

@@ -26,10 +26,12 @@ assigns the set identity and persists the result; this stage only produces the p
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
 from client_boq.models import ClauseItem, ParsedDocumentSet, PartSpec, RawUpload
+from pipeline.concurrency import run_calls
 from pipeline.documents import extract_document
 from pipeline.llm_client import LLMClient, demo_mode
 from client_boq.llm import make_client
@@ -268,16 +270,22 @@ def ingest_from_parts(
             "review them."
         )
 
-    # This loop's length IS known — it is `len(readable)` — so it is counted. (The ruling assumed
-    # otherwise from my Phase 0 report, which said only that there was no progress callback here;
-    # the absence of a callback is not the absence of a length. The per-CHUNK loop inside remains
-    # uncounted, because a part's chunk count is not known until its text is read.)
-    for index, (part, pdf_path) in enumerate(readable):
-        if count_cb is not None:
-            count_cb(index, len(readable))
+    # ---- PHASE A: local, sequential, fast. Read every part and build the flat task list. --------
+    #
+    # Splitting the loop in two is what makes both the concurrency and the progress possible. The
+    # old single loop could only ever count PARTS, because a part's chunk count is not known until
+    # its text has been read — and it read and called in the same breath. So the strip sat on 0/33
+    # for minutes at a time while a 40-page part went through eight sequential model calls, and
+    # `count_cb(index, len(readable))` fired once per part with the index BEFORE the work, so the
+    # last part's calls all happened under a bar reading 32/33.
+    #
+    # Reading first costs a few seconds of local PDF text extraction and yields the real
+    # denominator: the number of model calls this run will make.
+    tasks: list[tuple[PartSpec, str, int, str]] = []      # (part, source, chunk_no, framed body)
+    for part, pdf_path in readable:
         source = part.source_doc or pdf_path
         if source not in doc_names:
-            doc_names.append(source)
+            doc_names.append(source)      # first-seen in INPUT order, exactly as before
         path = Path(pdf_path)
         if not pdf_path or not path.is_file():
             continue
@@ -285,19 +293,59 @@ def ingest_from_parts(
         text = pdfops.page_text(data, 1, part.page_count())
         if not text.strip():
             continue  # a scanned part contributes no clauses; ingest already flagged it
-        for index, chunk in enumerate(_chunk(text), start=1):
-            body = (
+        for chunk_no, chunk in enumerate(_chunk(text), start=1):
+            tasks.append((part, source, chunk_no, (
                 f"=== {source} — part {part.n:02d} {part.title} "
                 f"(source pages {part.start}-{part.end}) ===\n{chunk}"
-            )
-            for clause in _structure(client, body, f"{part.part_id}-{index}"):
-                clause.part_id = part.part_id
-                if not clause.source_doc:
-                    clause.source_doc = source
-                clauses.append(clause)
+            )))
 
-    if count_cb is not None and readable:
-        count_cb(len(readable), len(readable))
+    if count_cb is not None:
+        count_cb(0, len(tasks))           # the honest denominator, known only now
+
+    # ---- PHASE B: the model calls, overlapped four at a time. ------------------------------------
+    #
+    # `run_calls` is the procurement chunked-extraction fan-out, reused rather than re-invented:
+    # it preserves INPUT order (`ThreadPoolExecutor.map`), runs a single item inline with no pool
+    # at all — so the DEMO one-call path is byte-identical — and bounds concurrency at 4.
+    #
+    # Four, not more. It is the number already proven against these providers in procurement
+    # ingest, and DeepSeek's rate limits are not documented anywhere we can point at. A fan-out
+    # that trips a 429 is slower than the sequential run it replaced, because every retry is a
+    # fresh minute.
+    #
+    # `_structure` swallows its own exceptions and returns `[]`. That must stay INSIDE the worker:
+    # `run_calls` re-raises the first exception `map` sees, so an exception escaping here would
+    # take the whole batch down — where today one bad chunk is one gap in one part. `LLMClient`
+    # builds its SDK clients under `_clients_lock`, so concurrent first-calls are already safe.
+    done_lock = threading.Lock()
+    done_count = 0
+
+    def _one(task: tuple[PartSpec, str, int, str]) -> list[ClauseItem]:
+        nonlocal done_count
+        part, _source, chunk_no, body = task
+        try:
+            return _structure(client, body, f"{part.part_id}-{chunk_no}")
+        finally:
+            # In `finally`, so a chunk that fails still advances the bar. Progress measures calls
+            # COMPLETED, not calls that succeeded; a bar that stalls on a failure would report the
+            # run as hung when it is merely lossy, and the gap is already reported elsewhere.
+            with done_lock:
+                done_count += 1
+                if count_cb is not None:
+                    count_cb(done_count, len(tasks))
+
+    results = run_calls(_one, tasks)
+
+    # Stitched back in input order, so clause ordering is identical to the sequential run.
+    for (part, source, _chunk_no, _body), found in zip(tasks, results):
+        for clause in found:
+            clause.part_id = part.part_id
+            if not clause.source_doc:
+                clause.source_doc = source
+            clauses.append(clause)
+
+    if count_cb is not None and tasks:
+        count_cb(len(tasks), len(tasks))
     return ParsedDocumentSet(name=project_name, documents=doc_names, clauses=clauses)
 
 

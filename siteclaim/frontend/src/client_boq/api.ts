@@ -6,6 +6,7 @@ import type {
   BenchmarkProject,
   BenchmarkSummary,
   BidReply,
+  BillCandidate,
   BqCandidates,
   BridgeRouteDecisions,
   BridgeRouteProposal,
@@ -15,13 +16,16 @@ import type {
   CitationsResponse,
   Coverage,
   CriteriaResponse,
+  CompanySettings,
   CriterionRow,
   DispatchDraftsResponse,
   DispatchSet,
-  DocumentRow,
   EstimateResponse,
+  EstimateScheduleInput,
+  DocumentRow,
   FirmsPage,
   GateState,
+  GmailIntegrationStatus,
   Highlight,
   JobState,
   LLMSettingsResponse,
@@ -37,6 +41,13 @@ import type {
   PartDetail,
   PartSpec,
   PartsResponse,
+  CostingModelShape,
+  CostingResponse,
+  DerivedResponse,
+  GroupPreview,
+  GroupsResponse,
+  HoleGroup,
+  OutputsResponse,
   ProjectDashboard,
   ProjectEOS,
   ProjectSummary,
@@ -49,6 +60,8 @@ import type {
   RecommendAllResponse,
   RegisterResponse,
   RevisionRow,
+  ScheduleResponse,
+  StationScheduleResponse,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -113,6 +126,13 @@ const post = <T>(path: string, body: unknown): Promise<T> =>
     body: JSON.stringify(body),
   }).then((r) => handle<T>(r));
 
+const put = <T>(path: string, body: unknown): Promise<T> =>
+  fetch(ROOT + path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
+
 const del = <T>(path: string): Promise<T> =>
   fetch(ROOT + path, { method: "DELETE", headers: actorHeaders() }).then((r) => handle<T>(r));
 
@@ -149,7 +169,11 @@ const rpost = <T>(path: string, body: unknown): Promise<T> =>
 
 /** Is this backend in DEMO mode? Drives the app-bar chip, which is not decoration: it means
  *  uploaded files were not read and every finding on screen came from a fixture. */
-export const health = (): Promise<{ status: string; demo_mode: boolean }> =>
+/** `review_gate` is `"soft"` (the V1 default) or `"hard"`. Soft means an unapproved register no
+ *  longer blocks routing or pricing — it warns — so the step chips must stop saying those steps
+ *  are waiting on it. Optional in the type because an older server does not send it, and the
+ *  safe reading of a missing value is the stricter one. */
+export const health = (): Promise<{ status: string; demo_mode: boolean; review_gate?: string }> =>
   fetch(`${BASE}/health`).then((r) => handle(r));
 
 export const api = {
@@ -218,12 +242,104 @@ export const api = {
   /** Archive, never delete — the response's note states the missing_rate consequence. */
   archiveRate: (rateId: string) => del<{ rate: RateRowFull; note: string }>(`/rates/${rateId}`),
 
+  // --- the output book ------------------------------------------------------
+  outputs: () => get<OutputsResponse>("/library/outputs"),
+  setOutputNorm: (key: string, value: number) =>
+    post<{ key: string; value: number; default: number }>(`/library/outputs/${key}`, { value }),
+  /** Forget your value and go back to the shipped default. A norm cannot be archived the way a
+   *  rate can — the engine reads it whatever happens — so this is the only meaningful undo. */
+  resetOutputNorm: (key: string) =>
+    del<{ key: string; value: number; default: number; source: string }>(`/library/outputs/${key}`),
+
+  // --- the bill: choosing one, without uploading it again --------------------
+  /** Every workbook in this set's upload that reads as a bill of quantities. */
+  billCandidates: (setId: string) =>
+    get<{ set_id: string; count: number; candidates: BillCandidate[] }>(
+      `/boq/${setId}/candidates`,
+    ),
+  /** Import one of them by its path inside the set — the file is already on the server. */
+  importBillFromSet: (setId: string, relativePath: string) =>
+    post<{ set_id: string; rev: number; items: number; priceable: number }>(
+      `/boq/${setId}/import-from-set`,
+      { relative_path: relativePath },
+    ),
+
+  // --- the costing engine ---------------------------------------------------
+  costing: (setId: string) => get<CostingResponse>(`/costing/${setId}`),
+  /** Point one item at what should price it — a build-up, a lab rate, or a site resource.
+   *  All three empty clears the override and puts the app's own proposal back. */
+  setItemBasis: (
+    setId: string,
+    fullRef: string,
+    keys: { basis_key?: string; lab_key?: string; prelim_key?: string },
+  ) =>
+    post<{ full_ref: string; cleared: boolean }>("/costing/item-basis", {
+      set_id: setId,
+      full_ref: fullRef,
+      ...keys,
+    }),
+  /** The deliverable: eight sheets with their formulas intact, so it still calculates in Excel. */
+  costingWorkbookUrl: (setId: string) => `${ROOT}/costing/${setId}/workbook.xlsx`,
+  /** Type a rate over the rounded proposal. `null` puts the proposal back. */
+  setSubmittedRate: (setId: string, fullRef: string, rate: number | null) =>
+    post<{ full_ref: string; rate: number | null; by: string }>("/costing/rate", {
+      set_id: setId,
+      full_ref: fullRef,
+      rate,
+    }),
+  setAssumptionVerdict: (setId: string, key: string, status: string, comment = "") =>
+    post<{ key: string; status: string; gate: string; outstanding: number }>(
+      "/costing/assumption",
+      { set_id: setId, key, status, comment },
+    ),
+  /** Copy-on-write: this is the call that makes the tender's model its own. */
+  saveSetCostingModel: (setId: string, model: CostingModelShape) =>
+    put<{ marks: Record<string, string>; problems: string[]; using_own_model: boolean }>(
+      `/costing/${setId}/model`,
+      { model },
+    ),
+  resetSetCostingModel: (setId: string) =>
+    del<{ using_own_model: boolean; note: string }>(`/costing/${setId}/model`),
+
+  // --- the take-off (Site) --------------------------------------------------
+  stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),
+  derived: (setId: string) => get<DerivedResponse>(`/site/${setId}/derived`),
+  holeGroups: (setId: string) => get<GroupsResponse>(`/site/${setId}/groups`),
+  /** Class one hole. "" un-decides it; C says in its note that it has no bill item to sit on. */
+  setStationClass: (setId: string, station: string, accessClass: string) =>
+    post<{ counts: Record<string, number>; decided_by: string; note: string }>("/site/class", {
+      set_id: setId,
+      station,
+      access_class: accessClass,
+    }),
+  saveGroup: (setId: string, groupId: string, group: Partial<HoleGroup>) =>
+    post<{ group: HoleGroup; ready: string[] }>("/site/group", {
+      set_id: setId,
+      group_id: groupId,
+      group,
+    }),
+  deleteGroup: (setId: string, groupId: string) =>
+    del<{ deleted: boolean; note: string }>(`/site/${setId}/group/${groupId}`),
+  /** Days and the blend as you type. A round trip on purpose: the day-by-day simulation is the
+   *  load-bearing calculation here, and a second copy of it in TypeScript would eventually
+   *  disagree with the first with no way to tell which was right. It never prices. */
+  previewGroup: (setId: string, group: Partial<HoleGroup>) =>
+    post<GroupPreview>("/site/preview", { set_id: setId, group }),
+
   // --- app-wide settings (the AI model) -------------------------------------
   settings: () => get<LLMSettingsResponse>("/settings"),
-  saveSettings: (body: { provider: string; model_anthropic?: string; model_deepseek?: string }) =>
+  saveSettings: (body: {
+    provider: string;
+    provider_ingest?: string;
+    model_anthropic?: string;
+    model_deepseek?: string;
+    model_openai?: string;
+  }) =>
     post<LLMSettingsResponse>("/settings", {
+      provider_ingest: "",
       model_anthropic: "",
       model_deepseek: "",
+      model_openai: "",
       ...body,
     }),
 
@@ -232,6 +348,25 @@ export const api = {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
     form.append("project_name", projectName);
+    return fetch(`${ROOT}/ingest/upload`, {
+      method: "POST",
+      body: form,
+      headers: actorHeaders(),
+    }).then((r) => handle<JobState>(r));
+  },
+  /** A folder that is already organised: each file becomes its own part, nothing is split.
+   *
+   *  The paths ride as their own field because a browser does not transmit
+   *  `webkitRelativePath` over multipart — without them, two `BQ.pdf` in different subfolders
+   *  arrive as one name and the second overwrites the first. The server pairs them by position. */
+  uploadFolder(picked: { file: File; path: string }[], projectName: string): Promise<JobState> {
+    const form = new FormData();
+    picked.forEach(({ file, path }) => {
+      form.append("files", file);
+      form.append("relative_paths", path);
+    });
+    form.append("project_name", projectName);
+    form.append("layout", "folder");
     return fetch(`${ROOT}/ingest/upload`, {
       method: "POST",
       body: form,
@@ -297,6 +432,22 @@ export const api = {
       highlights: Highlight[];
       note: string;
     }>(`/ingest/parts/${setId}/${partId}/locate`, { quote }),
+  /** Where a quoted claim sits **anywhere in the set**, and in which part.
+   *
+   *  What "show me on the page" needs. The per-part call above can only answer about the document
+   *  already open, which on a folder set means it says "not found" for every part but the one
+   *  holding the words — leaving the reader to find the right file themselves, which is the work
+   *  the button exists to do. `preferPartId` is only a head start on the search order. */
+  locateQuoteInSet: (setId: string, quote: string, preferPartId?: string) =>
+    post<{
+      verdict: "located" | "unverifiable" | "not_located";
+      part_id: string;
+      part_title: string;
+      page: number | null;
+      match?: string;
+      highlights: Highlight[];
+      note: string;
+    }>(`/ingest/${setId}/locate`, { quote, prefer_part_id: preferPartId ?? "" }),
 
   // --- review --------------------------------------------------------------
   /** `includeSpecifications` reads the specification tree too. Off by default: on a real
@@ -313,6 +464,21 @@ export const api = {
     );
   },
   reviewStatus: (jobId: string) => get<JobState>(`/review/status/${jobId}`),
+  /** Whatever this set is doing right now, of any kind — `job_id: null` when nothing is.
+   *
+   *  The screen's recovery route. Every other status call needs a job id, which a freshly loaded
+   *  browser does not have: the id lived in a poll loop belonging to a component that unmounted.
+   *  So a review ran on the server while the Register tab rendered a Run button, and pressing it
+   *  produced a 409 the UI had invited. Never 404s — "no job" is a state, not an error. */
+  liveJob: (setId: string) => get<JobState>(`/jobs/live/${encodeURIComponent(setId)}`),
+  /** EVERY job in flight for a set, oldest first.
+   *
+   *  The plural exists because the server pool is two wide: an ingest and a review genuinely run
+   *  at the same time, so a singular answer was being asked to carry a choice it could not make.
+   *  The shell picks the job belonging to the tab in view, and where more than one is live it says
+   *  so rather than silently presenting one as the answer. */
+  liveJobs: (setId: string) =>
+    get<{ set_id: string; jobs: JobState[] }>(`/jobs/live-all/${encodeURIComponent(setId)}`),
   register: (setId: string) => get<RegisterResponse>(`/review/register/${setId}`),
   citations: (setId: string) => get<CitationsResponse>(`/review/${setId}/citations`),
   /** Gate 2. The only writer of a verdict. `approved: false` records verdicts without
@@ -405,6 +571,18 @@ export const api = {
   runEstimate: (setId: string, body?: { margin_pct?: number; schedule?: unknown; letter?: unknown }) =>
     post<JobState>("/estimate/run", { set_id: setId, ...(body ?? {}) }),
   estimate: (setId: string) => get<EstimateResponse>(`/estimate/${setId}`),
+  /** The schedule a live estimate is run FROM. `saved: false` means this tender has never had
+   *  one — the editor opens empty rather than erroring. */
+  schedule: (setId: string) => get<ScheduleResponse>(`/estimate/schedule/${setId}`),
+  saveSchedule: (setId: string, schedule: EstimateScheduleInput, marginPct: number) =>
+    post<ScheduleResponse>("/estimate/schedule", {
+      set_id: setId,
+      schedule,
+      margin_pct: marginPct,
+    }),
+  /** The app-wide letterhead. The client and project are NOT here — they come from the tender's
+   *  own desk metadata, so they are never typed twice. */
+  saveCompany: (company: CompanySettings) => post<LLMSettingsResponse>("/company", company),
   workbookUrl: (setId: string) => `${ROOT}/estimate/${setId}/workbook`,
 
   // --- the offer letter ----------------------------------------------------
@@ -459,6 +637,21 @@ export const api = {
       setId: string,
       decisions: { package_key: string; chosen_route: string }[],
     ) => bpost<BridgeRouteDecisions>(`${setPath(setId)}/route/confirm`, { decisions }),
+
+    /** The persisted shortlist selection for a set — `{package_key: [firm_id, …]}`. Empty is a
+     *  legitimate answer (nothing selected yet), never a 404. */
+    approvals: (setId: string) =>
+      bget<{ set_id: string; approvals: Record<string, string[]> }>(`${setPath(setId)}/approvals`),
+
+    /** Record the selection so a reload does not lose it.
+     *
+     *  NOT the dispatch gate: nothing is composed, drafted or sent, and the operator still presses
+     *  Compose/Prepare on the Dispatch step. This only stops the selection evaporating between the
+     *  click and the decision. Replaces the stored list for every package named in the payload, so
+     *  a deselection persists too — an empty list means "none of them", which is a decision. */
+    saveApprovals: (setId: string, approvals: Record<string, string[]>) =>
+      bpost<{ set_id: string; approvals: Record<string, string[]> }>(
+        `${setPath(setId)}/approvals`, { approvals }),
   },
 
   // --- sourcing: the sublet fork -------------------------------------------
@@ -515,9 +708,19 @@ export const api = {
       );
     },
 
-    /** Which replies have landed for a tender. Refreshed on demand — there is no polling loop. */
+    /** Which replies have landed for a tender.
+     *
+     *  Polled on `poll_seconds` while Level & compare is the visible step AND the server's poller
+     *  is enabled — otherwise refreshed on demand. Nothing here auto-levels: a comparison must not
+     *  silently recompute under someone mid-decision, so a new arrival offers a re-level and never
+     *  performs one. */
     tenderReplies: (slug: string) =>
       rget<TenderReplies>(`/tender/${encodeURIComponent(slug)}/replies`),
+
+    /** The Gmail integration's state: credential, token, and — the part Level & compare needs —
+     *  whether the reply poller is actually watching. `polling_enabled` defaults FALSE, so a
+     *  default install watches nothing and an empty comparison looks exactly like an empty inbox. */
+    gmailStatus: () => rget<GmailIntegrationStatus>("/integrations/gmail"),
     tenderComparisonUrl: (slug: string) =>
       `${BASE}/tender/${encodeURIComponent(slug)}/comparison.xlsx`,
     /** The human gate: take a firm's reply out of the comparison for one unit. The reply is KEPT

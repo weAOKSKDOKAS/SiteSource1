@@ -14,8 +14,10 @@ poll (the replies sit in Gmail; nothing is lost). A message whose ref does not r
 ``unmatched`` and surfaced in the poller state — reported, never silently dropped.
 
 The loop can never crash the app: every iteration is wrapped; a failure records ``last_error`` and
-retries next tick. ``GMAIL_POLLING_ENABLED`` defaults to false (DEMO and the test suite never
-poll), and DEMO_MODE forces it off regardless. The blocking Gmail/parse work runs on a worker
+retries next tick. Polling is ON by default once Gmail is connected — automatic collection is the
+product, not an option — with ``GMAIL_POLLING_ENABLED`` as an explicit override in both directions.
+DEMO_MODE and a missing credential both force it off, so the demo, the test suite and an
+unconfigured install never poll. The blocking Gmail/parse work runs on a worker
 thread (``asyncio.to_thread``), never on the event loop.
 """
 
@@ -30,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from pipeline import reply_loop
 from pipeline.workspace import Workspace
 
 _PROCESSED_FILE = "processed_messages.json"
@@ -76,12 +79,41 @@ def poller_state() -> dict:
 
 
 def polling_enabled() -> bool:
-    """Polling is OPT-IN (``GMAIL_POLLING_ENABLED=true``) and DEMO_MODE forces it off — the demo
-    and the test suite stay fully offline (no Gmail import, no background task)."""
+    """Whether the machine waits at the outbox. ON by default once Gmail is connected.
+
+    Automatic collection is the product, not an option: an install that watches nothing and tells
+    the operator to edit a ``.env`` file has replaced a feature with a configuration instruction.
+    So the default flipped, and ``GMAIL_POLLING_ENABLED`` survives as an explicit override in BOTH
+    directions:
+
+    * unset  -> ON when Gmail is connected and DEMO is off
+    * ``true``  -> ON (even with no credential — for tests that drive `poll_once` directly)
+    * ``false`` -> OFF, always
+
+    Two things still force it off, and both are about not making noise nobody asked for:
+
+    * DEMO_MODE, absolutely — the demo and the test suite stay offline, no Gmail import, no task.
+    * NO CREDENTIAL. An unconfigured install must not poll or log errors in a loop; there is
+      nothing to poll and every tick would be a failure. `credentials_configured()` reads env vars
+      only — no network, no token file — so this stays cheap enough for a startup check.
+
+    What makes default-on safe is the self-ingest guard (`X-SiteSource-Outbound`, see
+    `poll_once`), not the default itself.
+    """
     from pipeline.llm_client import demo_mode  # lazy: no import cycle at module import
 
-    enabled = os.getenv("GMAIL_POLLING_ENABLED", "false").strip().lower() in ("1", "true", "yes")
-    return enabled and not demo_mode()
+    raw = os.getenv("GMAIL_POLLING_ENABLED", "").strip().lower()
+    if demo_mode():
+        return False
+    if raw in ("0", "false", "no"):
+        return False
+    if raw in ("1", "true", "yes"):
+        return True
+    # Unset: on when there is something to poll. Imported lazily so an install without the Google
+    # libs still answers this without touching them.
+    from pipeline import gmail_client
+
+    return gmail_client.credentials_configured()
 
 
 def poll_seconds() -> int:
@@ -139,7 +171,11 @@ def poll_once(process: ProcessReply, *, workspace: Optional[Workspace] = None, s
     from pipeline import gmail_client  # lazy: only a live poll imports the Gmail path
 
     ws = workspace or Workspace()
-    summary = {"found": 0, "processed": 0, "skipped": 0, "unmatched": 0, "failed": 0}
+    # `own` is its own counter, NOT folded into `skipped`. Skipping an already-processed message and
+    # refusing to eat our own outbound RFQ are different events, and a single number would hide the
+    # one worth watching: if `own` climbs while `processed` stays flat, the loop is talking to
+    # itself. See `reply_loop.record_outbound` for why a `-from:me` filter cannot do this job.
+    summary = {"found": 0, "processed": 0, "skipped": 0, "own": 0, "unmatched": 0, "failed": 0}
     try:
         messages = gmail_client.list_replies(poll_query(), service=service)
     except gmail_client.GmailUnavailable as exc:
@@ -148,10 +184,32 @@ def poll_once(process: ProcessReply, *, workspace: Optional[Workspace] = None, s
         return summary
     summary["found"] = len(messages)
     processed_ids = load_processed(ws)
+    own_ids = reply_loop.outbound_message_ids(ws)
     for m in messages:
         mid = m.get("id", "")
         if not mid or mid in processed_ids:
             summary["skipped"] += 1
+            continue
+        # OUR OWN dispatched RFQ, come back to us because `GMAIL_TEST_RECIPIENT` addresses every
+        # draft to the operator. It carries the ref tag and the BLANK Schedule of Rates, so it
+        # matches the query and would resolve, parse as a bid with no rates, and supersede the
+        # firm's genuine reply on the same (firm_id, trade) key.
+        #
+        # TWO signals, and the HEADER is the one that works. The message-id ledger is recorded when
+        # the draft is CREATED, and the Gmail API replaces that id when the draft is sent — "the
+        # draft is automatically deleted and a new message with an updated ID is created"
+        # (developers.google.com/workspace/gmail/api/guides/drafts). Since the operator sends by
+        # hand from Gmail, the ledger misses every time. `X-SiteSource-Outbound` travels with the
+        # message through the send, so it survives.
+        #
+        # The ledger is kept as a second signal rather than deleted: it still catches a draft that
+        # was never sent but is somehow listed, and two independent guards on a data-corrupting
+        # failure is the right number.
+        #
+        # NOT marked processed: these guards are the authority on what is ours, and marking it too
+        # would put the same fact in two places where they could disagree.
+        if m.get("outbound") or mid in own_ids:
+            summary["own"] += 1
             continue
         ref = ref_from_subject(m.get("subject", ""))
         try:

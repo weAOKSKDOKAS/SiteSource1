@@ -142,9 +142,13 @@ def test_a_planner_stub_is_rejected_and_the_deterministic_draft_stands():
 
 
 def _plan_with(planner, client, report):
-    """Run `plan_split` against a stubbed model client — no fixture, no network."""
+    """Run `plan_split` against a stubbed model client — no fixture, no network.
+
+    `make_client` grew a `stage=` keyword (per-stage provider selection), so the stub must
+    swallow whatever selection arguments the caller passes — it returns the same client
+    regardless, which is the point of a stub."""
     real = planner.make_client
-    planner.make_client = lambda: client
+    planner.make_client = lambda *a, **kw: client
     try:
         return planner.plan_split(report)
     finally:

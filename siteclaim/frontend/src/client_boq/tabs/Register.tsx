@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes, usePersisted } from "../chrome";
 import { PageView } from "../PageView";
 import type {
   CitationRow,
@@ -54,6 +54,7 @@ type SortMode = "register" | "page" | "status";
 
 export function RegisterTab({
   data,
+  job,
   railOpen,
   onRefresh,
   onError,
@@ -61,6 +62,12 @@ export function RegisterTab({
   onProgress,
 }: {
   data: SetData;
+  /** The run in flight anywhere in this set, from the shell. A tab's own `busy` flag dies
+   *  with the component, so a run started here and navigated away from left this tab able to
+   *  offer its Run button again — over a job that was still going, which the server then
+   *  refused with a 409 the UI had invited. `busy` covers work THIS mount started; `job`
+   *  covers work the set is doing at all. */
+  job?: JobState | null;
   railOpen: boolean;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
@@ -73,6 +80,15 @@ export function RegisterTab({
   const items = register?.line_items ?? [];
 
   const [selected, setSelected] = useState<number | null>(null);
+  /** The mismatch banner keeps its file lists collapsed: on a folder set they run to 203 names. */
+  const [mismatchOpen, setMismatchOpen] = useState(false);
+  /** Dismissed for good, per set. A warning you have read and understood is just noise on the
+   *  fiftieth visit, and it is stored per set_id so dismissing it on one tender says nothing
+   *  about the next — which is a different document set and a different mistake to make. */
+  const [mismatchGone, setMismatchGone] = usePersisted(
+    `mismatchDismissed.${data.setId}`,
+    false,
+  );
   const [partId, setPartId] = useState<string | null>(null);
   const [page, setPage] = useState<number | null>(null);
   /** The result of a "show me on the page" run, and its verdict — separate from the precomputed
@@ -90,6 +106,14 @@ export function RegisterTab({
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [criteriaRows, setCriteriaRows] = useState<Criterion[]>([]);
   const [busy, setBusy] = useState(false);
+  // The shell's job, narrowed to work that belongs to THIS tab. `TAB_FOR_JOB` is the one
+  // place that translates a workflow name into a tab, so this cannot drift from the chips.
+  const jobRunning =
+    !!job &&
+    (job.status === "queued" || job.status === "running") &&
+    TAB_FOR_JOB[job.kind] === "register";
+  // Everything that used to gate on `busy` gates on this instead.
+  const running = busy || jobRunning;
   /** Read the specification tree as well. Off by default — on a real government pack that is ~150
    *  of 206 parts, mostly appendices (borehole logs, test schedules) that carry no contractual
    *  position, and reading them is most of a long run. It is a DEFERRAL, not an exclusion: the
@@ -253,15 +277,17 @@ export function RegisterTab({
   async function locateSelected(item: DepartureItem) {
     const quote = item.cited_text?.trim();
     if (!quote) return;
-    const target = partId ?? partForClause(item.clause) ?? (data.parts?.parts ?? [])[0]?.part_id;
-    if (!target) return;
     setLocating("pending");
     try {
-      const r = await api.locateQuote(data.setId, target, quote);
+      // The whole set, not the open part. Searching only what is already on screen made the
+      // button useless on a 203-part set: it reported "not found" from whichever document
+      // happened to be showing, and finding the right one was left to the reader — which is
+      // exactly the work the button is for. The open part is passed as a head start only.
+      const r = await api.locateQuoteInSet(data.setId, quote, partId ?? undefined);
       setLocating(r.verdict);
       setLocateNote(r.note);
-      if (r.verdict === "located" && r.page != null) {
-        setPartId(target);
+      if (r.verdict === "located" && r.page != null && r.part_id) {
+        setPartId(r.part_id);   // switch the viewer to the document that actually holds the words
         setLocated(r.highlights);
         setPage(r.page);
       } else {
@@ -363,6 +389,9 @@ export function RegisterTab({
    *  job — reading the first response would work offline and do nothing with a real key. */
   async function runReview() {
     setBusy(true);
+    // A new run makes the previous refusal history: clear the shell banner at the START,
+    // before the work, so it can never describe a run that has been superseded.
+    onError("");
     try {
       const finished = await runJob(
         () => api.runReview(data.setId, data.name, includeSpecs),
@@ -376,8 +405,33 @@ export function RegisterTab({
       onProgress?.(null);
       await onRefresh();
     } catch (e: unknown) {
+      const err = e as Error & { status?: number };
+      // Belt and braces on the race the recovery effect otherwise closes. If a review was already
+      // running when this button was pressed — two windows on one set, or a click that beat the
+      // mount-time `liveJob` call — the server says 409 and NAMES the job. That is not an error
+      // worth a red banner: the thing the operator asked for is already happening. So adopt it
+      // and show its progress, which is what they wanted to see in the first place.
+      if (err.status === 409 && /already running/i.test(err.message ?? "")) {
+        try {
+          const live = await api.liveJob(data.setId);
+          if (live.job_id) {
+            onProgress?.(live);
+            const finished = await runJob(
+              () => Promise.resolve(live),
+              api.reviewStatus,
+              (s) => onProgress?.(s),
+            );
+            setRunNotes(finished.warnings ?? []);
+            onProgress?.(null);
+            await onRefresh();
+            return;
+          }
+        } catch {
+          /* fall through to the banner — a 409 we cannot attach to is worth reporting */
+        }
+      }
       onProgress?.(null);
-      onError(e instanceof Error ? e.message : String(e));
+      onError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -395,10 +449,12 @@ export function RegisterTab({
     }
   }
 
-  if (!register && busy) {
-    // The tab knows it is busy — it disabled its own run button — so it must not also say the
-    // review has not been run. That contradiction, beside a strip reading "REVIEW · running", was
-    // the same component arguing with itself on one screen.
+  if (!register && running) {
+    // The tab knows the set is busy — its own run, or one it has just adopted from the shell —
+    // so it must not also say the review has not been run. That contradiction, beside a strip
+    // reading "REVIEW · running", was the same component arguing with itself on one screen. It is
+    // `running` and not `busy` because the run is very often NOT this mount's: start a review,
+    // navigate away, come back, and `busy` is false while the review is still going.
     return (
       <WaitingOn title="The review is running">
         Reading each part against the criteria library. It keeps going if you navigate away — the
@@ -414,7 +470,7 @@ export function RegisterTab({
         action={
           data.gates.manifest ? (
             <div className="flex flex-col items-center gap-2.5">
-              <Button variant="brass" onClick={runReview} disabled={busy}>
+              <Button variant="brass" onClick={runReview} disabled={running}>
                 Run the review
               </Button>
               {/* The skip, made visible and reversible at the point of decision — not a constant
@@ -427,7 +483,7 @@ export function RegisterTab({
                   type="checkbox"
                   checked={includeSpecs}
                   onChange={(e) => setIncludeSpecs(e.target.checked)}
-                  disabled={busy}
+                  disabled={running}
                   className="accent-[#BD9A5F]"
                 />
                 Read the specifications too — slower, and mostly appendices
@@ -633,17 +689,67 @@ export function RegisterTab({
         {/* The single most confusing state in the app, said out loud. When the review returned
             its bundled sample instead of reading the upload, every citation is unlocatable and
             nothing highlights — which looks like a broken viewer and is not one. */}
-        {mismatch && (
-          <div className="flex-none border-b border-cb-amber bg-cb-brass-tint px-4 py-2.5">
+        {mismatch && !mismatchGone && (
+          // Bounded on purpose. This used to render one sentence containing every filename on both
+          // sides — fine for a binder and two annexes, a full page for a folder of 203, at which
+          // point the warning hid the findings it was warning about. The lists are here, behind a
+          // disclosure, and the banner itself stays two lines.
+          <div className="max-h-[40vh] flex-none overflow-y-auto border-b border-cb-amber bg-cb-brass-tint px-4 py-2.5">
             <div className="flex items-start gap-2">
               <span className="flex-none font-cb-mono text-[11px] text-cb-brass-text">⚠</span>
-              <div className="min-w-0">
-                <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
-                  THESE FINDINGS ARE NOT ABOUT YOUR DOCUMENT
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1 font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
+                    THESE FINDINGS ARE NOT ABOUT YOUR DOCUMENT
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMismatchGone(true)}
+                    title="Dismiss. It will not come back for this tender."
+                    className="cb-press -mt-1 flex-none px-1 font-cb-mono text-[13px] leading-none text-cb-brass-text"
+                  >
+                    ×
+                  </button>
                 </div>
                 <p className="mt-1 font-cb-sans text-[11px] leading-[1.5] text-cb-brass-text">
                   {mismatch.note}
                 </p>
+                {(mismatch.uploaded?.length ?? 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMismatchOpen((v) => !v)}
+                    className="cb-press mt-1 font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2"
+                  >
+                    {mismatchOpen ? "hide the file lists" : `show all ${mismatch.uploaded.length} uploaded files`}
+                  </button>
+                )}
+                {mismatchOpen && (
+                  <div className="mt-2 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
+                    {(
+                      [
+                        ["WHAT THE FINDINGS DESCRIBE", mismatch.reviewed],
+                        ["WHAT YOU UPLOADED", mismatch.uploaded],
+                      ] as [string, string[]][]
+                    ).map(([label, list]) => (
+                      <div key={label}>
+                        <div className="font-cb-mono text-[8px] font-semibold tracking-cb-label text-cb-brass-text">
+                          {label} · {list?.length ?? 0}
+                        </div>
+                        <div className="mt-1 max-h-[22vh] overflow-y-auto">
+                          {(list ?? []).map((name) => (
+                            <div
+                              key={name}
+                              title={name}
+                              className="truncate font-cb-mono text-[9px] leading-[1.6] text-cb-brass-text"
+                            >
+                              {name}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1044,7 +1150,7 @@ function RegisterRow({
             disabled={locating === "pending"}
             className="cb-press rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-2 py-[3px] font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text disabled:opacity-60"
           >
-            {locating === "pending" ? "LOOKING…" : "SHOW ME ON THE PAGE"}
+            {locating === "pending" ? "SEARCHING EVERY DOCUMENT…" : "SHOW ME ON THE PAGE"}
           </button>
           {locating && locating !== "pending" && (
             <span
@@ -1052,13 +1158,19 @@ function RegisterRow({
                 "font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
                 locating === "located" ? "text-cb-ok-dark" : "text-cb-bad-dark",
               )}
-              title={locateNote}
             >
               {locating === "located"
                 ? "FOUND — HIGHLIGHTED"
                 : locating === "not_located"
-                  ? "NOT ON THIS PART"
-                  : "NO TEXT LAYER TO SEARCH"}
+                  ? "NOT IN ANY DOCUMENT HERE"
+                  : "NOTHING HERE COULD BE SEARCHED"}
+            </span>
+          )}
+          {/* The note names the document it jumped to, or how many were searched to be able to
+              say "nowhere". A tooltip hid the one fact that makes the verdict trustworthy. */}
+          {locateNote && locating && locating !== "pending" && (
+            <span className="w-full font-cb-sans text-[10.5px] leading-[1.4] text-cb-muted">
+              {locateNote}
             </span>
           )}
         </div>

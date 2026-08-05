@@ -86,6 +86,9 @@
 
   --shadow-cb-card: 0 2px 10px rgba(12, 26, 40, 0.08);
   --shadow-cb-page: 0 2px 8px rgba(12, 26, 40, 0.1);
+  /* Retired 2026-08-02. This drew a hard 2px outline around every page highlight; the mark is now
+     a highlighter (see .cb-mark) with no border at all. Kept only because a ring may be wanted on
+     some other element one day — nothing uses it today. */
   --shadow-cb-ring: 0 0 0 2px #bd9a5f;
 }
 
@@ -182,12 +185,23 @@
   }
 }
 
+/* A page highlight — a HIGHLIGHTER, not a box.
+   `mix-blend-mode: multiply` is the whole trick: multiplying the fill into the page leaves every
+   glyph crisp underneath, which is what lets the mark be lighter AND more legible at once. An
+   opaque fill has to choose between the two, and a border was how the old mark compensated. */
+[data-app="cboq"] .cb-mark {
+  background: rgba(214, 176, 106, 0.42);
+  mix-blend-mode: multiply;
+  border-radius: var(--radius-cb-mark);
+}
+
 /* Arriving at a cited page from a register row. Without this, scrolling to a page that is
    already highlighted gives no signal that anything happened — the pulse is the "here" that
-   the scroll alone cannot say. One shot, never looping: this fires on a deliberate click. */
-@keyframes cbFlash {
-  0%   { box-shadow: 0 0 0 2px var(--color-cb-brass), 0 0 0 10px rgba(189, 154, 95, 0.35); }
-  100% { box-shadow: 0 0 0 2px var(--color-cb-brass), 0 0 0 0 rgba(189, 154, 95, 0); }
+   the scroll alone cannot say. One shot, never looping: this fires on a deliberate click.
+   Pulses the FILL, not a ring: an outline pulse would put back the border the mark just lost. */
+@keyframes cbMarkFlash {
+  0%   { background: rgba(214, 176, 106, 0.85); }
+  100% { background: rgba(214, 176, 106, 0.42); }
 }
 
 /* The greeked page body — unquoted paragraphs in the document pane are bars, not text, so

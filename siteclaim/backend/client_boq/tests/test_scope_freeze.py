@@ -246,3 +246,36 @@ def test_the_scope_routes_are_mounted(client):
         "/client-boq/estimate/scope/item",
         "/client-boq/estimate/scope/item/{set_id}/{item_id}",
     } <= paths
+
+
+# ---------------------------------------------------------------------------
+# The addendum -> re-price loop, which nothing exercised
+# ---------------------------------------------------------------------------
+def test_scope_sources_survive_a_second_document_arriving(scoped):
+    """A latent 500, found while building the BOQ revision work and fixed at the source.
+
+    `_scope_sources` reads `doc["applied"]` to decide whether an amendment belongs in the scope, but
+    `store.list_documents` never returned that key. The `or` short-circuits for the base document,
+    so the path only fires once a set has a SECOND document — and every test here ingested one
+    binder and stopped. `/estimate/scope/{set_id}/sources` therefore 500'd the moment a real
+    addendum arrived, which is exactly the loop this scope exists to serve.
+
+    `applied` is now derived from the revision rows: a document that has been received but not yet
+    carried through the gate has changed nothing, and must not appear as something the price has to
+    reflect.
+    """
+    client, set_id = scoped
+    before = len(_sources(client, set_id)["sources"])
+
+    received = client.post(
+        "/client-boq/ingest/document",
+        data={"set_id": set_id, "kind": "addendum", "ref": "Tender Addendum No. 1"},
+        files={"files": ("addendum.pdf", _binder(), "application/pdf")},
+    )
+    assert received.status_code == 200, received.text
+
+    body = client.get(f"/client-boq/estimate/scope/{set_id}/sources")
+    assert body.status_code == 200, body.text
+    # Received is not applied: /ingest/document proposes and commits nothing, so nothing about the
+    # price has changed yet and the addendum is not offered as a scope source.
+    assert len(body.json()["sources"]) == before
