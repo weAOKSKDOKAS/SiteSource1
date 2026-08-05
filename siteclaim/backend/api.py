@@ -24,7 +24,10 @@ from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent / ".env")  # before anything reads env
+# Before anything reads env. Skipped under the test suite (conftest.py sets the flag): a developer
+# who has configured LIVE must not thereby change what the tests assert. See conftest.py.
+if not os.getenv("SITESOURCE_SKIP_DOTENV", "").strip():
+    load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402

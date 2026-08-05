@@ -8,7 +8,7 @@ logic.
 | Direction | contractor sources work **out** to subcontractors | the client's contract comes **in** to the contractor |
 | Flow | tender → split by trade → shortlist firms → email enquiries → level bids → award | binder → **ingest** → departure register (**review**) → cost estimate, workbook and offer letter (**estimate**) |
 | Code | `siteclaim/backend/pipeline/`, `db/`, `rules_engine/` | `siteclaim/backend/client_boq/` |
-| API | ~58 endpoints at the root | 59 endpoints under `/client-boq/*` |
+| API | ~58 endpoints at the root | 62 endpoints under `/client-boq/*` |
 | Frontend | yes, a 5-tab wizard | yes — a tender-desk home + all five steps (Documents · Register · Scope · Price · Offer), at `#/tender` |
 
 The governing principle in both: **the LLM reads, structures, proposes and drafts;
@@ -29,7 +29,7 @@ py -3.14 -m venv .venv                 # scripts\start_backend.bat looks for it 
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-python -m pytest -q                    # 994 passed, 5 skipped
+python -m pytest -q                    # 1012 passed, 5 skipped
 $env:DEMO_MODE="true"; python -m uvicorn api:app --port 8000
 ```
 

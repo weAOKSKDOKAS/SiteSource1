@@ -493,3 +493,159 @@ div finally mounted. The layout was therefore **never measured at all** on exact
 load something first, which is the right-hand overflow §10 exists to prevent. The container is now
 a callback ref held in state, so the effect re-runs the moment the node attaches. Worth remembering:
 a `useRef` in an effect's dependency list is a lie — it never changes, so the effect never re-runs.
+
+## 12. The schedule, and what the first live run found (Series S, 2026-08-01)
+
+### The door that was never built
+
+Checked step by step against what the UI sends, three of the five were ready for a real API key.
+The fourth could never have worked: `/estimate/run` requires `margin_pct` **and** a structured
+`schedule` in LIVE, DEMO filled both from a fixture, and there was nowhere in the app to type a
+bill of quantities. `CONTEXT.md` had said from the start that quantities are *given* — "no take-off
+in this slice" — so the schedule was always meant to arrive from outside. Nobody built the door.
+
+`client_boq_schedules` stores it per tender (retyping a bill for every re-run is not a workflow, and
+a corrected quantity or an edited rate is exactly what causes a re-run). `/estimate/run` is
+untouched: the frontend sends what it persisted, so the contract that was already tested still is.
+
+### The editor does not price as you type, deliberately
+
+The obvious build shows a running total. That means re-implementing the cost build-up in
+TypeScript — productivity conversion, inline-over-book precedence, missing-rate-to-zero, rounding —
+and a pricing screen whose total disagrees with the server's is worse than one showing no total at
+all. So the editor shows **inputs and the book's rate**, both facts a person can check, and the
+arithmetic happens once, on the server, where it is tested. A `resource_ref` that names nothing in
+the rate book is marked `NOT IN BOOK` while you type, because that line will price at zero and be
+flagged, and finding that out before the run is the whole point of showing the rate.
+
+### The letterhead comes from what is already stored
+
+Company name, address, contact and phone are app-wide (`letter.*` settings) — the same on every
+tender. The client and the project come from that tender's own desk card, and the date is stamped
+at run time. Nothing is typed twice, and the Offer tab says when the letterhead is still the
+built-in placeholder rather than quietly sending a letter as "SiteSource Contracting Ltd".
+
+### The first live run, and the bug it exposed
+
+The provider probe passed both ways in seconds. The workflow then failed on its first real call:
+
+```
+purpose=client_boq-ingest-plan-split        ms=76835  in=901  out=8000
+purpose=client_boq-ingest-plan-split-retry  ms=79251  in=935  out=8000
+-> 1 validation error for PlannedSplit: Invalid JSON: EOF while parsing at line 1 column 0
+```
+
+Exactly 8,000 output tokens — the ceiling — twice, and an empty string both times. Measured
+directly against the API: **`deepseek-v4-flash` is a reasoning model.** At `max_tokens=600` it
+produced 2,175 characters of `reasoning_content`, `content=''`, `finish_reason='length'`; the same
+prompt at 8,000 used 3,240 tokens and answered correctly.
+
+So `DEFAULT_MAX_TOKENS` had quietly changed meaning. It was written when a completion budget was a
+budget for the **answer**; on a reasoning model it must also cover the thinking, which is billed as
+completion tokens and never appears in `content`. A hard prompt spends the whole allowance
+thinking, and the caller receives `''` — which surfaces as "Invalid JSON: EOF while parsing", a
+completely true statement about a string that was never the problem. Worse, `complete_json`'s
+corrective retry re-sends the same budget, so it fails identically and costs a second call.
+
+Two fixes, both in `pipeline/llm_client.py` (the shared chassis — the second documented change to
+it, and like the first it is procurement-neutral):
+
+- `DEEPSEEK_MIN_MAX_TOKENS` (default 32,000, env-overridable) as a floor on the DeepSeek path.
+  Reasoning headroom, not generosity: it makes a documented budget mean the same thing on both
+  providers. It never lowers a caller's explicit ask. The review's first chunk then used **19,801**
+  output tokens — it could not have completed under the old ceiling.
+- `CompletionTruncated`, raised when content is empty and `finish_reason == 'length'`. A
+  configuration fault must not be mistaken for an answer, and must not be retried as if it were bad
+  formatting — the same rule as `OcrEngineUnavailable` (trap 1b), for the same reason.
+
+### The split the model proposed, and why the gate exists
+
+With the ceiling fixed the run completed end to end. The planner's split was still wrong: two parts
+**both covering page 1** of a 12-page document. Everything downstream then read the title page —
+identical summaries on both parts, no strategy flags, empty register lines, no citations.
+
+The deterministic layer had measured all of it:
+
+```
+coverage : 2 of 12 pages
+overlaps : p.1 claimed by parts [1, 2]
+tier     : 4 — "no bookmarks, contents page, or divider pages found"
+```
+
+This is the design working, not failing. A measurement outranked a model proposal, the manifest
+gate is a **human** gate, and the Documents tab shows that coverage bar precisely so a person does
+not approve a split covering one page in twelve. The probe script approved it blindly, which no
+operator would. Re-running with an edited manifest — the designed path, `POST /ingest/manifest/approve`
+with a corrected parts list — put the whole document in front of the review.
+
+Tier 4 is also honest about the input: a 12-page slice cut out of a binder has no bookmarks,
+contents page or dividers, so the planner had nothing structural to work from. The full binder
+reaches tier 1.
+
+## 13. Reading the live register: the false alarms, and the highlighter (2026-08-02)
+
+### Ten citations "failed" with nothing wrong with them
+
+The live review reported 10 of 75 lines as citing a clause "not in the document set". None of them
+was wrong. Three separate causes, all in how a reference was *written* rather than whether the
+clause exists:
+
+| Cause | Example | Why it missed |
+|---|---|---|
+| a document-name prefix | `CIC Conditions of Tender, Clause 4.13` | the index is keyed `4.13` |
+| several clauses in one string | `8.1; 2.3; 10.1` | a finding about a CONFLICT cites them all |
+| a sub-clause limb | `4.4(b)`, `1.2(d)` | s01 indexes at the numbered level: `4.4`, `1.2` |
+
+The proof it was formatting and not a missing clause: **the same clause 4.13 resolved from the
+criteria stage's `'4.13'` and failed from the programme stage's prose form, in one register.**
+
+`clause_candidates()` now expands a reference into every id it might mean, most specific first, and
+`resolve_clauses()` returns all of them that the index holds. Deterministic — no model, no
+guessing at meaning, only at *format*.
+
+### The half that actually catches a lie, and why it had to change too
+
+Fixing the lookup alone moved nothing: all ten then failed the containment check instead. A finding
+about a conflict quotes a fragment from each clause it cites, joined by an ellipsis:
+
+```
+clause : 1.2(d); 2.1; 4.3
+quote  : "The tender documents consist of: … d) Assignment Brief and its Annexes;
+          … Tenderers are invited … to submit proposal and bid for Design…"
+```
+
+Asking whether all of that sits inside any ONE clause has no possible right answer — the fragments
+came from three. So the check now splits the quotation on the ellipsis and requires **each fragment
+to appear in the combined text of the clauses that line actually cites**.
+
+This is not a loosening. An invented fragment is in none of the cited clauses and still fails —
+which is the thing the guard exists to catch. It only stops failing honest quotations for a reason
+unrelated to whether they are true. `citation_failed` on the live register fell **10 → 3**, and the
+three that remain name the exact fragment that is missing.
+
+One bug found in the fix itself, worth keeping: the first ellipsis pattern allowed whitespace
+between the dots, so `"cost incurred. … There shall be"` split into `"cost incurred"` and
+`". There shall be"` — the stray leading period then failed containment. It accounted for 2 of the
+4 lines still failing at that point. The dots must be contiguous.
+
+### A highlighter, not a box
+
+The mark was a 70%-opaque fill with a hard 2px brass ring. Over a dense clause that washes the text
+out to pale grey and chops the sentence into boxes, one per word rectangle.
+
+`.cb-mark` uses `mix-blend-mode: multiply`. That is the whole trick, not merely a lower alpha:
+multiplying the fill into the page leaves every glyph fully black underneath, so the mark can be
+lighter **and** more legible at the same time — which is what makes the border unnecessary rather
+than merely absent. Verified side by side against the real page at 200 dpi.
+
+The arrival pulse had to change with it: `cbFlash` animated a 2px ring, which would have put the
+border straight back on every citation click. It now pulses the fill (`cbMarkFlash`, 0.85 → 0.42).
+
+**Dismissal** is local to `PageView`: Escape on the scroll container, or a `Clear` chip that appears
+in the toolbar only while there is something to clear. It resets whenever a new citation or search
+arrives, because a mark that stayed hidden would read as "nothing was found".
+
+That reset is keyed **by value, not by array identity** — the Register tab builds its highlights
+inline (`[...(citation?.highlights ?? []), ...located]`), so the array is a fresh object every
+render and an identity-based dependency would have fired continuously, making Clear appear to do
+nothing on the one tab where citations matter most.

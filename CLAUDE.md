@@ -16,7 +16,7 @@ chassis but almost no business logic:
 | Direction | Contractor sources work **out** to subcontractors | Client's contract comes **in** to the contractor |
 | Flow | tender → split by trade → shortlist firms → email enquiries → level bids → award | binder → split into parts (**ingest**) → departure register (**review**) → cost estimate + workbook + offer letter (**estimate**) |
 | Code | `siteclaim/backend/pipeline/`, `db/`, `rules_engine/` | `siteclaim/backend/client_boq/` |
-| API | ~58 endpoints at root (`/ingest`, `/shortlist`, …) | 59 endpoints under `/client-boq/*` |
+| API | ~58 endpoints at root (`/ingest`, `/shortlist`, …) | 71 endpoints under `/client-boq/*` |
 | Frontend | Yes — 5 tabs, a 5-step wizard, **Atlas** palette | Yes — a **tender desk** home (multi-tender shelf, team profiles) + Documents · Register · Scope per tender, all hash-routed under `#/tender`, **paper/brass** palette. all five steps have screens, plus Criteria / Rates / AI-model / Team. |
 
 The governing principle in both: **the LLM reads, structures, proposes and drafts; deterministic code
@@ -113,6 +113,10 @@ This boundary was a design constraint, is enforced by the code layout, and shoul
   procurement site constructs bare `LLMClient()` and routes from env exactly as before — verified
   by `pipeline/tests` — and client_boq applies its setting via `client_boq/llm.py::make_client()`,
   never by mutating env (the job pool runs on threads; a mutable process env is a race).
+  **A second documented change** (2026-08-01, found by the first live run): the DeepSeek path
+  applies a `DEEPSEEK_MIN_MAX_TOKENS` floor and raises `CompletionTruncated` instead of returning
+  an empty string when a reasoning model exhausts its budget. See trap 10. Both products benefit;
+  neither changes routing.
 - `pipeline.documents.extract_document(data, content_type, table_aware=)` — PDF text + page images
 - `db.store.get_connection()` — the shared SQLite connection (honours `SITESOURCE_DB`)
 - `pipeline.workspace.Workspace` / `tender_slug` — per-tender file storage
@@ -149,6 +153,15 @@ s01 scope review   AI draft + register wiring    s03 cost buildup   Det  qty × 
 s02 schedule       Det  normalise                s05 validate       RULE 5 flags
                                                  s06 offer letter   AI prose + injected numbers
                                                  → workbook (.xlsx) + letter (.md)
+
+BOQ  (the client's own bill — no model call anywhere in this package)
+reader     Det   their .xlsx → items, heading chains, page refs
+diff       Det   two revisions, keyed on the ITEM REF; a moved row is not a change
+carry      RULE  GCT App C 2.2(v) — the client's published re-pricing rules
+─── GATE: /boq/{set}/revision/{rev}/sign-off — every carried rate looked at ───
+production Det   a condition mix → shifts, crew-hours (the mix is a human judgement)
+pricing    Det   build-up ÷ quantity = UNIT RATE, the spread pool, page→bill→(A)
+checks     RULE  7 guards, each naming the clause it enforces
 ```
 
 **Four gate rules that must not be broken:**
@@ -178,6 +191,15 @@ threshold rules + precedence + LD math) · `store.py` (persistence + gates) · `
 (the editable criteria library — DB-backed, seeded once from the markdown via `criteria_loader.py`) ·
 `rates_store.py` (the editable rate book — the DB source `rates.py` declared itself the seam for) ·
 `llm.py` (`make_client()` — where the app-wide model setting is applied) ·
+`boq/` (the client's own bill, and the costing engine under it. Reading it: `reader.py` their .xlsx →
+items, `diff.py` two revisions keyed on the item ref, `carry.py` the client's published re-pricing
+rules, `checks.py` seven clause-backed guards. Deriving it: `schedule.py`/`criteria.py` the station
+table and the general-notes rules, `derive.py` recomputes the bill's quantities and reports where they
+diverge from it, `docmap.py` the specification index as a lookup. Pricing it: `duration.py` the
+day-by-day drilling simulation, `resources.py` coefficients and duration drivers, `allocate.py` rate
+recipes and the blend across hole groups, `groups.py` the spreads and the 80/11 reconciliation,
+`pricing.py` the unit rate and the spread pool, `unbilled.py` the gate on costs with no bill item —
+**no model call in any of them**) ·
 `ingest/close_date.py` (the close date as a finding: conservative parse of the AI-quoted clause) ·
 `ingest/pdfops.py` (pure PDF structure ops — outline walk, text-coverage scan, the confidence
 ladder, manifest validation, page slicing; no model, no network).
@@ -221,8 +243,12 @@ There is a real **code fork** on `demo_mode()`, and a new agent will get burned 
 - `api.py` — DEMO disables the `/contacts` and `/refresh` writes and the real mailer.
 
 **Consequence:** green tests prove the deterministic engine and data contracts. They prove **nothing**
-about the live LLM-reading path. As of this writing, the live path has **never been run** — no real
-document has been processed end-to-end.
+about the live LLM-reading path.
+
+**The live path HAS now been run** (2026-08-01, the real CIC Conditions of Tender, 12 pages): it
+works end to end and produced 75 register lines with 56 citations located on real pages. It also
+found a genuine blocker — see trap 10 — and cost ~17 minutes of wall time for those 12 pages,
+because a reasoning model is slow. Full write-up in `docs/client_boq/running_live.md` §4.
 
 ### LIVE mode — needs setup not present in a fresh container
 ```bash
@@ -236,8 +262,8 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ### Tests
 ```bash
-cd siteclaim/backend && python -m pytest -q          # 994 passed, 5 skipped
-python -m pytest client_boq/tests/ -q                # 320 passed
+cd siteclaim/backend && python -m pytest -q          # 1529 passed, 5 skipped
+python -m pytest client_boq/tests/ -q                # 503 passed
 ```
 
 On Windows use the `py` launcher to build the venv (`py -3.14 -m venv .venv` inside
@@ -258,6 +284,7 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
 | `siteclaim/docs/client_boq/review_criteria.md` | The criteria library — 28 criteria + the 8-row threshold table |
 | `siteclaim/docs/client_boq/reviewing_a_construction_contract_with_ai.md` | The review workflow's domain spec |
 | `siteclaim/docs/client_boq/estimating_process.md` | The estimate workflow's domain spec |
+| `siteclaim/docs/client_boq/prd_boq_costing.md` | **You are touching `boq/`, a bill of quantities, a rate, or a revision.** What a real BQ workbook actually contains, measured from ND/2025/04 — and why identity is the item reference, why a caption change is a scope change, and why an unpriced item is not free |
 | `siteclaim/docs/client_boq/templates/` | Letter-of-offer template + worked example (s06 follows these) |
 | `siteclaim/docs/client_boq/ui_inventory.md` | You are designing/building a client_boq frontend |
 | `siteclaim/docs/client_boq/build_backlog.md` | What is built, what is not, and every decision behind it |
@@ -325,6 +352,27 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
 
 ---
 
+10. **A REASONING MODEL BREAKS THE MEANING OF `max_tokens`.** Found on 2026-08-01, the first time
+   the live path ran. `deepseek-v4-flash` (and the `-pro` default) bills its chain of thought as
+   completion tokens and returns it in `reasoning_content`, never in `content`. A hard prompt at
+   `DEFAULT_MAX_TOKENS = 8000` therefore spends the whole budget thinking and returns an EMPTY
+   string — which arrives at the caller as `Invalid JSON: EOF while parsing`, a completely true
+   statement about a string that was never the problem. `complete_json`'s corrective retry then
+   re-sends the same budget and fails identically, at double the cost. Fixed with
+   `DEEPSEEK_MIN_MAX_TOKENS` (floor 32,000, env-overridable, never lowers an explicit ask) and
+   `CompletionTruncated`, raised when content is empty and `finish_reason == "length"` — the same
+   rule as `OcrEngineUnavailable`: a configuration fault must not be mistaken for an answer.
+   **Load-bearing, not precautionary**: the review's first chunk used 19,801 output tokens. Also
+   budget the wall clock — 12 pages took ~17 minutes, and the strict-JSON retry fired on two of
+   five stages.
+11. **The test suite must not inherit your `.env`.** `api.py` calls `load_dotenv()` at import, so
+   the moment a real `.env` exists — which is exactly what you create to run a tender for real —
+   every test that imports `api` picks up `DEMO_MODE=false`, your `SITESOURCE_DB` and your
+   `ANTHROPIC_MODEL`. Measured: **10 failures**, all passing again with the file moved aside.
+   `backend/conftest.py` now sets `SITESOURCE_SKIP_DOTENV=1` before pytest imports any test module,
+   and `api.py` honours it. If you add config that `api.py` reads at import, add it to the list
+   there too. Related to trap 1c: the environment is not the subject of the test.
+
 ## 9. Working agreements on this branch
 
 - Develop on **`from-client-to-tender-BOQ`**; **PR #4** is already open for it
@@ -332,6 +380,6 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
 - Keep the client_boq footprint outside its own directory minimal: `api.py` (the mount), the
   documented additive `pipeline/llm_client.py` change (§4), `frontend/src/main.tsx` (the hash
   branch), `frontend/src/index.css` (the token import), and the docs.
-- Run the full suite before committing; it should stay at **994 passed / 5 skipped** or better.
+- Run the full suite before committing; it should stay at **1529 passed / 5 skipped** or better.
   (The 5 skips are `requires_tesseract` — see trap 1b. An older figure of 678/8 predates the
   client_boq module and is no longer the bar.)
