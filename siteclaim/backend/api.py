@@ -1081,6 +1081,10 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     if test_recipient:
         print(f"[dispatch] test_recipient override active -> {test_recipient} ({len(dispatch.bundles)} firms)", flush=True)
     conn = store.get_connection()
+    # Every planned attachment whose source could not be found. It was skipped silently before, so
+    # a draft with NOTHING attached was indistinguishable from a draft with everything attached —
+    # the preview reads the doc index and never touches disk, so it showed the full set either way.
+    missing: list[str] = []
     try:
         drafts: list[dict] = []
         for b in dispatch.bundles:
@@ -1088,7 +1092,8 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
             if plan is not None and b.trade in overrides_by_key:
                 ov = overrides_by_key[b.trade]
                 plan = apply_attachment_overrides(plan, removed=ov.removed, whole=ov.whole)
-            attachments = assemble_firm_attachments(plan, ws, req.project_name, b.trade) if plan else []
+            attachments = assemble_firm_attachments(
+                plan, ws, req.project_name, b.trade, on_note=missing.append) if plan else []
             ref_m = _re.search(r"\[SiteSource Ref:\s*([^\]]+)\]", b.email_subject)
             # Recipient chain: address-book override for (firm, trade), else the firm's registered
             # enquiry_email, else empty (reported in `failed`, never a silent empty To). The
@@ -1135,6 +1140,12 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     swap = _substitution_notice(plans)
     if swap:
         message = f"{swap} {message}".strip() if message else swap
+    if missing:
+        # FIRST in the message: an enquiry that went out short is a worse fact than any other on
+        # this response, and the operator has to see it before deciding anything else.
+        gone = "; ".join(dict.fromkeys(missing))
+        message = (f"{len(missing)} planned attachment(s) could NOT be attached — {gone}. "
+                   + message).strip()
     if test_recipient:
         note = mailer_test_mode_notice(test_recipient, "draft")
         message = f"{note} {message}".strip() if message else note

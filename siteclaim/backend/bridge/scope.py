@@ -215,8 +215,13 @@ def _index_each(
     stages. Nothing is left half-written: the index is only persisted once the whole loop is past.
     """
     entries = []
-    for name, doc_type, data in docs:
-        entries.append(build_doc_entry(name, doc_type, data))
+    for name, doc_type, data, source_path in docs:
+        # `source_path` is the whole of the fix for the empty draft: this index names a document by
+        # the PART'S TITLE ("Schedule of Rates"), and no such file exists in the workspace's
+        # `docs/`. `assemble_firm_attachments` looked there, found nothing, and skipped every
+        # attachment in silence — while the preview, which reads this index and never touches disk,
+        # showed the full set. Recording where the bytes actually are costs one string per part.
+        entries.append(build_doc_entry(name, doc_type, data, source_path))
         done += 1
         if count_cb:
             count_cb(done, total)
@@ -251,11 +256,11 @@ def _apply_quarantine(
     and ``set_id == run_ref == tender_slug(name)`` — so writing under ``ref`` here and loading
     under ``scope.project_name`` there reach the same file.
     """
-    docs: list[tuple[str, DocType, bytes]] = []
+    docs: list[tuple[str, DocType, bytes, str]] = []
     for spec, pdf_path, _context in bill:
         data = _part_bytes(pdf_path)
         if data is not None:
-            docs.append((_label(spec), BILL_DOC_TYPE, data))
+            docs.append((_label(spec), BILL_DOC_TYPE, data, str(Path(pdf_path).resolve())))
     if not docs:
         # Nothing readable to index. Notably the workbook-only split arrives here with `bill=[]`,
         # and correctly writes no index: a workbook has no pages and yields no section spans.
@@ -268,14 +273,15 @@ def _apply_quarantine(
     #
     # Collected BEFORE the bill is indexed so the total is known from the first tick: a progress
     # bar that discovers its own denominator halfway through is worse than none.
-    context_docs: list[tuple[str, DocType, bytes]] = []
+    context_docs: list[tuple[str, DocType, bytes, str]] = []
     for spec, pdf_path, _ctx in (context or []):
         category = (spec.category or "").strip().lower()
         if category in _NEVER_INDEXED:
             continue
         data = _part_bytes(pdf_path)
         if data is not None:
-            context_docs.append((_label(spec), doc_type_for(category, is_bill=False), data))
+            context_docs.append((_label(spec), doc_type_for(category, is_bill=False), data,
+                                 str(Path(pdf_path).resolve())))
 
     total = len(docs) + len(context_docs)
     bill_entries, done = _index_each(docs, count_cb, 0, total)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+from pathlib import Path
 from typing import Callable, Optional
 
 from pipeline.stage_01_ingest.doc_index import load_doc_index
@@ -75,13 +76,23 @@ def plan_for_firms(
     return plans
 
 
-def _attachment_bytes(att, ws: Workspace, tender_id: str, package_key: str) -> Optional[bytes]:
+def _attachment_bytes(att, ws: Workspace, tender_id: str, package_key: str,
+                      sources: Optional[dict] = None) -> Optional[bytes]:
     """The bytes for one planned attachment (SoR sheet / whole original / sliced PDF), or None
-    if the source file is not present in the workspace."""
+    if the source file is not present.
+
+    ``sources`` maps an indexed ``filename`` to the ``source_path`` recorded with it, and is tried
+    FIRST. ``/ingest-upload`` records none — it saves each original to ``docs/<filename>`` and
+    indexes it under that same name, so the ``doc_path`` lookup below has always found it. The
+    bridge cannot: it indexes a client_boq PART under the part's TITLE, and no file called
+    "Schedule of Rates" has ever existed in ``docs/``. That lookup returned None for every
+    attachment, every one was skipped, and the drafts went out empty.
+    """
     if att.mode == "generated":
         path = ws.sor_sheet_path(tender_id, package_key)
         return path.read_bytes() if path.is_file() else None
-    path = ws.doc_path(tender_id, att.source_doc)
+    recorded = (sources or {}).get(att.source_doc, "")
+    path = Path(recorded) if recorded else ws.doc_path(tender_id, att.source_doc)
     if not path.is_file():
         return None
     data = path.read_bytes()
@@ -90,13 +101,27 @@ def _attachment_bytes(att, ws: Workspace, tender_id: str, package_key: str) -> O
 
 def assemble_firm_attachments(
     plan: SectionPlan, ws: Workspace, tender_id: str, package_key: str,
+    *, on_note: Optional[Callable[[str], None]] = None,
 ) -> list[dict]:
     """Materialise a section's plan into ``[{filename, mime, content_b64}]`` — ONLY the planned
-    relevant-only files, each base64-encoded. Missing sources are skipped (never fabricated)."""
+    relevant-only files, each base64-encoded. Missing sources are skipped (never fabricated).
+
+    The source of each file is resolved from the doc index's ``source_path`` where one was
+    recorded, falling back to ``docs/<filename>``. Skipping stays the behaviour for a source that
+    genuinely is not there — but it is now REPORTED through ``on_note``. Silence is why an empty
+    draft could ship while the preview, which reads the index and never touches disk, showed the
+    full set.
+    """
+    sources = {e.filename: e.source_path for e in load_doc_index(ws, tender_id) if e.source_path}
     out: list[dict] = []
     for att in plan.attachments:
-        data = _attachment_bytes(att, ws, tender_id, package_key)
+        data = _attachment_bytes(att, ws, tender_id, package_key, sources)
         if data is None:
+            if on_note:
+                on_note(
+                    f"{att.source_doc!r} is on the plan for {package_key!r} but its source file "
+                    "was not found, so it is NOT attached to this enquiry"
+                )
             continue
         emit_name = att.out_filename or att.source_doc  # the SoR slice is sent under its friendly name
         out.append({

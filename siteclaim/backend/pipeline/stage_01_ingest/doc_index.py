@@ -111,6 +111,19 @@ class DocIndexEntry(BaseModel):
     # ORIGINAL Schedule of Rates to a dispatched unit's own section pages (the priced-return sheet)
     # instead of a derived .xlsx. Text-layer schedule_of_rates only; ±1 is applied at slice time.
     sor_section_pages: dict[str, list[int]] = Field(default_factory=dict)
+    # WHERE THE BYTES ARE, when ``filename`` is not one.
+    #
+    # `/ingest-upload` writes each original to `docs/<filename>` and indexes it under that same
+    # filename, so `Workspace.doc_path(tender, filename)` finds it and this stays empty. The bridge
+    # cannot: its documents are client_boq PARTS, indexed under the part's TITLE ("Schedule of
+    # Rates") and living at the part's own cut-pdf path. `doc_path(tender, "Schedule of Rates")`
+    # is not a file, `_attachment_bytes` returned None, and `assemble_firm_attachments` skipped
+    # every attachment in silence — the drafts went out empty while the preview, which reads only
+    # this index and never touches disk, showed the full set.
+    #
+    # An absolute path, not a copy: the part pdfs already exist, and duplicating a 232 MB pack into
+    # `docs/` to make two names agree is paying disk to avoid saying where a file is.
+    source_path: str = ""
 
 
 def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
@@ -467,11 +480,18 @@ def _spans(markers: list[tuple[str, int]], page_count: int) -> dict[str, list[in
     return index
 
 
-def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEntry:
-    """Structural index for one original. Non-PDF / unreadable -> text_layer False, no index."""
+def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
+                    source_path: str = "") -> DocIndexEntry:
+    """Structural index for one original. Non-PDF / unreadable -> text_layer False, no index.
+
+    ``source_path`` records WHERE the bytes are for a caller whose ``filename`` is a label rather
+    than a file in ``docs/`` — see the field's note. Omitted by ``/ingest-upload``, which saves
+    under the name it indexes.
+    """
     pages = _pages_text(data)
     if pages is None:
-        return DocIndexEntry(filename=filename, kind=_kind_for(doc_type, "", filename))
+        return DocIndexEntry(filename=filename, kind=_kind_for(doc_type, "", filename),
+                             source_path=source_path)
     page1 = pages[0] if pages else ""
     text_layer = any(p.strip() for p in pages)
 
@@ -533,7 +553,7 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes) -> DocIndexEn
         filename=filename, kind=kind, spec_section_number=section_number,
         spec_section_title=section_title, text_layer=text_layer, page_count=len(pages),
         clause_index=clause_index, clause_onward_appendices=clause_onward,
-        sor_section_pages=sor_section_pages,
+        sor_section_pages=sor_section_pages, source_path=source_path,
     )
 
 
