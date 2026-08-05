@@ -889,7 +889,11 @@ function ReturnRow({
             <Chip className="bg-cb-ok-tint text-cb-ok-dark">return received</Chip>
           ) : (
             <Chip className="bg-cb-panel text-cb-muted">
-              {firm.status === "sent_mock" ? "in outbox · awaiting" : "awaiting reply"}
+              {firm.status === "sent_mock"
+                ? "in outbox · awaiting"
+                : firm.status === "recorded"
+                  ? "enquiry recorded · awaiting"
+                  : "awaiting reply"}
             </Chip>
           )}
         </div>

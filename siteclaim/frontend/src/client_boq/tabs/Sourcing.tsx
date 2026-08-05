@@ -420,15 +420,17 @@ export function SourcingTab({
         status: b.status,
       });
     }
-    // Then everything the server says was dispatched. `status` is "sent": a registry row exists
-    // only because an enquiry went out, which is the fact this screen is reporting.
+    // Then everything the server says was dispatched. `status` is "recorded", NOT "sent": the
+    // registry stores identity and no state, so what it can honestly say is that an enquiry was
+    // recorded against this firm and package. Saying "sent" put a claim on screen that no stored
+    // field supports — a composed-but-never-sent enquiry read as sent after one reload.
     for (const d of tenderReplies?.dispatched ?? []) {
       push(d.trade, {
         firm_id: d.firm_id,
         firm_name: d.firm_name,
         ref: d.ref,
         received: d.received || landed(d.trade, d.firm_id),
-        status: "sent",
+        status: "recorded",
       });
     }
     return [...byUnit.values()];

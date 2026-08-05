@@ -1464,7 +1464,13 @@ export interface AwaitingFirm {
   firm_name: string;
   ref: string;
   received: boolean;
-  status: DispatchStatus;
+  /** `"recorded"` is NOT a `DispatchStatus` — it is the honest answer when the row came from the
+   *  persisted correlation registry rather than from this session's own dispatch. The registry
+   *  stores identity (ref, tender, firm, trade) and no state, so it can say an enquiry was
+   *  RECORDED and cannot say it was sent. Rows rebuilt from it used to render `"sent"`, which
+   *  claimed something no stored field supports — a composed-but-never-sent enquiry read as sent
+   *  the moment the tab was reloaded. */
+  status: DispatchStatus | "recorded";
 }
 
 export interface AwaitingPackage {
