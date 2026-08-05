@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from client_boq import models, store
-from client_boq.ingest import pdfops, s01_plan_split, s02_interpret, s03_map_changes
+from client_boq.ingest import folder, pdfops, s01_plan_split, s02_interpret, s03_map_changes
 from client_boq.models import PartSpec, SplitManifest
 from pipeline.workspace import Workspace, tender_slug
 
@@ -110,6 +110,57 @@ def run_inspect(
     return manifest
 
 
+def run_folder_inspect(
+    uploads: list[tuple[str, Optional[str], bytes]],
+    project_name: str = "",
+    *,
+    progress_cb: Progress = None,
+) -> folder.FolderPlan:
+    """Ingest an already-organised folder. No inspection, no planning, no gate.
+
+    The counterpart to :func:`run_inspect`. Where that one has a binder to take apart, this has a
+    tree somebody already sorted — so each file becomes its own part, the paths are kept, and the
+    manifest arrives approved with a record saying it was automatic.
+
+    Non-PDFs do not vanish: a workbook that parses as a bill is offered to the bill importer, and
+    everything else is listed as held.
+    """
+    if not uploads:
+        raise ValueError("No files were uploaded.")
+
+    _note(progress_cb, "reading")
+    ws = Workspace()
+    name = (project_name or DEFAULT_SET_NAME).strip() or DEFAULT_SET_NAME
+    set_id = tender_slug(name)
+
+    # Keep the tree. `save_upload` would flatten every path to a basename, and two subfolders each
+    # holding a BQ.pdf would silently become one file.
+    parcels: list[folder.FolderUpload] = []
+    for relative_path, content_type, data in uploads:
+        if not data:
+            continue
+        ws.save_upload_at(name, relative_path, data)
+        parcels.append(folder.FolderUpload(
+            relative_path=relative_path, content_type=content_type or "", data=data))
+
+    _note(progress_cb, "listing")
+    plan = folder.plan_folder(parcels, set_id=set_id, page_count=_page_count)
+
+    _note(progress_cb, "saving")
+    conn = store.get_conn()
+    try:
+        store.upsert_document_set(conn, set_id=set_id, name=name, slug=set_id, status="inspected")
+        store.save_manifest(conn, plan.manifest)
+        # The gate is passed here rather than by a person. `save_manifest` deliberately preserves
+        # the stored approval flag, so it takes an explicit call to set it.
+        if plan.manifest.approved:
+            store.approve_manifest(conn, set_id, True)
+    finally:
+        conn.close()
+    store.save_manifest_artifact(ws, name, plan.manifest)
+    return plan
+
+
 def run_split(set_id: str, *, progress_cb: Progress = None) -> list[PartSpec]:
     """Cut the approved manifest into parts and interpret each one.
 
@@ -139,6 +190,8 @@ def run_split(set_id: str, *, progress_cb: Progress = None) -> list[PartSpec]:
 
     def source_bytes(filename: str) -> bytes:
         if filename not in sources:
+            # A folder ingest stores originals under their own subfolders, so `filename` may be a
+            # relative path rather than a bare name. `docs / path` handles both.
             path = docs / filename
             sources[filename] = path.read_bytes() if path.is_file() else b""
         return sources[filename]
@@ -146,13 +199,25 @@ def run_split(set_id: str, *, progress_cb: Progress = None) -> list[PartSpec]:
     _note(progress_cb, "splitting")
     pdf_paths: dict[str, str] = {}
     cut: list[tuple[PartSpec, bytes]] = []
-    for part in manifest.parts:
+    planned = len(manifest.parts)
+    for index, part in enumerate(manifest.parts, start=1):
+        # A folder set can be two hundred files, and one unchanging "splitting" for the whole loop
+        # is indistinguishable from a hang. Counted, like the interpreting pass below.
+        if planned > 1:
+            _note(progress_cb, f"splitting {index}/{planned}")
         origin = part.source_doc or manifest.source_doc
         data = source_bytes(origin)
         if not data:
             cut.append((part, b""))
             continue
-        part_bytes = pdfops.slice_pdf(data, part.start, part.end)
+        # A part that spans the whole of its own file is COPIED, not cut. Slicing it would
+        # re-encode an untouched PDF through PyMuPDF for no reason — losing byte-identity with the
+        # original, and any structure PyMuPDF does not carry across. `apply_document` has always
+        # done it this way for a replacement document; this is the same rule applied earlier.
+        if part.start == 1 and part.end >= _page_count(data):
+            part_bytes = data
+        else:
+            part_bytes = pdfops.slice_pdf(data, part.start, part.end)
         folder = out_root / f"{part.n:02d}_{(part.abbr or part.slug or 'part').upper()}"
         folder.mkdir(parents=True, exist_ok=True)
         target = folder / f"{manifest.prefix or 'part'}-{part.n:02d}-{part.slug}.pdf"

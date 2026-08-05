@@ -1,11 +1,17 @@
 """The tender workspace — deterministic, path-safe on-disk storage (Phase A)."""
 
+from pathlib import Path
+
+import pytest
+
 from pipeline import reply_loop
 from pipeline.workspace import (
+    UnsafeUploadPath,
     Workspace,
     anchor_name_on_contract,
     contract_number_in_text,
     name_has_contract_number,
+    safe_relative_path,
     tender_slug,
 )
 
@@ -98,3 +104,67 @@ def test_sor_sheet_path_lives_under_artifacts(tmp_path):
     path = ws.sor_sheet_path("Proj X", "electrical")
     assert path.name == "SoR_electrical.xlsx"
     assert path.parent.name == "artifacts"
+
+
+# ---------------------------------------------------------------------------
+# Uploading a folder — the tree is information, and flattening it loses documents
+# ---------------------------------------------------------------------------
+class TestSaveUploadAt:
+    """A tender package arrives organised, and that organisation is the client's own statement
+    about what belongs with what. `save_upload` reduces every file to a basename, which is right
+    for a binder and destroys a folder."""
+
+    def test_two_files_of_the_same_name_in_different_folders_both_survive(self, tmp_path):
+        # THE bug this method exists for. On the reference corpus, "TA #1/BQ/BQ.pdf" and
+        # "TA #2/BQ/BQ.pdf" both flatten to docs/BQ.pdf — the addendum's bill overwrites the
+        # original with no trace that either existed.
+        ws = Workspace(root=tmp_path)
+        first = ws.save_upload_at("Proj X", "TA #1/BQ/BQ.pdf", b"the original bill")
+        second = ws.save_upload_at("Proj X", "TA #2/BQ/BQ.pdf", b"the addendum bill")
+
+        assert first != second
+        assert first.read_bytes() == b"the original bill"
+        assert second.read_bytes() == b"the addendum bill"
+
+    def test_the_old_method_still_loses_one_of_them(self, tmp_path):
+        # Kept as a statement of why the new method exists, not as an endorsement. `save_upload`
+        # remains correct for a binder upload, where names are already distinct.
+        ws = Workspace(root=tmp_path)
+        ws.save_upload("Proj X", "TA #1/BQ/BQ.pdf", b"the original bill")
+        ws.save_upload("Proj X", "TA #2/BQ/BQ.pdf", b"the addendum bill")
+        assert ws.doc_path("Proj X", "BQ.pdf").read_bytes() == b"the addendum bill"
+
+    def test_the_tree_is_kept_under_docs(self, tmp_path):
+        ws = Workspace(root=tmp_path)
+        saved = ws.save_upload_at("Proj X", "ND202504/TA #2/BQ/bill.xlsx", b"x")
+        assert saved.relative_to(ws.docs_dir("Proj X")) == Path("ND202504/TA #2/BQ/bill.xlsx")
+
+    def test_windows_separators_are_understood(self, tmp_path):
+        ws = Workspace(root=tmp_path)
+        saved = ws.save_upload_at("Proj X", r"TA #1\BQ\bill.pdf", b"x")
+        assert saved.relative_to(ws.docs_dir("Proj X")) == Path("TA #1/BQ/bill.pdf")
+
+    @pytest.mark.parametrize("bad", ["../../etc/passwd", "a/../../b.pdf", "/etc/passwd",
+                                     "C:/Windows/system32/x.pdf", r"C:\Windows\x.pdf"])
+    def test_a_path_that_escapes_is_refused_not_trimmed(self, tmp_path, bad):
+        # `save_upload` silently reduces these to a basename. Here they raise: a path that tries to
+        # climb out of the workspace is worth seeing, and quietly rewriting it hides the attempt.
+        ws = Workspace(root=tmp_path)
+        with pytest.raises(UnsafeUploadPath):
+            ws.save_upload_at("Proj X", bad, b"data")
+
+    def test_an_empty_path_is_refused(self, tmp_path):
+        ws = Workspace(root=tmp_path)
+        with pytest.raises(UnsafeUploadPath):
+            ws.save_upload_at("Proj X", "   ", b"data")
+
+    def test_a_separator_smuggled_inside_a_segment_cannot_escape(self, tmp_path):
+        # Each segment is reduced to a safe name after the split, so a component cannot carry
+        # its own separator through.
+        saved = safe_relative_path("folder/..%2Fescape.pdf")
+        assert ".." not in saved.parts and saved.parts[0] == "folder"
+
+    def test_nothing_lands_outside_the_tender_folder(self, tmp_path):
+        ws = Workspace(root=tmp_path)
+        saved = ws.save_upload_at("Proj X", "deep/deeper/file.pdf", b"x")
+        assert saved.resolve().is_relative_to(ws.tender_dir("Proj X").resolve())
