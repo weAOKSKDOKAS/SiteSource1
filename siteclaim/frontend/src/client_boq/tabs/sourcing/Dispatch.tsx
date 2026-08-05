@@ -317,7 +317,8 @@ function AttachmentPlan({
       <SectionLabel>Relevant documents per package (assembled)</SectionLabel>
       <p className="text-[10px] text-cb-faint">
         Remove anything a firm doesn’t need, or expand a slice to the whole file — the Gmail drafts
-        carry exactly this set.
+        carry exactly this set. Each package goes out with the bill extract to read <em>and</em> an
+        Excel schedule to price; a PDF has no fields to type in and comes back blank.
       </p>
       {plans.map((plan) => {
         const ov = ovFor(plan.package_key);
@@ -353,6 +354,13 @@ function AttachmentPlan({
                           : "whole file"}
                     </Chip>
                     {priced && <Chip className="bg-cb-ok-tint text-cb-ok-dark">priced return</Chip>}
+                    {/* The enquiry carries TWO documents for the priced return: the bill extract
+                        to read, and the workbook to fill in. A print PDF has no fields — the one
+                        that came back had Quantity and Unit intact and Rate and Amount empty —
+                        so which file to type in has to be unmissable here, before drafting. */}
+                    {a.flags.includes("pricing_workbook") && (
+                      <Chip className="bg-cb-warm text-cb-brass-text">fill this one in</Chip>
+                    )}
                     {a.clauses.length > 0 && !expanded && (
                       <span className="font-cb-mono font-medium text-cb-body">
                         {a.clauses.join(", ")}

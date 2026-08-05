@@ -1010,9 +1010,21 @@ def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
     show the substitution BEFORE drafting from data it already receives. The response shape is
     unchanged: two frontends read this as a list, and moving it to carry one sentence would break
     both to say something the list already contains."""
+    from pipeline.stage_03_dispatch.attachments import build_attachments
     from pipeline.stage_03_dispatch.drafts import plan_for_firms
 
-    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name)
+    workspace = None if demo_mode() else Workspace()
+    if workspace is not None and req.scope is not None:
+        # Write each package's pricing workbook BEFORE planning, so the gate previews exactly what
+        # the drafts will carry. `/dispatch/drafts` gets this for free — `build_dispatch` runs
+        # first and generates the same file — and without it here the preview would list one
+        # attachment where the enquiry sends two. The write is idempotent and derived entirely
+        # from the package's own `sor_items`; it composes nothing and sends nothing.
+        for package_key in req.approvals:
+            build_attachments(package_key, req.scope, None, project_name=req.project_name,
+                              tender_id=req.project_name, workspace=workspace)
+    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name,
+                           workspace=workspace)
     return [p.model_dump() for p in plans.values()]
 
 

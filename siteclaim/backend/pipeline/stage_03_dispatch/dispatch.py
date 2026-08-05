@@ -29,6 +29,7 @@ from pipeline.reply_loop import make_ref, record_dispatch, subject_with_ref
 from pipeline.stage_03_dispatch.attachments import build_attachments
 from pipeline.workspace import Workspace
 from schemas.models import (
+    AttachmentKind,
     BundleAttachment,
     DispatchBundle,
     DispatchSet,
@@ -83,6 +84,43 @@ def _template_email(firm_name: str, trade: str, project_name: str) -> tuple[str,
         "Kind regards,\nBuying Team"
     )
     return subject, body
+
+
+# One plain line saying which attachment to fill in, appended to EVERY body that goes out with a
+# pricing workbook — the composed one and the template one alike.
+#
+# Deterministic rather than left to the compose prompt, because it is the instruction the whole
+# return path depends on and a model will not phrase it the same way twice. Proven on the real
+# pack: the bill extract went out as a print PDF, was "filled in" in a viewer, and came back with
+# Rate and Amount entirely empty. The firm has to be told which file to type in.
+_PRICING_NOTE = (
+    "Please enter your rates in the attached Excel schedule and return that file — a PDF has no "
+    "fields to type in and comes back blank. The PDF attachments are the bill and specification "
+    "extracts for this package, for reference."
+)
+
+
+def _with_pricing_note(body: str, attachments) -> str:
+    """Append :data:`_PRICING_NOTE` above the sign-off when a pricing workbook is enclosed.
+
+    Above the sign-off, not after it: a line under "Kind regards" reads as a footer and is skimmed
+    past, and this is the one line the return depends on. A body with no recognisable sign-off gets
+    it at the end, which is still where a reader looks for the instruction.
+    """
+    # `source_path`, not merely the kind: `assemble_bundle_attachments` lists an SoR sheet even
+    # with no workspace, where it is DESCRIBED and never written. Telling a firm to fill in a
+    # workbook that was never generated would be a promise the enquiry does not keep.
+    if not any(getattr(a, "kind", None) == AttachmentKind.SOR_SHEET and a.source_path
+               for a in attachments):
+        return body
+    if _PRICING_NOTE in (body or ""):
+        return body                                   # already carried (a re-compose, or an edit)
+    text = (body or "").rstrip()
+    marker = "\nKind regards"
+    if marker in text:
+        head, _sep, tail = text.rpartition(marker)
+        return f"{head.rstrip()}\n\n{_PRICING_NOTE}\n{marker.lstrip(chr(10))}{tail}"
+    return f"{text}\n\n{_PRICING_NOTE}"
 
 
 _COMPOSE_BATCH_SIZE = 6  # bundles per compose call — bounded so the JSON response never truncates
@@ -199,6 +237,7 @@ def build_dispatch(
         if workspace is not None:
             record_dispatch(workspace, ref, tender_id, fid, trade)
         subject, body = emails[(trade, fid)]
+        body = _with_pricing_note(body, attachments_by_trade.get(trade, []))
         bundles.append(DispatchBundle(
             firm_id=fid,
             firm_name=name,
