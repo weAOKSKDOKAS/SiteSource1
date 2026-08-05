@@ -480,6 +480,66 @@ _RECOVER_MAIN = re.compile(r"^\s*(?:Item:\s*)?([A-Z]{1,2}\d+)\b[)\.|:\s]*(.*)$")
 _RECOVER_SUB = re.compile(r"^\s*(?:Item:\s*)?\(([a-z]{1,4})\)\s*[)\.|:\s]*(.*)$")
 _ROMAN = frozenset({"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"})
 
+# --- the same backstop for the OTHER reference family --------------------------------------------
+# `_RECOVER_MAIN` requires ONE OR TWO LETTERS then digits, so it matches `G7` and `BB12` and
+# nothing else. A Bill of Quantities numbers its items `1.17`, `2.24`, `7.2` — no letters anywhere
+# — so `_ocr_item_inventory` returns {} for a bill, `recover_dropped_sor_items` exits on its
+# `if not inv` line, and the completeness backstop that exists for a Schedule of Rates has never
+# once run on a bill. `report_sequence_gaps` then NAMES the missing rows and nothing puts them back.
+#
+# That is the whole of the loss observed on CEDD ND/2025/04: bill 2 without 2.2, bill 7 without
+# 7.2, bill 1 opening at 1.12. The rows are in the extracted text — they are dropped by the model
+# on the chunk that carried them, which is precisely the failure this backstop was built for.
+_BQ_REF_LINE = re.compile(r"^(\d{1,2}\s*[.\-/]\s*\d{1,3}[a-z]?)\b[)\.|:\s]*(.*)$", re.I)
+
+# Page furniture, and the one shape that would otherwise recover an item out of its own footer:
+# `1.12 to 1.18 carried to collection` opens with a real reference and is not a priced row.
+_BQ_NOT_AN_ITEM = re.compile(
+    r"^\s*(?:"
+    r"(?:to\s+[\d.]+\s+)?(?:carried|brought)\s+(?:to|forward|down|from)\b"
+    r"|collection\b|summary\b|total\b|sub[-\s]?total\b"
+    r"|bill\s*(?:no\.?)?\s*\d"
+    r"|item\s*(?:no\.?|description)\b"
+    r"|page\b"
+    r")",
+    re.I,
+)
+
+
+def _bq_item_inventory(doc_text: str, bills: set) -> "dict[str, str]":
+    """``item_ref -> description`` for every BILL row that leads a line, restricted to ``bills``.
+
+    The restriction is the precision guard, and it is deliberately strict: only a bill the
+    extraction ALREADY established is scanned for. A stray ``2.2`` in a document that produced no
+    bill-2 items is a clause reference, a date fragment or a page number, and inventing an item
+    from it would be exactly the phantom-item failure the gate upstream exists to prevent. The
+    cost is that a bill dropped whole is not recovered — but nothing can see that hole from the
+    inside either, and a warning nobody can act on is how a real signal gets ignored.
+
+    First occurrence wins, matching ``heading_chains`` and ``_section_titles``: a reference
+    repeated in a running header must not overwrite the row where the item was actually priced.
+    """
+    inv: dict[str, str] = {}
+    if not bills:
+        return inv
+    for raw in (doc_text or "").splitlines():
+        line = raw.strip()
+        if not line or line[:1] == "=" or _SKIP_LINE.match(raw) or _BQ_NOT_AN_ITEM.match(line):
+            continue
+        m = _BQ_REF_LINE.match(line)
+        if not m:
+            continue
+        ref = re.sub(r"\s+", "", m.group(1))
+        if bill_of(ref) not in bills:
+            continue
+        rest = m.group(2).strip()
+        # A row needs a description. `1.12   250.00   1,830.00` is the amount columns of a row
+        # whose text sits elsewhere on the page, and `1.12 .......... 14` is a contents line.
+        if sum(c.isalpha() for c in rest) < 2 or _BQ_NOT_AN_ITEM.match(rest):
+            continue
+        inv.setdefault(ref, rest[:80])
+    return inv
+
 
 def _ocr_item_inventory(doc_text: str) -> "dict[str, str]":
     """Every SoR item code that appears at the START of a line in the (OCR/native) SoR text, mapped
@@ -533,20 +593,29 @@ def recover_dropped_sor_items(scope: ScopePackages, doc_text: str) -> ScopePacka
     most of that section's items, else the first package. No LLM, no DB.
 
     Only fires when the SoR text actually leads lines with item codes (the OCR/native SoR shape); an
-    empty/absent ``doc_text`` (DEMO) is a no-op."""
-    inv = _ocr_item_inventory(doc_text)
-    if not inv:
-        return scope
+    empty/absent ``doc_text`` (DEMO) is a no-op.
+
+    BOTH reference families are covered. The letter family (``G7``) is the original; the bill
+    family (``2.24``) was blind until a real bill lost rows to it — see ``_bq_item_inventory``.
+    Each is read by its own reader and homed by its own key, so neither can see the other's refs
+    and the Schedule-of-Rates path is byte-for-byte what it was."""
     have = {_norm_ref(it.item_ref) for p in scope.packages for it in p.sor_items}
+    bills = {b for b in (bill_of(it.item_ref or "")
+                         for p in scope.packages for it in p.sor_items) if b}
+    inv = _ocr_item_inventory(doc_text)
+    bq_inv = _bq_item_inventory(doc_text, bills)
+    if not inv and not bq_inv:
+        return scope
     missing = [(code, desc) for code, desc in inv.items() if _norm_ref(code) not in have]
-    if not missing:
+    bq_missing = [(code, desc) for code, desc in bq_inv.items() if _norm_ref(code) not in have]
+    if not missing and not bq_missing:
         return scope
     packages = [p.model_copy(update={"sor_items": list(p.sor_items)}) for p in scope.packages]
 
-    def _home_for(sec: str):
+    def _home_by(key, value):
         best, best_n = None, -1
         for p in packages:
-            n = sum(1 for it in p.sor_items if section_of(it.item_ref) == sec)
+            n = sum(1 for it in p.sor_items if key(it.item_ref) == value)
             if n > best_n:
                 best, best_n = p, n
         return best
@@ -556,10 +625,20 @@ def recover_dropped_sor_items(scope: ScopePackages, doc_text: str) -> ScopePacka
         sec = section_of(code)
         if not sec:
             continue
-        home = _home_for(sec) or (packages[0] if packages else None)
+        home = _home_by(section_of, sec) or (packages[0] if packages else None)
         if home is None:
             continue
         home.sor_items.append(SorItem(item_ref=code, description=(desc or None), section=sec))
+        recovered.append(code)
+    for code, desc in bq_missing:
+        bill = bill_of(code)
+        # THE BILL IS THE SECTION (see the two-families note above), so a recovered row lands in
+        # the package that owns most of its bill and carries that bill as its section — the same
+        # answer `annotate_sections` would give it, reached without a second read.
+        home = _home_by(bill_of, bill) or (packages[0] if packages else None)
+        if home is None:
+            continue
+        home.sor_items.append(SorItem(item_ref=code, description=(desc or None), section=bill))
         recovered.append(code)
     if recovered:
         print(f"[ingest] recovered {len(recovered)} SoR rows the extractor dropped "
