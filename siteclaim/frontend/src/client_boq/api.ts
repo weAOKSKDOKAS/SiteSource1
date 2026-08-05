@@ -6,6 +6,7 @@ import type {
   BenchmarkProject,
   BenchmarkSummary,
   BidReply,
+  BillCandidate,
   BqCandidates,
   BridgeRouteDecisions,
   BridgeRouteProposal,
@@ -15,11 +16,13 @@ import type {
   CitationsResponse,
   Coverage,
   CriteriaResponse,
+  CompanySettings,
   CriterionRow,
   DispatchDraftsResponse,
   DispatchSet,
-  DocumentRow,
   EstimateResponse,
+  EstimateScheduleInput,
+  DocumentRow,
   FirmsPage,
   GateState,
   GmailIntegrationStatus,
@@ -38,6 +41,13 @@ import type {
   PartDetail,
   PartSpec,
   PartsResponse,
+  CostingModelShape,
+  CostingResponse,
+  DerivedResponse,
+  GroupPreview,
+  GroupsResponse,
+  HoleGroup,
+  OutputsResponse,
   ProjectDashboard,
   ProjectEOS,
   ProjectSummary,
@@ -50,6 +60,8 @@ import type {
   RecommendAllResponse,
   RegisterResponse,
   RevisionRow,
+  ScheduleResponse,
+  StationScheduleResponse,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -110,6 +122,13 @@ const get = <T>(path: string): Promise<T> => fetch(ROOT + path).then((r) => hand
 const post = <T>(path: string, body: unknown): Promise<T> =>
   fetch(ROOT + path, {
     method: "POST",
+    headers: { "Content-Type": "application/json", ...actorHeaders() },
+    body: JSON.stringify(body),
+  }).then((r) => handle<T>(r));
+
+const put = <T>(path: string, body: unknown): Promise<T> =>
+  fetch(ROOT + path, {
+    method: "PUT",
     headers: { "Content-Type": "application/json", ...actorHeaders() },
     body: JSON.stringify(body),
   }).then((r) => handle<T>(r));
@@ -223,12 +242,104 @@ export const api = {
   /** Archive, never delete — the response's note states the missing_rate consequence. */
   archiveRate: (rateId: string) => del<{ rate: RateRowFull; note: string }>(`/rates/${rateId}`),
 
+  // --- the output book ------------------------------------------------------
+  outputs: () => get<OutputsResponse>("/library/outputs"),
+  setOutputNorm: (key: string, value: number) =>
+    post<{ key: string; value: number; default: number }>(`/library/outputs/${key}`, { value }),
+  /** Forget your value and go back to the shipped default. A norm cannot be archived the way a
+   *  rate can — the engine reads it whatever happens — so this is the only meaningful undo. */
+  resetOutputNorm: (key: string) =>
+    del<{ key: string; value: number; default: number; source: string }>(`/library/outputs/${key}`),
+
+  // --- the bill: choosing one, without uploading it again --------------------
+  /** Every workbook in this set's upload that reads as a bill of quantities. */
+  billCandidates: (setId: string) =>
+    get<{ set_id: string; count: number; candidates: BillCandidate[] }>(
+      `/boq/${setId}/candidates`,
+    ),
+  /** Import one of them by its path inside the set — the file is already on the server. */
+  importBillFromSet: (setId: string, relativePath: string) =>
+    post<{ set_id: string; rev: number; items: number; priceable: number }>(
+      `/boq/${setId}/import-from-set`,
+      { relative_path: relativePath },
+    ),
+
+  // --- the costing engine ---------------------------------------------------
+  costing: (setId: string) => get<CostingResponse>(`/costing/${setId}`),
+  /** Point one item at what should price it — a build-up, a lab rate, or a site resource.
+   *  All three empty clears the override and puts the app's own proposal back. */
+  setItemBasis: (
+    setId: string,
+    fullRef: string,
+    keys: { basis_key?: string; lab_key?: string; prelim_key?: string },
+  ) =>
+    post<{ full_ref: string; cleared: boolean }>("/costing/item-basis", {
+      set_id: setId,
+      full_ref: fullRef,
+      ...keys,
+    }),
+  /** The deliverable: eight sheets with their formulas intact, so it still calculates in Excel. */
+  costingWorkbookUrl: (setId: string) => `${ROOT}/costing/${setId}/workbook.xlsx`,
+  /** Type a rate over the rounded proposal. `null` puts the proposal back. */
+  setSubmittedRate: (setId: string, fullRef: string, rate: number | null) =>
+    post<{ full_ref: string; rate: number | null; by: string }>("/costing/rate", {
+      set_id: setId,
+      full_ref: fullRef,
+      rate,
+    }),
+  setAssumptionVerdict: (setId: string, key: string, status: string, comment = "") =>
+    post<{ key: string; status: string; gate: string; outstanding: number }>(
+      "/costing/assumption",
+      { set_id: setId, key, status, comment },
+    ),
+  /** Copy-on-write: this is the call that makes the tender's model its own. */
+  saveSetCostingModel: (setId: string, model: CostingModelShape) =>
+    put<{ marks: Record<string, string>; problems: string[]; using_own_model: boolean }>(
+      `/costing/${setId}/model`,
+      { model },
+    ),
+  resetSetCostingModel: (setId: string) =>
+    del<{ using_own_model: boolean; note: string }>(`/costing/${setId}/model`),
+
+  // --- the take-off (Site) --------------------------------------------------
+  stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),
+  derived: (setId: string) => get<DerivedResponse>(`/site/${setId}/derived`),
+  holeGroups: (setId: string) => get<GroupsResponse>(`/site/${setId}/groups`),
+  /** Class one hole. "" un-decides it; C says in its note that it has no bill item to sit on. */
+  setStationClass: (setId: string, station: string, accessClass: string) =>
+    post<{ counts: Record<string, number>; decided_by: string; note: string }>("/site/class", {
+      set_id: setId,
+      station,
+      access_class: accessClass,
+    }),
+  saveGroup: (setId: string, groupId: string, group: Partial<HoleGroup>) =>
+    post<{ group: HoleGroup; ready: string[] }>("/site/group", {
+      set_id: setId,
+      group_id: groupId,
+      group,
+    }),
+  deleteGroup: (setId: string, groupId: string) =>
+    del<{ deleted: boolean; note: string }>(`/site/${setId}/group/${groupId}`),
+  /** Days and the blend as you type. A round trip on purpose: the day-by-day simulation is the
+   *  load-bearing calculation here, and a second copy of it in TypeScript would eventually
+   *  disagree with the first with no way to tell which was right. It never prices. */
+  previewGroup: (setId: string, group: Partial<HoleGroup>) =>
+    post<GroupPreview>("/site/preview", { set_id: setId, group }),
+
   // --- app-wide settings (the AI model) -------------------------------------
   settings: () => get<LLMSettingsResponse>("/settings"),
-  saveSettings: (body: { provider: string; model_anthropic?: string; model_deepseek?: string }) =>
+  saveSettings: (body: {
+    provider: string;
+    provider_ingest?: string;
+    model_anthropic?: string;
+    model_deepseek?: string;
+    model_openai?: string;
+  }) =>
     post<LLMSettingsResponse>("/settings", {
+      provider_ingest: "",
       model_anthropic: "",
       model_deepseek: "",
+      model_openai: "",
       ...body,
     }),
 
@@ -237,6 +348,25 @@ export const api = {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
     form.append("project_name", projectName);
+    return fetch(`${ROOT}/ingest/upload`, {
+      method: "POST",
+      body: form,
+      headers: actorHeaders(),
+    }).then((r) => handle<JobState>(r));
+  },
+  /** A folder that is already organised: each file becomes its own part, nothing is split.
+   *
+   *  The paths ride as their own field because a browser does not transmit
+   *  `webkitRelativePath` over multipart — without them, two `BQ.pdf` in different subfolders
+   *  arrive as one name and the second overwrites the first. The server pairs them by position. */
+  uploadFolder(picked: { file: File; path: string }[], projectName: string): Promise<JobState> {
+    const form = new FormData();
+    picked.forEach(({ file, path }) => {
+      form.append("files", file);
+      form.append("relative_paths", path);
+    });
+    form.append("project_name", projectName);
+    form.append("layout", "folder");
     return fetch(`${ROOT}/ingest/upload`, {
       method: "POST",
       body: form,
@@ -302,6 +432,22 @@ export const api = {
       highlights: Highlight[];
       note: string;
     }>(`/ingest/parts/${setId}/${partId}/locate`, { quote }),
+  /** Where a quoted claim sits **anywhere in the set**, and in which part.
+   *
+   *  What "show me on the page" needs. The per-part call above can only answer about the document
+   *  already open, which on a folder set means it says "not found" for every part but the one
+   *  holding the words — leaving the reader to find the right file themselves, which is the work
+   *  the button exists to do. `preferPartId` is only a head start on the search order. */
+  locateQuoteInSet: (setId: string, quote: string, preferPartId?: string) =>
+    post<{
+      verdict: "located" | "unverifiable" | "not_located";
+      part_id: string;
+      part_title: string;
+      page: number | null;
+      match?: string;
+      highlights: Highlight[];
+      note: string;
+    }>(`/ingest/${setId}/locate`, { quote, prefer_part_id: preferPartId ?? "" }),
 
   // --- review --------------------------------------------------------------
   /** `includeSpecifications` reads the specification tree too. Off by default: on a real
@@ -425,6 +571,18 @@ export const api = {
   runEstimate: (setId: string, body?: { margin_pct?: number; schedule?: unknown; letter?: unknown }) =>
     post<JobState>("/estimate/run", { set_id: setId, ...(body ?? {}) }),
   estimate: (setId: string) => get<EstimateResponse>(`/estimate/${setId}`),
+  /** The schedule a live estimate is run FROM. `saved: false` means this tender has never had
+   *  one — the editor opens empty rather than erroring. */
+  schedule: (setId: string) => get<ScheduleResponse>(`/estimate/schedule/${setId}`),
+  saveSchedule: (setId: string, schedule: EstimateScheduleInput, marginPct: number) =>
+    post<ScheduleResponse>("/estimate/schedule", {
+      set_id: setId,
+      schedule,
+      margin_pct: marginPct,
+    }),
+  /** The app-wide letterhead. The client and project are NOT here — they come from the tender's
+   *  own desk metadata, so they are never typed twice. */
+  saveCompany: (company: CompanySettings) => post<LLMSettingsResponse>("/company", company),
   workbookUrl: (setId: string) => `${ROOT}/estimate/${setId}/workbook`,
 
   // --- the offer letter ----------------------------------------------------

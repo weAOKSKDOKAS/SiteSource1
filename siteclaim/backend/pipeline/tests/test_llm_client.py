@@ -2,8 +2,15 @@
 
 import pytest
 
+from pydantic import BaseModel
+
+from pipeline import llm_client
 from pipeline.llm_client import LLMClient, demo_mode, strip_code_fences
 from schemas.models import ScopePackages
+
+
+class _Ok(BaseModel):
+    ok: bool
 
 
 def _boom(*args, **kwargs):
@@ -109,3 +116,96 @@ def test_log_call_omits_tokens_when_unavailable(capsys):
     line = capsys.readouterr().out
     assert "provider=deepseek" in line and "purpose=classify" in line
     assert "in=" not in line  # no token usage reported -> the fields are simply absent
+
+
+# ---------------------------------------------------------------------------
+# Reasoning models — a completion budget must still leave room for an ANSWER
+# ---------------------------------------------------------------------------
+def _fake_openai(content: str, *, finish_reason="stop", reasoning="", completion_tokens=100,
+                 seen: dict | None = None):
+    """A stand-in openai SDK module. Records the max_tokens it was called with, so a test can
+    assert the reasoning headroom is actually applied."""
+    module = types.SimpleNamespace()
+
+    class _Err(Exception):
+        pass
+
+    module.RateLimitError = module.APIConnectionError = _Err
+    module.APITimeoutError = module.InternalServerError = _Err
+
+    message = types.SimpleNamespace(content=content, reasoning_content=reasoning)
+    choice = types.SimpleNamespace(message=message, finish_reason=finish_reason)
+    resp = types.SimpleNamespace(
+        choices=[choice],
+        usage=types.SimpleNamespace(prompt_tokens=10, completion_tokens=completion_tokens),
+    )
+
+    def create(**kw):
+        if seen is not None:
+            seen.update(kw)
+        return resp
+
+    class _OpenAI:
+        def __init__(self, *a, **k):
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+
+    module.OpenAI = _OpenAI
+    return module
+
+
+def test_a_reasoning_model_that_never_answers_is_a_loud_config_error(monkeypatch):
+    """MEASURED 2026-08-01: deepseek-v4-flash spends completion tokens on `reasoning_content`, so a
+    hard prompt at max_tokens=8000 returned finish_reason='length' with content=''. That empty
+    string reached the caller as 'Invalid JSON: EOF while parsing' — a true statement about a
+    string that was never the problem, and `complete_json`'s corrective retry then re-sent the same
+    budget and failed identically.
+
+    It must name its own cause instead."""
+    monkeypatch.setitem(sys.modules, "openai",
+                        _fake_openai("", finish_reason="length", reasoning="x" * 2175))
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    client = llm_client.LLMClient(provider="deepseek")
+    with pytest.raises(llm_client.CompletionTruncated) as exc:
+        client.complete_json(system="s", user="u", target_model=_Ok)
+    message = str(exc.value)
+    assert "reasoning" in message.lower()
+    assert "DEEPSEEK_MIN_MAX_TOKENS" in message  # tells the operator how to fix it
+
+
+def test_the_deepseek_path_raises_the_completion_budget_for_reasoning(monkeypatch):
+    """The floor is what makes `max_tokens` mean the same thing on both providers — on a reasoning
+    model the budget must cover the thinking AND the answer."""
+    seen: dict = {}
+    monkeypatch.setitem(sys.modules, "openai", _fake_openai('{"ok": true}', seen=seen))
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    client = llm_client.LLMClient(provider="deepseek")
+    client.complete_json(system="s", user="u", target_model=_Ok,
+                         max_tokens=llm_client.DEFAULT_MAX_TOKENS)
+    assert seen["max_tokens"] == llm_client.DEEPSEEK_MIN_MAX_TOKENS
+
+
+def test_an_explicit_larger_budget_is_never_lowered(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setitem(sys.modules, "openai", _fake_openai('{"ok": true}', seen=seen))
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    client = llm_client.LLMClient(provider="deepseek")
+    client.complete_json(system="s", user="u", target_model=_Ok, max_tokens=99_000)
+    assert seen["max_tokens"] == 99_000
+
+
+def test_a_truncated_answer_that_DID_produce_content_is_left_alone(monkeypatch):
+    """Only the empty case is a config fault. Partial content is a parsing problem, and the
+    existing corrective retry is the right handler for it — don't widen the new error."""
+    monkeypatch.setitem(sys.modules, "openai",
+                        _fake_openai('{"ok": true}', finish_reason="length"))
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    client = llm_client.LLMClient(provider="deepseek")
+    assert client.complete_json(system="s", user="u", target_model=_Ok).ok is True

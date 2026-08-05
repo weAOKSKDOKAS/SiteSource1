@@ -40,9 +40,14 @@ export function NavSidebar({
     { label: "Archived", short: "AR", surface: { kind: "home", shelf: "archived" }, count: counts.archived },
     { label: "Awaiting client", short: "AW", surface: { kind: "home", shelf: "awaiting" }, count: counts.awaiting, countTone: "warn" },
   ];
+  // The LIBRARY: what the company knows, as against what one job needs. Everything here is
+  // inherited by every tender and overridable on any of them — rates and outputs are the two
+  // halves of the same idea (what a crew costs an hour; how many hours the work takes), so they
+  // sit together at the top.
   const customise: NavItem[] = [
     { label: "Criteria library", short: "CL", surface: { kind: "screen", screen: "criteria" }, count: counts.criteria },
     { label: "Pricing & rates", short: "PR", surface: { kind: "screen", screen: "rates" } },
+    { label: "Outputs & norms", short: "ON", surface: { kind: "screen", screen: "outputs" } },
     { label: "AI model", short: "AI", surface: { kind: "screen", screen: "settings" } },
     { label: "Letter templates", short: "LT", surface: { kind: "notdesigned", screen: "letters" } },
     { label: "Standard positions", short: "SP", surface: { kind: "notdesigned", screen: "positions" } },

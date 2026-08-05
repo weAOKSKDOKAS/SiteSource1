@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes, usePersisted } from "../chrome";
 import { PageView } from "../PageView";
 import type {
   CitationRow,
@@ -80,6 +80,15 @@ export function RegisterTab({
   const items = register?.line_items ?? [];
 
   const [selected, setSelected] = useState<number | null>(null);
+  /** The mismatch banner keeps its file lists collapsed: on a folder set they run to 203 names. */
+  const [mismatchOpen, setMismatchOpen] = useState(false);
+  /** Dismissed for good, per set. A warning you have read and understood is just noise on the
+   *  fiftieth visit, and it is stored per set_id so dismissing it on one tender says nothing
+   *  about the next — which is a different document set and a different mistake to make. */
+  const [mismatchGone, setMismatchGone] = usePersisted(
+    `mismatchDismissed.${data.setId}`,
+    false,
+  );
   const [partId, setPartId] = useState<string | null>(null);
   const [page, setPage] = useState<number | null>(null);
   /** The result of a "show me on the page" run, and its verdict — separate from the precomputed
@@ -268,15 +277,17 @@ export function RegisterTab({
   async function locateSelected(item: DepartureItem) {
     const quote = item.cited_text?.trim();
     if (!quote) return;
-    const target = partId ?? partForClause(item.clause) ?? (data.parts?.parts ?? [])[0]?.part_id;
-    if (!target) return;
     setLocating("pending");
     try {
-      const r = await api.locateQuote(data.setId, target, quote);
+      // The whole set, not the open part. Searching only what is already on screen made the
+      // button useless on a 203-part set: it reported "not found" from whichever document
+      // happened to be showing, and finding the right one was left to the reader — which is
+      // exactly the work the button is for. The open part is passed as a head start only.
+      const r = await api.locateQuoteInSet(data.setId, quote, partId ?? undefined);
       setLocating(r.verdict);
       setLocateNote(r.note);
-      if (r.verdict === "located" && r.page != null) {
-        setPartId(target);
+      if (r.verdict === "located" && r.page != null && r.part_id) {
+        setPartId(r.part_id);   // switch the viewer to the document that actually holds the words
         setLocated(r.highlights);
         setPage(r.page);
       } else {
@@ -678,17 +689,67 @@ export function RegisterTab({
         {/* The single most confusing state in the app, said out loud. When the review returned
             its bundled sample instead of reading the upload, every citation is unlocatable and
             nothing highlights — which looks like a broken viewer and is not one. */}
-        {mismatch && (
-          <div className="flex-none border-b border-cb-amber bg-cb-brass-tint px-4 py-2.5">
+        {mismatch && !mismatchGone && (
+          // Bounded on purpose. This used to render one sentence containing every filename on both
+          // sides — fine for a binder and two annexes, a full page for a folder of 203, at which
+          // point the warning hid the findings it was warning about. The lists are here, behind a
+          // disclosure, and the banner itself stays two lines.
+          <div className="max-h-[40vh] flex-none overflow-y-auto border-b border-cb-amber bg-cb-brass-tint px-4 py-2.5">
             <div className="flex items-start gap-2">
               <span className="flex-none font-cb-mono text-[11px] text-cb-brass-text">⚠</span>
-              <div className="min-w-0">
-                <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
-                  THESE FINDINGS ARE NOT ABOUT YOUR DOCUMENT
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1 font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
+                    THESE FINDINGS ARE NOT ABOUT YOUR DOCUMENT
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMismatchGone(true)}
+                    title="Dismiss. It will not come back for this tender."
+                    className="cb-press -mt-1 flex-none px-1 font-cb-mono text-[13px] leading-none text-cb-brass-text"
+                  >
+                    ×
+                  </button>
                 </div>
                 <p className="mt-1 font-cb-sans text-[11px] leading-[1.5] text-cb-brass-text">
                   {mismatch.note}
                 </p>
+                {(mismatch.uploaded?.length ?? 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMismatchOpen((v) => !v)}
+                    className="cb-press mt-1 font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2"
+                  >
+                    {mismatchOpen ? "hide the file lists" : `show all ${mismatch.uploaded.length} uploaded files`}
+                  </button>
+                )}
+                {mismatchOpen && (
+                  <div className="mt-2 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
+                    {(
+                      [
+                        ["WHAT THE FINDINGS DESCRIBE", mismatch.reviewed],
+                        ["WHAT YOU UPLOADED", mismatch.uploaded],
+                      ] as [string, string[]][]
+                    ).map(([label, list]) => (
+                      <div key={label}>
+                        <div className="font-cb-mono text-[8px] font-semibold tracking-cb-label text-cb-brass-text">
+                          {label} · {list?.length ?? 0}
+                        </div>
+                        <div className="mt-1 max-h-[22vh] overflow-y-auto">
+                          {(list ?? []).map((name) => (
+                            <div
+                              key={name}
+                              title={name}
+                              className="truncate font-cb-mono text-[9px] leading-[1.6] text-cb-brass-text"
+                            >
+                              {name}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1089,7 +1150,7 @@ function RegisterRow({
             disabled={locating === "pending"}
             className="cb-press rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-2 py-[3px] font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text disabled:opacity-60"
           >
-            {locating === "pending" ? "LOOKING…" : "SHOW ME ON THE PAGE"}
+            {locating === "pending" ? "SEARCHING EVERY DOCUMENT…" : "SHOW ME ON THE PAGE"}
           </button>
           {locating && locating !== "pending" && (
             <span
@@ -1097,13 +1158,19 @@ function RegisterRow({
                 "font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
                 locating === "located" ? "text-cb-ok-dark" : "text-cb-bad-dark",
               )}
-              title={locateNote}
             >
               {locating === "located"
                 ? "FOUND — HIGHLIGHTED"
                 : locating === "not_located"
-                  ? "NOT ON THIS PART"
-                  : "NO TEXT LAYER TO SEARCH"}
+                  ? "NOT IN ANY DOCUMENT HERE"
+                  : "NOTHING HERE COULD BE SEARCHED"}
+            </span>
+          )}
+          {/* The note names the document it jumped to, or how many were searched to be able to
+              say "nowhere". A tooltip hid the one fact that makes the verdict trustworthy. */}
+          {locateNote && locating && locating !== "pending" && (
+            <span className="w-full font-cb-sans text-[10.5px] leading-[1.4] text-cb-muted">
+              {locateNote}
             </span>
           )}
         </div>

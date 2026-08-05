@@ -100,6 +100,43 @@ def _safe_name(filename: str) -> str:
     return base or "upload"
 
 
+class UnsafeUploadPath(ValueError):
+    """A relative path that would escape the tender's own folder.
+
+    Raised rather than sanitised. A ``..`` segment or a drive letter arriving from a browser is not
+    a typo somebody made — quietly rewriting it to something harmless would hide an attempt to write
+    outside the workspace, and the app has no business being discreet about that.
+    """
+
+
+def safe_relative_path(relative_path: str) -> Path:
+    """Validate a browser-supplied relative path and return it as a ``Path``.
+
+    Uploading a folder means the client tells the server where each file sat in the tree, and a path
+    that comes from a client is input, not fact. Anything absolute, drive-lettered, or containing
+    ``..`` is refused; separators are normalised so Windows and POSIX clients agree; each segment is
+    reduced to a safe name so a component cannot smuggle a separator through.
+    """
+    raw = (relative_path or "").replace("\\", "/").replace("\x00", "").strip()
+    if not raw:
+        raise UnsafeUploadPath("an uploaded file arrived with no path at all")
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        raise UnsafeUploadPath(
+            f"{relative_path!r} is an absolute path. Uploaded files are stored relative to the "
+            f"tender's own folder, so only a relative path can be honoured.")
+
+    parts = [segment for segment in raw.split("/") if segment not in ("", ".")]
+    if any(segment == ".." for segment in parts):
+        raise UnsafeUploadPath(
+            f"{relative_path!r} climbs above the tender folder. Refused rather than trimmed — a "
+            f"path that tries to escape is worth seeing, not quietly fixing.")
+    if not parts:
+        raise UnsafeUploadPath(f"{relative_path!r} names no file")
+
+    cleaned = [_safe_name(segment) for segment in parts]
+    return Path(*cleaned)
+
+
 class Workspace:
     """Deterministic on-disk storage for one tender's originals and artifacts."""
 
@@ -125,10 +162,28 @@ class Workspace:
 
     # -- files --------------------------------------------------------------
     def save_upload(self, tender_id: str, filename: str, data: bytes) -> Path:
-        """Persist an uploaded original and return its path."""
+        """Persist an uploaded original and return its path.
+
+        Flattens to a basename. Correct for a binder upload, where filenames are already distinct —
+        and lossy for a folder, where two subfolders may each hold a ``BOQ.pdf``. Use
+        :meth:`save_upload_at` when the tree matters.
+        """
         path = self.docs_dir(tender_id, create=True) / _safe_name(filename)
         path.write_bytes(data)
         return path
+
+    def save_upload_at(self, tender_id: str, relative_path: str, data: bytes) -> Path:
+        """Persist an uploaded original **keeping its folder tree**, and return its path.
+
+        The reason this exists: ``save_upload`` reduces every file to a basename, so
+        ``TA #1/BQ/BQ.pdf`` and ``TA #2/BQ/BQ.pdf`` both become ``docs/BQ.pdf`` and the second
+        silently overwrites the first. On a tender package that is a lost document — the addendum's
+        bill replacing the original with no trace that either existed.
+        """
+        target = self.docs_dir(tender_id, create=True) / safe_relative_path(relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return target
 
     def doc_path(self, tender_id: str, filename: str) -> Path:
         """Where an original *would* live (may or may not exist yet)."""

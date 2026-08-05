@@ -24,7 +24,9 @@ from typing import Callable, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent / ".env")  # before anything reads env
+# Before anything reads env. The test suite is unaffected: conftest.py pre-sets every
+# outcome-changing variable, and load_dotenv(override=False) leaves present keys alone.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402

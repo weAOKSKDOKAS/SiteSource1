@@ -6,25 +6,31 @@ Responsibilities:
   ``backend/fixtures/`` and short-circuits BEFORE any provider code runs. No SDK is
   imported and no socket is opened — the offline demo is safe even with
   ``openai`` / ``anthropic`` / ``pymupdf`` all uninstalled.
-* **Provider routing by content** (``_route``): a call carrying any image goes to
-  **Anthropic** (Sonnet) vision — DeepSeek V4's chat API rejects ``image_url`` input; a
-  **text-only** call goes to the cheap text provider, **DeepSeek** when
-  ``DEEPSEEK_API_KEY`` is set (OpenAI-compatible API at ``https://api.deepseek.com``,
-  model from ``DEEPSEEK_MODEL``), otherwise **Anthropic** in text mode so it still works
-  today with no new key. ``EXTRACTION_PROVIDER`` sets the constructed default; content
-  routing overrides it so images never reach DeepSeek and text takes the cheapest path.
-  Both SDKs are imported **lazily**, only on the live path, one client cached per provider.
+* **Three providers** — ``anthropic``, ``deepseek`` and ``openai`` — described by two tables rather
+  than by branching: :data:`PROVIDER_MODEL_ENV` (which env var names each one's model) and
+  :data:`VISION_CAPABLE` (which can be handed a page image). Adding a fourth is entries in those
+  tables plus one ``_*_complete`` method. All SDKs are imported **lazily**, only on the live path,
+  one client cached per provider.
+* **Provider routing by content** (``_route``): a call carrying any image goes to a provider that
+  can actually read one — an explicitly configured vision-capable provider keeps its images, and one
+  that cannot read them falls back to Anthropic. A **text-only** call goes to an explicitly
+  configured provider, else the cheap default: **DeepSeek** when ``DEEPSEEK_API_KEY`` is set
+  (OpenAI-compatible API at ``https://api.deepseek.com``), otherwise **Anthropic** in text mode so
+  it works with no extra key.
 * **Multimodal**: ``complete_json(images=[...base64 PNG...])`` attaches the document
   images to the message (OpenAI ``image_url`` blocks / Anthropic ``image`` blocks).
 * **Strict-JSON parsing** into a Pydantic model (strip ``` fences → parse, one
-  corrective retry) and retry-on-transient — for both providers.
+  corrective retry) and retry-on-transient — for every provider.
 
-NOTE on DeepSeek vision: DeepSeek V4's chat API **rejects** ``image_url`` content
-(confirmed error: "unknown variant `image_url`, expected `text`"), so it is text-only
-here and document uploads default to ``anthropic``, which reads images/PDF natively.
-``build_openai_messages`` still emits OpenAI ``image_url`` blocks for genuinely
-vision-capable OpenAI-compatible endpoints; only that one builder would change to
-wire a different OpenAI-style vision provider.
+NOTE on DeepSeek vision: DeepSeek V4's chat API **rejects** ``image_url`` content (confirmed error:
+"unknown variant `image_url`, expected `text`"). That is why it is absent from :data:`VISION_CAPABLE`
+— a fact about DeepSeek, not a rule that images belong to Anthropic. ``build_openai_messages`` emits
+the ``image_url`` data-URL blocks that genuinely vision-capable OpenAI endpoints take, which is why
+OpenAI vision needed no new builder.
+
+WHO READS THE DOCUMENTS: ``EXTRACTION_PROVIDER`` names the provider for the ingest stage, and
+``client_boq.llm.make_client(stage="ingest")`` passes it through as an explicit provider so it
+reaches the live call path. Every other stage is unaffected by it.
 """
 
 import json
@@ -40,12 +46,74 @@ from pydantic import BaseModel, ValidationError
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_TOKENS = 8000  # a sane per-chunk ceiling; ingest chunks its input so the output never truncates
+
+# Which env var names the model for each provider, and what it falls back to.
+#
+# A table rather than a chain of ``if provider == ...`` branches, because the two-way version of
+# this had an `else` that silently handed any unrecognised provider the DeepSeek model. A lookup
+# raises on an unknown name instead, which is the difference between a typo you find immediately
+# and a tender priced by a model nobody chose.
+# Several names per provider where more than one is in circulation: the first is canonical, the
+# rest are aliases people actually have in their .env.
+PROVIDER_MODEL_ENV: dict[str, tuple[tuple[str, ...], str]] = {
+    "anthropic": (("ANTHROPIC_MODEL",), ANTHROPIC_MODEL),
+    "deepseek": (("DEEPSEEK_MODEL",), DEFAULT_DEEPSEEK_MODEL),
+    "openai": (("OPENAI_MODEL", "CHATGPT_MODEL"), DEFAULT_OPENAI_MODEL),
+}
+PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "openai": ("OPENAI_API_KEY", "CHATGPT_API_KEY"),
+}
+PROVIDERS = tuple(PROVIDER_MODEL_ENV)
+
+# Which providers can actually be handed a page image.
+#
+# A physical constraint, not a preference: DeepSeek V4's chat API rejects `image_url` content
+# outright ("unknown variant `image_url`, expected `text`"). Written as data so that adding a
+# vision-capable provider is one entry here rather than an edit to the routing logic.
+VISION_CAPABLE = frozenset({"anthropic", "openai"})
+
+# The provider images fall back to when the configured one cannot read them.
+VISION_FALLBACK = "anthropic"
+
+# Some OpenAI models reject `max_tokens` and require `max_completion_tokens` instead. Which one a
+# given model wants is discovered on the first call and remembered — see `_openai_complete`.
+_OPENAI_TOKEN_PARAM = "max_tokens"
+
+# REASONING MODELS BREAK THE MEANING OF max_tokens.
+#
+# `DEFAULT_MAX_TOKENS` was written when a completion budget was a budget for the ANSWER. On a
+# reasoning model (deepseek-v4-flash, and the -pro default) the same budget must also cover the
+# chain of thought, which is charged as completion tokens and is not returned in `content`. A hard
+# prompt therefore spends the entire allowance thinking, `content` comes back EMPTY, and the caller
+# sees "Invalid JSON: EOF while parsing" — a truthful message about a string that was never the
+# real problem.
+#
+# Measured on 2026-08-01 against deepseek-v4-flash: max_tokens=600 -> 2,175 chars of
+# reasoning_content, content='' , finish_reason='length'. Same prompt at 8,000 -> 3,240 completion
+# tokens and a correct answer. The split planner needed more than 8,000 and failed twice, retry
+# included, because the retry re-sent the same budget.
+#
+# So the floor below is reasoning headroom, not generosity: it is what makes a documented budget
+# mean the same thing on both providers. 32,000 and 65,536 were both accepted by the API.
+DEEPSEEK_MIN_MAX_TOKENS = int(os.getenv("DEEPSEEK_MIN_MAX_TOKENS", "32000"))
 _MAX_RETRIES = 4
 _FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 
 # Back-compat alias (older imports referenced MODEL).
 MODEL = ANTHROPIC_MODEL
+
+class CompletionTruncated(RuntimeError):
+    """The model hit its completion ceiling without writing an answer.
+
+    Distinct from a bad answer, and deliberately NOT retried by ``complete_json``'s corrective
+    pass: that retry re-sends the same budget, so it would fail identically while costing a second
+    call. Surfaced to the operator with the two things that actually fix it.
+    """
+
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -58,8 +126,56 @@ def demo_mode() -> bool:
 
 
 def extraction_provider() -> str:
-    """The configured extraction provider ('anthropic' default, or 'deepseek')."""
-    return os.getenv("EXTRACTION_PROVIDER", "anthropic").strip().lower()
+    """The provider that reads documents — ``EXTRACTION_PROVIDER``, 'anthropic' by default.
+
+    Named for the extraction stage because that is what it governs: the ingest pass that decides how
+    a binder is cut and what each part says. ``client_boq.llm.make_client(stage="ingest")`` passes it
+    through as an explicit provider, which is what makes it reach the live call path.
+    """
+    return configured_extraction_provider() or "anthropic"
+
+
+def configured_extraction_provider() -> str:
+    """``EXTRACTION_PROVIDER`` as actually set, or ``''`` when it is not.
+
+    Distinct from :func:`extraction_provider`, which supplies the default, and the difference
+    matters: "nobody configured this" must not become an explicit choice of Anthropic. Passing a
+    provider explicitly suppresses the cheap-text routing (``_route``), so defaulting here would
+    quietly move every ingest off DeepSeek for anyone who has a DeepSeek key and no opinion about
+    extraction.
+    """
+    return os.getenv("EXTRACTION_PROVIDER", "").strip().lower()
+
+
+def model_for_provider(provider: str) -> str:
+    """The model a provider will use — its env override, else its shipped default."""
+    try:
+        env_names, fallback = PROVIDER_MODEL_ENV[provider]
+    except KeyError:
+        raise ValueError(
+            f"{provider!r} is not a provider this client knows. There are "
+            f"{len(PROVIDERS)}: {', '.join(PROVIDERS)}."
+        ) from None
+    return _first_env(*env_names, default=fallback)
+
+
+def provider_key(provider: str) -> str:
+    """The API key for a provider, '' when none is set."""
+    return _first_env(*PROVIDER_KEY_ENV.get(provider, ()))
+
+
+def _first_env(*names: str, default: str = "") -> str:
+    """The first of several env vars that is actually set.
+
+    Exists so ``OPENAI_API_KEY`` and ``CHATGPT_API_KEY`` can both work: the first is what the SDK
+    and every other tool expects, the second is what people who think of it as "the ChatGPT key"
+    write in their .env. Supporting both costs one function and saves a confusing empty-key failure.
+    """
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return default
 
 
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_-]*\s*\n(.*?)\n```$", re.DOTALL)
@@ -128,27 +244,33 @@ class LLMClient:
         self._clients_lock = threading.Lock()  # guards lazy construction under concurrent chunk calls
 
     def _default_model(self) -> str:
-        if self.provider == "anthropic":
-            return os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
-        return os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
+        # An unknown provider used to fall through to the DeepSeek model. It now raises, because a
+        # provider name nobody recognises is a configuration mistake and pricing a tender with a
+        # silently substituted model is the worst possible way to find that out.
+        return model_for_provider(self.provider)
 
     # -- provider routing by content ----------------------------------------
     def _route(self, images: Optional[list[str]]) -> str:
         """Pick the provider for a call by its content.
 
-        A call carrying any image → Anthropic (Sonnet) vision — DeepSeek's chat API
-        rejects image input; that is a physical constraint and outranks everything below.
-        A text-only call → an EXPLICITLY constructed provider when one was passed
-        (``LLMClient(provider=...)`` — how client_boq applies its app-wide model setting),
-        else the cheap default: DeepSeek when ``DEEPSEEK_API_KEY`` is set, otherwise
-        Anthropic in text mode (works today with no new key). Bare ``LLMClient()`` —
-        every procurement call site — routes exactly as it always has.
+        A call carrying any image goes to a provider that can actually read one. That is a physical
+        constraint (DeepSeek's chat API rejects ``image_url`` outright) rather than a preference, so
+        it outranks everything below — but it is a constraint on *DeepSeek*, not a law that images
+        belong to Anthropic. An explicitly configured vision-capable provider keeps its images; one
+        that cannot read them falls back, because a silent text-only read of a scanned page would
+        return a confident summary of nothing.
+
+        A text-only call goes to an EXPLICITLY constructed provider when one was passed
+        (``LLMClient(provider=...)`` — how client_boq applies its settings), else the cheap default:
+        DeepSeek when ``DEEPSEEK_API_KEY`` is set, otherwise Anthropic in text mode. Bare
+        ``LLMClient()`` — every procurement call site — routes exactly as it always has.
         """
         if images:
-            return "anthropic"
+            chosen = self._provider_arg or VISION_FALLBACK
+            return chosen if chosen in VISION_CAPABLE else VISION_FALLBACK
         if self._provider_arg:
             return self._provider_arg
-        if os.getenv("DEEPSEEK_API_KEY", "").strip():
+        if provider_key("deepseek"):
             return "deepseek"
         return "anthropic"
 
@@ -157,9 +279,7 @@ class LLMClient:
         override for the matching provider, else the env default)."""
         if provider == self.provider and self._model_arg:
             return self._model_arg
-        if provider == "anthropic":
-            return os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
-        return os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
+        return model_for_provider(provider)
 
     # -- public API ---------------------------------------------------------
     def complete_json(
@@ -211,10 +331,12 @@ class LLMClient:
     def _complete_text(
         self, *, system: str, user: str, images: Optional[list[str]], max_tokens: int, purpose: str = ""
     ) -> str:
-        provider = self._route(images)  # content routing: images -> anthropic, text -> cheap
+        provider = self._route(images)  # content routing: images -> vision-capable, text -> cheap
         model = self._model_for(provider)
         if provider == "anthropic":
             return self._anthropic_complete(system, user, images, max_tokens, model, purpose)
+        if provider == "openai":
+            return self._openai_complete(system, user, images, max_tokens, model, purpose)
         return self._deepseek_complete(system, user, images, max_tokens, model, purpose)
 
     def _log_call(self, provider: str, model: str, purpose: str, ms: float, tokens: dict) -> None:
@@ -270,17 +392,112 @@ class LLMClient:
         )
         messages = build_openai_messages(system, user, images)  # text-only in practice
         tokens: dict = {}
+        # Reasoning headroom — see DEEPSEEK_MIN_MAX_TOKENS. Never lowers a caller's explicit ask.
+        budget = max(max_tokens, DEEPSEEK_MIN_MAX_TOKENS)
 
         def call() -> str:
-            resp = client.chat.completions.create(model=model, messages=messages, max_tokens=max_tokens)
+            resp = client.chat.completions.create(model=model, messages=messages, max_tokens=budget)
             usage = getattr(resp, "usage", None)
             tokens["in"] = getattr(usage, "prompt_tokens", None)
             tokens["out"] = getattr(usage, "completion_tokens", None)
-            return resp.choices[0].message.content or ""
+            choice = resp.choices[0]
+            content = choice.message.content or ""
+            # An empty answer that stopped on `length` is a CONFIGURATION fault, not a reply: the
+            # model spent the whole budget reasoning and never wrote an answer. Returning "" here
+            # sends the caller a JSON parse error about a string that was never the problem, and
+            # `complete_json`'s corrective retry then re-sends the identical budget and fails
+            # identically. Raised loudly instead — the same rule as OcrEngineUnavailable, and for
+            # the same reason: a misconfiguration must not be mistaken for an answer.
+            if not content.strip() and getattr(choice, "finish_reason", None) == "length":
+                reasoning = getattr(choice.message, "reasoning_content", None) or ""
+                raise CompletionTruncated(
+                    f"{model} used its entire {budget}-token completion budget on reasoning and "
+                    f"returned no answer ({len(reasoning)} chars of reasoning_content). "
+                    "Raise DEEPSEEK_MIN_MAX_TOKENS, or set DEEPSEEK_MODEL to a non-reasoning model."
+                )
+            return content
 
         start = time.perf_counter()
         text = self._retry(call, transient)
         self._log_call("deepseek", model, purpose, (time.perf_counter() - start) * 1000, tokens)
+        return text
+
+    def _openai_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str, purpose: str = "") -> str:
+        """OpenAI proper — the same SDK DeepSeek borrows, without DeepSeek's two adaptations.
+
+        Deliberately NOT a call into ``_deepseek_complete`` with a different ``base_url``:
+
+        * **No ``DEEPSEEK_MIN_MAX_TOKENS`` floor.** That floor is reasoning headroom for DeepSeek's
+          models. Applying it here would send ``max_tokens=32000`` on every OpenAI call, silently
+          and expensively, for a reason that has nothing to do with OpenAI.
+        * **The token parameter is discovered, not assumed.** Newer OpenAI models reject
+          ``max_tokens`` and require ``max_completion_tokens``. Which one this model wants is found
+          out on the first call and remembered for the process, so a wrong guess costs one retry
+          rather than every ingest failing on a parameter name.
+
+        Images ride along unchanged: ``build_openai_messages`` already emits the ``image_url``
+        data-URL blocks, which is why vision needed no new builder.
+        """
+        import openai  # lazy: importing this module must not require the SDK
+
+        key = provider_key("openai")
+        if not key:
+            raise RuntimeError(
+                "OpenAI is the configured provider but no key is set. Put OPENAI_API_KEY (or "
+                "CHATGPT_API_KEY) in backend/.env."
+            )
+        with self._clients_lock:  # concurrent chunk calls may hit this first-time together
+            if "openai" not in self._clients:
+                self._clients["openai"] = openai.OpenAI(api_key=key)
+        client = self._clients["openai"]
+        transient = (
+            openai.RateLimitError,
+            openai.APIConnectionError,
+            openai.APITimeoutError,
+            openai.InternalServerError,
+        )
+        messages = build_openai_messages(system, user, images)
+        tokens: dict = {}
+        # An empty tuple never catches, which is the right behaviour for an SDK build that has no
+        # such class: the parameter fallback simply does not apply and the original error surfaces.
+        bad_request = getattr(openai, "BadRequestError", ())
+
+        def call() -> str:
+            global _OPENAI_TOKEN_PARAM
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, **{_OPENAI_TOKEN_PARAM: max_tokens})
+            except bad_request as bad:
+                # The one 400 worth reacting to rather than surfacing: the model wants the other
+                # spelling of the same budget. Anything else is a real problem and is re-raised.
+                other = ("max_completion_tokens" if _OPENAI_TOKEN_PARAM == "max_tokens"
+                         else "max_tokens")
+                if other not in str(bad):
+                    raise
+                _OPENAI_TOKEN_PARAM = other
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, **{other: max_tokens})
+
+            usage = getattr(resp, "usage", None)
+            tokens["in"] = getattr(usage, "prompt_tokens", None)
+            tokens["out"] = getattr(usage, "completion_tokens", None)
+            choice = resp.choices[0]
+            content = choice.message.content or ""
+            # Same rule as DeepSeek's: an empty answer that stopped on `length` is a configuration
+            # fault, not a reply. Returning "" would reach the caller as a JSON parse error about a
+            # string that was never the problem, and the corrective retry would re-send the same
+            # budget and fail identically.
+            if not content.strip() and getattr(choice, "finish_reason", None) == "length":
+                raise CompletionTruncated(
+                    f"{model} used its entire {max_tokens}-token completion budget and returned no "
+                    f"answer. Raise the caller's max_tokens, or set OPENAI_MODEL to a model that "
+                    f"does not spend its budget reasoning."
+                )
+            return content
+
+        start = time.perf_counter()
+        text = self._retry(call, transient)
+        self._log_call("openai", model, purpose, (time.perf_counter() - start) * 1000, tokens)
         return text
 
     def _anthropic_complete(self, system: str, user: str, images: Optional[list[str]], max_tokens: int, model: str, purpose: str = "") -> str:

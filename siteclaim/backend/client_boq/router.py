@@ -15,6 +15,7 @@ from __future__ import annotations
 import time as _time
 
 import io
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,29 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Uploa
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from client_boq import criteria_loader, criteria_store, jobs, models, store
+from client_boq import criteria_loader, criteria_store, jobs, models, rates_store, store
+from client_boq.boq import allocate as boq_allocate
+from client_boq.boq import assumptions as boq_assumptions
+from client_boq.boq import buildup as boq_buildup
+from client_boq.boq import carry as boq_carry
+from client_boq.boq import checks as boq_checks
+from client_boq.boq import costing as boq_costing
+from client_boq.boq import costing_workbook as boq_costing_workbook
+from client_boq.boq import coverage as boq_coverage
+from client_boq.boq import derive as boq_derive
+from client_boq.boq import diff as boq_diff
+from client_boq.boq import docmap as boq_docmap
+from client_boq.boq import model as boq_model
+from client_boq.boq import georef as boq_georef
+from client_boq.boq import groups as boq_groups
+from client_boq.boq import outputs as boq_outputs
+from client_boq.boq import pricing as boq_pricing
+from client_boq.boq import production as boq_production
+from client_boq.boq import programme as boq_programme
+from client_boq.boq import reader as boq_reader
+from client_boq.boq import schedule as boq_schedule
+from client_boq.boq import trace as boq_trace
+from client_boq.boq import unbilled as boq_unbilled
 from client_boq.models import (
     HUMAN_VERDICTS,
     STATUS_CANDIDATE,
@@ -53,7 +76,7 @@ from client_boq.review import s08_citation_verify
 from client_boq.estimate import run as estimate_run
 from client_boq.estimate import workbook as estimate_workbook
 from pipeline.llm_client import demo_mode
-from pipeline.workspace import Workspace
+from pipeline.workspace import UnsafeUploadPath, Workspace, safe_relative_path
 
 router = APIRouter(prefix="/client-boq", tags=["client_boq"])
 
@@ -264,17 +287,30 @@ def _parse_mismatch(conn, set_id: str) -> Optional[dict]:
 
     return {
         "reviewed": sorted(parsed.documents),
-        "uploaded": sorted(d for d in held),
+        "uploaded": sorted(held),
         "note": (
-            "The findings below describe "
-            + ", ".join(sorted(parsed.documents))
-            + ", not the document set that was uploaded ("
-            + ", ".join(sorted(held))
-            + "). Nothing here can be located in your upload, so no quotation is highlighted. "
-            "This is what an offline DEMO run looks like: the review stage returned its bundled "
-            "sample instead of reading your files. Run this tender in LIVE mode to review it."
+            f"The findings below describe {_name_a_few(sorted(parsed.documents))} — not the "
+            f"{len(held)} document(s) that were uploaded ({_name_a_few(sorted(held))}). Nothing "
+            f"here can be located in your upload, so no quotation is highlighted. This is what an "
+            f"offline DEMO run looks like: the review stage returned its bundled sample instead of "
+            f"reading your files. Run this tender in LIVE mode to review it."
         ),
     }
+
+
+def _name_a_few(names: list[str], limit: int = 3) -> str:
+    """Name a couple and count the rest.
+
+    The sentence used to inline every filename on both sides. That read fine for a binder plus two
+    annexes and became a wall of text for a folder of 203 — the warning grew until it hid the
+    findings it was warning about. The full lists are returned beside this as ``reviewed`` and
+    ``uploaded``, so the screen can show them on demand; repeating them here bought nothing.
+    """
+    if not names:
+        return "nothing"
+    shown = ", ".join(Path(n).name for n in names[:limit])
+    rest = len(names) - limit
+    return shown if rest <= 0 else f"{shown} and {rest} more"
 
 
 def _result_payload(register: DepartureRegister) -> dict:
@@ -324,6 +360,12 @@ def _manifest_payload(manifest: SplitManifest) -> dict:
     function the gate's own validation uses — so the manifest screen's gaps/overlaps count can
     never disagree with what the gate would refuse on.
     """
+    from client_boq.ingest import folder as folder_mod
+
+    # A folder set has no binder, so page coverage is not a fact about it: `coverage()` would report
+    # "0 of 0 pages" against a set where every page is present. It reports files instead — which is
+    # the thing that actually exists — and says the split was never in question.
+    is_folder = manifest.tier == folder_mod.TIER_FOLDER
     return {
         "set_id": manifest.set_id,
         "source_doc": manifest.source_doc,
@@ -331,13 +373,34 @@ def _manifest_payload(manifest: SplitManifest) -> dict:
         "tier": manifest.tier,
         "tier_reason": manifest.tier_reason,
         "approved": manifest.approved,
+        "layout": "folder" if is_folder else "binder",
+        "auto_approved": is_folder and manifest.approved,
+        "file_count": len(manifest.parts) if is_folder else 0,
+        "file_pages": sum(p.page_count() for p in manifest.parts) if is_folder else 0,
         "coverage": manifest.coverage(),
-        "coverage_detail": pdfops.coverage(manifest, manifest.pages),
+        "coverage_detail": ({"pages": 0, "covered": 0, "gaps": [], "overlaps": []} if is_folder
+                            else pdfops.coverage(manifest, manifest.pages)),
         # ``part_id`` is a computed property, so ``model_dump`` drops it — and it is the identity
         # every other endpoint keys on. Adding it here rather than letting a client re-derive the
         # zero-pad-plus-abbreviation rule, which is exactly the sort of duplicated identity rule
         # that drifts. Sending it back in an edited manifest is harmless: it is not a field.
         "parts": [{**p.model_dump(), "part_id": p.part_id} for p in manifest.parts],
+    }
+
+
+def _folder_payload(plan) -> dict:
+    """What a folder ingest returns: the manifest, plus what was routed and what is merely held.
+
+    ``held`` is the point. Ingest is PDF-only, and until now a workbook or a Word file was written
+    to disk and then silently absent from everything the screen shows. A file may be un-read; it may
+    not be un-mentioned.
+    """
+    return {
+        **_manifest_payload(plan.manifest),
+        "summary": plan.summary(),
+        "bills": [b.model_dump() for b in plan.bills],
+        "held": [h.model_dump() for h in plan.held],
+        "problems": plan.problems,
     }
 
 
@@ -388,6 +451,43 @@ def _run_ingest_job(job_id: str, uploads: list[RawUpload], project_name: str, ac
         jobs.JOBS.update(job_id, status="error", error=str(exc))
 
 
+def _run_folder_job(job_id: str, uploads: list[RawUpload], project_name: str,
+                    actor: str = "") -> None:
+    """Ingest an organised folder end to end: list it, then materialise and interpret every part.
+
+    Both halves in one job because a folder has no gate between them. Stopping after the manifest
+    would leave a set that says "ingested" with nothing in it — which is exactly what it did before
+    this existed, and it looked to the user like a broken split rather than a missing step.
+    """
+    jobs.JOBS.update(job_id, status="running", stage="reading")
+    try:
+        plan = ingest_run.run_folder_inspect(
+            uploads, project_name, progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+        )
+        _stamp_new_set(plan.manifest.set_id, actor)
+        ingest_run.run_split(
+            plan.manifest.set_id,
+            progress_cb=lambda s: jobs.JOBS.update(job_id, stage=s),
+            # The count as NUMBERS, same as the plain split job: a two-hundred-file folder on one
+            # unchanging word is indistinguishable from a hang.
+            count_cb=_count_cb(job_id),
+        )
+        conn = store.get_conn()
+        try:
+            rows = store.load_parts(conn, plan.manifest.set_id)
+            # The freshly interpreted parts may quote the submission-deadline clause; turn the
+            # quote into the desk's close date (or an honest not_found) while it is hot.
+            from client_boq.ingest import close_date as close_date_mod
+            close_date_mod.derive(conn, plan.manifest.set_id)
+            store.touch_set(conn, plan.manifest.set_id, actor)
+        finally:
+            conn.close()
+        jobs.JOBS.update(job_id, status="done", stage="ingested",
+                         done=len(rows), total=len(rows), result=_folder_payload(plan))
+    except Exception as exc:  # noqa: BLE001 — any failure becomes a job error, not a crash
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
 def _stamp_new_set(set_id: str, actor: str) -> None:
     """Desk metadata for a set that just entered the app: the uploader owns it (they can hand it
     off on the card), and the close date is honestly ``reading`` until the interpreter has been
@@ -405,23 +505,70 @@ def _stamp_new_set(set_id: str, actor: str) -> None:
         conn.close()
 
 
+LAYOUT_BINDER = "binder"
+LAYOUT_FOLDER = "folder"
+
+
 @router.post("/ingest/upload", response_model=JobState)
 def post_ingest_upload(
     files: Optional[list[UploadFile]] = File(None),
     project_name: str = Form(""),
+    layout: str = Form(LAYOUT_BINDER),
+    relative_paths: Optional[list[str]] = Form(None),
     actor: str = Depends(_actor),
 ) -> JobState:
-    """Upload a tender and get back a DRAFT split manifest for review.
+    """Upload a tender and get back a split manifest.
 
-    Nothing is cut here and no review runs: this reads the document's own structure, asks the
-    planner to refine it, and stops at the manifest so a human can correct the boundaries
-    before anything expensive happens. Approve it at ``/ingest/manifest/approve``, then
-    ``/ingest/split``."""
+    Two shapes, and the caller says which:
+
+    ``binder`` (the default) — one monolithic PDF. Nothing is cut here and no review runs: this
+    reads the document's own structure, asks the planner to refine it, and stops at the manifest so
+    a human can correct the boundaries before anything expensive happens. Approve it at
+    ``/ingest/manifest/approve``, then ``/ingest/split``.
+
+    ``folder`` — a tree somebody already organised. Each file becomes its own part, the paths are
+    kept, nothing is split and there is nothing to approve. ``relative_paths`` carries each file's
+    place in the tree, index-aligned with ``files``, because a browser does not send
+    ``webkitRelativePath`` over multipart and the paths would otherwise be lost.
+    """
+    mode = (layout or LAYOUT_BINDER).strip().lower()
+    if mode not in (LAYOUT_BINDER, LAYOUT_FOLDER):
+        raise HTTPException(status_code=422,
+                            detail=f"layout must be {LAYOUT_BINDER!r} or {LAYOUT_FOLDER!r}.")
+
+    incoming = list(files or [])
+    paths = list(relative_paths or [])
+    if mode == LAYOUT_FOLDER and paths and len(paths) != len(incoming):
+        raise HTTPException(
+            status_code=422,
+            detail=(f"{len(paths)} relative paths for {len(incoming)} files. They are matched by "
+                    f"position, so a mismatch would file documents under the wrong names."))
+
     uploads: list[RawUpload] = [
-        (f.filename or "document", f.content_type, f.file.read()) for f in (files or [])
+        (paths[i] if i < len(paths) and paths[i] else (f.filename or "document"),
+         f.content_type, f.file.read())
+        for i, f in enumerate(incoming)
     ]
     if not uploads:
         raise HTTPException(status_code=422, detail="Upload at least one PDF tender document.")
+
+    if mode == LAYOUT_FOLDER:
+        # Validate the paths HERE, before anything is queued. A rejected path is a fault in the
+        # request, and answering it with a job the caller has to poll before learning that would
+        # be a worse answer than a 400.
+        for relative_path, _ct, _data in uploads:
+            try:
+                safe_relative_path(relative_path)
+            except UnsafeUploadPath as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Queued, not inline. There is no gate to stop at, so the job runs all the way to
+        # interpreted parts — and on a real package that is two hundred files to copy and read,
+        # which no request should be holding open. The caller polls /ingest/status.
+        job_id = jobs.JOBS.create("ingest")
+        jobs.POOL.submit(_run_folder_job, job_id, uploads, project_name, actor)
+        return JobState(job_id=job_id, kind="ingest", status="queued", stage="uploading")
+
     if demo_mode():
         notes: list[str] = []
         try:
@@ -523,7 +670,53 @@ def get_ingest_manifest(set_id: str) -> dict:
         conn.close()
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"No split manifest for set {set_id!r}.")
-    return _manifest_payload(manifest)
+    payload = _manifest_payload(manifest)
+    if payload["layout"] == "folder":
+        # What else arrived. `_folder_payload` puts these on the UPLOAD response only, so before
+        # this the whole "what came in that is not a part" panel — the bills you have to pick from
+        # and the held files — lasted exactly until the page was refreshed. A promise that a file
+        # is never un-mentioned cannot be kept for one render.
+        payload.update(_what_else_arrived(set_id, manifest))
+    return payload
+
+
+def _what_else_arrived(set_id: str, manifest) -> dict:
+    """The bills and the held files of a folder set, recovered from what is on disk.
+
+    Derived rather than stored, for the same reason the candidate route is: no table to migrate and
+    no second copy of the truth to drift. A part is a file the manifest claims; anything else under
+    ``docs/`` is either a bill, a signature for something present, or held.
+    """
+    from client_boq.ingest import folder as folder_mod
+
+    docs = Workspace().docs_dir(set_id)
+    if not docs.is_dir():
+        return {"bills": [], "held": [], "problems": []}
+
+    parts = {p.source_doc for p in manifest.parts}
+    present = {p.relative_to(docs).as_posix() for p in docs.rglob("*") if p.is_file()}
+    bills = get_bill_candidates(set_id)["candidates"]
+    billed = {b["relative_path"] for b in bills}
+
+    held = []
+    for path in sorted(p for p in docs.rglob("*") if p.is_file()):
+        relative = path.relative_to(docs).as_posix()
+        if relative in parts or relative in billed:
+            continue
+        suffix = path.suffix.lower()
+        if suffix in folder_mod._SIGNATURE_SUFFIXES and relative[: -len(suffix)] in present:
+            continue          # proof about a file that IS here, not a file nobody read
+        held.append({"relative_path": relative, "suffix": suffix,
+                     "bytes": path.stat().st_size, "note": folder_mod.HELD_NOTE})
+
+    problems = []
+    if len(bills) > 1 and not any(b["already_imported"] for b in bills):
+        proposed = next((b for b in bills if b["proposed"]), None)
+        problems.append(
+            f"{len(bills)} workbooks parse as a bill of quantities. Which one is operative is a "
+            f"decision, so none was imported"
+            + (f" — {proposed['relative_path']} looks current ({proposed['why']})." if proposed else "."))
+    return {"bills": bills, "held": held, "problems": problems}
 
 
 class ManifestApproval(BaseModel):
@@ -1033,43 +1226,206 @@ def delete_rate(rate_id: str, actor: str = Depends(_actor)) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# The output book (Outputs and norms)
+#
+# The rate book's sibling: rates say what a crew costs an hour, outputs say how many hours the work
+# takes. Both are the COMPANY's, not a job's — a tender inherits them and may override any line, and
+# client_boq.boq.outputs.resolve is the single place BOOK/YOURS/MISSING is decided.
+# ---------------------------------------------------------------------------
+class OutputEdit(BaseModel):
+    """One norm. The key is in the path; only the value is editable."""
+    value: float | None = None
+
+
+@router.get("/library/outputs")
+def get_outputs() -> dict:
+    """The output book — every declared norm, its value, and whether that value is the shipped
+    default or one somebody set.
+
+    Returns the declarations alongside the values so the screen has the label, unit, block and the
+    `⌞` explanation without a second source of truth to keep in step. Adding a norm is one entry in
+    ``outputs.NORMS`` and it appears here.
+    """
+    from client_boq.boq import outputs as outputs_mod
+    conn = store.get_conn()
+    try:
+        book = store.load_output_book(conn)
+        meta = store.output_norm_meta(conn)
+    finally:
+        conn.close()
+    return {
+        "blocks": [
+            {
+                "id": block,
+                "title": outputs_mod.BLOCK_TITLE[block],
+                "rows": [
+                    {
+                        "key": norm.key,
+                        "label": norm.label,
+                        "unit": norm.unit,
+                        "note": norm.note,
+                        "value": book.get(norm.key),
+                        "default": norm.default,
+                        # `seed` mirrors the rate book's source column: a number nobody has
+                        # touched should not claim to be somebody's decision.
+                        "source": "you" if norm.key in meta else "seed",
+                        "updated_by": meta.get(norm.key, {}).get("updated_by", ""),
+                        "updated_at": meta.get(norm.key, {}).get("updated_at"),
+                    }
+                    for norm in outputs_mod.NORMS if norm.block == block
+                ],
+            }
+            for block in outputs_mod.BLOCK_ORDER
+        ],
+        "count": len(outputs_mod.NORMS),
+    }
+
+
+@router.post("/library/outputs/{key}")
+def post_output_norm(key: str, req: OutputEdit, actor: str = Depends(_actor)) -> dict:
+    """Set one norm. Refuses a key the book does not declare.
+
+    A norm is not free-form the way a rate id is: rates are the company's own codes, but an output
+    only means anything because the engine reads it, so an undeclared key would be a number nobody
+    ever consults sitting on a screen looking authoritative.
+    """
+    from client_boq.boq import outputs as outputs_mod
+    norm = outputs_mod.NORM_INDEX.get(key)
+    if norm is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(f"There is no norm {key!r}. The book declares: "
+                    f"{', '.join(sorted(outputs_mod.NORM_INDEX))}."))
+    if req.value is None:
+        raise HTTPException(status_code=422, detail=f"{norm.label} must be a number.")
+    conn = store.get_conn()
+    try:
+        store.save_output_norm(conn, key, req.value, unit=norm.unit, actor=actor)
+        book = store.load_output_book(conn)
+    finally:
+        conn.close()
+    return {"key": key, "value": book.get(key), "default": norm.default}
+
+
+@router.delete("/library/outputs/{key}")
+def delete_output_norm(key: str) -> dict:
+    """Put one norm back to the shipped default by forgetting your value.
+
+    Not an archive, unlike a rate: a norm cannot be removed from the book — the engine reads it
+    whatever happens — so the only meaningful undo is to stop overriding the default.
+    """
+    from client_boq.boq import outputs as outputs_mod
+    norm = outputs_mod.NORM_INDEX.get(key)
+    if norm is None:
+        raise HTTPException(status_code=404, detail=f"There is no norm {key!r}.")
+    conn = store.get_conn()
+    try:
+        conn.execute("DELETE FROM client_boq_outputs WHERE key = ?", (key,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"key": key, "value": norm.default, "default": norm.default, "source": "seed"}
+
+
+# ---------------------------------------------------------------------------
 # App-wide settings — the AI model
 # ---------------------------------------------------------------------------
 class LLMSettings(BaseModel):
-    provider: str = ""          # "" = auto (env routing) | anthropic | deepseek
+    provider: str = ""          # "" = auto (env routing) | anthropic | deepseek | openai
+    # Who reads the documents. Separate because reading the tender is a different job from the
+    # stages that reason about what was read, and it decides what all of them are looking at.
+    # "" falls through to EXTRACTION_PROVIDER, then to `provider`.
+    provider_ingest: str = ""
     model_anthropic: str = ""   # "" = the env/code default
     model_deepseek: str = ""
+    model_openai: str = ""
+
+
+class CompanySettings(BaseModel):
+    """The letterhead the offer letter goes out on.
+
+    App-wide, because it is the same on every tender. The CLIENT's name and the project come from
+    that tender's own desk metadata instead, so nothing is typed twice — and the date is stamped at
+    run time rather than stored, because a letter's date is the day it was produced.
+    """
+
+    company_name: str = ""
+    company_address: str = ""
+    contact_name: str = ""
+    contact_number: str = ""
+
+
+# The keys the letterhead lives under, prefixed so the settings table stays legible as it grows.
+COMPANY_KEYS = ("letter.company_name", "letter.company_address",
+                "letter.contact_name", "letter.contact_number")
+
+
+def _company_settings(conn) -> dict:
+    """The stored letterhead, as the field names ``LetterMeta`` uses. Blank means unset, which the
+    Offer screen says out loud rather than papering over with a plausible company name."""
+    return {key.split(".", 1)[1]: store.get_setting(conn, key) for key in COMPANY_KEYS}
 
 
 @router.get("/settings")
 def get_settings() -> dict:
     """The app-wide LLM settings, plus what they actually mean at call time.
 
-    ``effective`` reports the residual truths the stored values cannot override: page images
-    always go to Anthropic vision (DeepSeek rejects image input), and an empty value means the
-    environment's default, not "off".
+    ``effective`` reports what the stored values actually resolve to at call time — including the
+    one thing no setting can override: page images go to a provider that can read one, and a
+    text-only provider falls back rather than pretending to have read a scanned page.
     """
     from client_boq import llm as llm_mod
-    from pipeline.llm_client import ANTHROPIC_MODEL, DEFAULT_DEEPSEEK_MODEL
-    import os
+    from pipeline.llm_client import (
+        VISION_CAPABLE,
+        VISION_FALLBACK,
+        model_for_provider,
+        provider_key,
+    )
     cfg = llm_mod.current_settings()
     conn = store.get_conn()
     try:
         rows = store.list_settings(conn)
+        company = _company_settings(conn)
     finally:
         conn.close()
+
+    text_provider = cfg["provider"] or ("deepseek" if provider_key("deepseek") else "anthropic")
+    ingest_provider = llm_mod.resolve_provider(cfg, llm_mod.STAGE_INGEST) or text_provider
     return {
         **cfg,
+        "company": company,
         "providers": [p for p in llm_mod.PROVIDERS if p],
         "effective": {
-            "text_provider": cfg["provider"] or (
-                "deepseek" if os.getenv("DEEPSEEK_API_KEY", "").strip() else "anthropic"),
-            "vision_provider": "anthropic",   # always — DeepSeek rejects image input
-            "model_anthropic": cfg["model_anthropic"] or os.getenv("ANTHROPIC_MODEL", ANTHROPIC_MODEL),
-            "model_deepseek": cfg["model_deepseek"] or os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL),
+            "text_provider": text_provider,
+            # Who reads the documents, and who reads a SCANNED one — which are the same provider
+            # unless it cannot take images, in which case the fallback is named rather than implied.
+            "ingest_provider": ingest_provider,
+            "vision_provider": (ingest_provider if ingest_provider in VISION_CAPABLE
+                                else VISION_FALLBACK),
+            "vision_capable": sorted(VISION_CAPABLE),
+            "model_anthropic": cfg["model_anthropic"] or model_for_provider("anthropic"),
+            "model_deepseek": cfg["model_deepseek"] or model_for_provider("deepseek"),
+            "model_openai": cfg["model_openai"] or model_for_provider("openai"),
+            "model_ingest": (cfg.get(llm_mod.MODEL_KEY.get(ingest_provider, ""))
+                             or model_for_provider(ingest_provider)),
         },
         "rows": rows,
     }
+
+
+@router.post("/company")
+def post_company(req: CompanySettings, actor: str = Depends(_actor)) -> dict:
+    """Save the letterhead. Blank fields are allowed and stay blank — the offer letter renders a
+    visible placeholder for anything unset rather than inventing a company name, which is the same
+    rule the rest of this product follows about not filling gaps on a person's behalf."""
+    conn = store.get_conn()
+    try:
+        for key, value in zip(COMPANY_KEYS, (req.company_name, req.company_address,
+                                             req.contact_name, req.contact_number)):
+            store.set_setting(conn, key, value.strip(), actor)
+    finally:
+        conn.close()
+    return get_settings()
 
 
 @router.post("/settings")
@@ -1078,14 +1434,19 @@ def post_settings(req: LLMSettings, actor: str = Depends(_actor)) -> dict:
     stages construct their client per run, so nothing needs restarting. Procurement is not
     affected: this setting is read only by ``client_boq/llm.py``."""
     from client_boq import llm as llm_mod
-    if req.provider not in llm_mod.PROVIDERS:
-        raise HTTPException(status_code=422,
-                            detail=f"provider must be one of {[p or 'auto' for p in llm_mod.PROVIDERS]}")
+    for field, value in (("provider", req.provider), ("provider_ingest", req.provider_ingest)):
+        if value not in llm_mod.PROVIDERS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field} must be one of "
+                       f"{[p or 'auto' for p in llm_mod.PROVIDERS]}")
     conn = store.get_conn()
     try:
         store.set_setting(conn, llm_mod.SETTING_PROVIDER, req.provider, actor)
+        store.set_setting(conn, llm_mod.SETTING_PROVIDER_INGEST, req.provider_ingest, actor)
         store.set_setting(conn, llm_mod.SETTING_MODEL_ANTHROPIC, req.model_anthropic.strip(), actor)
         store.set_setting(conn, llm_mod.SETTING_MODEL_DEEPSEEK, req.model_deepseek.strip(), actor)
+        store.set_setting(conn, llm_mod.SETTING_MODEL_OPENAI, req.model_openai.strip(), actor)
     finally:
         conn.close()
     return get_settings()
@@ -1340,6 +1701,90 @@ class LocateRequest(BaseModel):
     quote: str
 
 
+class LocateInSetRequest(BaseModel):
+    quote: str
+    #: The part to try first — normally whatever the viewer is already showing. An optimisation
+    #: and nothing more: the answer is identical either way, it just arrives sooner when the
+    #: guess is right.
+    prefer_part_id: str = ""
+
+
+@router.post("/ingest/{set_id}/locate")
+def post_set_locate(set_id: str, req: LocateInSetRequest) -> dict:
+    """Find a quotation **anywhere in the set**, and say which part it is in.
+
+    The per-part route above answers "is this quote on these pages". That is the wrong question for
+    a "show me on the page" button, and answering the wrong question is what made the button
+    confusing: it searched whichever document happened to be open, so on a 203-part set it reported
+    "not found" 202 times out of 203 while the words sat in a file it never looked at. The user then
+    has to guess the right document by hand — which is the job they clicked the button to avoid.
+
+    So this searches every part and reports **where** the words are. Same three verdicts, one extra
+    fact (``part_id``), and the caller switches the viewer to it.
+
+    Ordering is by part, first hit wins, so the common case is fast. A complete miss is the
+    expensive case because it has to look everywhere before it can honestly say "nowhere" —
+    measured at 6.5s over the reference set's 203 parts / 131 MB. That is the price of the honest
+    answer, and it is paid on an explicit click, not on render.
+    """
+    quote = (req.quote or "").strip()
+    if not quote:
+        raise HTTPException(status_code=422, detail="Nothing to locate.")
+
+    conn = store.get_conn()
+    try:
+        rows = store.load_parts(conn, set_id)
+    finally:
+        conn.close()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No parts in set {set_id!r}.")
+
+    # The preferred part first; everything else in its own order behind it.
+    ordered = sorted(rows, key=lambda r: r[0].part_id != req.prefer_part_id)
+
+    searched = 0        # parts we could actually look inside
+    unsearchable = 0    # parts with no text layer — looked at, could not be read
+    for spec, path, _context in ordered:
+        if not path:
+            continue
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            continue
+        if not pdfops.has_text_layer(data):
+            unsearchable += 1
+            continue
+        searched += 1
+        found = pdfops.locate(data, quote, page_offset=spec.start - 1)
+        if not found:
+            continue
+        return {
+            "verdict": models.LOCATED, "part_id": spec.part_id, "part_title": spec.title,
+            "page": found["page"], "match": found["match"], "highlights": found["highlights"],
+            "note": (f"found on page {found['page']} of {spec.part_id}"
+                     if found["match"] == "exact"
+                     else f"a distinctive fragment was found on page {found['page']} of {spec.part_id}"),
+        }
+
+    if not searched:
+        # Nothing in the whole set could be read. Calling that "not found" would blame the
+        # quotation for a set of scans.
+        return {
+            "verdict": models.UNVERIFIABLE, "part_id": "", "part_title": "", "page": None,
+            "highlights": [],
+            "note": (f"none of the {unsearchable} document(s) in this set have a text layer, so "
+                     f"the quotation could not be searched for. Read the pages to check it."),
+        }
+    return {
+        "verdict": models.NOT_LOCATED, "part_id": "", "part_title": "", "page": None,
+        "highlights": [],
+        "note": (f"these words are not in any of the {searched} searchable document(s) in this set"
+                 + (f" ({unsearchable} more could not be read)" if unsearchable else "")
+                 + ". The finding is quoting a document that is not in this upload, or "
+                   "paraphrasing rather than quoting."),
+    }
+
+
 @router.post("/ingest/parts/{set_id}/{part_id}/locate")
 def post_part_locate(set_id: str, part_id: str, req: LocateRequest) -> dict:
     """Where a quoted claim actually sits in this part — "show me" on a context card.
@@ -1379,7 +1824,13 @@ def post_part_locate(set_id: str, part_id: str, req: LocateRequest) -> dict:
         }
     return {
         "verdict": models.LOCATED, "page": found["page"], "match": found["match"],
-        "highlights": found["highlights"], "note": "",
+        "highlights": found["highlights"],
+        # An exact hit and a fragment hit are both `located`, and they are not equally strong: a
+        # fragment means the search fell back to the most distinctive run of words in the quote,
+        # so the highlight proves *that phrase* is on the page, not the whole sentence. Saying so
+        # costs one line and is the same wording s08 uses for the precomputed marks.
+        "note": (f"found on page {found['page']}" if found["match"] == "exact"
+                 else f"a distinctive fragment was found on page {found['page']}"),
     }
 
 
@@ -1949,6 +2400,56 @@ class EstimateRunRequest(BaseModel):
     margin_pct: float | None = None                 # required in live (the human states it); DEMO uses the fixture margin
     schedule: EstimateSchedule | None = None        # required in live; DEMO uses the fixture schedule
     letter: LetterMeta | None = None                # offer-letter header fields (code-injected); defaults applied
+
+
+class ScheduleSaveRequest(BaseModel):
+    set_id: str
+    schedule: EstimateSchedule
+    margin_pct: float = 0.0
+
+
+@router.get("/estimate/schedule/{set_id}")
+def get_estimate_schedule(set_id: str) -> dict:
+    """The pricing schedule a live estimate will be run FROM — quantities, resources, the margin.
+
+    `/estimate/run` takes the schedule in its request body and DEMO fills it from a fixture, so
+    until a person had to type one, nothing persisted it. A bill of quantities is far too much work
+    to retype for every re-run — and a re-run is exactly what a corrected quantity or an edited rate
+    causes. `saved` is false when this set has never had one, which is a state the screen shows
+    rather than an error.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, margin = store.load_schedule(conn, set_id)
+        meta = store.schedule_meta(conn, set_id)
+    finally:
+        conn.close()
+    return {
+        "set_id": set_id,
+        "saved": schedule is not None,
+        "schedule": (schedule or EstimateSchedule()).model_dump(),
+        "margin_pct": margin,
+        **meta,
+    }
+
+
+@router.post("/estimate/schedule")
+def post_estimate_schedule(req: ScheduleSaveRequest, actor: str = Depends(_actor)) -> dict:
+    """Save the schedule and margin for a set. Stores the INPUT to the estimate, never its output —
+    the priced result is still computed only by the deterministic spine, on `/estimate/run`."""
+    conn = store.get_conn()
+    try:
+        store.save_schedule(conn, req.set_id, req.schedule, req.margin_pct, actor)
+        meta = store.schedule_meta(conn, req.set_id)
+    finally:
+        conn.close()
+    return {
+        "set_id": req.set_id,
+        "saved": True,
+        "schedule": req.schedule.model_dump(),
+        "margin_pct": req.margin_pct,
+        **meta,
+    }
 
 
 def _flag_counts(estimate: Estimate) -> dict[str, int]:
@@ -2596,3 +3097,1374 @@ def get_estimate_letter(set_id: str) -> dict:
         "markdown": letter.markdown,
         "letter": letter.model_dump(),
     }
+
+
+# ---------------------------------------------------------------------------
+# BOQ — the client's bill of quantities: import it, diff it, price it, check it
+# ---------------------------------------------------------------------------
+# Everything below is deterministic. There is no job polling here and no DEMO/LIVE fork, because
+# nothing in this surface calls a model: reading a workbook, comparing two revisions and multiplying
+# a quantity by a rate are all things arithmetic settles. See boq/__init__.py.
+class BillRateRequest(BaseModel):
+    set_id: str
+    full_ref: str
+    rev: Optional[int] = None
+    rate: Optional[float] = None
+    build_up: Optional[models.ScheduleItem] = None
+    basis: str = ""
+    needs_review: bool = False
+    review_note: str = ""
+
+
+class AssumptionRequest(BaseModel):
+    set_id: str
+    rev: Optional[int] = None
+    assumption: models.ItemAssumption
+
+
+class CarryRequest(BaseModel):
+    set_id: str
+    from_rev: int
+    to_rev: int
+    apply: bool = False
+
+
+def _bill_or_404(conn, set_id: str, rev: Optional[int] = None) -> models.ClientBill:
+    bill = store.load_bill(conn, set_id, rev)
+    if bill is None:
+        where = "" if rev is None else f" at revision {rev}"
+        raise HTTPException(
+            status_code=404,
+            detail=f"No bill of quantities for set {set_id!r}{where}. Import the client's workbook "
+                   f"with POST /client-boq/boq/import first.")
+    return bill
+
+
+def _reprice_gate_or_409(conn, set_id: str, rev: int) -> None:
+    """A revision cannot be signed off while a carried rate is still unlooked-at.
+
+    The mirror of the rule the review side already applies to clauses: when an addendum rewrites
+    wording somebody had approved, the approval is torn up rather than quietly inherited. Here it is
+    a rate. GCT App C 2.2(v) carries a rate onto a changed quantity without comment, which is legal
+    and is not the same as being right — the reference addendum multiplied three monitoring
+    quantities by 2.17 under exactly that rule.
+    """
+    pending = store.bill_review_pending(conn, set_id, rev)
+    if pending:
+        names = ", ".join(entry["full_ref"] for entry in pending[:8])
+        more = f" and {len(pending) - 8} more" if len(pending) > 8 else ""
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{len(pending)} item{'s' if len(pending) != 1 else ''} carried into revision "
+                    f"{rev} still to be looked at: {names}{more}. A rate carried onto a changed "
+                    f"quantity or a reworded item is what the correction rules do, not a decision "
+                    f"anyone made — confirm each before this revision stands behind a price."))
+
+
+def _import_workbook(set_id: str, filename: str, payload: bytes, *,
+                     doc_id: str, rev: Optional[int], actor: str) -> dict:
+    """Read one workbook into a bill revision. The single path both import routes go through.
+
+    Two routes reach here — a browser upload, and "the copy already in this set" — and they must
+    produce byte-for-byte the same revision. Factored rather than duplicated because the one thing
+    that must never differ between them is what ends up in the database.
+    """
+    if not payload:
+        raise HTTPException(status_code=422, detail="Empty upload.")
+    if not (filename or "").lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{filename!r} is not an Excel workbook. The bill of quantities is issued and "
+                   f"submitted as .xlsx (GCT Appendix A paragraphs 9-11).")
+
+    conn = store.get_conn()
+    try:
+        target_rev = store.next_bill_rev(conn, set_id) if rev is None else int(rev)
+        # The client's own file is kept, not just what we read out of it. Their workbook is the
+        # document the tender is submitted in (GCT App A 10), so a future write-back has to have it.
+        path = store.bill_dir(Workspace(), set_id) / f"rev-{target_rev}-{Path(filename).name}"
+        path.write_bytes(payload)
+        try:
+            bill = boq_reader.read_workbook(path, set_id=set_id, rev=target_rev)
+        except Exception as exc:                                  # noqa: BLE001 — reported, not swallowed
+            raise HTTPException(status_code=422,
+                                detail=f"Could not read {filename!r} as a bill of quantities: {exc}")
+        store.save_bill_revision(conn, bill, doc_id=doc_id)
+        store.touch_set(conn, set_id, actor)
+        return {
+            "set_id": set_id, "rev": target_rev, "items": len(bill.items),
+            "bills": sorted({item.bill_no for item in bill.items}),
+            "priceable": sum(1 for i in bill.items if not i.is_parent and not i.pre_priced),
+            "pre_priced": sum(1 for i in bill.items if i.pre_priced),
+            "notes": bill.notes,
+            "item_notes": [{"full_ref": i.full_ref, "notes": i.notes} for i in bill.items if i.notes],
+        }
+    finally:
+        conn.close()
+
+
+@router.post("/boq/import")
+async def import_bill(
+    set_id: str = Form(...),
+    doc_id: str = Form(default=""),
+    rev: Optional[int] = Form(default=None),
+    file: UploadFile = File(...),
+    actor: str = Depends(_actor),
+) -> dict:
+    """Read the client's bill-of-quantities workbook into a new revision.
+
+    Excel is not a convenience here — GCT Appendix A 9 requires the bill to be submitted "only ... in
+    Editable File format, i.e. the Microsoft Excel format", using the client's own file, so the
+    workbook is the document, not an export of one.
+    """
+    return _import_workbook(set_id, file.filename or "", await file.read(),
+                            doc_id=doc_id, rev=rev, actor=actor)
+
+
+# --- the bills that arrived with the upload ---------------------------------
+#
+# A folder ingest already finds these: `plan_folder` tries every workbook through the bill reader
+# and lists the ones that parse. What it could not do was let anybody ACT on the list — the
+# candidates were returned once, in the upload response, and the screen that reloads from
+# `/ingest/manifest/{set_id}` never saw them. So the app said "pick one on the Price step" and then
+# offered nowhere to pick, which is why a set with three perfectly good bills in it could not be
+# priced at all.
+#
+# Found on demand rather than stored: no table, no migration, and a workbook dropped into the set
+# later shows up without a re-ingest. Three files is a cheap read.
+_WORKBOOK_SUFFIXES = (".xlsx", ".xlsm")
+
+# How a package names its addenda. `TA #2/BQ/E-ND_2025_04-BQ-2.xlsx` is the second technical
+# addendum's bill; the base bill has neither marking. Ranking on this is what lets the app PROPOSE
+# an operative bill instead of leaving a three-way choice with no help in it.
+_ADDENDUM_IN_PATH = re.compile(r"\bTA\s*#?\s*(\d+)", re.IGNORECASE)
+_TRAILING_INDEX = re.compile(r"[-_](\d+)$")
+
+
+def _addendum_rank(relative_path: str) -> tuple[int, str]:
+    """How late in the sequence this workbook is, and the reason to show for it."""
+    match = _ADDENDUM_IN_PATH.search(relative_path)
+    if match:
+        return int(match.group(1)), f"latest addendum: TA #{match.group(1)}"
+    stem = Path(relative_path).stem
+    match = _TRAILING_INDEX.search(stem)
+    if match:
+        return int(match.group(1)), f"highest revision marking on the filename: {stem}"
+    return 0, "the only bill found, or the base bill with no addendum marking"
+
+
+@router.get("/boq/{set_id}/candidates")
+def get_bill_candidates(set_id: str) -> dict:
+    """Every workbook in this set's upload that reads as a bill of quantities.
+
+    "Reads as" by trying, never by the filename: the reference corpus holds `E-ND_2025_04-BQ-2.xlsx`
+    and would equally hold a `Summary.xlsx` that is not a bill. The reader either finds priceable
+    items or it does not — the same test `plan_folder` applies at ingest.
+
+    One candidate is marked ``proposed`` with the sentence that explains it. Proposed, never
+    automatic: which file is newest is very nearly clerical, and being wrong about it prices the
+    wrong bill, so the app shows its reasoning and a person clicks.
+    """
+    docs = Workspace().docs_dir(set_id)
+    conn = store.get_conn()
+    try:
+        revisions = store.list_bill_revisions(conn, set_id)
+    finally:
+        conn.close()
+    # `source_file` is the name of the COPY kept beside the revision, which `_import_workbook`
+    # writes as `rev-2-E-ND_2025_04-BQ-2.xlsx`. Comparing the raw names would never match, and the
+    # screen would offer to import a bill that is already in.
+    imported = {re.sub(r"^rev-\d+-", "", row.get("source_file") or "") for row in revisions}
+
+    candidates: list[dict] = []
+    if docs.is_dir():
+        for path in sorted(p for p in docs.rglob("*") if p.suffix.lower() in _WORKBOOK_SUFFIXES):
+            relative = path.relative_to(docs).as_posix()
+            try:
+                bill = boq_reader.read_workbook(path)
+            except Exception:                     # noqa: BLE001 — not a bill is an answer, not a fault
+                continue
+            priceable = [i for i in bill.items if not i.is_parent and not i.pre_priced]
+            if not priceable:
+                continue
+            rank, why = _addendum_rank(relative)
+            candidates.append({
+                "relative_path": relative, "name": path.name, "bytes": path.stat().st_size,
+                "items": len(bill.items), "priceable": len(priceable),
+                "notes": list(bill.notes[:4]),
+                "already_imported": path.name in imported,
+                "rank": rank, "why": why, "proposed": False,
+            })
+
+    if candidates:
+        best = max(candidates, key=lambda c: (c["rank"], c["relative_path"]))
+        best["proposed"] = True
+    return {"set_id": set_id, "count": len(candidates), "candidates": candidates}
+
+
+class ImportFromSetRequest(BaseModel):
+    relative_path: str
+    doc_id: str = ""
+    rev: Optional[int] = None
+
+
+@router.post("/boq/{set_id}/import-from-set")
+def import_bill_from_set(set_id: str, req: ImportFromSetRequest,
+                         actor: str = Depends(_actor)) -> dict:
+    """Import a bill the app already holds, by its path inside this set's upload.
+
+    Uploading a file the server already has on disk is work for no reason, and on a folder ingest it
+    means going back to find the original in a 441-file tree. Same import, same revision, no
+    round trip.
+    """
+    docs = Workspace().docs_dir(set_id)
+    try:
+        # Refuses `..`, an absolute path and a drive letter rather than trimming them — a traversal
+        # attempt is not a typo. Written for the folder upload; the same rule applies to any path a
+        # client hands us.
+        relative = safe_relative_path(req.relative_path)
+    except UnsafeUploadPath as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    path = docs / relative
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No file {req.relative_path!r} in this set's upload. "
+                   f"GET /client-boq/boq/{set_id}/candidates lists what is here.")
+    return _import_workbook(set_id, path.name, path.read_bytes(),
+                            doc_id=req.doc_id, rev=req.rev, actor=actor)
+
+
+@router.get("/boq/{set_id}")
+def get_bill(set_id: str, rev: Optional[int] = None) -> dict:
+    """The bill at ``rev``, or the operative one (highest revision) when rev is not given."""
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, set_id, rev)
+        rates = store.load_bill_rates(conn, set_id, bill.rev)
+        revisions = store.list_bill_revisions(conn, set_id)
+    finally:
+        conn.close()
+    return {
+        "set_id": set_id, "rev": bill.rev, "source_file": bill.source_file,
+        "revisions": revisions,
+        "items": [item.model_dump() for item in bill.items],
+        "summary": [line.model_dump() for line in bill.summary],
+        "notes": bill.notes,
+        "rates": {ref: {k: v for k, v in row.items() if k != "build_up"} for ref, row in rates.items()},
+    }
+
+
+@router.get("/boq/{set_id}/diff/{from_rev}/{to_rev}")
+def get_bill_diff(set_id: str, from_rev: int, to_rev: int) -> dict:
+    """What changed between two revisions of the bill.
+
+    The reason this endpoint exists at all: the workbook marks nothing. No fill, no bold, no comment,
+    no tracked change — and the addendum's own summary of itself is disclaimed as "neither
+    exhaustive nor guaranteed to be accurate".
+    """
+    conn = store.get_conn()
+    try:
+        before = _bill_or_404(conn, set_id, from_rev)
+        after = _bill_or_404(conn, set_id, to_rev)
+        priced = {ref: row["rate"] for ref, row in store.load_bill_rates(conn, set_id, from_rev).items()}
+    finally:
+        conn.close()
+    diff = boq_diff.diff_bills(before, after)
+    carried = boq_carry.carry_rates(diff, before, after, priced)
+    return {
+        "set_id": set_id, "from_rev": from_rev, "to_rev": to_rev,
+        "counts": diff.counts(), "unchanged": diff.unchanged,
+        "moved_only": diff.moved_only,
+        "changes": [change.model_dump() for change in diff.changes],
+        "worklist": [entry.model_dump() for entry in boq_carry.pending_review(carried)],
+    }
+
+
+@router.post("/boq/carry")
+def carry_bill_rates(req: CarryRequest, actor: str = Depends(_actor)) -> dict:
+    """Propose — or, with ``apply``, write — the rates for a new revision.
+
+    A proposal until somebody says otherwise. Every entry names the rule that produced it, and every
+    entry that needs a person to look holds the new revision's gate shut until they have.
+    """
+    conn = store.get_conn()
+    try:
+        before = _bill_or_404(conn, req.set_id, req.from_rev)
+        after = _bill_or_404(conn, req.set_id, req.to_rev)
+        priced = store.load_bill_rates(conn, req.set_id, req.from_rev)
+        diff = boq_diff.diff_bills(before, after)
+        carried = boq_carry.carry_rates(diff, before, after,
+                                        {ref: row["rate"] for ref, row in priced.items()})
+        if req.apply:
+            for entry in carried:
+                if entry.basis == models.CARRY_DELETED:
+                    continue
+                store.save_bill_rate(
+                    conn, req.set_id, req.to_rev, entry.full_ref, rate=entry.rate,
+                    build_up=priced.get(entry.full_ref, {}).get("build_up"),
+                    basis=entry.basis,
+                    # It stays the estimator's rate: App C 2.2(v) carries THEIR number forward, it
+                    # does not invent one. What is not yet theirs is the decision that the number is
+                    # still right at the new quantity, and `needs_review` is what says so.
+                    badge=priced.get(entry.full_ref, {}).get("badge") or models.BADGE_USER,
+                    needs_review=entry.needs_review, review_note=entry.reason, actor=actor,
+                )
+        pending = boq_carry.pending_review(carried)
+    finally:
+        conn.close()
+    return {
+        "set_id": req.set_id, "from_rev": req.from_rev, "to_rev": req.to_rev,
+        "applied": req.apply,
+        "carried": [entry.model_dump() for entry in carried],
+        "needs_review": [entry.model_dump() for entry in pending],
+    }
+
+
+@router.post("/boq/rate")
+def save_bill_rate(req: BillRateRequest, actor: str = Depends(_actor)) -> dict:
+    """Save one item's rate and the build-up behind it. Editing always transfers ownership."""
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        item = bill.index().get(req.full_ref)
+        if item is None:
+            raise HTTPException(status_code=404,
+                                detail=f"No item {req.full_ref!r} in revision {bill.rev} of the bill.")
+        if item.pre_priced:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Item {req.full_ref} is pre-priced by the client at "
+                        f"{item.client_rate}. GCT App C 2.2(vi) reinstates the client's figure at "
+                        f"examination, so a rate entered here would be discarded."))
+        amount = None
+        if req.rate is not None:
+            amount = req.rate if item.lump else round(req.rate * (item.qty or 0), 2)
+        store.save_bill_rate(
+            conn, req.set_id, bill.rev, req.full_ref, rate=req.rate, amount=amount,
+            build_up=req.build_up, basis=req.basis or "built", badge=models.BADGE_USER,
+            needs_review=req.needs_review, review_note=req.review_note, actor=actor,
+        )
+        store.touch_set(conn, req.set_id, actor)
+        pending = store.bill_review_pending(conn, req.set_id, bill.rev)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "rev": bill.rev, "full_ref": req.full_ref,
+            "rate": req.rate, "amount": amount, "badge": models.BADGE_USER,
+            "outstanding_review": len(pending)}
+
+
+@router.post("/boq/assumption")
+def save_bill_assumption(req: AssumptionRequest, actor: str = Depends(_actor)) -> dict:
+    """Save how one item's given quantity is assumed to split, and price it from that.
+
+    The mix has to reconcile to the client's quantity. It is not scaled to fit: the total is fixed
+    by the bill and may not be altered (GCT 6), so a mix that disagrees is an error in the mix, and
+    a rate built from a silently corrected mix is indistinguishable from one that is right.
+    """
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        item = bill.index().get(req.assumption.full_ref)
+        if item is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No item {req.assumption.full_ref!r} in revision {bill.rev} of the bill.")
+        try:
+            build_up = boq_production.expand(req.assumption, item)
+        except boq_production.AssumptionMismatch as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+        assumption = req.assumption.model_copy(update={"badge": models.BADGE_USER})
+        store.save_item_assumption(conn, req.set_id, bill.rev, assumption, actor=actor)
+        store.save_bill_rate(
+            conn, req.set_id, bill.rev, item.full_ref, build_up=build_up, basis="built",
+            badge=models.BADGE_USER, actor=actor,
+        )
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+    return {
+        "set_id": req.set_id, "rev": bill.rev, "full_ref": item.full_ref,
+        "shifts": [{"condition": label, "shifts": shifts}
+                   for label, shifts in boq_production.shifts_for(assumption)],
+        "weighted_output": boq_production.weighted_output(assumption),
+        "unpriced_conditions": boq_production.unpriced_conditions(assumption),
+        "build_up": build_up.model_dump(),
+    }
+
+
+@router.get("/boq/{set_id}/priced")
+def get_priced_bill(set_id: str, rev: Optional[int] = None, margin_pct: float = 0.0) -> dict:
+    """The bill, priced from the stored build-ups and rates."""
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, set_id, rev)
+        stored = store.load_bill_rates(conn, set_id, bill.rev)
+        rate_rows = rates_store.load(conn)
+    finally:
+        conn.close()
+    build_ups = {ref: row["build_up"] for ref, row in stored.items() if row["build_up"] is not None}
+    carried = {ref: row["rate"] for ref, row in stored.items()
+               if row["rate"] is not None and row["build_up"] is None}
+    priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, margin_pct=margin_pct,
+                                    carried=carried)
+    return {"set_id": set_id, "rev": bill.rev, **priced.model_dump()}
+
+
+@router.get("/boq/{set_id}/checks")
+def get_bill_checks(set_id: str, rev: Optional[int] = None, margin_pct: float = 0.0,
+                    fee_pct: Optional[float] = None) -> dict:
+    """Run the deterministic guards over the priced bill. Each names the clause it enforces."""
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, set_id, rev)
+        stored = store.load_bill_rates(conn, set_id, bill.rev)
+        rate_rows = rates_store.load(conn)
+        pending = store.bill_review_pending(conn, set_id, bill.rev)
+    finally:
+        conn.close()
+    build_ups = {ref: row["build_up"] for ref, row in stored.items() if row["build_up"] is not None}
+    carried = {ref: row["rate"] for ref, row in stored.items()
+               if row["rate"] is not None and row["build_up"] is None}
+    priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, margin_pct=margin_pct,
+                                    carried=carried)
+    issued = {line.code: line.amount for line in bill.summary
+              if line.client_inserted and line.code in {"B", "D", "E"} and line.amount is not None}
+    flags = boq_checks.run_checks(priced, bill, issued_sums=issued, fee_pct=fee_pct)
+    return {
+        "set_id": set_id, "rev": bill.rev,
+        "tendered_total": priced.tendered_total,
+        "counts": {kind: sum(1 for f in flags if f.kind == kind)
+                   for kind in sorted({f.kind for f in flags})},
+        "flags": [flag.model_dump() for flag in flags],
+        "outstanding_review": pending,
+    }
+
+
+@router.post("/boq/{set_id}/revision/{rev}/sign-off")
+def sign_off_bill_revision(set_id: str, rev: int, actor: str = Depends(_actor)) -> dict:
+    """Declare a bill revision priced. Refused while any carried rate is still unlooked-at."""
+    conn = store.get_conn()
+    try:
+        _bill_or_404(conn, set_id, rev)
+        _reprice_gate_or_409(conn, set_id, rev)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "rev": rev, "signed_off": True, "by": actor}
+
+
+# ---------------------------------------------------------------------------
+# The take-off (Site) — the drawing's half of the estimate
+#
+# Everything the bill of quantities does not say: where the 91 holes are, what the general-notes
+# drawing rules about them, which of them a rig can reach, and which of them drill alike.
+#
+# There is NO GATE on this step. An unassigned hole cannot stop you pricing — but the Price step
+# carries the count live, and the sweep will not settle while one is open. The block is where the
+# money is decided, not where the reading is.
+# ---------------------------------------------------------------------------
+class StationScheduleRequest(BaseModel):
+    """The schedule read off the drawing. ``confirm`` is a person saying they have checked it."""
+    set_id: str
+    schedule: boq_schedule.StationSchedule
+    source_sheet: str = ""
+    confirm: bool = False
+
+
+class StationClassRequest(BaseModel):
+    set_id: str
+    station: str
+    access_class: str = ""          # A | B | C, or "" to un-decide it
+    group_id: Optional[str] = None  # None leaves the existing grouping alone
+
+
+class HoleGroupRequest(BaseModel):
+    set_id: str
+    rev: Optional[int] = None
+    group_id: str
+    group: boq_groups.HoleGroup
+
+
+class GroupPreviewRequest(BaseModel):
+    """One group's inputs, for the live arithmetic under the Groups screen."""
+    set_id: str
+    group: boq_groups.HoleGroup
+
+
+def _schedule_or_404(conn, set_id: str) -> boq_schedule.StationSchedule:
+    schedule, _meta = store.load_station_schedule(conn, set_id)
+    if schedule is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No station schedule for set {set_id!r}. Read it off the borehole details "
+                   f"drawing (GI/210 on the reference contract) and save it first.")
+    return schedule
+
+
+def _billed_class_counts(bill: models.ClientBill, class_refs: dict) -> dict:
+    """How many rig moves of each class the client actually billed.
+
+    Read from the bill rather than typed, because it is the only external check on a judgement the
+    estimator otherwise makes alone — and a number he typed himself cannot check him.
+    """
+    index = bill.index()
+    counts = {}
+    for name, ref in class_refs.items():
+        item = index.get(ref)
+        if item is not None and item.qty:
+            counts[name] = int(item.qty)
+    return counts
+
+
+@router.get("/site/{set_id}/schedule")
+def get_station_schedule(set_id: str) -> dict:
+    """The stations, and whether every row adds up.
+
+    ``bad_rows`` is the first thing the screen shows: a hole whose length does not equal its soil
+    plus its rock has been misread, and no quantity derived from it means anything. They are named,
+    never silently dropped and never repaired.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, meta = store.load_station_schedule(conn, set_id)
+        classes = store.load_station_classes(conn, set_id)
+    finally:
+        conn.close()
+    if schedule is None:
+        return {"set_id": set_id, "stations": [], "trial_pits": [], "classes": {},
+                "bad_rows": [], "usable": False, "totals": {}, "meta": meta,
+                "waiting_on": "the borehole details schedule has not been read yet"}
+    return {
+        "set_id": set_id,
+        "meta": meta,
+        "stations": [s.model_dump() for s in schedule.stations],
+        "trial_pits": [p.model_dump() for p in schedule.trial_pits],
+        "classes": classes,
+        "bad_rows": schedule.bad_rows(),
+        "usable": schedule.usable(),
+        "totals": {
+            "holes": schedule.hole_count(), "soil_m": schedule.soil_m(),
+            "rock_m": schedule.rock_m(), "hard_m": schedule.hard_m(),
+            "standpipes": schedule.standpipes(), "piezometers": schedule.piezometers(),
+            "instruments": schedule.instruments(), "deepest": schedule.deepest(),
+            "trial_pits": len(schedule.trial_pits),
+        },
+    }
+
+
+@router.post("/site/schedule")
+def post_station_schedule(req: StationScheduleRequest, actor: str = Depends(_actor)) -> dict:
+    """Save the schedule, and optionally confirm it.
+
+    Confirming is not sticky. A re-read lands unconfirmed again, because the thing somebody checked
+    is no longer the thing on the screen — the same rule the register applies when an addendum
+    rewrites a clause somebody had already ruled on.
+    """
+    conn = store.get_conn()
+    try:
+        store.save_station_schedule(conn, req.set_id, req.schedule,
+                                    source_sheet=req.source_sheet, confirmed=req.confirm,
+                                    actor=actor)
+        _schedule, meta = store.load_station_schedule(conn, req.set_id)
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "meta": meta,
+            "bad_rows": req.schedule.bad_rows(), "usable": req.schedule.usable()}
+
+
+@router.get("/site/{set_id}/derived")
+def get_derived_quantities(set_id: str, rev: Optional[int] = None) -> dict:
+    """What the drawing says the quantities should be, checked against what the client billed.
+
+    A divergence is worth more than a match. On the reference contract GI/100's Table 1 says 52
+    permeability tests and the bill says 54 — nobody reading either document alone would notice,
+    and the tenderer who prices 52 has under-priced two.
+    """
+    conn = store.get_conn()
+    try:
+        schedule = _schedule_or_404(conn, set_id)
+        criteria, _class_refs = store.load_site_criteria(conn, set_id)
+        bill = store.load_bill(conn, set_id, rev)
+    finally:
+        conn.close()
+    report = boq_derive.derive(schedule, criteria, bill=bill)
+    return {
+        "set_id": set_id, "rev": bill.rev if bill else None,
+        "checked_against_a_bill": bill is not None,
+        "derived": [d.model_dump() for d in report.derived],
+        "divergences": [d.model_dump() for d in report.divergences()],
+        "confirmations": [d.full_ref for d in report.confirmations()],
+        "unchecked": [d.label for d in report.unchecked()],
+    }
+
+
+@router.post("/site/class")
+def post_station_class(req: StationClassRequest, actor: str = Depends(_actor)) -> dict:
+    """Class one hole. The judgement no document in the set contains.
+
+    Class C is the interesting one: PS 7.01B calls it access "only by helicopter" and the bill has
+    no item for it, so a hole classed C has nowhere to be priced. That is not a reason to price it
+    at nothing — the response says so, and the sweep is where it goes.
+    """
+    from client_boq.boq.groups import CLASS_C, CLASS_MEANING, CLASSES
+    if req.access_class and req.access_class not in CLASSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{req.access_class!r} is not a class of site. PS 7.01B has "
+                   f"{', '.join(CLASSES)}.")
+    conn = store.get_conn()
+    try:
+        store.save_station_class(conn, req.set_id, req.station, access_class=req.access_class,
+                                 group_id=req.group_id, actor=actor)
+        classes = store.load_station_classes(conn, req.set_id)
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+    counts: dict[str, int] = {}
+    for row in classes.values():
+        if row["access_class"]:
+            counts[row["access_class"]] = counts.get(row["access_class"], 0) + 1
+    return {
+        "set_id": req.set_id, "station": req.station,
+        "access_class": req.access_class, "decided_by": actor,
+        "counts": counts,
+        "note": (f"{CLASS_MEANING[CLASS_C]} — this hole has no bill item to be priced against, so "
+                 f"it goes to the sweep rather than being priced at nothing."
+                 if req.access_class == CLASS_C else ""),
+    }
+
+
+@router.get("/site/{set_id}/groups")
+def get_hole_groups(set_id: str, rev: Optional[int] = None) -> dict:
+    """The groups, what each still needs, and whether the classification agrees with the bill.
+
+    ``reconcile`` is the whole point of the screen. The client bills 80 Class A and 11 Class B rig
+    moves and never says which holes; the estimator's counts coming back to 80 and 11 is the only
+    external check there is on a decision he otherwise makes alone.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+        bill = store.load_bill(conn, set_id, rev)
+        resolved_rev = bill.rev if bill else 0
+        groups = store.load_hole_groups(conn, set_id, resolved_rev)
+        classes = store.load_station_classes(conn, set_id)
+        _criteria, class_refs = store.load_site_criteria(conn, set_id)
+        book = store.load_output_book(conn)
+    finally:
+        conn.close()
+
+    # A group's class follows its stations': the estimator classes holes on the Holes screen, and a
+    # group is just a set of holes that drill alike. Inferring it here keeps that one act, not two.
+    filled = []
+    sources = {}
+    for group in groups:
+        if schedule is not None:
+            group = boq_groups.summarise(group, schedule)
+        assigned = {classes.get(name, {}).get("access_class", "") for name in group.stations}
+        assigned.discard("")
+        if len(assigned) == 1 and not group.access_class:
+            group = group.model_copy(update={"access_class": assigned.pop()})
+        group, source = boq_outputs.apply_to_group(group, book)
+        filled.append(group)
+        sources[group.label] = {k: v.model_dump() for k, v in source.items()}
+
+    plan = boq_groups.GroupPlan(
+        groups=filled,
+        billed_class_counts=_billed_class_counts(bill, class_refs) if bill else {})
+    return {
+        "set_id": set_id, "rev": resolved_rev,
+        "groups": [g.model_dump() for g in filled],
+        "sources": sources,
+        "counts": plan.counts(),
+        "unassigned": plan.unassigned(),
+        "billed_class_counts": plan.billed_class_counts,
+        "reconcile": plan.reconcile(),
+        "not_ready": plan.not_ready(),
+        "class_refs": class_refs,
+    }
+
+
+@router.post("/site/group")
+def post_hole_group(req: HoleGroupRequest, actor: str = Depends(_actor)) -> dict:
+    """Create or update a group — the estimator's judgement about which holes drill alike.
+
+    Nothing in the client's documents draws these lines, which is why the group carries a ``basis``
+    and stays "not ready" until it is written. A number nobody can explain is a number nobody can
+    defend.
+    """
+    conn = store.get_conn()
+    try:
+        bill = store.load_bill(conn, req.set_id, req.rev)
+        resolved_rev = bill.rev if bill else 0
+        schedule, _meta = store.load_station_schedule(conn, req.set_id)
+        group = boq_groups.summarise(req.group, schedule) if schedule else req.group
+        store.save_hole_group(conn, req.set_id, resolved_rev, req.group_id, group, actor)
+        existing = store.load_station_classes(conn, req.set_id)
+        for station in group.stations:
+            store.save_station_class(
+                conn, req.set_id, station,
+                access_class=existing.get(station, {}).get("access_class", ""),
+                group_id=req.group_id, actor=actor)
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "rev": resolved_rev, "group_id": req.group_id,
+            "group": group.model_dump(), "ready": group.ready()}
+
+
+@router.delete("/site/{set_id}/group/{group_id}")
+def remove_hole_group(set_id: str, group_id: str, rev: Optional[int] = None,
+                      actor: str = Depends(_actor)) -> dict:
+    """Remove a group. Its holes keep their access classes — classifying a hole and deciding which
+    spread works it are two different acts, and undoing one must not undo the other."""
+    conn = store.get_conn()
+    try:
+        bill = store.load_bill(conn, set_id, rev)
+        store.delete_hole_group(conn, set_id, bill.rev if bill else 0, group_id)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "group_id": group_id, "deleted": True,
+            "note": "The holes keep the class you gave them; only the grouping is gone."}
+
+
+@router.post("/site/preview")
+def post_group_preview(req: GroupPreviewRequest) -> dict:
+    """The arithmetic under the Groups screen, recomputed as the estimator types.
+
+    Deliberately a round trip rather than the same sum written again in TypeScript. The day-by-day
+    simulation — 5% slower every 20 m down, and the afternoon going to rock when soil finishes at
+    lunchtime — is the load-bearing calculation in this product, and two implementations of it
+    would eventually disagree with no way to tell which was right.
+
+    It prices nothing. Days and the blended rate of work are exact and cheap; the RATE needs the
+    whole bill, and comes from ``/boq/{set_id}/priced`` when the estimator leaves the screen.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, req.set_id)
+        book = store.load_output_book(conn)
+    finally:
+        conn.close()
+
+    group = boq_groups.summarise(req.group, schedule) if schedule else req.group
+    group, sources = boq_outputs.apply_to_group(group, book)
+    source_dump = {k: v.model_dump() for k, v in sources.items()}
+    missing = group.ready()
+    if missing:
+        return {"ready": False, "waiting_on": missing, "sources": source_dump}
+
+    duration = group.duration()
+    metres = group.soil_m + group.rock_m
+    return {
+        "ready": True,
+        "sources": source_dump,
+        "soil_m": group.soil_m, "rock_m": group.rock_m,
+        "soil_days": duration.soil_days,
+        "rock_days_charged": duration.rock_days_charged,
+        "drilling_days": duration.total_days,
+        "on_site_days": float(duration.total_days) + book.mob_days,
+        "rigs": group.rigs,
+        # What the group actually achieves once decay and the part-day carry-over are in. This
+        # number exists so somebody can say "we have never beaten 9 on that hill" and fix it before
+        # any money is involved.
+        "blended_m_per_day": (metres / duration.total_days) if duration.total_days else 0.0,
+        "unfinished": duration.unfinished,
+    }
+
+
+@router.get("/site/{set_id}/georef")
+def get_georef(set_id: str, sheet: str = "", window_m: float = boq_georef.DEFAULT_WINDOW_M) -> dict:
+    """Where each station sits on a drawing sheet, as fractions of the page.
+
+    Coordinates, never images. One render per sheet is cropped ninety-one ways in the browser, so
+    there is no image pipeline here and none is needed — the placement is arithmetic over two
+    printed grid marks, which is a ruler rather than a guess.
+
+    Registrations are not persisted yet, so this reports what it is waiting for rather than
+    inventing marks. Two typed coordinates turn it on.
+    """
+    conn = store.get_conn()
+    try:
+        schedule = _schedule_or_404(conn, set_id)
+    finally:
+        conn.close()
+    registration = boq_georef.SheetRegistration(sheet=sheet)
+    return {
+        "set_id": set_id, "sheet": sheet, "window_m": window_m,
+        "registration": registration.model_dump(),
+        "problems": registration.problems(),
+        "waiting_on": ("two printed grid marks from this sheet — read the coordinates beside any "
+                       "two grid crosses and the other eighty-nine holes follow by arithmetic"),
+        "stations": [s.station for s in schedule.stations
+                     if s.easting is not None and s.northing is not None],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Price — the working, what a rate must cover, and the sweep
+#
+# The sweep is the app's ONLY hard stop. Everything else warns and lets you past, because everything
+# else can be corrected later; a cost with no bill item and no routing cannot, and the reason is in
+# the contract rather than in a preference:
+#
+#   General Preambles ¶6 — "Items against which no rate is entered shall be deemed to be covered by
+#   the other rates in the bill of quantities."
+# ---------------------------------------------------------------------------
+class CoverageTickRequest(BaseModel):
+    """A person saying their build-up does (or no longer does) carry one head."""
+    set_id: str
+    rev: Optional[int] = None
+    full_ref: str = ""          # "" ticks a bill-level head
+    head_key: str
+    ticked: bool = True
+
+
+class SweepCostRequest(BaseModel):
+    set_id: str
+    rev: Optional[int] = None
+    key: str
+    label: str = ""
+    source: str = ""
+    amount: Optional[float] = None
+    route: str = ""             # query | load | spread | accept ('' leaves it unrouted)
+    target_ref: str = ""
+    reason: str = ""
+
+
+def _coverage_or_404(conn, set_id: str, rev: Optional[int], full_ref: str):
+    bill = _bill_or_404(conn, set_id, rev)
+    item = bill.index().get(full_ref)
+    if item is None:
+        raise HTTPException(status_code=404,
+                            detail=f"No item {full_ref!r} in the bill at revision {bill.rev}.")
+    return bill, item
+
+
+@router.get("/price/{set_id}/coverage/{full_ref}")
+def get_item_coverage(set_id: str, full_ref: str, rev: Optional[int] = None) -> dict:
+    """What this rate must cover, and how much of it somebody has said it does.
+
+    The list is a rule's — read off the Method of Measurement and the clauses its item coverage
+    cites. The ticks are a person's, every one carrying a name and a date. A machine cannot know
+    what you put in your number, so it never guesses: nothing here is ever pre-ticked, and three
+    unticked heads is not an error but a decision waiting.
+    """
+    conn = store.get_conn()
+    try:
+        bill, item = _coverage_or_404(conn, set_id, rev, full_ref)
+        ticks = store.load_coverage_ticks(conn, set_id, bill.rev)
+        docmap_row = conn.execute(
+            "SELECT map_json FROM client_boq_docmaps WHERE set_id = ? ORDER BY source LIMIT 1",
+            (set_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    docmap = None
+    if docmap_row and docmap_row["map_json"] and docmap_row["map_json"] != "{}":
+        docmap = boq_docmap.DocumentMap.model_validate_json(docmap_row["map_json"])
+
+    merged = {**ticks.get(full_ref, {}), **ticks.get("", {})}
+    coverage = boq_coverage.coverage_for(item, docmap=docmap, ticks=merged)
+    section = (item.bill_no or full_ref.split(".", 1)[0]).strip()
+    return {
+        "set_id": set_id, "rev": bill.rev,
+        "full_ref": full_ref, "description": item.description,
+        "summary": coverage.summary(),
+        "entries": [e.model_dump() for e in coverage.entries],
+        "bill_level": coverage.bill_level.model_dump() if coverage.bill_level else None,
+        "uncovered": [e.key for e in coverage.uncovered()],
+        "settled": coverage.settled(),
+        "note": coverage.note,
+        # An empty list must never read as "this rate covers nothing". It means the item coverage
+        # for this bill section has not been transcribed yet — a gap in the app, not in the
+        # contract, and the difference matters enormously to somebody about to price the item.
+        "waiting_on": ("" if coverage.entries else
+                       f"The item coverage for Bill No.{section} has not been transcribed yet, so "
+                       f"this list is empty because nobody has read it — not because the rate "
+                       f"carries no obligations. Read Section {section} of the Method of "
+                       f"Measurement before pricing this item."),
+    }
+
+
+@router.post("/price/coverage/tick")
+def post_coverage_tick(req: CoverageTickRequest, actor: str = Depends(_actor)) -> dict:
+    """Tick or untick one head. **Only this endpoint writes a tick, and only a person calls it.**
+
+    The same structural refusal ``/review/approve`` makes for a clause verdict: there is no badge
+    column on the row and no code path by which a model could set one.
+    """
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        store.save_coverage_tick(conn, req.set_id, bill.rev, req.full_ref, req.head_key,
+                                 req.ticked, actor)
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "rev": bill.rev, "full_ref": req.full_ref,
+            "head_key": req.head_key, "ticked": req.ticked, "ticked_by": actor if req.ticked else ""}
+
+
+@router.get("/price/{set_id}/trace/{full_ref}")
+def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
+                   margin_pct: float = 0.0) -> dict:
+    """How this rate was reached, as a tree that opens all the way down to a page.
+
+    Every leaf says whether it came from a document, a person or the library, and ``problems`` names
+    any that cannot — because a tree with one unattributed number still looks complete, and looking
+    complete is the failure this screen exists to prevent.
+    """
+    conn = store.get_conn()
+    try:
+        bill, item = _coverage_or_404(conn, set_id, rev, full_ref)
+        rates = store.load_bill_rates(conn, set_id, bill.rev)
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+        groups = store.load_hole_groups(conn, set_id, bill.rev)
+        sweep = store.load_sweep(conn, set_id, bill.rev)
+    finally:
+        conn.close()
+
+    row = rates.get(full_ref)
+    # A lump item's quantity is legitimately absent — SMM Corr. 1/2007 Part III ¶3 prints "-" in the
+    # rate column — so `qty` is Optional on the model and must not be handed straight to arithmetic.
+    qty = item.qty or 0.0
+    breakdown = boq_allocate.RateBreakdown(
+        full_ref=full_ref, label=item.description,
+        rate=row["rate"] if row else None,
+        cost=(row["amount"] or 0.0) if row else 0.0,
+        divisor=qty, divisor_label=item.unit, lump=item.lump, markup_pct=margin_pct,
+    )
+    trace = boq_trace.trace_rate(
+        breakdown, description=item.description, unit=item.unit, qty=qty,
+        amount=row["amount"] if row else None, margin_pct=margin_pct,
+        margin_owner=(row.get("updated_by", "") if row else ""),
+        groups=groups, schedule=schedule,
+        spread_share=0.0, spread_total=sweep.spread_total(),
+    )
+    return {
+        "set_id": set_id, "rev": bill.rev, "full_ref": full_ref,
+        "trace": trace.model_dump(),
+        "priced": row is not None,
+        "waiting_on": ("" if row else
+                       "this item has no rate yet — price it and the working appears here"),
+    }
+
+
+@router.get("/price/{set_id}/sweep")
+def get_sweep(set_id: str, rev: Optional[int] = None) -> dict:
+    """Costs the contract makes yours that no bill item asks for, and where each one is going."""
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, set_id, rev)
+        sweep = store.load_sweep(conn, set_id, bill.rev)
+    finally:
+        conn.close()
+    return {
+        "set_id": set_id, "rev": bill.rev,
+        "costs": [c.model_dump() for c in sweep.costs],
+        # `outstanding()` returns the reasons, one sentence per unrouted cost — the same sentences
+        # the gate refuses with, so the screen can show them before the button is pressed rather
+        # than after.
+        "outstanding": sweep.outstanding(),
+        "settled": sweep.settled(),
+        "spread_total": sweep.spread_total(),
+        "loadings": sweep.loadings(),
+        "queries": [c.label for c in sweep.queries()],
+        "accepted_risk": sweep.accepted_risk(),
+        "routes": list(boq_unbilled.ROUTES),
+        "route_meaning": boq_unbilled.ROUTE_MEANING,
+        "warning": boq_unbilled.SILENCE_WARNING,
+    }
+
+
+@router.post("/price/sweep")
+def post_sweep_cost(req: SweepCostRequest, actor: str = Depends(_actor)) -> dict:
+    """Add a cost to the sweep, or route one already on it.
+
+    Routing is a decision and it is stamped. Accepting a risk needs a written reason, because a risk
+    somebody took deliberately and one nobody noticed look identical six months later.
+    """
+    if req.route and req.route not in boq_unbilled.ROUTES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{req.route!r} is not a route. There are four: "
+                   f"{', '.join(boq_unbilled.ROUTES)}.")
+    cost = boq_unbilled.UnbilledCost(
+        key=req.key, label=req.label, source=req.source, amount=req.amount,
+        route=req.route, target_ref=req.target_ref, reason=req.reason, decided_by=actor)
+    problem = cost.problem() if req.route else None
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        if req.route == boq_unbilled.ROUTE_LOAD and req.target_ref not in bill.index():
+            raise HTTPException(
+                status_code=422,
+                detail=f"There is no item {req.target_ref!r} to load {req.label or req.key!r} onto.")
+        store.save_sweep_cost(conn, req.set_id, bill.rev, cost, actor)
+        sweep = store.load_sweep(conn, req.set_id, bill.rev)
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "rev": bill.rev, "key": req.key, "route": req.route,
+            "decided_by": actor if req.route else "",
+            "outstanding": len(sweep.outstanding()), "settled": sweep.settled()}
+
+
+@router.post("/price/{set_id}/sweep/settle")
+def settle_sweep(set_id: str, rev: Optional[int] = None, actor: str = Depends(_actor)) -> dict:
+    """Declare the sweep settled. **The app's only hard stop.**
+
+    Refuses on the module's own sentence, unrewritten — it names each outstanding cost and says what
+    leaving it costs. Also refuses while a hole has no access class, which is where the Site step's
+    missing gate actually lands: an unclassed hole is a rig move nobody has priced.
+    """
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, set_id, rev)
+        sweep = store.load_sweep(conn, set_id, bill.rev)
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+        classes = store.load_station_classes(conn, set_id)
+    finally:
+        conn.close()
+
+    if schedule is not None:
+        unassigned = [s.station for s in schedule.stations
+                      if not classes.get(s.station, {}).get("access_class")]
+        if unassigned:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"{len(unassigned)} hole(s) still have no class of site — "
+                        f"{', '.join(unassigned[:5])}{'…' if len(unassigned) > 5 else ''}. "
+                        f"Each one is a rig move that has not been priced against 2.2a or 2.2b."))
+    try:
+        boq_unbilled.gate(sweep)
+    except boq_unbilled.UnroutedCost as refused:
+        raise HTTPException(status_code=409, detail=str(refused)) from refused
+
+    conn = store.get_conn()
+    try:
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "rev": bill.rev, "settled": True, "by": actor,
+            "spread_total": sweep.spread_total(), "loadings": sweep.loadings(),
+            "accepted_risk": sweep.accepted_risk()}
+
+
+# ---------------------------------------------------------------------------
+# Costing — the bill in, the priced workbook out
+#
+# The whole point of the module: a client's bill of quantities becomes a bottom-up cost build-up and
+# an eight-sheet Excel model that still calculates. Everything the engine does is described by an
+# editable CostingModel, and a change made on one tender stays on that tender (copy-on-write).
+# ---------------------------------------------------------------------------
+class CostingModelRequest(BaseModel):
+    model: boq_model.CostingModel
+
+
+class SubmittedRateRequest(BaseModel):
+    set_id: str
+    rev: Optional[int] = None
+    full_ref: str
+    rate: Optional[float] = None    # None puts the rounded proposal back
+
+
+class ItemBasisRequest(BaseModel):
+    set_id: str
+    rev: Optional[int] = None
+    full_ref: str
+    #: Exactly one of these. Empty strings in all three clear the override and put the app's own
+    #: proposal back — the same "None restores the proposal" rule the submitted rate follows.
+    basis_key: str = ""
+    lab_key: str = ""
+    prelim_key: str = ""
+
+
+@router.post("/costing/item-basis")
+def post_item_basis(req: ItemBasisRequest, actor: str = Depends(_actor)) -> dict:
+    """Point one bill item at the thing that should price it.
+
+    ``_costing`` has always READ these overrides out of the costing state and applied them; nothing
+    ever wrote one. So a proposal the app got wrong could only be typed over with a flat rate, which
+    loses the build-up behind it — you got a number instead of a model. This is the missing half.
+    """
+    chosen = [k for k in (req.basis_key, req.lab_key, req.prelim_key) if k]
+    if len(chosen) > 1:
+        raise HTTPException(status_code=422,
+                            detail="An item is priced by one thing. Send basis_key, lab_key or "
+                                   "prelim_key — not more than one.")
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        if req.full_ref not in bill.index():
+            raise HTTPException(status_code=404,
+                                detail=f"No item {req.full_ref!r} in revision {bill.rev}.")
+        model = boq_model.effective(store.load_library_model(conn), store.load_set_model(conn, req.set_id))
+        for key, index, what in ((req.basis_key, model.basis_index(), "build-up basis"),
+                                 (req.lab_key, model.lab_index(), "laboratory rate"),
+                                 (req.prelim_key, model.prelim_index(), "preliminaries resource")):
+            if key and key not in index:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{key!r} is not a {what} in this model. Available: "
+                           f"{', '.join(sorted(index)[:12])}")
+
+        state = store.load_costing_state(conn, req.set_id, bill.rev)
+        items = dict(state["mapping"].get("items") or {})
+        if chosen:
+            items[req.full_ref] = {"basis_key": req.basis_key, "lab_key": req.lab_key,
+                                   "prelim_key": req.prelim_key}
+        else:
+            items.pop(req.full_ref, None)
+        store.save_costing_state(conn, req.set_id, bill.rev,
+                                 mapping={**state["mapping"], "items": items}, actor=actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "rev": bill.rev, "full_ref": req.full_ref,
+            "basis_key": req.basis_key, "lab_key": req.lab_key, "prelim_key": req.prelim_key,
+            "cleared": not chosen, "by": actor}
+
+
+class AssumptionVerdictRequest(BaseModel):
+    set_id: str
+    rev: Optional[int] = None
+    key: str
+    status: str = ""                # Accepted | Revised | Rejected ('' = back to unreviewed)
+    comment: str = ""
+
+
+def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
+    """Run the whole engine for one tender. The single path everything else here goes through."""
+    bill = _bill_or_404(conn, set_id, rev)
+    library = store.load_library_model(conn)
+    own = store.load_set_model(conn, set_id)
+    model = boq_model.effective(library, own)
+    state = store.load_costing_state(conn, set_id, bill.rev)
+
+    mapping = boq_costing.propose_quantities(bill)
+    for role, confirmed in (state["mapping"].get("quantities") or {}).items():
+        if role in mapping.matches and confirmed.get("full_ref"):
+            item = bill.index().get(confirmed["full_ref"])
+            if item is not None:
+                mapping.matches[role] = mapping.matches[role].model_copy(update={
+                    "full_ref": item.full_ref, "description": item.description,
+                    "value": item.qty or 0.0, "unit": item.unit, "confirmed": True,
+                    "why": "confirmed by hand"})
+
+    item_mappings = boq_costing.propose_pricing(bill, model)
+    chosen = state["mapping"].get("items") or {}
+    for entry in item_mappings:
+        override = chosen.get(entry.full_ref)
+        if override:
+            entry.basis_key = override.get("basis_key", "")
+            entry.lab_key = override.get("lab_key", "")
+            entry.prelim_key = override.get("prelim_key", "")
+            entry.confirmed = True
+            entry.why = "confirmed by hand"
+
+    quantities = mapping.quantities()
+    programme = boq_programme.derive(quantities, model)
+    spread = boq_buildup.build_spread(programme, model)
+    buildup = boq_buildup.build(programme, model, spread)
+    priced = boq_costing.price(bill, model, programme, buildup, item_mappings,
+                               submitted=state["submitted"])
+
+    billed_standing = None
+    for item in bill.items:
+        if item.unit == "h" and "standing" in item.description.lower():
+            billed_standing = item.qty
+            break
+    register = boq_assumptions.build(programme, model, buildup, spread,
+                                     verdicts=state["verdicts"],
+                                     billed_standing_hours=billed_standing)
+
+    return {
+        "bill": bill, "library": library, "own": own, "model": model, "state": state,
+        "mapping": mapping, "item_mappings": item_mappings, "programme": programme,
+        "spread": spread, "buildup": buildup, "priced": priced, "register": register,
+        "billed_standing_hours": billed_standing,
+    }
+
+
+@router.get("/costing/model")
+def get_library_model() -> dict:
+    """The company's costing model — bands, resources, drivers, mark-up, rounding, every input.
+
+    Seeded from the reference template on first read, so a company that has never opened this screen
+    can still price something. Everything on it is editable.
+    """
+    conn = store.get_conn()
+    try:
+        model = store.load_library_model(conn)
+    finally:
+        conn.close()
+    return {"model": model.model_dump(), "problems": model.problems(), "usable": model.usable()}
+
+
+@router.put("/costing/model")
+def put_library_model(req: CostingModelRequest, actor: str = Depends(_actor)) -> dict:
+    """Save the company's model. Changes every future tender; never rewrites one already priced."""
+    conn = store.get_conn()
+    try:
+        store.save_library_model(conn, req.model, actor)
+    finally:
+        conn.close()
+    return {"model": req.model.model_dump(), "problems": req.model.problems()}
+
+
+@router.get("/costing/{set_id}")
+def get_costing(set_id: str, rev: Optional[int] = None) -> dict:
+    """Everything the costing screens need: the model in force, the programme, and the priced bill."""
+    conn = store.get_conn()
+    try:
+        parts = _costing(conn, set_id, rev)
+    finally:
+        conn.close()
+
+    programme, register = parts["programme"], parts["register"]
+    standing = boq_programme.against_the_bill(programme, parts["billed_standing_hours"])
+    return {
+        "set_id": set_id, "rev": parts["bill"].rev,
+        "model": parts["model"].model_dump(),
+        # Empty when this tender is still on the library's model — which is itself the answer to
+        # "has anybody changed anything here".
+        "marks": boq_model.compare(parts["library"], parts["own"]),
+        "using_own_model": parts["own"] is not None,
+        "quantities": {role: match.model_dump() for role, match in parts["mapping"].matches.items()},
+        "unmatched_roles": parts["mapping"].unmatched_roles,
+        "mapping_problems": parts["mapping"].problems(),
+        "item_mappings": [m.model_dump() for m in parts["item_mappings"]],
+        "programme": programme.model_dump(),
+        "checks": [c.model_dump() for c in programme.checks] + (
+            [standing.model_dump()] if standing else []),
+        "spread": parts["spread"].model_dump(),
+        "buildup": parts["buildup"].model_dump(),
+        "priced": parts["priced"].model_dump(),
+        "register": {
+            "rows": [r.model_dump() for r in register.rows],
+            "gate": register.gate(), "summary": register.summary(),
+            "outstanding": len(register.outstanding()),
+        },
+    }
+
+
+@router.put("/costing/{set_id}/model")
+def put_set_model(set_id: str, req: CostingModelRequest, actor: str = Depends(_actor)) -> dict:
+    """Change the model **for this tender only**.
+
+    Copy-on-write: this is the write that makes the tender's model its own. The library is untouched
+    and no other tender moves — which is the whole of "a change made on one job stays on that job".
+    """
+    conn = store.get_conn()
+    try:
+        store.save_set_model(conn, set_id, req.model, actor=actor)
+        library = store.load_library_model(conn)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "model": req.model.model_dump(),
+            "marks": boq_model.compare(library, req.model),
+            "problems": req.model.problems(), "using_own_model": True}
+
+
+@router.delete("/costing/{set_id}/model")
+def delete_set_model(set_id: str, actor: str = Depends(_actor)) -> dict:
+    """Put this tender back on the library's model, discarding its own copy."""
+    conn = store.get_conn()
+    try:
+        store.clear_set_model(conn, set_id)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "using_own_model": False,
+            "note": "This tender is back on the library's model. Its own copy is gone."}
+
+
+@router.post("/costing/rate")
+def post_submitted_rate(req: SubmittedRateRequest, actor: str = Depends(_actor)) -> dict:
+    """Type a rate over the rounded proposal. The last decision before a tender goes in is a
+    commercial one, and it is not the app's."""
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        if req.full_ref not in bill.index():
+            raise HTTPException(status_code=404,
+                                detail=f"No item {req.full_ref!r} in the bill at revision "
+                                       f"{bill.rev}.")
+        if req.rate is None:
+            store.clear_submitted_rate(conn, req.set_id, bill.rev, req.full_ref)
+        else:
+            store.save_costing_state(conn, req.set_id, bill.rev,
+                                     submitted={req.full_ref: req.rate}, actor=actor)
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "rev": bill.rev, "full_ref": req.full_ref, "rate": req.rate,
+            "by": actor}
+
+
+@router.post("/costing/assumption")
+def post_assumption_verdict(req: AssumptionVerdictRequest, actor: str = Depends(_actor)) -> dict:
+    """Rule on one assumption. **Only a person calls this**, and the register is the human gate.
+
+    It warns and does not block — the sweep is the app's only hard stop — but the workbook prints
+    NOT CLEARED until every row has a verdict, so a model nobody reviewed cannot pass as one that
+    somebody did.
+    """
+    from datetime import datetime, timezone
+    if req.status and req.status not in boq_assumptions.STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{req.status!r} is not a verdict. There are three: "
+                   f"{', '.join(boq_assumptions.STATUSES)} — or blank for not yet reviewed.")
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        store.save_costing_state(conn, req.set_id, bill.rev, actor=actor, verdicts={
+            req.key: {"status": req.status, "reviewed_by": actor if req.status else "",
+                      "reviewed_at": now if req.status else None, "comment": req.comment}})
+        parts = _costing(conn, req.set_id, bill.rev)
+    finally:
+        conn.close()
+    register = parts["register"]
+    return {"set_id": req.set_id, "rev": bill.rev, "key": req.key, "status": req.status,
+            "reviewed_by": actor if req.status else "",
+            "gate": register.gate(), "outstanding": len(register.outstanding())}
+
+
+@router.get("/costing/{set_id}/workbook.xlsx")
+def get_costing_workbook(set_id: str, rev: Optional[int] = None) -> Response:
+    """The deliverable: eight sheets **with their formulas intact**.
+
+    Not a report. Change a blue cell on 01 Inputs and every rate on 05 recalculates in Excel, with
+    the app switched off — which is also the honest answer to "what if I want to do something the
+    engine cannot".
+    """
+    conn = store.get_conn()
+    try:
+        parts = _costing(conn, set_id, rev)
+        meta = store.load_set_meta(conn, set_id)
+    finally:
+        conn.close()
+
+    xlsx = boq_costing_workbook.build_workbook(
+        parts["model"], parts["programme"], parts["spread"], parts["buildup"],
+        parts["priced"], parts["register"],
+        contract_reference=meta.get("client", "") or set_id)
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f'attachment; filename="costing_{set_id}_rev{parts["bill"].rev}.xlsx"'},
+    )

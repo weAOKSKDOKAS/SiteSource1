@@ -24,15 +24,22 @@ export function ProfilePicker({
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [busy, setBusy] = useState(false);
+  // The picker is a full-screen overlay, so the app's own ErrorNote renders UNDERNEATH it and a
+  // failed Join looked like a dead button. It has to say what went wrong where it happened —
+  // this is the one screen a person cannot get past, so a silent failure here locks them out.
+  const [failed, setFailed] = useState<string | null>(null);
 
   const add = async () => {
     if (!name.trim()) return;
     setBusy(true);
+    setFailed(null);
     try {
       const { member } = await api.addTeamMember({ name: name.trim(), role: role.trim() });
       onPicked(member);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setFailed(message);
+      onError(message);
     } finally {
       setBusy(false);
     }
@@ -103,9 +110,23 @@ export function ProfilePicker({
               className="w-[120px] rounded-cb-btn border border-cb-border bg-cb-warm px-2.5 py-1.5 font-cb-sans text-[12px] text-cb-ink-text placeholder:text-cb-faint"
             />
             <Button onClick={() => void add()} disabled={busy || !name.trim()}>
-              Join
+              {busy ? "Joining…" : "Join"}
             </Button>
           </div>
+
+          {failed && (
+            <div className="mt-2 rounded-cb-card border border-cb-bad bg-cb-bad-tint px-2.5 py-2">
+              {/* The backend's own sentence, unrewritten — a paraphrase hides which part failed. */}
+              <div className="font-cb-mono text-[9.5px] leading-[1.5] text-cb-bad-dark">
+                {failed}
+              </div>
+              <div className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-body">
+                {/failed to fetch|networkerror|load failed/i.test(failed)
+                  ? "The API is not answering. It usually means the backend is not running, or this page is pointed at a different port than the one it is on."
+                  : "Nothing was saved. Try again, or pick an existing name above."}
+              </div>
+            </div>
+          )}
         </div>
 
         {onClose && (

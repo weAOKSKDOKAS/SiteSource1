@@ -626,3 +626,266 @@ handoff's rules, because it lists them as undesigned.
 
 **After P1–P4:** no backend change; every one of the 59 routes now has a screen that uses it except
 the revision workbook. Full write-up: `ui_build.md` §11.
+
+## Series S — the schedule, so LIVE can price
+
+Checking each LIVE branch against what the UI actually sends found that three of the five steps
+were ready for a real API key and the fourth could never have been: `/estimate/run` requires
+`margin_pct` **and** a structured `schedule` in LIVE, DEMO filled both from a fixture, and there was
+nowhere in the app to type a bill of quantities. `CONTEXT.md` says quantities are *given* ("no
+take-off in this slice"), so the schedule was always meant to come from outside — nobody had built
+the door.
+
+| # | Stage | Size | Split | Status |
+|---|---|---|---|---|
+| S1 | `client_boq_schedules` + `GET`/`POST /estimate/schedule` | S | BE | `[x]` done 2026-08-01 |
+| S2 | The schedule editor on the Price tab (rate-book-backed) | M | FE | `[x]` done 2026-08-01 |
+| S3 | The letterhead: `letter.*` settings + `POST /company`, wired from set metadata | S | FE + 1 route | `[x]` done 2026-08-01 |
+| S4 | Reasoning-model truncation in the shared LLM client | S | BE | `[x]` done 2026-08-01 |
+
+**After S1–S4:** 62 routes, 1,006 tests. All five steps run in LIVE. Full write-up in
+`ui_build.md` §12; the live-run findings are in `running_live.md`.
+
+## Series C — reading the live register
+
+What using the first live run in the UI turned up. Full write-up in `ui_build.md` §13.
+
+| # | Stage | Size | Split | Status |
+|---|---|---|---|---|
+| C1 | Clause references: prefixes, multi-clause strings, sub-clause limbs | S | BE | `[x]` done 2026-08-02 |
+| C2 | Composite quotations checked against all the clauses a line cites | S | BE | `[x]` done 2026-08-02 |
+| C3 | The page mark becomes a highlighter — multiply, no border | S | FE | `[x]` done 2026-08-02 |
+| C4 | Dismiss the marks: Escape and a Clear chip | S | FE | `[x]` done 2026-08-02 |
+
+**After C1–C4:** `citation_failed` on the live CIC register falls 10 → 3, and the three that remain
+name the fragment that is genuinely missing. No route change; 1012 tests.
+
+## Series B — the bill of quantities, and the costing model behind a rate
+
+What studying the real ND/2025/04 package turned up, and what it forced. Full write-up:
+`prd_boq_costing.md`.
+
+The estimate half did not model what it claimed to. `EstimateSchedule` is a flat list of invented
+activities with no bill, no item numbering, no client quantity and — the load-bearing omission — **no
+unit rate**, only `activity_total`. But the contract this module exists to serve hands you a finished
+bill of 166 numbered items in a workbook you are required to price *in place* (GCT App A 9: the bill
+"shall only be submitted in Editable File format, i.e. the Microsoft Excel format"; para 10: using
+"the electronic files ... provided by the Client"). There was nowhere to put it. Locked decision 1
+had said quantities come "from a **BOQ** or manual entry" and `estimate/s02_schedule.py:9` had marked
+itself the seam; nobody had built the door.
+
+| # | Stage | Size | Split | Status |
+|---|---|---|---|---|
+| B1 | `boq/reader.py` — the workbook, and the four things in it that break a naive reader | M | BE | `[x]` done 2026-08-03 |
+| B2 | `boq/diff.py` — revision diff keyed on the item reference, caption chain included | M | BE | `[x]` done 2026-08-03 |
+| B3 | `boq/carry.py` — the client's own re-pricing rules (GCT App C 2.2(v)) + `needs_review` | S | BE | `[x]` done 2026-08-03 |
+| B4 | `boq/production.py` — the condition mix: where the resource quantities come from | M | BE | `[x]` done 2026-08-03 |
+| B5 | `boq/pricing.py` — unit rate, lump items, the spread pool, the roll-up | M | BE | `[x]` done 2026-08-03 |
+| B6 | `boq/checks.py` — seven guards, each naming the clause it enforces | S | BE | `[x]` done 2026-08-03 |
+| B7 | 3 tables, 9 routes, and the re-price gate | M | BE | `[x]` done 2026-08-03 |
+| B8 | A latent 500 the addendum → re-price loop walks straight into | S | BE | `[x]` done 2026-08-03 |
+
+### The finding that decided the design
+
+**The workbook does not mark what changed. At all.** Across all three revisions: every one of 1,239
+non-empty cells in Rev 2 has `fill_type = None`, changed rows carry the same font as unchanged rows,
+there are zero cell comments, no defined names and no tracked changes. Rev 1 carries a sheet-level
+print footer on the bills it touched; **Rev 2's spreadsheet carries no revision marking whatsoever**
+(its PDF twin does — the two deliverables disagree).
+
+So the largest price movement in that tender reached the tenderer as seven words —
+
+> "Updated the quantities of item nos. 6.4 – 6.6."
+
+— covering three unmarked cells mid-page that took groundwater monitoring from 24 weeks per
+instrument to 52 (1,128 → 2,451, 1,623 → 3,546, 2,760 → 5,996 nr-wk; ×2.17). The tenderer asked for
+one extra week to reprice it and was refused, twice. And the addendum disclaims its own summary as
+"neither exhaustive nor guaranteed to be accurate" — correctly, since one of its three bill remarks
+is factually wrong (it says item 3.2 was split into "3.2a and 3.2b"; only 3.2a exists).
+
+A machine diff is the only honest defence, which is what B2 is.
+
+### Identity is the item reference, never the row
+
+Across both transitions: **0 items renumbered, 0 deleted**, 35 moved rows. When they inserted the
+signboard they numbered it `1.61A` — a suffix letter — so 1.62 and 1.63 would not have to move. When
+they split 2.2 they kept 2.2 as a caption and put bare `a`/`b` beneath it. So the diff keys on
+`(bill_no, full_ref)` and reports a move as *not a change* — otherwise 35 false changes bury 5 real
+ones, which is how a safeguard stops being read.
+
+### The four things that break a naive reader (B1)
+
+1. **Item references are floats.** Item `1.20` is stored as `1.2` — the same value as item `1.2`.
+   **Twelve collisions** in Rev 2, separated only by `cell.number_format` (`General` vs `'0.00'`).
+   Read `cell.value` alone and two differently-priced items silently merge. The reference is now
+   rendered *through* the format, and a lossy render is reported (the real bill holds `2.244` under
+   `'0.00'` and prints "2.24").
+2. **There is no description column.** Description spreads across B/C/D and *the column is the indent
+   level*, plus hard-wrapped continuation rows whose leading spaces are load-bearing. Item 2.9's own
+   cell reads "maximum depth not exceeding 3.00m" — meaningless until read up to "Extra over for
+   excavation in rock". General Preambles 2 makes that contractual.
+3. **`Bill No.4` is structurally corrupt**: `max_column = 16384`, ~76,500 stray cells and 9,963 merged
+   ranges from an old fill-right that still says "Bill No. 1" inside Bill 4. It printed fine for
+   years; openpyxl `MemoryError`s enumerating it. Every read clamps to column H.
+4. **Page references exist only as `row_breaks` geometry.** `BQ/2/1` is in no cell, yet the Index,
+   the Grand Summary and both addenda all cite it.
+
+One limit is the format's and not the reader's, and is documented rather than papered over: captions
+in the same column cannot be nested (`Trial Pits and Inspection Pits`, `Trial pits`, `Inspection
+pits` and `Extra over for excavation in rock` all sit in column B at four levels of meaning, and
+leading whitespace is applied inconsistently). The SMM section banner is tracked separately, because
+it is detectable and was otherwise being overwritten by the first group caption beneath it.
+
+### The costing model (B4/B5)
+
+The resource → cost engine in `estimate/s03_cost_buildup.py` was already right and is reused
+unchanged. What was missing sat either side of it.
+
+*Below*: the bill says `2,300 m` of drilling and one rate, but does not say which holes. The SMM
+slices drilling by material, hole size, depth stage (20 m bands from existing ground level) and class
+of site; the consultant's QS worked it out hole by hole from the drawings and summed. Pricing runs
+that backwards. `ItemAssumption` holds the mix and the output rate in each condition, cites the
+drawing page it came from, and expands deterministically into shifts and crew-hours. **The mix must
+reconcile to the client's quantity and is never scaled to fit** — the total is fixed (GCT 6), so a
+mix that disagrees is an error in the mix, and a rate built from a silently corrected one is
+indistinguishable from a right answer.
+
+*Above*: `unit_rate = money(priced_cost / qty)`. `CostActivity` gave a total; the box on the form
+wants a rate, and under Option B that rate is what every remeasured metre is paid at for the life of
+the contract.
+
+Also `SpreadLine`: costs with no bill item at all — 31 deemed-included heads plus the "no separate
+item" instructions (PP 11/2A site uniform, NTT C2, NTT C25) — pooled and allocated pro rata on value,
+with the rounding residue landing on **one named item** rather than smeared invisibly.
+
+### The re-price gate (B7)
+
+The mirror of decision 7. A revision reopens the **rates** that depended on it:
+`POST /boq/{set_id}/revision/{rev}/sign-off` 409s while any carried rate is unconfirmed, naming them.
+Carrying a 24-week rate onto a 52-week quantity is what App C 2.2(v) prescribes and is not a decision
+anybody made.
+
+### B8 — the latent 500
+
+`router.py:2050` read `doc["applied"]`, a key `store.list_documents` never returned. The `or`
+short-circuits for the base document, so it only fires once a set holds a **second** document — and
+every scope test ingested one binder and stopped. `GET /estimate/scope/{set_id}/sources` therefore
+500'd the moment a real addendum arrived, which is exactly the loop that scope exists to serve.
+`applied` is now derived from the revision rows (received is not applied: `/ingest/document`
+proposes and commits nothing), with a regression test proven to fail without the fix.
+
+**After B1–B8:** 71 routes, **1,102 tests**. No model call anywhere in `boq/` — every file is
+deterministic, which is what makes the package provable offline. Tests run against a generated
+workbook (`tests/_bqfixture.py`) reproducing each measured trap, so no client tender data enters the
+repository.
+
+**Not in this slice:** the UI; writing rates back into the client's workbook (required for a real
+submission, deferred on the evidence of that corrupt sheet — it needs byte-level proof and a
+paste-the-rates fallback); reading the drawings with vision to draft a condition mix (the seam is
+`boq/production.expand`, which takes an `ItemAssumption` as an argument); an AI reading of the
+preambles to propose what belongs in the spread pool; and take-off, which stays out per decision 1.
+
+## Series E — the costing engine, modelled on a real estimator's workbook
+
+The governing question, and it reshaped the design: *"the person who can already do the work will just
+do it himself, because he trusts his own work — how do I augment him rather than automate him?"*
+
+So the dividing line for every feature: **if two good estimators would get the same answer it is
+clerical and the app does it; if they would disagree it is judgement and the app asks.** The product
+is a clerk and a checker, not an estimator.
+
+| # | Stage | Size | Split | Status |
+|---|---|---|---|---|
+| E1 | `boq/duration.py` — the day-by-day drilling simulation | M | BE | `[x]` done 2026-08-03 |
+| E2 | `boq/resources.py` — classes, coefficients, duration drivers, materials from geometry | M | BE | `[x]` done 2026-08-03 |
+| E3 | `boq/allocate.py` — `RateRecipe`, and the blend across hole groups | M | BE | `[x]` done 2026-08-03 |
+| E4 | `boq/schedule.py` + `criteria.py` — the station table and the general-notes rules | S | BE | `[x]` done 2026-08-03 |
+| E5 | `boq/groups.py` — spreads, proximity clustering, the 80/11 reconciliation | M | BE | `[x]` done 2026-08-03 |
+| E6 | `boq/derive.py` — recompute the bill's quantities and report the divergences | M | BE | `[x]` done 2026-08-03 |
+| E7 | `boq/docmap.py` — the Particular Specification index as a lookup | S | BE | `[x]` done 2026-08-03 |
+| E8 | `boq/unbilled.py` — the gate on costs with no bill item | S | BE | `[x]` done 2026-08-03 |
+
+### The finding that made it buildable
+
+**The drawings are readable.** An earlier pass concluded all 33 sheets were useless because
+`get_text()` returns 29 characters — true, and the wrong test. They are flattened raster, so a *text*
+extractor sees nothing. Rendered at 420 dpi and read with **vision** they are crisp:
+
+- **GI/210** is the station schedule: one row per borehole with easting, northing, ground level,
+  rockhead, total depth, **tentative length in soil**, **expected length in rock**, standpipe ✓ and
+  piezometer ✓ — plus a second table of **21 trial pits**. This is the take-off, and it includes the
+  material split, which a previous write-up had declared underivable from any drawing. It was a
+  printed column.
+- **GI/100** carries every rule: sampling at 2.0 m, trial pits 1.5 × 1.5 × 3.0 m sampled at 1 m from
+  0.5 m, an inspection pit at every drillhole, termination at 5 m of Grade III+ rock or 80 m, *"up to
+  two standpipes/piezometers … in each drillhole"*, monitoring *"at least 12 months"*, and Table 1's
+  tentative test counts.
+- **GI/020/021** give the working areas as four corner coordinates each — every one a 10 × 5 m plot.
+- **GI/200–205** are 1:2000 contoured plans: which holes are beside a highway and which are up Saddle
+  Pass.
+
+### Every row is checked twice, which is why reading a picture is safe here
+
+Per row, the schedule must satisfy its own arithmetic — `length = soil + rock`, verified on the real
+sheet (29.90 + 5.0 = 34.90 · 21.10 + 5.0 = 26.10 · 23.11 + 5.0 = 28.11). Per item, the totals must
+equal the client's own bill — Σ soil = 2,300 m, holes = 91, standpipes = 47, piezometers = 68.
+
+**The bill is the answer key for our reading of the drawing.** Where the two disagree, that is the most
+valuable output, not a failure. Two already exist: GI/100 Table 1 gives 52 permeability and 30
+pressuremeter tests against the bill's 54 and 31; and the Particular Specification's index heads
+SECTION 28 with section 29's title, while its own clauses and the contents page both say Environmental
+Ground Investigation. `docmap` reports that rather than silently correcting it — guessing which of the
+client's two statements is true is not a parser's job.
+
+### The costing model, reproduced to the cent
+
+`E1`–`E3` reproduce a working estimator's spreadsheet exactly, and that is the regression test for the
+whole design — if our number and his differ on his inputs, the code is wrong.
+
+```
+days        soil_rate = 20 m/day × (1 − 5%)^floor(cum_soil/20)   ← decays per 20 m band, as the SMM stages
+            day_left  = 1 − soil_today/soil_rate                  ← soil finishing at 11am gives rock the afternoon
+            60 m soil + 72 m rock → 11 days · soil 3.1108 d · rock charged 7.8892 d
+
+resources   every line = rate × qty × coefficient, then × 1.33
+            drivers      n = 11 (labour, PM, geologist, consumables) · n+4 = 15 (plant, staff)
+            coefficients rig 1.23 · workers 2 · PM 0.33 ("split across three jobs") · water barriers 0.2
+            materials    tubes ROUNDUP(60/2)=30 · boxes 2+18 · grout π(0.04)²×132×1000 = 663.5 L
+
+rate        material days × daily cost × markup ÷ material metres
+            soil 3.1108 × 1.33 × 12,986.60 ÷ 60 = 895.51/m ✓    rock ÷ 72 = 1,892.55/m ✓
+```
+
+All ten of its BOQ rates match to the cent, every class subtotal matches, and the totals match
+(263,457.13 cost / 350,397.98 selling).
+
+**Two day-counts, deliberately different.** `rock_days_actual` is what the rig really spends;
+`rock_days_charged` is `total_days − soil_days`, and it is what the *rate* divides by — because the
+last day is paid for whole whether or not the hole finished at 3pm. Charging that rounding to rock is
+the workbook's convention and is reproduced rather than tidied.
+
+### What changes for a real tender: groups
+
+The workbook prices *one* situation. Bill 2 wants one rate over 91 holes that are not alike. So the
+model runs **once per hole group** and the bill rate is the blend — `Σ(cost) ÷ Σ(metres)`. A single
+group is the degenerate case and must equal the workbook, which is exactly what the regression asserts.
+
+The access class is the estimator's, never the app's: the client bills **80 Class A and 11 Class B**
+and **names no holes**. `GroupPlan.reconcile()` is his only external check. And PS 7.01B's **Class C —
+helicopter access — has no bill item at all**, so a station classed C has nowhere to be priced.
+
+### E8 — silence is not neutral
+
+General Preambles ¶6: *"Items against which no rate is entered shall be deemed to be covered by the
+other rates."* An unpriced cost is a promise to work for free for the life of a remeasured contract. So
+a believed cost with no bill item must route to **query · load onto a named item · spread pool ·
+accepted risk**, and the gate refuses the fifth option of doing nothing. An accepted risk without a
+recorded reason is also refused — a risk somebody took deliberately and one nobody noticed look
+identical six months later.
+
+**After E1–E8:** **1,181 tests**. No model call anywhere in the new code; every module is deterministic
+or a gate. No route change — this is the arithmetic spine, and per the plan the three modules whose
+shape *is* a UI decision (`trace`, `georef`, `coverage`) wait until the screens are pinned.
+
+**Not in this slice:** the vision stages (`triage`, `extract`, `setting`) and the screens they feed;
+`georef` and `coverage`; the submission pack; write-back; re-pointing the register.

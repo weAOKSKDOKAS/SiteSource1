@@ -30,7 +30,7 @@ from client_boq.models import (
     PartSpec,
 )
 from pipeline.llm_client import LLMClient, demo_mode
-from client_boq.llm import make_client
+from client_boq.llm import STAGE_INGEST, make_client
 
 DEMO_FIXTURE = "cases/client_boq/ingest_interpret_part.json"
 
@@ -95,7 +95,9 @@ def interpret_part(
 ) -> PartContext:
     """Produce one part's context card. Never raises: an unreadable or failing part comes
     back flagged, because one bad part must not sink the whole ingest."""
-    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
+    # The document-reading stage picks its own provider: EXTRACTION_PROVIDER, or the
+    # ingest setting, before the app-wide one (client_boq/llm.py).
+    client = make_client(stage=STAGE_INGEST)
     base = PartContext(part_id=part.part_id, title=part.title, category=part.category)
 
     # Read the part FIRST, in every mode. Whether a part has usable text is a measurement, and

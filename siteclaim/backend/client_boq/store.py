@@ -18,26 +18,39 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from client_boq import models
 from client_boq.models import (
+    BADGE_USER,
+    ClientBill,
     ContextSummary,
     DepartureRegister,
     Estimate,
+    EstimateSchedule,
     EstimateScope,
+    ItemAssumption,
     LetterOfOffer,
     ParsedDocumentSet,
     PartContext,
     PartSpec,
     RFIBatch,
     RFIItem,
+    ScheduleItem,
     ScopeReviewResult,
     SplitManifest,
 )
 from db import store as db_store
 from pipeline.llm_client import demo_mode
 from pipeline.workspace import Workspace
+
+if TYPE_CHECKING:  # imported lazily at call sites — client_boq.boq pulls in the whole costing engine,
+    from client_boq.boq.criteria import SiteCriteria   # and store has no business loading it to
+    from client_boq.boq.groups import HoleGroup        # save a row
+    from client_boq.boq.model import CostingModel
+    from client_boq.boq.outputs import OutputBook
+    from client_boq.boq.schedule import StationSchedule
+    from client_boq.boq.unbilled import UnbilledCost, UnbilledSweep
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +409,708 @@ def list_settings(conn: sqlite3.Connection) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# The output book — what your company knows, as distinct from what a job needs
+# ---------------------------------------------------------------------------
+def load_output_book(conn: sqlite3.Connection) -> "OutputBook":
+    """The company's norms. An empty table is not an error — it means nobody has overridden a
+    default yet, and :func:`client_boq.boq.outputs.OutputBook.get` falls back to the declared one."""
+    from client_boq.boq.outputs import OutputBook
+    rows = conn.execute("SELECT key, value FROM client_boq_outputs").fetchall()
+    return OutputBook(values={row["key"]: float(row["value"]) for row in rows})
+
+
+def save_output_norm(conn: sqlite3.Connection, key: str, value: float, *,
+                     unit: str = "", actor: str = "") -> None:
+    """Write one norm. Editing one changes every future estimate; it never rewrites one already run —
+    the same promise the rate book makes, and for the same reason."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_outputs (key, value, unit, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value, unit = excluded.unit,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        """,
+        (key, float(value), unit, actor, now),
+    )
+    conn.commit()
+
+
+def output_norm_meta(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Who last touched each norm, and when. Keyed by norm; absent means never edited."""
+    rows = conn.execute(
+        "SELECT key, updated_by, updated_at FROM client_boq_outputs"
+    ).fetchall()
+    return {row["key"]: {"updated_by": row["updated_by"], "updated_at": row["updated_at"]}
+            for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# The pricing schedule — the INPUT a live estimate is run from
+# ---------------------------------------------------------------------------
+def load_schedule(conn: sqlite3.Connection, set_id: str) -> tuple[Optional[EstimateSchedule], float]:
+    """The persisted schedule and margin for a set, or ``(None, 0.0)``.
+
+    Returns the margin separately rather than folding it into the schedule because they are
+    different kinds of fact: the schedule is quantities and resources, the margin is a commercial
+    decision the person makes at the moment of pricing. ``/estimate/run`` takes them as two
+    arguments for the same reason.
+    """
+    row = conn.execute(
+        "SELECT schedule_json, margin_pct FROM client_boq_schedules WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    if row is None or not row["schedule_json"]:
+        return None, 0.0
+    return EstimateSchedule.model_validate_json(row["schedule_json"]), float(row["margin_pct"] or 0)
+
+
+def save_schedule(
+    conn: sqlite3.Connection, set_id: str, schedule: EstimateSchedule, margin_pct: float,
+    actor: str = "",
+) -> None:
+    """Persist the schedule a live estimate will be run from. Stamps who last touched it — a bill
+    of quantities is somebody's work, and a price that rests on it should be able to say whose."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_schedules (set_id, schedule_json, margin_pct, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(set_id) DO UPDATE SET
+            schedule_json = excluded.schedule_json, margin_pct = excluded.margin_pct,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        """,
+        (set_id, schedule.model_dump_json(), float(margin_pct), actor, now),
+    )
+    conn.commit()
+
+
+def schedule_meta(conn: sqlite3.Connection, set_id: str) -> dict:
+    """Who last saved the schedule, and when ('' / None when never saved)."""
+    row = conn.execute(
+        "SELECT updated_by, updated_at FROM client_boq_schedules WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    return {"updated_by": row["updated_by"], "updated_at": row["updated_at"]} if row else {
+        "updated_by": "", "updated_at": None
+    }
+
+
+# ---------------------------------------------------------------------------
+# The client's bill of quantities — revisions, rates, and the assumptions behind them
+# ---------------------------------------------------------------------------
+def save_bill_revision(
+    conn: sqlite3.Connection, bill: "ClientBill", *, doc_id: str = "",
+) -> int:
+    """Append a bill revision. Returns the rev written.
+
+    Append-only, like ``save_parts``: a new revision leaves every earlier one readable, because the
+    only way to see what an addendum did is to compare the two. Re-importing the SAME rev overwrites
+    it (you corrected a bad read); a new rev never touches its predecessor.
+    """
+    conn.execute(
+        """
+        INSERT INTO client_boq_bill_revisions (set_id, rev, doc_id, source_file, bill_json, read_notes)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, rev) DO UPDATE SET
+            doc_id = excluded.doc_id, source_file = excluded.source_file,
+            bill_json = excluded.bill_json, read_notes = excluded.read_notes
+        """,
+        (bill.set_id, int(bill.rev), doc_id, bill.source_file, bill.model_dump_json(),
+         json.dumps(bill.notes)),
+    )
+    conn.commit()
+    return int(bill.rev)
+
+
+def load_bill(conn: sqlite3.Connection, set_id: str, rev: Optional[int] = None) -> Optional["ClientBill"]:
+    """The bill at ``rev``, or the OPERATIVE one (highest rev) when rev is None.
+
+    Derived rather than flagged, for the same reason ``load_parts`` derives it: a stored
+    "is_operative" column is one failed write away from pointing at a superseded bill, and you
+    would price the wrong document without anything looking wrong.
+    """
+    if rev is None:
+        row = conn.execute(
+            "SELECT bill_json FROM client_boq_bill_revisions WHERE set_id = ? ORDER BY rev DESC LIMIT 1",
+            (set_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT bill_json FROM client_boq_bill_revisions WHERE set_id = ? AND rev = ?",
+            (set_id, int(rev)),
+        ).fetchone()
+    if row is None or not row["bill_json"]:
+        return None
+    return ClientBill.model_validate_json(row["bill_json"])
+
+
+def list_bill_revisions(conn: sqlite3.Connection, set_id: str) -> list[dict]:
+    """Every bill revision held for a set, oldest first, with its cause and item count."""
+    rows = conn.execute(
+        """
+        SELECT rev, doc_id, source_file, read_notes, created_at
+        FROM client_boq_bill_revisions WHERE set_id = ? ORDER BY rev
+        """,
+        (set_id,),
+    ).fetchall()
+    out: list[dict] = []
+    for row in rows:
+        bill = load_bill(conn, set_id, int(row["rev"]))
+        out.append({
+            "rev": int(row["rev"]),
+            "doc_id": row["doc_id"],
+            "source_file": row["source_file"],
+            "created_at": row["created_at"],
+            "items": len(bill.items) if bill else 0,
+            "notes": json.loads(row["read_notes"] or "[]"),
+        })
+    return out
+
+
+def next_bill_rev(conn: sqlite3.Connection, set_id: str) -> int:
+    """The rev a newly imported bill should take."""
+    row = conn.execute(
+        "SELECT MAX(rev) AS r FROM client_boq_bill_revisions WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    return 0 if row is None or row["r"] is None else int(row["r"]) + 1
+
+
+def save_bill_rate(
+    conn: sqlite3.Connection, set_id: str, rev: int, full_ref: str, *,
+    rate: Optional[float] = None, amount: Optional[float] = None,
+    build_up: Optional["ScheduleItem"] = None, basis: str = "", badge: str = BADGE_USER,
+    needs_review: bool = False, review_note: str = "", actor: str = "",
+) -> None:
+    """Save one item's rate and its build-up, for one revision of the bill."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_bill_rates
+            (set_id, rev, full_ref, rate, amount, buildup_json, basis, badge, needs_review,
+             review_note, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, rev, full_ref) DO UPDATE SET
+            rate = excluded.rate, amount = excluded.amount, buildup_json = excluded.buildup_json,
+            basis = excluded.basis, badge = excluded.badge, needs_review = excluded.needs_review,
+            review_note = excluded.review_note, updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        """,
+        (set_id, int(rev), full_ref, rate, amount,
+         build_up.model_dump_json() if build_up is not None else "{}",
+         basis, badge, 1 if needs_review else 0, review_note, actor, now),
+    )
+    conn.commit()
+
+
+def load_bill_rates(conn: sqlite3.Connection, set_id: str, rev: int) -> dict[str, dict]:
+    """full_ref → the stored rate row, for one revision."""
+    rows = conn.execute(
+        """
+        SELECT full_ref, rate, amount, buildup_json, basis, badge, needs_review, review_note,
+               updated_by, updated_at
+        FROM client_boq_bill_rates WHERE set_id = ? AND rev = ?
+        """,
+        (set_id, int(rev)),
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for row in rows:
+        build_up = None
+        if row["buildup_json"] and row["buildup_json"] != "{}":
+            build_up = ScheduleItem.model_validate_json(row["buildup_json"])
+        out[row["full_ref"]] = {
+            "full_ref": row["full_ref"],
+            "rate": row["rate"],
+            "amount": row["amount"],
+            "build_up": build_up,
+            "basis": row["basis"],
+            "badge": row["badge"],
+            "needs_review": bool(row["needs_review"]),
+            "review_note": row["review_note"],
+            "updated_by": row["updated_by"],
+            "updated_at": row["updated_at"],
+        }
+    return out
+
+
+def bill_review_pending(conn: sqlite3.Connection, set_id: str, rev: int) -> list[dict]:
+    """Items in this revision whose carried rate still has to be looked at by a person.
+
+    The forcing function for a revision: a rate carried onto a quantity that doubled is legal under
+    GCT App C 2.2(v) and is not necessarily still the right estimate.
+    """
+    rows = conn.execute(
+        """
+        SELECT full_ref, review_note FROM client_boq_bill_rates
+        WHERE set_id = ? AND rev = ? AND needs_review = 1 ORDER BY full_ref
+        """,
+        (set_id, int(rev)),
+    ).fetchall()
+    return [{"full_ref": row["full_ref"], "reason": row["review_note"]} for row in rows]
+
+
+def save_item_assumption(
+    conn: sqlite3.Connection, set_id: str, rev: int, assumption: "ItemAssumption", actor: str = "",
+) -> None:
+    """Save how one item's given quantity is assumed to split across working conditions."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_item_assumptions
+            (set_id, rev, full_ref, assumption_json, basis, badge, source_part_id, source_page,
+             updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, rev, full_ref) DO UPDATE SET
+            assumption_json = excluded.assumption_json, basis = excluded.basis,
+            badge = excluded.badge, source_part_id = excluded.source_part_id,
+            source_page = excluded.source_page, updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        """,
+        (set_id, int(rev), assumption.full_ref, assumption.model_dump_json(), assumption.basis,
+         assumption.badge, assumption.source_part_id, int(assumption.source_page), actor, now),
+    )
+    conn.commit()
+
+
+def load_item_assumptions(conn: sqlite3.Connection, set_id: str, rev: int) -> dict[str, "ItemAssumption"]:
+    """full_ref → the assumption behind that item's rate, for one revision."""
+    rows = conn.execute(
+        "SELECT full_ref, assumption_json FROM client_boq_item_assumptions WHERE set_id = ? AND rev = ?",
+        (set_id, int(rev)),
+    ).fetchall()
+    return {
+        row["full_ref"]: ItemAssumption.model_validate_json(row["assumption_json"])
+        for row in rows if row["assumption_json"] and row["assumption_json"] != "{}"
+    }
+
+
+# ---------------------------------------------------------------------------
+# The take-off — the station schedule, the site's rules, hole classes and groups
+#
+# The drawing's half of the estimate. Every table here answers a question the bill of quantities
+# does not: where the holes are, what the specification says about them, which of them a rig can
+# reach, and which of them drill alike.
+# ---------------------------------------------------------------------------
+def load_station_schedule(conn: sqlite3.Connection, set_id: str) -> tuple[Optional["StationSchedule"], dict]:
+    """The schedule read off the drawing, and who (if anyone) has confirmed that reading.
+
+    Returns the confirmation separately because it is not a property of the holes — it is a
+    property of somebody having looked. An unconfirmed schedule is a machine's proposal and
+    nothing prices from it.
+    """
+    from client_boq.boq.schedule import StationSchedule
+    row = conn.execute(
+        """
+        SELECT schedule_json, source_sheet, confirmed_by, confirmed_at, updated_by, updated_at
+        FROM client_boq_station_schedules WHERE set_id = ?
+        """,
+        (set_id,),
+    ).fetchone()
+    if row is None or not row["schedule_json"] or row["schedule_json"] == "{}":
+        return None, {"confirmed_by": "", "confirmed_at": None, "source_sheet": ""}
+    return StationSchedule.model_validate_json(row["schedule_json"]), {
+        "confirmed_by": row["confirmed_by"],
+        "confirmed_at": row["confirmed_at"],
+        "source_sheet": row["source_sheet"],
+        "updated_by": row["updated_by"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def save_station_schedule(conn: sqlite3.Connection, set_id: str, schedule: "StationSchedule", *,
+                          source_sheet: str = "", confirmed: bool = False, actor: str = "") -> None:
+    """Replace the schedule for a set. One row: there is only ever one truth about where the holes are.
+
+    Confirming is an act with a name on it and it is not sticky — a re-read lands unconfirmed again,
+    because the thing somebody checked is no longer the thing on the screen.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_station_schedules
+            (set_id, schedule_json, source_sheet, confirmed_by, confirmed_at, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id) DO UPDATE SET
+            schedule_json = excluded.schedule_json, source_sheet = excluded.source_sheet,
+            confirmed_by = excluded.confirmed_by, confirmed_at = excluded.confirmed_at,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        """,
+        (set_id, schedule.model_dump_json(), source_sheet or schedule.source_sheet,
+         actor if confirmed else "", now if confirmed else None, actor, now),
+    )
+    conn.commit()
+
+
+def load_site_criteria(conn: sqlite3.Connection, set_id: str) -> tuple["SiteCriteria", dict[str, str]]:
+    """The general-notes drawing's rules, and which bill items carry the Class A / B rig moves.
+
+    Both default rather than returning None: the criteria's own defaults are the reference
+    contract's, and a set nobody has configured is more usefully shown with those than with a blank
+    screen — every one of them is an input the estimator can correct.
+    """
+    from client_boq.boq.criteria import SiteCriteria
+    row = conn.execute(
+        "SELECT criteria_json, source_sheet, class_refs FROM client_boq_site_criteria WHERE set_id = ?",
+        (set_id,),
+    ).fetchone()
+    if row is None or not row["criteria_json"] or row["criteria_json"] == "{}":
+        return SiteCriteria(), {"A": "2.2a", "B": "2.2b"}
+    criteria = SiteCriteria.model_validate_json(row["criteria_json"])
+    refs = json.loads(row["class_refs"] or "{}") or {"A": "2.2a", "B": "2.2b"}
+    return criteria, {str(k): str(v) for k, v in refs.items()}
+
+
+def save_site_criteria(conn: sqlite3.Connection, set_id: str, criteria: "SiteCriteria", *,
+                       class_refs: Optional[dict[str, str]] = None, actor: str = "") -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_site_criteria
+            (set_id, criteria_json, source_sheet, class_refs, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id) DO UPDATE SET
+            criteria_json = excluded.criteria_json, source_sheet = excluded.source_sheet,
+            class_refs = excluded.class_refs, updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        """,
+        (set_id, criteria.model_dump_json(), criteria.source_sheet,
+         json.dumps(class_refs or {"A": "2.2a", "B": "2.2b"}), actor, now),
+    )
+    conn.commit()
+
+
+def load_station_classes(conn: sqlite3.Connection, set_id: str) -> dict[str, dict]:
+    """station → {access_class, group_id, decided_by, decided_at}. Absent means undecided."""
+    rows = conn.execute(
+        """
+        SELECT station, access_class, group_id, decided_by, decided_at
+        FROM client_boq_station_classes WHERE set_id = ?
+        """,
+        (set_id,),
+    ).fetchall()
+    return {row["station"]: dict(row) for row in rows}
+
+
+def save_station_class(conn: sqlite3.Connection, set_id: str, station: str, *,
+                       access_class: str = "", group_id: Optional[str] = None,
+                       actor: str = "") -> None:
+    """Record one hole's access class, with a name against it.
+
+    The name is the point. The bill prices 80 Class A moves and no drawing says which holes those
+    are, so when a count disagrees with the bill the only way to settle it is to ask the person who
+    made the call — which requires knowing who that was.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    existing = conn.execute(
+        "SELECT group_id FROM client_boq_station_classes WHERE set_id = ? AND station = ?",
+        (set_id, station),
+    ).fetchone()
+    resolved_group = existing["group_id"] if group_id is None and existing else (group_id or "")
+    conn.execute(
+        """
+        INSERT INTO client_boq_station_classes
+            (set_id, station, access_class, group_id, decided_by, decided_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, station) DO UPDATE SET
+            access_class = excluded.access_class, group_id = excluded.group_id,
+            decided_by = excluded.decided_by, decided_at = excluded.decided_at
+        """,
+        (set_id, station, access_class, resolved_group, actor, now),
+    )
+    conn.commit()
+
+
+def load_hole_groups(conn: sqlite3.Connection, set_id: str, rev: int) -> list["HoleGroup"]:
+    """The groups for one revision, in a stable order so the screen does not reshuffle on save."""
+    from client_boq.boq.groups import HoleGroup
+    rows = conn.execute(
+        """
+        SELECT group_id, group_json FROM client_boq_hole_groups
+        WHERE set_id = ? AND rev = ? ORDER BY group_id
+        """,
+        (set_id, int(rev)),
+    ).fetchall()
+    return [HoleGroup.model_validate_json(row["group_json"])
+            for row in rows if row["group_json"] and row["group_json"] != "{}"]
+
+
+def save_hole_group(conn: sqlite3.Connection, set_id: str, rev: int, group_id: str,
+                    group: "HoleGroup", actor: str = "") -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_hole_groups
+            (set_id, rev, group_id, group_json, badge, basis, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, rev, group_id) DO UPDATE SET
+            group_json = excluded.group_json, badge = excluded.badge, basis = excluded.basis,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        """,
+        (set_id, int(rev), group_id, group.model_dump_json(), group.badge, group.basis, actor, now),
+    )
+    conn.commit()
+
+
+def delete_hole_group(conn: sqlite3.Connection, set_id: str, rev: int, group_id: str) -> None:
+    """Remove a group. Its stations keep their access classes — classifying a hole and deciding
+    which spread works it are two different acts, and undoing one must not undo the other."""
+    conn.execute(
+        "DELETE FROM client_boq_hole_groups WHERE set_id = ? AND rev = ? AND group_id = ?",
+        (set_id, int(rev), group_id),
+    )
+    conn.execute(
+        "UPDATE client_boq_station_classes SET group_id = '' WHERE set_id = ? AND group_id = ?",
+        (set_id, group_id),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# The costing model — the library's, and a tender's own copy of it
+# ---------------------------------------------------------------------------
+LIBRARY_MODEL_ID = "default"
+
+
+def load_library_model(conn: sqlite3.Connection) -> "CostingModel":
+    """The company's costing model. Seeded from the reference template on first read.
+
+    Seeded rather than required: a company that has never opened the model screen should still be
+    able to price something, and the defaults are a working model rather than an empty one.
+    """
+    from client_boq.boq.model import CostingModel, default_model
+    row = conn.execute(
+        "SELECT model_json FROM client_boq_costing_models WHERE model_id = ?",
+        (LIBRARY_MODEL_ID,),
+    ).fetchone()
+    if row is None or not row["model_json"] or row["model_json"] == "{}":
+        return default_model()
+    return CostingModel.model_validate_json(row["model_json"])
+
+
+def save_library_model(conn: sqlite3.Connection, model: "CostingModel", actor: str = "") -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_costing_models (model_id, name, model_json, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(model_id) DO UPDATE SET
+            name = excluded.name, model_json = excluded.model_json,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        """,
+        (LIBRARY_MODEL_ID, model.name, model.model_dump_json(), actor, now),
+    )
+    conn.commit()
+
+
+def load_set_model(conn: sqlite3.Connection, set_id: str) -> Optional["CostingModel"]:
+    """This tender's own model, or ``None`` meaning it is still using the library's."""
+    from client_boq.boq.model import CostingModel
+    row = conn.execute(
+        "SELECT model_json FROM client_boq_set_costing_model WHERE set_id = ?", (set_id,)
+    ).fetchone()
+    if row is None or not row["model_json"] or row["model_json"] == "{}":
+        return None
+    return CostingModel.model_validate_json(row["model_json"])
+
+
+def save_set_model(conn: sqlite3.Connection, set_id: str, model: "CostingModel",
+                   based_on: str = LIBRARY_MODEL_ID, actor: str = "") -> None:
+    """Copy-on-write. Writing here is what makes this tender's model its own from now on."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_set_costing_model
+            (set_id, model_json, based_on, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(set_id) DO UPDATE SET
+            model_json = excluded.model_json, based_on = excluded.based_on,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        """,
+        (set_id, model.model_dump_json(), based_on, actor, now),
+    )
+    conn.commit()
+
+
+def clear_set_model(conn: sqlite3.Connection, set_id: str) -> None:
+    """Put this tender back on the library's model. The only way back once it has diverged."""
+    conn.execute("DELETE FROM client_boq_set_costing_model WHERE set_id = ?", (set_id,))
+    conn.commit()
+
+
+def load_costing_state(conn: sqlite3.Connection, set_id: str, rev: int) -> dict:
+    """What a person has decided about this tender's costing: mappings, rates, verdicts."""
+    row = conn.execute(
+        """
+        SELECT mapping_json, submitted_json, verdicts_json, updated_by, updated_at
+        FROM client_boq_costing_state WHERE set_id = ? AND rev = ?
+        """,
+        (set_id, int(rev)),
+    ).fetchone()
+    if row is None:
+        return {"mapping": {}, "submitted": {}, "verdicts": {},
+                "updated_by": "", "updated_at": None}
+    return {
+        "mapping": json.loads(row["mapping_json"] or "{}"),
+        "submitted": {k: float(v) for k, v in json.loads(row["submitted_json"] or "{}").items()},
+        "verdicts": json.loads(row["verdicts_json"] or "{}"),
+        "updated_by": row["updated_by"], "updated_at": row["updated_at"],
+    }
+
+
+def save_costing_state(conn: sqlite3.Connection, set_id: str, rev: int, *,
+                       mapping: Optional[dict] = None, submitted: Optional[dict] = None,
+                       verdicts: Optional[dict] = None, actor: str = "") -> dict:
+    """Merge into what is already recorded. Returns the state as it now stands.
+
+    A merge rather than a replace because these three arrive from three different screens, and a
+    caller that only knows about rates must not wipe somebody's register verdicts.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    current = load_costing_state(conn, set_id, rev)
+    merged = {
+        "mapping": {**current["mapping"], **(mapping or {})},
+        "submitted": {**current["submitted"], **(submitted or {})},
+        "verdicts": {**current["verdicts"], **(verdicts or {})},
+    }
+    conn.execute(
+        """
+        INSERT INTO client_boq_costing_state
+            (set_id, rev, mapping_json, submitted_json, verdicts_json, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, rev) DO UPDATE SET
+            mapping_json = excluded.mapping_json, submitted_json = excluded.submitted_json,
+            verdicts_json = excluded.verdicts_json, updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        """,
+        (set_id, int(rev), json.dumps(merged["mapping"]), json.dumps(merged["submitted"]),
+         json.dumps(merged["verdicts"]), actor, now),
+    )
+    conn.commit()
+    return {**merged, "updated_by": actor, "updated_at": now}
+
+
+def clear_submitted_rate(conn: sqlite3.Connection, set_id: str, rev: int, full_ref: str) -> None:
+    """Forget a typed rate and go back to the rounded proposal. The only undo that means anything —
+    a proposal cannot be deleted, it is recomputed every time."""
+    state = load_costing_state(conn, set_id, rev)
+    state["submitted"].pop(full_ref, None)
+    conn.execute(
+        """
+        INSERT INTO client_boq_costing_state (set_id, rev, submitted_json)
+        VALUES (?, ?, ?)
+        ON CONFLICT(set_id, rev) DO UPDATE SET submitted_json = excluded.submitted_json
+        """,
+        (set_id, int(rev), json.dumps(state["submitted"])),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# The sweep, and what a rate is ticked as covering
+# ---------------------------------------------------------------------------
+def load_sweep(conn: sqlite3.Connection, set_id: str, rev: int) -> "UnbilledSweep":
+    """The costs the contract makes yours that no bill item asks for, and how each is routed."""
+    from client_boq.boq.unbilled import UnbilledCost, UnbilledSweep
+    rows = conn.execute(
+        """
+        SELECT key, label, source, amount, route, target_ref, reason, decided_by
+        FROM client_boq_sweep_costs WHERE set_id = ? AND rev = ? ORDER BY key
+        """,
+        (set_id, int(rev)),
+    ).fetchall()
+    return UnbilledSweep(set_id=set_id, rev=int(rev), costs=[
+        UnbilledCost(key=r["key"], label=r["label"], source=r["source"], amount=r["amount"],
+                     route=r["route"], target_ref=r["target_ref"], reason=r["reason"],
+                     decided_by=r["decided_by"])
+        for r in rows
+    ])
+
+
+def save_sweep_cost(conn: sqlite3.Connection, set_id: str, rev: int, cost: "UnbilledCost",
+                    actor: str = "") -> None:
+    """Add a cost to the sweep, or route one already there.
+
+    ``decided_by`` is only stamped once a route is chosen. An unrouted cost has nobody's name on it
+    because nobody has decided anything about it yet — which is exactly the state the gate refuses.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_sweep_costs
+            (set_id, rev, key, label, source, amount, route, target_ref, reason, decided_by,
+             decided_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, rev, key) DO UPDATE SET
+            label = excluded.label, source = excluded.source, amount = excluded.amount,
+            route = excluded.route, target_ref = excluded.target_ref, reason = excluded.reason,
+            decided_by = excluded.decided_by, decided_at = excluded.decided_at
+        """,
+        (set_id, int(rev), cost.key, cost.label, cost.source, cost.amount, cost.route,
+         cost.target_ref, cost.reason, actor if cost.route else "", now if cost.route else None),
+    )
+    conn.commit()
+
+
+def load_coverage_ticks(conn: sqlite3.Connection, set_id: str, rev: int) -> dict[str, dict[str, dict]]:
+    """full_ref → head key → the tick. Only ticks are stored.
+
+    The list of heads is re-derived from the measurement rules on every request, so an addendum that
+    rewrites a clause changes the list without this table knowing — and a tick against a head that no
+    longer exists simply stops being read rather than propping up a rate nobody checked.
+    """
+    rows = conn.execute(
+        """
+        SELECT full_ref, head_key, ticked, ticked_by, ticked_at
+        FROM client_boq_coverage_ticks WHERE set_id = ? AND rev = ?
+        """,
+        (set_id, int(rev)),
+    ).fetchall()
+    out: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        out.setdefault(row["full_ref"], {})[row["head_key"]] = {
+            "ticked": bool(row["ticked"]), "ticked_by": row["ticked_by"],
+            "ticked_at": row["ticked_at"],
+        }
+    return out
+
+
+def save_coverage_tick(conn: sqlite3.Connection, set_id: str, rev: int, full_ref: str,
+                       head_key: str, ticked: bool, actor: str = "") -> None:
+    """Record that a person says their build-up does (or no longer does) carry this head.
+
+    A machine cannot know what somebody put in their number, so there is no badge column here and no
+    way for a model to write this row — the same structural refusal ``/review/approve`` makes for a
+    clause verdict.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_coverage_ticks
+            (set_id, rev, full_ref, head_key, ticked, ticked_by, ticked_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, rev, full_ref, head_key) DO UPDATE SET
+            ticked = excluded.ticked, ticked_by = excluded.ticked_by,
+            ticked_at = excluded.ticked_at
+        """,
+        (set_id, int(rev), full_ref, head_key, 1 if ticked else 0,
+         actor if ticked else "", now if ticked else None),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
 # Register + the review→estimate gate
 # ---------------------------------------------------------------------------
 def save_register(conn: sqlite3.Connection, register: DepartureRegister) -> None:
@@ -494,7 +1209,12 @@ def manifest_is_approved(conn: sqlite3.Connection, set_id: str) -> bool:
 
 
 def approve_manifest(conn: sqlite3.Connection, set_id: str, approved: bool) -> None:
-    """Record the human decision on the manifest — the ONLY writer of the ingest gate flag."""
+    """Record the decision on the manifest — the ONLY writer of the ingest gate flag.
+
+    Usually a person's, via ``/ingest/manifest/approve``. A folder ingest sets it automatically
+    because there are no page ranges to confirm, and says so in the manifest's ``tier_reason``
+    rather than leaving a green tick that implies somebody looked.
+    """
     conn.execute(
         """
         INSERT INTO client_boq_manifests (set_id, approved, approved_at)
@@ -519,39 +1239,55 @@ def upsert_document(conn: sqlite3.Connection, set_id: str, *, doc_id: str, filen
     Re-recording the same ``doc_id`` keeps its original position, so re-splitting a document
     never reshuffles the timeline.
     """
+    # One statement, not a SELECT followed by an INSERT. Ingests run on a thread pool, so two jobs
+    # touching the same set — a double-clicked upload, the same folder sent twice — could both see
+    # "no row yet" and both insert, and the loser died on a raw UNIQUE-constraint error with no
+    # indication of what a person had actually done wrong.
+    #
+    # The seq sub-select keeps the promise in the docstring: an existing document holds its original
+    # position, and only a genuinely new one takes the next number.
+    conn.execute(
+        """
+        INSERT INTO client_boq_documents (set_id, doc_id, filename, kind, ref, seq, note)
+        VALUES (?, ?, ?, ?, ?,
+                COALESCE(
+                    (SELECT seq FROM client_boq_documents WHERE set_id = ? AND doc_id = ?),
+                    (SELECT COALESCE(MAX(seq), -1) + 1 FROM client_boq_documents WHERE set_id = ?)
+                ), ?)
+        ON CONFLICT(set_id, doc_id) DO UPDATE SET
+            filename = excluded.filename, kind = excluded.kind,
+            ref = excluded.ref, note = excluded.note
+        """,
+        (set_id, doc_id, filename, kind, ref, set_id, doc_id, set_id, note),
+    )
+    conn.commit()
     row = conn.execute(
         "SELECT seq FROM client_boq_documents WHERE set_id = ? AND doc_id = ?", (set_id, doc_id)
     ).fetchone()
-    if row is not None:
-        seq = int(row["seq"])
-        conn.execute(
-            "UPDATE client_boq_documents SET filename = ?, kind = ?, ref = ?, note = ? "
-            "WHERE set_id = ? AND doc_id = ?",
-            (filename, kind, ref, note, set_id, doc_id),
-        )
-    else:
-        nxt = conn.execute(
-            "SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM client_boq_documents WHERE set_id = ?",
-            (set_id,),
-        ).fetchone()
-        seq = int(nxt["n"])
-        conn.execute(
-            "INSERT INTO client_boq_documents (set_id, doc_id, filename, kind, ref, seq, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (set_id, doc_id, filename, kind, ref, seq, note),
-        )
-    conn.commit()
-    return seq
+    return int(row["seq"]) if row else 0
 
 
 def list_documents(conn: sqlite3.Connection, set_id: str) -> list[dict]:
-    """Every document that entered the set, in arrival order. These are the history's tabs."""
+    """Every document that entered the set, in arrival order. These are the history's tabs.
+
+    Each row carries a derived ``applied``: whether this document has actually produced a part
+    revision yet. ``/ingest/document`` deliberately commits nothing — it proposes a mapping and
+    stops at the gate — so a received addendum and an applied one are different states, and only
+    the applied one has changed what is being priced. Derived from the revision rows rather than
+    stored as a flag, for the same reason the operative revision is (``load_parts``): a flag can
+    drift, a join cannot.
+    """
     rows = conn.execute(
         "SELECT doc_id, filename, kind, ref, seq, received_at, note "
         "FROM client_boq_documents WHERE set_id = ? ORDER BY seq",
         (set_id,),
     ).fetchall()
-    return [dict(row) for row in rows]
+    applied = {
+        row["doc_id"] for row in conn.execute(
+            "SELECT DISTINCT doc_id FROM client_boq_part_revisions WHERE set_id = ?", (set_id,)
+        )
+    }
+    return [{**dict(row), "applied": row["doc_id"] in applied} for row in rows]
 
 
 def save_parts(conn: sqlite3.Connection, set_id: str, parts: list[PartSpec],
@@ -960,6 +1696,18 @@ def _client_boq_dir(ws: Workspace, tender_id: str):
 def parts_dir(ws: Workspace, tender_id: str):
     """Where the cut part PDFs and their context cards are materialised."""
     path = _client_boq_dir(ws, tender_id) / "parts"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def bill_dir(ws: Workspace, tender_id: str):
+    """Where the client's bill-of-quantities workbooks are kept, one per revision.
+
+    The file itself is kept, not merely what was read out of it: GCT Appendix A 10 requires the bill
+    to be priced in the client's own workbook, so writing rates back means having their file — and
+    every superseded revision stays beside it, because a diff needs both.
+    """
+    path = _client_boq_dir(ws, tender_id) / "bill"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

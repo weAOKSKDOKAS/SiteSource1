@@ -104,17 +104,364 @@ export interface RatesResponse {
   seed_duplicates: string[];
 }
 
+// --- the output book -------------------------------------------------------
+// The rate book's sibling: rates say what a crew costs an hour, outputs say how many hours the
+// work takes. Both are the company's, not a job's. A tender inherits every norm here and may
+// override any of them, and `SourceChip` shows which — see boq/outputs.py, which is the only
+// place BOOK/YOURS/MISSING is decided.
+export interface OutputRow {
+  key: string;
+  label: string;
+  unit: string;
+  /** The `⌞` line: why the number is what it is. Empty when it needs no explaining. */
+  note: string;
+  value: number;
+  /** What ships. Stays visible beside an edit so you can always see what you moved away from. */
+  default: number;
+  /** `seed` = nobody has touched it. `you` = somebody set it, and updated_by says who. */
+  source: "seed" | "you";
+  updated_by: string;
+  updated_at: string | null;
+}
+
+export interface OutputBlock {
+  id: string;
+  title: string;
+  rows: OutputRow[];
+}
+
+export interface OutputsResponse {
+  blocks: OutputBlock[];
+  count: number;
+}
+
+// --- the take-off (Site) ---------------------------------------------------
+// The drawing's half of the estimate: where the holes are, which of them a rig can reach, and
+// which of them drill alike. None of it is in the bill of quantities.
+export interface Station {
+  station: string;
+  kind: string;
+  easting: number | null;
+  northing: number | null;
+  ground_level_mpd: number | null;
+  rockhead_level_mpd: number | null;
+  length_m: number;
+  max_boring_m: number;
+  soil_m: number;
+  hard_above_rockhead_m: number;
+  rock_m: number;
+  standpipe: boolean;
+  piezometer: boolean;
+  sheet: string;
+  notes: string[];
+}
+
+export interface TrialPit {
+  station: string;
+  easting: number | null;
+  northing: number | null;
+  ground_level_mpd: number | null;
+  depth_m: number;
+  max_depth_m: number;
+  depth_in_soil_m: number;
+  sheet: string;
+}
+
+/** `access_class` is "" until somebody decides. `decided_by` is why the table exists. */
+export interface StationClass {
+  station: string;
+  access_class: string;
+  group_id: string;
+  decided_by: string;
+  decided_at: string | null;
+}
+
+export interface ScheduleTotals {
+  holes: number;
+  soil_m: number;
+  rock_m: number;
+  hard_m: number;
+  standpipes: number;
+  piezometers: number;
+  instruments: number;
+  deepest: number;
+  trial_pits: number;
+}
+
+export interface StationScheduleResponse {
+  set_id: string;
+  meta: { confirmed_by: string; confirmed_at: string | null; source_sheet: string };
+  stations: Station[];
+  trial_pits: TrialPit[];
+  classes: Record<string, StationClass>;
+  /** A hole whose length is not its soil plus its rock has been misread. Named, never repaired. */
+  bad_rows: string[];
+  usable: boolean;
+  totals: Partial<ScheduleTotals>;
+  waiting_on?: string;
+}
+
+/** One quantity the drawing implies, and what the client billed for it. */
+export interface Derived {
+  full_ref: string;
+  label: string;
+  value: number;
+  unit: string;
+  rule: string;
+  source: string;
+  billed: number | null;
+  agrees: boolean | null;
+  note: string;
+}
+
+export interface DerivedResponse {
+  set_id: string;
+  rev: number | null;
+  checked_against_a_bill: boolean;
+  derived: Derived[];
+  divergences: Derived[];
+  confirmations: string[];
+  unchecked: string[];
+}
+
+export interface HoleGroup {
+  label: string;
+  stations: string[];
+  access_class: string;
+  terrain: string;
+  soil_m: number;
+  rock_m: number;
+  deepest_m: number;
+  holes_past_20m: number;
+  rigs: number;
+  soil_output: number;
+  rock_output: number;
+  decay: number;
+  access_build_cost: number;
+  badge: string;
+  basis: string;
+  /** Which fields the estimator typed. Recorded as an act — `decay` defaults to 0.05, so the
+   *  value alone cannot say whether anybody chose it. */
+  overrides: string[];
+}
+
+export interface ResolvedNorm {
+  key: string;
+  value: number;
+  source: "book" | "yours" | "missing";
+  book_value: number | null;
+  label: string;
+  unit: string;
+}
+
+export interface GroupsResponse {
+  set_id: string;
+  rev: number;
+  groups: HoleGroup[];
+  /** group label → field name → where that output came from. Drives the SourceChips. */
+  sources: Record<string, Record<string, ResolvedNorm>>;
+  counts: Record<string, number>;
+  unassigned: number;
+  billed_class_counts: Record<string, number>;
+  /** Where the estimator's classification disagrees with the bill. Empty means agreed. */
+  reconcile: string[];
+  not_ready: Record<string, string[]>;
+  class_refs: Record<string, string>;
+}
+
+// --- the costing engine ----------------------------------------------------
+// Bill of quantities in, priced bill and a live Excel model out. Everything the engine does is
+// described by a CostingModel the estimator can change; a change made on one tender stays there.
+export interface Band {
+  label: string;
+  lower: number;
+  rate: number;
+  holes: number;
+  calibration_depth_m: number;
+}
+
+export interface SpreadLine {
+  key: string;
+  label: string;
+  block: string;
+  multiplier: number;
+  rate: number;
+  unit: string;
+  /** `rig_day` scales with the rig count; `contract_day` does not. Merging them prices
+   *  supervision per rig, which is wrong in the direction that loses money.
+   *  `prelim` is in NEITHER total — the office and the site vehicle are billed as their own
+   *  items, so rolling them into a day-cost would charge them inside every metre drilled and
+   *  again on the line the client asked for them on. */
+  charge: "rig_day" | "contract_day" | "none" | "prelim";
+  note: string;
+}
+
+export interface CostingModelShape {
+  name: string;
+  note: string;
+  inputs: Record<string, number>;
+  bands: { bands: Band[] };
+  method: {
+    basis: string;
+    divergent_threshold: number;
+    marginal_threshold: number;
+    depth_departure_threshold: number;
+  };
+  spread: SpreadLine[];
+  laboratory: { key: string; label: string; rate: number; note: string }[];
+  /** Stand-ins keyed on how a line is MEASURED, so they fill in any bill rather than only the
+   *  one they were written against. `unit: ""` is the catch-all. */
+  placeholders: { unit: string; rate: number; label: string }[];
+  /** Off shows the bill as it honestly stands — every unpriced line red, nothing invented. */
+  use_placeholders: boolean;
+  basis_rows: { key: string; label: string; driver: string; divisor: string; note: string }[];
+  markup: { key: string; label: string; kind: string; components: string[] }[];
+  rounding: { threshold: number; decimals: number }[];
+}
+
+/** A thing worth knowing before pricing. `stop` is the template's "do not price". */
+export interface CostingCheck {
+  key: string;
+  verdict: "ok" | "marginal" | "stop";
+  message: string;
+  value: number | null;
+}
+
+export interface ProgrammeShape {
+  rock_fraction: number;
+  band: Band | null;
+  work_days: number;
+  work_days_p10: number;
+  work_days_p90: number;
+  blended_rate: number;
+  method_b_days: number;
+  divergence: number;
+  allocation: number;
+  calendar_days: number;
+  rigs_exact: number;
+  rigs_required: number;
+  standing_hours: number;
+  core_boxes: number;
+  mazier_samples: number;
+  grout_litres: number;
+  problems: string[];
+}
+
+export interface PricedRow {
+  full_ref: string;
+  description: string;
+  qty: number | null;
+  unit: string;
+  lump: boolean;
+  cost_basis: number | null;
+  rate_raw: number | null;
+  rate_rounded: number | null;
+  /** The estimator's. The rounded figure beside it is only a proposal. */
+  rate_to_submit: number | null;
+  amount: number | null;
+  overridden: boolean;
+  /** built | lab | client | prelim | typed | unpriced */
+  source: string;
+  /** How the line behaves over time, from the bill's own unit: fixed | time | measured. */
+  behaviour: string;
+  /** The arithmetic behind a proposed rate, in words — "Site vehicle at HK$3,500/week × 122". */
+  working: string;
+  prelim_key: string;
+  note: string;
+}
+
+export interface AssumptionRow {
+  key: string;
+  label: string;
+  value: string;
+  basis: string;
+  source: string;
+  confidence: "High" | "Medium" | "Low";
+  /** Read from the bill or worked out from it — shown, not adjustable. */
+  derived: boolean;
+  status: string;
+  reviewed_by: string;
+  comment: string;
+}
+
+export interface CostingResponse {
+  set_id: string;
+  rev: number;
+  model: CostingModelShape;
+  /** Dotted path → `book` | `yours`. Empty means this tender has changed nothing. */
+  marks: Record<string, string>;
+  using_own_model: boolean;
+  quantities: Record<string, { role: string; full_ref: string; description: string; value: number; unit: string; why: string; confirmed: boolean }>;
+  unmatched_roles: string[];
+  mapping_problems: string[];
+  programme: ProgrammeShape;
+  checks: CostingCheck[];
+  spread: {
+    cost_per_rig_day: number;
+    cost_per_contract_day: number;
+    site_teams_required: number;
+    rig_cost_programme: number;
+    rig_cost_programme_p90: number;
+  };
+  buildup: {
+    rows: { key: string; label: string; quantity: number; total_cost: number; cost_per_unit: number | null; derivation: string; problem: string }[];
+    total_direct_cost: number;
+    markup_steps: { key: string; label: string; kind: string; rate: number; factor: number }[];
+    selling_factor: number;
+    problems: string[];
+  };
+  priced: {
+    rows: PricedRow[];
+    total: number;
+    unpriced: string[];
+    /** Lines standing on a stand-in. While this is non-empty the total is PROVISIONAL. */
+    placeholders: string[];
+    provisional: boolean;
+    /** How much of `total` nobody chose. The difference is what has actually been priced. */
+    placeholder_total: number;
+    problems: string[];
+  };
+  register: { rows: AssumptionRow[]; gate: string; summary: string; outstanding: number };
+}
+
+/** The arithmetic under the Groups screen. Days and the blend, never a rate. */
+export interface GroupPreview {
+  ready: boolean;
+  waiting_on?: string[];
+  sources: Record<string, ResolvedNorm>;
+  soil_m?: number;
+  rock_m?: number;
+  soil_days?: number;
+  rock_days_charged?: number;
+  drilling_days?: number;
+  on_site_days?: number;
+  rigs?: number;
+  blended_m_per_day?: number;
+  unfinished?: boolean;
+}
+
 // --- app-wide settings (the AI model) --------------------------------------
 export interface LLMSettingsResponse {
+  /** The letterhead block, saved on the same screen. */
+  company: CompanySettings;
   provider: string; // "" = auto
+  /** Who reads the documents. "" falls through to EXTRACTION_PROVIDER, then to `provider`. */
+  provider_ingest: string;
   model_anthropic: string;
   model_deepseek: string;
+  model_openai: string;
   providers: string[];
   effective: {
     text_provider: string;
-    vision_provider: string; // always "anthropic" — DeepSeek rejects images
+    ingest_provider: string;
+    /** Who reads a SCANNED page — the ingest provider, unless it cannot take images. */
+    vision_provider: string;
+    /** The providers that can be handed a page image at all. */
+    vision_capable: string[];
     model_anthropic: string;
     model_deepseek: string;
+    model_openai: string;
+    model_ingest: string;
   };
   rows: { key: string; value: string; updated_by: string; updated_at: string | null }[];
 }
@@ -213,10 +560,38 @@ export interface Manifest {
   tier: number;
   tier_reason: string;
   approved: boolean;
+  /** `binder` was split from one document; `folder` arrived already organised. */
+  layout?: "binder" | "folder";
+  /** True when the gate passed itself because there were no page ranges to confirm. */
+  auto_approved?: boolean;
+  file_count?: number;
+  file_pages?: number;
   /** The covered page count. `coverage_detail` is the one with the breaks in it. */
   coverage: number;
   coverage_detail: CoverageDetail;
   parts: PartSpec[];
+  /** Folder ingest only — what was routed, and what is stored but read by nothing. */
+  summary?: string;
+  bills?: BillCandidate[];
+  held?: { relative_path: string; suffix: string; bytes: number; note: string }[];
+  problems?: string[];
+}
+
+/** A workbook in the upload that reads as a bill of quantities.
+ *
+ *  `proposed` marks the one the app believes is operative and `why` is the sentence that explains
+ *  it ("latest addendum: TA #2"). A proposal, never an automatic choice: which file is newest is
+ *  very nearly clerical, and being wrong about it prices the wrong bill. */
+export interface BillCandidate {
+  relative_path: string;
+  name: string;
+  bytes: number;
+  items: number;
+  priceable: number;
+  notes: string[];
+  already_imported: boolean;
+  proposed: boolean;
+  why: string;
 }
 
 // --- ingest: the parts -----------------------------------------------------
@@ -1349,4 +1724,61 @@ export interface GmailIntegrationStatus {
   drafts_created?: number;
   replies_processed: number;
   replies_unmatched: number;
+}
+
+// --- the pricing schedule: the INPUT a live estimate is run from ------------
+// Mirrors ResourceLine / ScheduleItem / EstimateSchedule in models.py. In DEMO a fixture supplies
+// this; in LIVE a person builds it, which is what the Price tab's editor is for.
+
+/** One resource within a direct activity. Either name a rate from the book (`resource_ref`) OR
+ *  give an `inline_rate`. `productivity` (output units per hour) converts a quantity into hours
+ *  before the rate applies: qty ÷ productivity = hours, hours × rate = amount. */
+export interface ResourceLineInput {
+  description: string;
+  resource_ref: string;
+  inline_rate: number | null;
+  qty: number;
+  unit: string;
+  productivity: number | null;
+}
+
+/** `direct` prices from resource lines; `indirect` computes from a basis. Anything else is left
+ *  alone for s05 to flag as `unclassified_item` — never guessed into a category. */
+export type ScheduleCategory = "direct" | "indirect" | "";
+export type IndirectBasis = "lump" | "per_week" | "pct_of_direct" | "";
+
+export interface ScheduleItemInput {
+  item_id: string; // assigned by s02 when blank
+  description: string;
+  category: ScheduleCategory;
+  unit: string;
+  lines: ResourceLineInput[];
+  basis: IndirectBasis;
+  amount: number | null; // lump
+  rate: number | null; // per_week
+  pct: number | null; // pct_of_direct
+}
+
+export interface EstimateScheduleInput {
+  duration_weeks: number | null;
+  items: ScheduleItemInput[];
+}
+
+export interface ScheduleResponse {
+  set_id: string;
+  /** false = this tender has never had one. A state the screen shows, not an error. */
+  saved: boolean;
+  schedule: EstimateScheduleInput;
+  margin_pct: number;
+  updated_by: string;
+  updated_at: string | null;
+}
+
+/** The letterhead, stored app-wide. Blank fields stay blank — the letter shows a visible
+ *  placeholder rather than inventing a company name. */
+export interface CompanySettings {
+  company_name: string;
+  company_address: string;
+  contact_name: string;
+  contact_number: string;
 }

@@ -25,7 +25,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # A raw uploaded file as the module receives it, matching the main app's ingest tuple shape
 # ``(filename, content_type, bytes)`` so ``pipeline.documents.extract_document`` can be reused.
@@ -421,6 +421,26 @@ class PartContext(BaseModel):
     # reading and a person's correction of it must never be mistakable for one another. Editing
     # a card stamps `user`; re-interpreting it puts `ai` back, because that IS a fresh reading.
     badge: str = BADGE_AI
+
+    @field_validator("summary", "notes", mode="before")
+    @classmethod
+    def _accept_a_list_of_sentences(cls, v):
+        """A list where a paragraph was asked for is a formatting difference, not a bad reading.
+
+        Every other prose field on this card is a ``list[str]``, so a model that returns
+        ``notes: ["...", "..."]`` has understood the document perfectly and merely picked the
+        neighbouring shape. Rejecting that threw away the WHOLE card: measured on the first live
+        run of the ND/2025/04 corpus, **93 of 203 parts** came back as "Interpreting this part
+        failed (1 validation error … input_type=list)" and were stored unread — including
+        `01-acc`, a 65-page conditions-of-contract with a perfectly good text layer. It also cost
+        120 retries, since a validation failure looks exactly like a malformed response.
+
+        Joining is the honest repair: nothing is invented, nothing is dropped, and a genuinely
+        wrong type (a dict, a number) still fails as it should.
+        """
+        if isinstance(v, (list, tuple)):
+            return " ".join(str(x).strip() for x in v if str(x).strip())
+        return v
 
 
 # ===========================================================================
@@ -875,6 +895,239 @@ class Estimate(BaseModel):
     totals: EstimateTotals = Field(default_factory=EstimateTotals)
 
 
+# ===========================================================================
+# The client's BILL OF QUANTITIES — the priced document the tender actually asks for
+# ===========================================================================
+# Modelled on the real ND/2025/04 workbook (see docs/client_boq/prd_boq_costing.md). Three facts
+# from that package decide the shapes below:
+#
+#   1. An item's description is a CHAIN, not a string. Item 2.9's own cell reads "maximum depth
+#      not exceeding 3.00m", which is meaningless; its meaning is assembled by reading up the
+#      captions to "Extra over for excavation in rock" / "Trial Pits and Inspection Pits" /
+#      "SECTION 2 - GROUND INVESTIGATION". General Preambles 2 makes that contractual: the
+#      "headings, sub-headings, item descriptions ... identify the work covered".
+#   2. The ITEM REFERENCE is the stable key; the row number is volatile. Across both real
+#      revisions 0 items were renumbered and 0 deleted, while 35 moved rows. A new item was even
+#      numbered "1.61A" — a suffix letter — so that 1.62 and 1.63 would not have to move.
+#   3. Excel stores the reference as a FLOAT, so item 1.20 is stored as 1.2 — the same value as
+#      item 1.2. Twelve such collisions exist in Rev 2. `item_ref` is therefore the FORMATTED
+#      string, rendered through the cell's number format, never the raw value.
+
+class BillItem(BaseModel):
+    """One priced line of the client's bill.
+
+    Identity is ``(bill_no, full_ref)``. ``row`` is carried only so a future write-back knows which
+    cell to fill — it must never be used to identify an item, because a revision moves rows freely.
+    """
+
+    bill_no: str = ""                  # "1".."9"
+    item_ref: str = ""                 # FORMATTED reference: "1.20", "2.10", "1.61A"
+    sub_ref: str = ""                  # "a" / "b" for a lettered variant, else blank
+    full_ref: str = ""                 # "2.2a", or == item_ref
+    heading_path: list[str] = Field(default_factory=list)   # the caption chain, outermost first
+    description: str = ""              # the item's own text, continuation rows joined verbatim
+    unit_raw: str = ""                 # exactly as it appears: "item ", "Item", "nr."
+    unit: str = ""                     # normalised: "item", "nr"
+    qty: Optional[float] = None        # None for a lump item; 0.0 is a REAL quantity that needs a rate
+    lump: bool = False                 # the quantity cell held "-"
+    client_rate: Optional[float] = None
+    client_amount: Optional[float] = None
+    pre_priced: bool = False           # the client filled the rate (Bill 9, item 8.2) — do not alter
+    is_parent: bool = False            # carries lettered variants beneath it (2.2 → 2.2a/2.2b); not priced
+    page_ref: str = ""                 # "BQ/2/1", derived from row_breaks (it is in no cell)
+    sheet: str = ""
+    row: int = 0                       # a write-back anchor ONLY
+    notes: list[str] = Field(default_factory=list)          # honest degradations, never silent
+
+    def full_description(self) -> str:
+        """Heading chain + item text — what the item actually means (General Preambles 2)."""
+        return " / ".join([*(h.strip() for h in self.heading_path if h.strip()),
+                           self.description.strip()]).strip(" /")
+
+
+class GrandSummaryLine(BaseModel):
+    """One line of the Grand Summary. (B), (D) and (E) arrive pre-filled by the client and are
+    reinstated if a tenderer alters them (GCT App C 2.5); (A), (C), (F) and (G) are computed."""
+
+    label: str = ""
+    code: str = ""                     # "A".."G", or the bill number
+    amount: Optional[float] = None
+    client_inserted: bool = False
+
+
+class ClientBill(BaseModel):
+    """One revision of the client's bill of quantities, as read from their workbook."""
+
+    set_id: str = ""
+    rev: int = 0
+    source_file: str = ""
+    items: list[BillItem] = Field(default_factory=list)
+    summary: list[GrandSummaryLine] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)          # workbook-level anomalies
+
+    def index(self) -> dict[str, BillItem]:
+        """full_ref → item. The identity map every downstream stage keys on."""
+        return {item.full_ref: item for item in self.items}
+
+
+# --- the revision diff -----------------------------------------------------
+CHANGE_ADDED = "added"
+CHANGE_DELETED = "deleted"
+CHANGE_QTY = "qty"
+CHANGE_DESCRIPTION = "description"
+CHANGE_UNIT = "unit"
+CHANGE_HEADING = "heading"
+CHANGE_PRE_PRICED = "pre_priced"
+CHANGE_KINDS = (CHANGE_ADDED, CHANGE_DELETED, CHANGE_QTY, CHANGE_DESCRIPTION, CHANGE_UNIT,
+                CHANGE_HEADING, CHANGE_PRE_PRICED)
+
+
+class ItemChange(BaseModel):
+    """One difference between two revisions of the bill. ``detail`` is a deterministic sentence, not
+    a model's prose — the addendum's own remarks are expressly "neither exhaustive nor guaranteed to
+    be accurate", so nothing here may be a summary of a summary."""
+
+    kind: str = ""                     # one of CHANGE_KINDS
+    bill_no: str = ""
+    full_ref: str = ""
+    before: str = ""                   # rendered, so a diff is readable without the two bills
+    after: str = ""
+    detail: str = ""
+
+
+class BillDiff(BaseModel):
+    """What changed between two bill revisions, keyed on the item reference.
+
+    ``moved_only`` is load-bearing: 35 items moved rows between Rev 0 and Rev 1 of the real bill
+    while changing nothing. Reporting a move as a change would bury the five real changes.
+    """
+
+    from_rev: int = 0
+    to_rev: int = 0
+    changes: list[ItemChange] = Field(default_factory=list)
+    moved_only: list[str] = Field(default_factory=list)      # full_refs, unchanged but relocated
+    unchanged: int = 0
+
+    def counts(self) -> dict[str, int]:
+        out = {kind: 0 for kind in CHANGE_KINDS}
+        for change in self.changes:
+            out[change.kind] = out.get(change.kind, 0) + 1
+        return out
+
+
+# --- carrying rates across a revision (GCT Appendix C 2.2(v)) --------------
+CARRY_SAME_RATE = "same_rate"
+CARRY_NEW_ZERO = "new_item_zero"
+CARRY_PRE_PRICED = "pre_priced_from_addendum"
+CARRY_UNIT_CONVERTED = "unit_converted"
+CARRY_DELETED = "deleted"
+CARRY_NEEDS_HUMAN = "needs_human"
+
+
+class CarriedRate(BaseModel):
+    """A PROPOSED rate for an item in the new revision, and the published rule that produced it.
+
+    These are the tender examiner's own rules, so they are the correct default: an addendum binds
+    whether or not a tenderer picks it up, and if you do not incorporate it the examiner applies
+    exactly this to your bid (GCT App C 2.2(v)), under the cardinal rule 2.1 "Under no circumstances
+    can the tendered rates be changed".
+
+    ``needs_review`` is OUR addition, not the client's. A carry can be legal and still wrong: the
+    real addendum multiplied three monitoring quantities by 2.17, and the rate that was right for
+    24 weeks per instrument is not obviously right for 52.
+    """
+
+    full_ref: str = ""
+    rate: Optional[float] = None
+    basis: str = ""                    # CARRY_* above
+    rule: str = ""                     # the App C row, quoted, so the proposal explains itself
+    needs_review: bool = False
+    reason: str = ""                   # why a human has to look, in plain words
+
+
+# --- the production assumption (where the resource quantities come from) ---
+class ConditionShare(BaseModel):
+    """One slice of a given quantity, and how fast the work goes in that slice.
+
+    The measurement rules split drilling by material, hole size, depth stage and class of site
+    (SMM S02 2.12 Groups IV/V, 2.06 Group II) — but the bill reports one aggregated quantity per
+    item. A rate is therefore a weighted average over an ASSUMED mix, and that mix is the estimate.
+    """
+
+    label: str = ""                    # "soil, 0-20m, Class A"
+    qty: float = 0.0                   # the part of the item's quantity in this condition
+    output: float = 0.0                # units of that quantity per shift (0 → flagged, never guessed)
+    crew_ref: str = ""                 # rate_id for the crew
+    plant_ref: str = ""                # rate_id for the rig/plant
+    shift_hours: float = 8.0
+
+
+class ItemAssumption(BaseModel):
+    """How one bill item's given quantity is assumed to split, with the evidence for it.
+
+    ``source_part_id``/``source_page`` cite a drawing already held in the set, so an assumption
+    points at its evidence exactly as a departure points at a clause. ``basis`` is free prose and
+    is meant to be read: this is a judgement about ground nobody has drilled yet, and the app must
+    never let it look like a measurement.
+    """
+
+    full_ref: str = ""
+    conditions: list[ConditionShare] = Field(default_factory=list)
+    basis: str = ""
+    badge: str = BADGE_USER            # a person typed it until a model proposes one
+    source_part_id: str = ""
+    source_page: int = 0
+
+    def total_qty(self) -> float:
+        return sum(c.qty for c in self.conditions)
+
+
+# --- the priced bill -------------------------------------------------------
+class PricedItem(BaseModel):
+    """One bill item with a rate behind it and the trace that produced it."""
+
+    full_ref: str = ""
+    bill_no: str = ""
+    description: str = ""
+    unit: str = ""
+    qty: Optional[float] = None
+    lump: bool = False
+    build_up: float = 0.0              # the cost of the resources, before any spread
+    spread: float = 0.0                # this item's share of the no-line costs
+    cost: float = 0.0                  # build_up + spread
+    unit_rate: Optional[float] = None  # None for a lump item — the SMM prints "-" there
+    amount: float = 0.0                # qty x unit_rate, or the lump amount
+    rate_source: str = ""              # "built" | "carried" | "client" | "unpriced"
+    lines: list[CostLine] = Field(default_factory=list)
+
+
+class SpreadLine(BaseModel):
+    """A cost that must be carried but has no bill item to carry it — Particular Preamble 4A:
+    "Any item missed out from the item coverage shall not be measured". It is spread across the
+    priced rates, and the allocation stays visible."""
+
+    label: str = ""
+    amount: float = 0.0
+    reason: str = ""                   # the clause that says there is no separate item
+
+
+class PricedBill(BaseModel):
+    """The bill, priced. Every figure re-adds by hand: money() is applied at each step."""
+
+    set_id: str = ""
+    rev: int = 0
+    items: list[PricedItem] = Field(default_factory=list)
+    spread: list[SpreadLine] = Field(default_factory=list)
+    spread_total: float = 0.0
+    spread_residue_ref: str = ""       # which item absorbed the rounding residue — named, not hidden
+    bill_totals: dict[str, float] = Field(default_factory=dict)   # bill_no -> total
+    page_totals: dict[str, float] = Field(default_factory=dict)   # page_ref -> total
+    total_build_up: float = 0.0
+    margin_pct: float = 0.0
+    tendered_total: float = 0.0        # (A) — what goes on the Form of Tender
+    flags: list[EstimateFlag] = Field(default_factory=list)
+
+
 class LetterMeta(BaseModel):
     """The offer-letter header fields — CODE-INJECTED from the run request, never AI-written. Sensible
     demo defaults so a letter renders without every field supplied."""
@@ -1214,6 +1467,301 @@ _DDL = [
         value      TEXT NOT NULL DEFAULT '',
         updated_by TEXT NOT NULL DEFAULT '',
         updated_at TEXT
+    )
+    """,
+    # The pricing schedule a live estimate is run FROM — quantities, resources and the margin.
+    #
+    # `/estimate/run` takes the schedule in its request body and DEMO supplies a fixture, so
+    # nothing persisted one until a person had to type it. A bill of quantities is far too much
+    # work to retype for every re-run, and a re-run is exactly what happens when a rate changes
+    # or a quantity is corrected — so it is stored per set, and the run request is filled from
+    # here. The estimate itself is still computed only by the deterministic spine; this table
+    # holds its INPUT, never its output.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_schedules (
+        set_id         TEXT PRIMARY KEY,
+        schedule_json  TEXT NOT NULL DEFAULT '',   -- a serialised EstimateSchedule
+        margin_pct     REAL NOT NULL DEFAULT 0,    -- the human states it; no default is safe
+        updated_by     TEXT NOT NULL DEFAULT '',
+        updated_at     TEXT
+    )
+    """,
+    # The client's BILL OF QUANTITIES, one row per revision.
+    #
+    # Keyed (set_id, rev) and append-only, exactly like client_boq_part_revisions and for the same
+    # reason: an addendum reissues the bill, and Rev 0 has to survive Rev 1 so the two can be
+    # compared. The operative revision is DERIVED as MAX(rev), never stored as a flag that could
+    # drift out of step with the rows.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_bill_revisions (
+        set_id      TEXT NOT NULL,
+        rev         INTEGER NOT NULL,
+        doc_id      TEXT NOT NULL DEFAULT '',     -- the document that caused it (an addendum)
+        source_file TEXT NOT NULL DEFAULT '',
+        bill_json   TEXT NOT NULL DEFAULT '{}',   -- a serialised ClientBill
+        read_notes  TEXT NOT NULL DEFAULT '[]',   -- what the reader could not do cleanly
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (set_id, rev)
+    )
+    """,
+    # A rate against one bill item, PER REVISION.
+    #
+    # Per revision, not per set, so pricing Rev 2 leaves Rev 1's prices intact — you can always see
+    # what you had priced before the addendum landed. `needs_review` is the re-price gate: a rate
+    # carried across a revision can be arithmetically legal and still wrong (a quantity that
+    # doubled), and the revision cannot be signed off while any of these is unconfirmed.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_bill_rates (
+        set_id       TEXT NOT NULL,
+        rev          INTEGER NOT NULL,
+        full_ref     TEXT NOT NULL,               -- "2.2a" — the stable item identity
+        rate         REAL,                        -- NULL means unpriced, which is NOT the same as 0
+        amount       REAL,
+        buildup_json TEXT NOT NULL DEFAULT '{}',  -- a serialised ScheduleItem (the resource lines)
+        basis        TEXT NOT NULL DEFAULT '',    -- built | carried | client | CARRY_* on a carry
+        badge        TEXT NOT NULL DEFAULT 'user',
+        needs_review INTEGER NOT NULL DEFAULT 0,
+        review_note  TEXT NOT NULL DEFAULT '',
+        updated_by   TEXT NOT NULL DEFAULT '',
+        updated_at   TEXT,
+        PRIMARY KEY (set_id, rev, full_ref)
+    )
+    """,
+    # How one item's given quantity is assumed to split across working conditions.
+    #
+    # This is the estimate. The bill says "2,300 m of drilling in soil" and says nothing about which
+    # holes, at what depth, in which class of site — but the rate has to be a weighted average over
+    # all of them. Stored per revision alongside the rate it produced, and carrying its evidence:
+    # source_part_id/source_page point at a drawing already in the set, so an assumption cites a
+    # page exactly as a departure cites a clause.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_item_assumptions (
+        set_id          TEXT NOT NULL,
+        rev             INTEGER NOT NULL,
+        full_ref        TEXT NOT NULL,
+        assumption_json TEXT NOT NULL DEFAULT '{}',  -- a serialised ItemAssumption
+        basis           TEXT NOT NULL DEFAULT '',    -- why you believe it; meant to be read
+        badge           TEXT NOT NULL DEFAULT 'user',
+        source_part_id  TEXT NOT NULL DEFAULT '',
+        source_page     INTEGER NOT NULL DEFAULT 0,
+        updated_by      TEXT NOT NULL DEFAULT '',
+        updated_at      TEXT,
+        PRIMARY KEY (set_id, rev, full_ref)
+    )
+    """,
+    # ---------------------------------------------------------------------------------------------
+    # The derivation engine (client_boq.boq.*) — the take-off, the groups, and the gate.
+    #
+    # Everything below is per-set EXCEPT client_boq_outputs, which is the company's, not a job's.
+    # That split is the same one the rate book already draws and it decides which screen a number
+    # lives on: the library holds what your company knows, a tender holds what this job needs.
+    # ---------------------------------------------------------------------------------------------
+    # The OUTPUT BOOK — productivity, mobilisation, coefficients, default markup.
+    #
+    # Library-global (no set_id), keyed by the norm's stable handle. Stored as rows rather than one
+    # JSON blob so a single norm can be edited, attributed and dated on its own — these are argued
+    # about individually and rarely, which is exactly the shape client_boq_rates has.
+    #
+    # An absent row is NOT zero: client_boq.boq.outputs falls back to the norm's declared default,
+    # and a key the book has never heard of resolves as MISSING and is flagged.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_outputs (
+        key        TEXT PRIMARY KEY,
+        value      REAL NOT NULL DEFAULT 0,
+        unit       TEXT NOT NULL DEFAULT '',
+        updated_by TEXT NOT NULL DEFAULT '',
+        updated_at TEXT
+    )
+    """,
+    # The STATION SCHEDULE read off the drawing — 91 boreholes and 21 trial pits, with coordinates,
+    # ground and rockhead levels, and the soil/rock split of every hole.
+    #
+    # NOT client_boq_schedules, which is the estimate PRICING schedule and an entirely different
+    # thing. The name collision is a real trap; these are the drillholes.
+    #
+    # `confirmed_by` is load-bearing: a vision extraction is a proposal until a person has looked at
+    # it beside the drawing, and nothing prices from an unconfirmed one. One row per set — a re-read
+    # replaces the last, because there is only ever one truth about where the holes are.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_station_schedules (
+        set_id        TEXT PRIMARY KEY,
+        schedule_json TEXT NOT NULL DEFAULT '{}',  -- a serialised StationSchedule
+        source_sheet  TEXT NOT NULL DEFAULT '',    -- "60740338/GI/210"
+        confirmed_by  TEXT NOT NULL DEFAULT '',    -- '' = still a machine's reading
+        confirmed_at  TEXT,
+        updated_by    TEXT NOT NULL DEFAULT '',
+        updated_at    TEXT
+    )
+    """,
+    # The SITE'S OWN RULES as the general-notes drawing states them — sampling intervals, pit sizes,
+    # termination criteria, monitoring duration, the tentative test counts.
+    #
+    # NOT client_boq_criteria, which is the review criteria library (acceptable contract positions).
+    # Another collision worth naming: these are the ground investigation's rules, from GI/100.
+    #
+    # `class_refs` records which bill items carry the Class A and Class B rig moves, because the
+    # reconciliation on the Site screen has to compare the estimator's counts against a quantity, and
+    # which item that is differs between contracts.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_site_criteria (
+        set_id        TEXT PRIMARY KEY,
+        criteria_json TEXT NOT NULL DEFAULT '{}',  -- a serialised SiteCriteria
+        source_sheet  TEXT NOT NULL DEFAULT '',    -- "60740338/GI/100"
+        class_refs    TEXT NOT NULL DEFAULT '{}',  -- {"A": "2.2a", "B": "2.2b"}
+        updated_by    TEXT NOT NULL DEFAULT '',
+        updated_at    TEXT
+    )
+    """,
+    # One station's ACCESS CLASS — the judgement the client's documents do not contain.
+    #
+    # The bill prices 80 Class A and 11 Class B rig moves and no drawing says which holes are which,
+    # so this is the estimator's and his only external check is that the counts come back to 80 and
+    # 11. Kept per station rather than folded into the group, because classification and grouping are
+    # two different acts: you can class a hole from its picture long before deciding which spread
+    # works it, and the Site screen is built around doing exactly that.
+    #
+    # `decided_by` is the point of the table. A count that disagrees with the bill has to be
+    # answerable — "who called ABH19 a B, and when" — or the query cannot be raised.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_station_classes (
+        set_id       TEXT NOT NULL,
+        station      TEXT NOT NULL,               -- "CE19-ABH19"
+        access_class TEXT NOT NULL DEFAULT '',    -- A | B | C ('' = not yet decided)
+        group_id     TEXT NOT NULL DEFAULT '',
+        decided_by   TEXT NOT NULL DEFAULT '',
+        decided_at   TEXT,
+        PRIMARY KEY (set_id, station)
+    )
+    """,
+    # A HOLE GROUP — the estimator's judgement about which holes drill alike.
+    #
+    # Nothing in the client's documents draws these lines. Per revision, like client_boq_bill_rates
+    # and for the same reason: an addendum that reissues the bill must leave what you had before it
+    # readable. `basis` is why he believes it, and a group stays "not ready" until it is written —
+    # a number nobody can explain is a number nobody can defend.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_hole_groups (
+        set_id     TEXT NOT NULL,
+        rev        INTEGER NOT NULL,
+        group_id   TEXT NOT NULL,
+        group_json TEXT NOT NULL DEFAULT '{}',    -- a serialised HoleGroup
+        badge      TEXT NOT NULL DEFAULT 'user',
+        basis      TEXT NOT NULL DEFAULT '',
+        updated_by TEXT NOT NULL DEFAULT '',
+        updated_at TEXT,
+        PRIMARY KEY (set_id, rev, group_id)
+    )
+    """,
+    # The SWEEP — costs the contract makes yours that no bill item asks for.
+    #
+    # This is the app's only hard stop, and the table is why. General Preambles ¶6: "Items against
+    # which no rate is entered shall be deemed to be covered by the other rates in the bill of
+    # quantities." So an unrouted cost is not an open question — it is a promise to do that work for
+    # nothing, for the life of a remeasured contract.
+    #
+    # `route` is NULL-equivalent ('') until somebody chooses, and `reason` is mandatory on the accept
+    # route: a risk somebody took deliberately and one nobody noticed look identical six months later.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_sweep_costs (
+        set_id     TEXT NOT NULL,
+        rev        INTEGER NOT NULL,
+        key        TEXT NOT NULL,                 -- stable handle: "traffic", "heli-ABH244"
+        label      TEXT NOT NULL DEFAULT '',
+        source     TEXT NOT NULL DEFAULT '',      -- the clause that put it on the list
+        amount     REAL,                          -- NULL is legal: you query before you know
+        route      TEXT NOT NULL DEFAULT '',      -- query | load | spread | accept ('' = unrouted)
+        target_ref TEXT NOT NULL DEFAULT '',      -- the item a `load` lands on
+        reason     TEXT NOT NULL DEFAULT '',
+        decided_by TEXT NOT NULL DEFAULT '',
+        decided_at TEXT,
+        PRIMARY KEY (set_id, rev, key)
+    )
+    """,
+    # WHAT A RATE MUST COVER — one row per (item, coverage head) the estimator has ticked.
+    #
+    # Only ticks are stored. The list itself is re-derived from the measurement rules and the
+    # specification on every request, so an addendum that changes a clause changes the list without
+    # this table knowing; a tick against a head that no longer exists simply stops being read.
+    #
+    # Nothing is ever pre-ticked. Assembling the list is clerical retrieval and a rule does it;
+    # deciding whether your build-up already carries a head is judgement and only a person does it —
+    # which is why every row carries a name and a date and there is no `badge` column.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_coverage_ticks (
+        set_id    TEXT NOT NULL,
+        rev       INTEGER NOT NULL,
+        full_ref  TEXT NOT NULL,                  -- the bill item, or '' for a bill-level tick
+        head_key  TEXT NOT NULL,                  -- "smm.2.13.a", "ps.7.30S"
+        ticked    INTEGER NOT NULL DEFAULT 0,
+        ticked_by TEXT NOT NULL DEFAULT '',
+        ticked_at TEXT,
+        PRIMARY KEY (set_id, rev, full_ref, head_key)
+    )
+    """,
+    # The SPECIFICATION INDEX, parsed — clause reference to page, so the chain
+    # bill item → item coverage → cited clause → page can be walked instead of hunted.
+    #
+    # Cached per (set, source document) because parsing it is deterministic and re-reading a 40-page
+    # index on every coverage request is waste. `notes` carries what the parser could not do cleanly,
+    # including contradictions in the client's own index — those get reported, never quietly fixed.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_docmaps (
+        set_id     TEXT NOT NULL,
+        source     TEXT NOT NULL,                 -- the part id the index was read from: "04-PS"
+        map_json   TEXT NOT NULL DEFAULT '{}',    -- a serialised DocumentMap
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (set_id, source)
+    )
+    """,
+    # ---------------------------------------------------------------------------------------------
+    # The COSTING MODEL — how this company prices, as data rather than as code.
+    #
+    # Bands, resource lines, item drivers, the mark-up chain, the rounding ladder and every scalar
+    # input, in one serialised object. Editable end to end: adding a production band or deleting a
+    # plant line is a change to a row in here, not a code change.
+    # ---------------------------------------------------------------------------------------------
+    # The library's model — what the company works from. Seeded from GI_Costing_Template.xlsx.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_costing_models (
+        model_id   TEXT PRIMARY KEY,
+        name       TEXT NOT NULL DEFAULT '',
+        model_json TEXT NOT NULL DEFAULT '{}',    -- a serialised CostingModel
+        updated_by TEXT NOT NULL DEFAULT '',
+        updated_at TEXT
+    )
+    """,
+    # A tender's own model. COPY-ON-WRITE: absent means "using the library's", and the first edit
+    # made on this tender copies the library's model in here. From then on the tender owns it —
+    # the library is untouched and no other tender moves.
+    #
+    # That is the whole mechanism for "a change made on one job stays on that job", and it is also
+    # what makes the ⟨BOOK⟩/⟨YOURS⟩ marks derivable: compare this against the library, field by
+    # field, rather than storing a second record of what diverged.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_set_costing_model (
+        set_id     TEXT PRIMARY KEY,
+        model_json TEXT NOT NULL DEFAULT '{}',
+        based_on   TEXT NOT NULL DEFAULT '',      -- the library model it was copied from
+        updated_by TEXT NOT NULL DEFAULT '',
+        updated_at TEXT
+    )
+    """,
+    # What a person decided about one tender's costing, per revision: which bill items supply the
+    # engine's quantities and which build-up prices each item (both proposed, then confirmed), any
+    # rate typed over the rounded proposal, and the assumptions register's verdicts.
+    #
+    # One row rather than four tables because these are read and written together, always, and
+    # because none of them means anything without the others.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_costing_state (
+        set_id         TEXT NOT NULL,
+        rev            INTEGER NOT NULL,
+        mapping_json   TEXT NOT NULL DEFAULT '{}',   -- confirmed quantity + item mappings
+        submitted_json TEXT NOT NULL DEFAULT '{}',   -- full_ref -> the rate actually being tendered
+        verdicts_json  TEXT NOT NULL DEFAULT '{}',   -- assumption key -> {status, by, at, comment}
+        updated_by     TEXT NOT NULL DEFAULT '',
+        updated_at     TEXT,
+        PRIMARY KEY (set_id, rev)
     )
     """,
 ]

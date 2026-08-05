@@ -144,6 +144,64 @@ export function Pill({ children, className }: { children: ReactNode; className?:
   );
 }
 
+/**
+ * Where a number came from: the company's book, this tender, or nowhere.
+ *
+ * The library/tender rule made visible. A tender inherits every norm the output book holds and may
+ * override any of them — and the override is always shown, because an inherited number and a chosen
+ * one are different claims even when the digits match. Only the person who chose one can be asked why.
+ *
+ * `MISSING` is the important case and the reason this is a chip rather than a bit of styling: it is a
+ * number named by something that prices, that nothing stands behind. It renders red and carries 0 —
+ * flagged, never quietly defaulted, exactly as an archived rate resolves on a re-run.
+ *
+ * The backend decides which of the three this is (`boq/outputs.py: resolve`). This never works it out
+ * from the value — two code paths that can disagree about provenance are worse than no mark at all.
+ */
+export type Source = "book" | "yours" | "missing";
+
+const SOURCE_STYLE: Record<Source, string> = {
+  book: "bg-cb-info text-cb-navy border border-cb-disabled",
+  yours: "bg-cb-brass-tint text-cb-brass-text border border-cb-brass-line",
+  missing: "bg-cb-bad-tint text-cb-bad-dark border border-cb-bad",
+};
+
+const SOURCE_TITLE: Record<Source, string> = {
+  book: "Inherited from the output library. Changing it there changes every future tender.",
+  yours: "Typed on this tender, for this job only. The library is untouched.",
+  missing: "Nothing in the library defines this. It prices at zero until somebody sets it.",
+};
+
+export function SourceChip({
+  source,
+  bookValue,
+  className,
+}: {
+  source: Source;
+  /** The book's number, shown beside an override so `⟨BOOK 20⟩` sits next to your 9. */
+  bookValue?: number | null;
+  className?: string;
+}) {
+  const showBook = source === "yours" && bookValue !== null && bookValue !== undefined;
+  return (
+    <span className={cx("inline-flex flex-none items-center gap-1", className)}>
+      {showBook && (
+        <Chip className={SOURCE_STYLE.book} title={SOURCE_TITLE.book}>
+          BOOK {formatNorm(bookValue)}
+        </Chip>
+      )}
+      <Chip className={SOURCE_STYLE[source]} title={SOURCE_TITLE[source]}>
+        {source.toUpperCase()}
+      </Chip>
+    </span>
+  );
+}
+
+/** A norm, printed the way it is said: `0.33`, `20`, `1.23` — never `20.00` and never `0.3300`. */
+export function formatNorm(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
+}
+
 /** The all-caps mono section label that heads a block of content. */
 export function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -226,6 +284,141 @@ export function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * A small exclusive choice, shown in full — `⟨A⟩ B C`.
+ *
+ * A select would hide the alternatives behind a click, and on Site › Holes the alternatives are the
+ * decision: you are choosing between three classes of access whose meanings matter, ninety-one
+ * times. Every option carries its own `title`, because "B" on its own tells you nothing.
+ *
+ * Nothing is pre-selected. `value=""` is a legitimate state — a hole nobody has judged yet — and it
+ * has to look different from a hole somebody judged as A.
+ */
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  className,
+}: {
+  value: T | "";
+  options: { value: T; label: string; title?: string; tone?: "normal" | "warn" }[];
+  onChange: (value: T) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cx(
+        "inline-flex flex-none overflow-hidden rounded-cb-btn border border-cb-border-strong",
+        className,
+      )}
+    >
+      {options.map((option) => {
+        const on = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            title={option.title}
+            onClick={() => onChange(option.value)}
+            className={cx(
+              "cb-press border-r border-cb-border-strong px-2 py-[3px] font-cb-mono text-[10px] font-semibold last:border-r-0",
+              on && option.tone === "warn"
+                ? "bg-cb-amber text-cb-on-brass"
+                : on
+                  ? "bg-cb-ink text-white"
+                  : "bg-white text-cb-muted",
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * A window of a drawing sheet, centred on one station.
+ *
+ * One render per sheet, cropped N ways in CSS. There is no image pipeline and none is needed: the
+ * browser downloads the sheet once, and ninety-one tiles are ninety-one transforms of that same
+ * cached image.
+ *
+ * The scaling looks like it stretches and does not. A window that is square *in metres* covers
+ * different fractions of the page horizontally and vertically whenever the page is not square — so
+ * setting width and height independently from those two fractions is exactly the uniform scale, not
+ * a distortion of it. That holds only while the registration is isotropic, which is why
+ * `georef.SheetRegistration.problems()` refuses a sheet whose two axes disagree by more than 2%.
+ *
+ * With no registration there is no honest picture to draw, so it says so rather than showing a
+ * plausible-looking placeholder somebody might classify a hole from.
+ */
+export function MapCrop({
+  src,
+  box,
+  size = 96,
+  className,
+}: {
+  src: string | null;
+  /** Fractions of the page. Null when the sheet has not been located yet. */
+  box: { x0: number; y0: number; x1: number; y1: number; clipped?: boolean } | null;
+  size?: number;
+  className?: string;
+}) {
+  const span = box ? { x: box.x1 - box.x0, y: box.y1 - box.y0 } : null;
+  if (!src || !span || span.x <= 0 || span.y <= 0) {
+    return (
+      <div
+        style={{ width: size, height: size }}
+        title="This sheet has no grid marks yet — read the coordinates beside any two grid crosses and every station on it follows."
+        className={cx(
+          "flex flex-none items-center justify-center rounded-cb-chip border border-dashed border-cb-border-strong bg-cb-panel p-1 text-center font-cb-mono text-[7.5px] leading-[1.35] text-cb-faint",
+          className,
+        )}
+      >
+        NO GRID MARKS ON THIS SHEET YET
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{ width: size, height: size }}
+      className={cx(
+        "relative flex-none overflow-hidden rounded-cb-chip border bg-cb-page",
+        box?.clipped ? "border-cb-amber" : "border-cb-border",
+        className,
+      )}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        style={{
+          position: "absolute",
+          width: size / span.x,
+          height: size / span.y,
+          left: -(box!.x0 * size) / span.x,
+          top: -(box!.y0 * size) / span.y,
+          maxWidth: "none",
+        }}
+      />
+      {/* The station is the centre of the window by construction, so the crosshair needs no
+          coordinates of its own — it marks the middle, and the middle is the hole. */}
+      <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 font-cb-mono text-[13px] font-semibold text-cb-bad">
+        ✛
+      </span>
+      {box?.clipped && (
+        <span
+          title="This station is near the edge of the sheet, so part of the window is off the paper."
+          className="absolute bottom-0 right-0 bg-cb-amber px-1 font-cb-mono text-[7px] font-semibold text-cb-on-brass"
+        >
+          EDGE
+        </span>
+      )}
+    </div>
   );
 }
 
