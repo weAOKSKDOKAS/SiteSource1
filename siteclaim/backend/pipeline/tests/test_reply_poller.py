@@ -106,15 +106,44 @@ def test_ref_extraction_from_a_reply_subject():
     assert reply_poller.ref_from_subject("no tag here") == ""
 
 
-def test_polling_is_off_in_demo_even_when_enabled(monkeypatch):
-    # The autouse fixture forces DEMO_MODE=true: even an explicit enable must not poll (DEMO is
-    # fully offline), and the default (no env) is off everywhere.
+def test_polling_is_off_in_demo_and_on_by_default_once_gmail_is_connected(monkeypatch):
+    """The four states of `polling_enabled()`, with the credential pinned in BOTH directions.
+
+    The credential is what decides the UNSET case — automatic collection is the product, so an
+    install with Gmail connected polls without being told to, and an install with nothing to poll
+    stays quiet rather than logging a failure every tick. This test used to leave
+    `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` to whatever the machine happened to have, so it
+    read "off by default" on a developer box with no credential and failed on one with. The
+    environment is not the subject of the test: both vars are set explicitly for each case.
+    """
+    connected = {"GOOGLE_CLIENT_ID": "cid", "GOOGLE_CLIENT_SECRET": "secret"}
+
+    # 1. DEMO, explicitly enabled -> still OFF. Absolute: the demo and the suite stay offline.
+    for k, v in connected.items():
+        monkeypatch.setenv(k, v)
     monkeypatch.setenv("GMAIL_POLLING_ENABLED", "true")
     assert reply_poller.polling_enabled() is False
-    monkeypatch.delenv("GMAIL_POLLING_ENABLED", raising=False)
+
+    # 2. Outside DEMO, unset, NO credential -> OFF. The real default-off case: there is nothing to
+    #    poll, and every tick would be an error in a loop.
     monkeypatch.setenv("DEMO_MODE", "false")
-    assert reply_poller.polling_enabled() is False                # off by default outside DEMO too
+    monkeypatch.delenv("GMAIL_POLLING_ENABLED", raising=False)
+    for k in connected:
+        monkeypatch.delenv(k, raising=False)
+    assert reply_poller.polling_enabled() is False
+
+    # 3. Outside DEMO, unset, credential PRESENT -> ON. The default that makes the machine wait at
+    #    the outbox; the self-ingest guard is what makes it safe, not an opt-in flag.
+    for k, v in connected.items():
+        monkeypatch.setenv(k, v)
+    assert reply_poller.polling_enabled() is True
+
+    # 4. The explicit override still wins in both directions.
+    monkeypatch.setenv("GMAIL_POLLING_ENABLED", "false")
+    assert reply_poller.polling_enabled() is False
     monkeypatch.setenv("GMAIL_POLLING_ENABLED", "true")
+    for k in connected:
+        monkeypatch.delenv(k, raising=False)     # true means true, credential or not
     assert reply_poller.polling_enabled() is True
 
 
