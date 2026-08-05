@@ -273,3 +273,38 @@ def test_the_ingest_routes_are_mounted(client):
         "/client-boq/ingest/parts/{set_id}",
         "/client-boq/ingest/parts/{set_id}/{part_id}",
     } <= paths
+
+
+# ---------------------------------------------------------------------------
+# A live model's shape, not the fixture's
+# ---------------------------------------------------------------------------
+def test_a_prose_field_returned_as_a_list_is_joined_not_rejected():
+    """The card must survive a model answering in the neighbouring shape.
+
+    `PartContext` asks for `notes` and `summary` as prose and for six other fields as
+    `list[str]`, so a model returning `notes: ["...", "..."]` has read the document correctly and
+    merely picked the shape next door. Pydantic rejected it, `interpret_part` caught the
+    ValidationError, and the WHOLE card was stored as "not readable" — losing the summary, the
+    obligations and the commercial flags along with it.
+
+    Measured on the first live run of the ND/2025/04 corpus through `gpt-5.6-luna`: **93 of 203
+    parts** were lost this way, `01-acc` among them — a 65-page conditions of contract with a
+    perfectly good text layer, catalogued as unread. It also caused 120 retries, because a
+    validation failure is indistinguishable from a malformed response at the call site.
+    """
+    from client_boq.models import PartContext
+
+    context = PartContext(
+        summary=["The Additional Conditions of Contract.", "It amends the NEC ECC HK Edition."],
+        notes=["The source description is a drawing.", "No scope is stated in the supplied text."],
+    )
+    assert context.summary == (
+        "The Additional Conditions of Contract. It amends the NEC ECC HK Edition."
+    )
+    assert context.notes.startswith("The source description is a drawing.")
+    assert context.readable is True, "a joined card is a read card"
+
+    # A string is untouched, and a genuinely wrong type still fails.
+    assert PartContext(notes="already prose").notes == "already prose"
+    with pytest.raises(Exception):
+        PartContext(notes={"not": "prose"})

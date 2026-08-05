@@ -166,6 +166,10 @@ def test_a_quote_that_is_on_the_page_is_located_with_a_measured_page(client):
     assert body["page"] == 2
     box = body["highlights"][0]
     assert 0.0 <= box["x0"] < box["x1"] <= 1.0
+    # `located` covers both an exact hit and a fragment fallback, and those are not equally strong
+    # evidence. The verdict alone cannot say which, so the note must.
+    assert body["match"] == "exact"
+    assert body["note"] == "found on page 2"
 
 
 def test_a_quote_that_is_not_on_these_pages_says_so(client):
@@ -201,6 +205,48 @@ def test_a_scanned_part_reports_that_it_could_not_be_checked(client):
     assert "no text layer" in body["note"]
 
 
+# ---------------------------------------------------------------------------
+# Locating across the whole set — what "show me on the page" actually needs
+# ---------------------------------------------------------------------------
+def test_a_set_wide_locate_names_the_part_holding_the_quote(client):
+    """The per-part route can only answer about the document already open, and that made the
+    button useless on a folder set: it reported "not found" from whichever part happened to be on
+    screen while the words sat in another file. Finding the right document is the button's job."""
+    set_id = _ingest(client, "set-locate")           # 3 parts; the quote is on page 2, part one
+    parts = client.get(f"/client-boq/ingest/parts/{set_id}").json()["parts"]
+    assert len(parts) >= 3
+
+    # Ask from a part that does NOT contain it — the case that used to fail.
+    body = client.post(
+        f"/client-boq/ingest/{set_id}/locate",
+        json={"quote": QUOTE, "prefer_part_id": parts[2]["part_id"]},
+    ).json()
+    assert body["verdict"] == "located"
+    assert body["part_id"] == parts[0]["part_id"], "it must name the part that holds the words"
+    assert body["page"] == 2
+    assert body["highlights"]
+    assert parts[0]["part_id"] in body["note"], "the note must say which document it landed in"
+
+
+def test_a_set_wide_miss_says_how_many_documents_were_searched(client):
+    """"Not found" is only worth trusting if it says how hard it looked."""
+    set_id = _ingest(client, "set-locate-miss")
+    body = client.post(
+        f"/client-boq/ingest/{set_id}/locate",
+        json={"quote": "a sentence that is in none of these documents whatsoever"},
+    ).json()
+    assert body["verdict"] == "not_located"
+    assert body["part_id"] == ""
+    assert body["highlights"] == []
+    assert "searchable document" in body["note"]
+
+
+def test_a_set_wide_locate_needs_a_quote_and_a_set(client):
+    set_id = _ingest(client, "set-locate-guard")
+    assert client.post(f"/client-boq/ingest/{set_id}/locate", json={"quote": " "}).status_code == 422
+    assert client.post("/client-boq/ingest/no-such-set/locate", json={"quote": QUOTE}).status_code == 404
+
+
 def test_locating_nothing_is_refused(client):
     set_id = _ingest(client)
     part = _part(client, set_id)
@@ -224,7 +270,28 @@ def test_the_register_reports_when_it_describes_a_different_document(client):
     assert mismatch is not None, "the DEMO fixture is about another document; that must be visible"
     assert "binder.pdf" in [u for u in mismatch["uploaded"]]
     assert mismatch["reviewed"] and "binder.pdf" not in mismatch["reviewed"]
-    assert "not the document set that was uploaded" in mismatch["note"]
+    assert "that were uploaded" in mismatch["note"]
+
+
+def test_the_mismatch_note_stays_short_however_many_files_were_uploaded():
+    """The warning must not grow until it hides the findings it is warning about.
+
+    It used to inline every filename on both sides. That read fine for a binder plus two annexes,
+    and on a 203-file folder ingest it rendered a wall of text that made the Register unusable —
+    roughly 14,000 characters of paths where two sentences were wanted. The full lists are returned
+    beside the note as ``reviewed`` and ``uploaded`` for the screen to disclose on demand.
+    """
+    from client_boq.router import _name_a_few
+
+    many = [f"nd202504 contract dcos/acc/i-nd_2025_04-acc_app_{n}-0.pdf" for n in range(203)]
+    named = _name_a_few(many)
+
+    assert named.endswith("and 200 more")
+    assert len(named) < 200, named
+    # Basenames, not paths: the folder is already established by the sentence around it.
+    assert "nd202504 contract dcos/" not in named
+    assert _name_a_few(["a.pdf", "b.pdf"]) == "a.pdf, b.pdf"   # a short list is shown in full
+    assert _name_a_few([]) == "nothing"
 
 
 def test_the_mismatch_is_absent_when_nothing_was_split(client):
@@ -245,4 +312,5 @@ def test_the_new_routes_are_mounted(client):
         "/client-boq/criteria",
         "/client-boq/ingest/parts/{set_id}/{part_id}/context",
         "/client-boq/ingest/parts/{set_id}/{part_id}/locate",
+        "/client-boq/ingest/{set_id}/locate",
     } <= paths
