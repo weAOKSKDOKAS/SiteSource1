@@ -139,6 +139,20 @@ def get_scope(set_id: str) -> dict:
     return {"set_id": set_id, "scope": scope.model_dump()}
 
 
+@router.get("/{set_id}/doc-index")
+def get_doc_index_state(set_id: str) -> dict:
+    """Does a document index exist for this tender, when was it built, and over how many documents.
+
+    A pure read, and the gate's precondition made visible. The last live failure was a split run
+    under one slug and drafts assembled under another: `load_doc_index` returned `[]`, the enquiry
+    carried a generated workbook instead of the sliced bill, and nothing said so until it had been
+    sent. Never 404s — "no index" is the answer this exists to give, and the loudest one it has.
+    """
+    from bridge.doc_index_state import doc_index_state
+
+    return doc_index_state(set_id)
+
+
 @router.post("/{set_id}/route/analyze")
 def post_route_analyze(set_id: str) -> dict:
     """Propose a route per package — 409s until the client_boq review register is approved.

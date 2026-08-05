@@ -20,6 +20,7 @@ import type {
   CriterionRow,
   DispatchDraftsResponse,
   DispatchSet,
+  DocIndexState,
   EstimateResponse,
   EstimateScheduleInput,
   DocumentRow,
@@ -666,6 +667,14 @@ export const api = {
       setId: string,
       decisions: { package_key: string; chosen_route: string }[],
     ) => bpost<BridgeRouteDecisions>(`${setPath(setId)}/route/confirm`, { decisions }),
+
+    /** Does a document index exist for this tender, when was it built, over how many documents.
+     *
+     *  The dispatch gate's precondition, made visible. Without an index every enquiry carries the
+     *  generated pricing sheet instead of the bill sliced to its section, and no specification at
+     *  all — which is what happened live when the split ran under one slug and the drafts were
+     *  assembled under another. Never 404s: "no index" is the answer this exists to give. */
+    docIndex: (setId: string) => bget<DocIndexState>(`${setPath(setId)}/doc-index`),
 
     /** The persisted shortlist selection for a set — `{package_key: [firm_id, …]}`. Empty is a
      *  legitimate answer (nothing selected yet), never a 404. */

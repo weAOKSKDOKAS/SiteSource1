@@ -26,6 +26,7 @@ import type {
   BridgeRouteProposalRead,
   Coverage,
   DispatchSet,
+  DocIndexState,
   GmailIntegrationStatus,
   LevelledBid,
   MisdirectedHint,
@@ -114,6 +115,10 @@ export function SourcingTab({
   // Lifted out of StepDispatch, which used to fetch this itself.
   const [plans, setPlans] = useState<SectionPlan[] | null>(null);
   const [plansError, setPlansError] = useState("");
+  /** FIX C — what the enquiry's attachments will be assembled FROM, read when the tab opens.
+   *  The last live failure was a split under one slug and drafts under another; nothing was
+   *  broken, the index simply was not there, and the only symptom was the sent attachment. */
+  const [docIndex, setDocIndex] = useState<DocIndexState | null>(null);
 
   // Level & award.
   const [levelled, setLevelled] = useState<Record<string, LevelledBid[]> | null>(null);
@@ -138,7 +143,7 @@ export function SourcingTab({
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [spl, prop, dec, cov, appr, reps] = await Promise.all([
+    const [spl, prop, dec, cov, appr, reps, idx] = await Promise.all([
       api.bridge.split(setId).catch(() => null),
       api.bridge.proposal(setId).catch(() => null),
       api.bridge.decisions(setId).catch(() => null),
@@ -150,6 +155,9 @@ export function SourcingTab({
       // reply poller is running: six replies sat on disk and Level & compare said "No dispatched
       // packages yet" because it had nothing but this session's own memory to build from.
       api.sourcing.tenderReplies(setId).catch(() => null),
+      // The document index the dispatch gate will draft from — read here, not inside the step, so
+      // the warning is on screen before anything is composed.
+      api.bridge.docIndex(setId).catch(() => null),
     ]);
     setSplit(spl?.scope ?? null);
     setProposal(prop);
@@ -158,6 +166,7 @@ export function SourcingTab({
     setStoredApprovals(appr?.approvals ?? null);
     if (appr?.approvals && Object.keys(appr.approvals).length) setApprovals(appr.approvals);
     setTenderReplies(reps);
+    setDocIndex(idx);
     setLoading(false);
   }, [setId]);
 
@@ -538,6 +547,7 @@ export function SourcingTab({
                 demoMode={demoMode}
                 plans={plans}
                 plansError={plansError}
+                docIndex={docIndex}
                 loading={busy}
                 onToggleApprove={toggleApprove}
                 onEditDraft={(trade, firmId, value) =>

@@ -20,6 +20,7 @@ import type {
   Candidate,
   DispatchDraftsResponse,
   DispatchSet,
+  DocIndexState,
   DispatchStatus,
   SectionPlan,
   ShortlistSet,
@@ -64,6 +65,43 @@ function formatPages(pages: number[]): string {
   return runs.join(", ");
 }
 
+/** What the enquiry's attachments will be assembled FROM, stated before anything is drafted.
+ *
+ *  The last live failure was a split run under one tender slug and drafts built under another. No
+ *  component misbehaved: the index simply was not there, so every enquiry silently carried a 7 KB
+ *  generated sheet instead of the bill sliced to its section, and nothing said so until it had
+ *  been sent. This is that precondition, said out loud, at the moment it still matters.
+ */
+function DocIndexBanner({ state }: { state: DocIndexState | null }) {
+  if (!state) return null;
+  const kinds = Object.entries(state.kinds).sort(([a], [b]) => a.localeCompare(b));
+  return (
+    <div
+      className={cx(
+        "rounded-cb-card border px-3 py-2 text-[11px] leading-relaxed",
+        state.warning
+          ? "border-cb-bad bg-cb-bad-soft text-cb-bad-dark"
+          : "border-cb-border bg-cb-panel text-cb-muted",
+      )}
+    >
+      <div className="font-cb-mono text-[10px] uppercase tracking-wide">
+        Documents indexed for {state.tender_slug}
+      </div>
+      {state.exists ? (
+        <div className="mt-0.5">
+          {state.documents} document{state.documents === 1 ? "" : "s"}
+          {state.built_at && ` · built ${new Date(state.built_at).toLocaleString()}`}
+          {kinds.length > 0 && ` · ${kinds.map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ")}`}
+          {state.sor_sections.length > 0 && ` · bill sections ${state.sor_sections.join(", ")}`}
+        </div>
+      ) : (
+        <div className="mt-0.5 font-semibold">No index for this tender.</div>
+      )}
+      {state.warning && <div className="mt-1">{state.warning}</div>}
+    </div>
+  );
+}
+
 export function Dispatch({
   shortlist,
   approvals,
@@ -72,6 +110,7 @@ export function Dispatch({
   demoMode,
   plans,
   plansError,
+  docIndex,
   loading,
   onToggleApprove,
   onEditDraft,
@@ -87,6 +126,8 @@ export function Dispatch({
   /** Lifted to the tab container — this screen no longer fetches. null = still loading. */
   plans: SectionPlan[] | null;
   plansError: string;
+  /** The document index this gate is about to draft from. null = not read yet. */
+  docIndex: DocIndexState | null;
   loading: boolean;
   onToggleApprove: (trade: string, firmId: string) => void;
   onEditDraft: (trade: string, firmId: string, value: Draft) => void;
@@ -109,6 +150,8 @@ export function Dispatch({
         draft, then confirm. Each firm receives only its package's documents. Confirming prepares
         each enquiry in the outbox with exactly your edited text.
       </p>
+
+      <DocIndexBanner state={docIndex} />
 
       <Card flush>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cb-divider px-3 py-2">

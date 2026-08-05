@@ -1151,6 +1151,24 @@ export interface BridgeSplitResponse {
   notes: string[];
 }
 
+/** What the dispatch gate reports about this tender's document index, before anything is drafted. */
+export interface DocIndexState {
+  set_id: string;
+  tender_slug: string;
+  exists: boolean;
+  /** ISO-8601 UTC, from the index file's own mtime. Null when there is no index. */
+  built_at: string | null;
+  documents: number;
+  /** How many parts SHOULD be indexed right now — the confirmed bill plus every non-drawing
+   *  context part. More than `documents` means something arrived after the index was built. */
+  indexable_parts: number;
+  kinds: Record<string, number>;
+  sor_sections: string[];
+  stale: boolean;
+  /** The sentence to show, naming the slug. Empty when there is nothing to warn about. */
+  warning: string;
+}
+
 export interface BridgeSplitRead {
   set_id: string;
   scope: ScopePackages;
