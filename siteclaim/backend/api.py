@@ -1614,10 +1614,50 @@ class TenderRepliesResponse(BaseModel):
     last_received: str | None = None
     replies: list[TenderReplyInfo] = Field(default_factory=list)
     outstanding: list[dict] = Field(default_factory=list)  # dispatched, not yet replied
+    # EVERY dispatched enquiry for this tender, replied or not — the persisted record of who was
+    # asked. `outstanding` is this list minus whoever has answered, which is the wrong shape for a
+    # screen that must show landed AND awaiting side by side.
+    #
+    # Level & compare used to rebuild this from `dispatch.bundles`, which is React state and dies
+    # with the browser session: six replies sat on disk and the screen said "No dispatched packages
+    # yet", because no dispatch had happened in THAT tab. A reply that exists must be visible
+    # regardless of what the session did.
+    #
+    # `firm_name` is resolved from the firm register where it is known and falls back to the id —
+    # the correlation registry stores identity, not display text, and a missing name is not a
+    # reason to hide a dispatched enquiry.
+    dispatched: list[dict] = Field(default_factory=list)
     comparison_available: bool = False
     # routed-unit package_key -> that unit's SoR item count (the denominator for a reply's coverage,
     # so the operator reads "31/31 H items priced" not a bare count). Empty when no scope is persisted.
     unit_totals: dict[str, int] = Field(default_factory=dict)
+
+
+def _firm_names(firm_ids: set[str]) -> dict[str, str]:
+    """``firm_id -> firm_name`` for the ids we can resolve. Never raises.
+
+    The correlation registry stores identity, not display text, so a rebuilt dispatch list has ids
+    and no names. An unreadable or unseeded firm database is not a reason to hide a dispatched
+    enquiry — the caller falls back to the id.
+    """
+    if not firm_ids:
+        return {}
+    try:
+        conn = store.get_connection()
+    except Exception:  # noqa: BLE001 — no database is a display problem, not a failure
+        return {}
+    try:
+        # `name_en` is the display column — `store.firm_from_row` maps it to `.name`, and there is
+        # no `name` column to select.
+        rows = conn.execute(
+            f"SELECT firm_id, name_en FROM firms WHERE firm_id IN ({','.join('?' * len(firm_ids))})",
+            tuple(sorted(firm_ids)),
+        ).fetchall()
+        return {r["firm_id"]: r["name_en"] for r in rows if r["name_en"]}
+    except Exception:  # noqa: BLE001 — an unseeded/absent table degrades to ids
+        return {}
+    finally:
+        conn.close()
 
 
 @app.get("/tender/{slug}/replies", response_model=TenderRepliesResponse)
@@ -1635,10 +1675,20 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
     records = reply_loop.tender_reply_records(workspace, canonical)
     active = [r for r in records if r.get("status") == "active"]
     replied = {(r["reply"].get("firm_id"), r["reply"].get("trade")) for r in active}  # aligned keys
+    mine = [d for d in reply_loop.outstanding_dispatches(workspace)
+            if tender_slug(d["tender_id"]) == canonical]
     outstanding = [
         {"firm_id": d["firm_id"], "trade": d["trade"]}
-        for d in reply_loop.outstanding_dispatches(workspace)
-        if tender_slug(d["tender_id"]) == canonical and (d["firm_id"], d["trade"]) not in replied
+        for d in mine if (d["firm_id"], d["trade"]) not in replied
+    ]
+    names = _firm_names({d["firm_id"] for d in mine})
+    dispatched = [
+        {
+            "firm_id": d["firm_id"], "trade": d["trade"], "ref": d.get("ref", ""),
+            "firm_name": names.get(d["firm_id"], d["firm_id"]),
+            "received": (d["firm_id"], d["trade"]) in replied,
+        }
+        for d in mine
     ]
     return TenderRepliesResponse(
         tender_slug=canonical,
@@ -1653,6 +1703,7 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
             for r in records
         ],
         outstanding=outstanding,
+        dispatched=dispatched,
         comparison_available=reply_loop.comparison_file(workspace, canonical).is_file(),
         unit_totals=section_totals(scope) if scope is not None else {},
     )

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
@@ -121,6 +121,47 @@ def post_route_analyze(set_id: str) -> dict:
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {**body, "notes": notes}
+
+
+class ApprovalsRequest(BaseModel):
+    """The operator's current shortlist selection for the packages this screen is showing.
+
+    Replace semantics per package: a firm just DESELECTED must disappear, and an empty list means
+    "none of them", which is a decision rather than an absence.
+    """
+
+    approvals: dict[str, list[str]] = Field(default_factory=dict)
+
+
+@router.get("/{set_id}/approvals")
+def get_approvals(set_id: str) -> dict:
+    """The persisted shortlist selection — ``{package_key: [firm_id, …]}``.
+
+    A pure read. An empty mapping is a state ("nothing selected yet"), never an error, so this
+    does not 404 on a set nobody has shortlisted.
+    """
+    from bridge import approvals as approvals_mod
+
+    return {"set_id": set_id, "approvals": approvals_mod.load_approvals(set_id)}
+
+
+@router.post("/{set_id}/approvals")
+def post_approvals(set_id: str, req: ApprovalsRequest,
+                   x_cboq_actor: str = Header("")) -> dict:
+    """Record the shortlist selection so a reload does not lose it.
+
+    **This is not the dispatch gate.** Nothing is composed, drafted or sent here; the operator
+    still presses Compose/Prepare on the Dispatch step and that decision is unchanged. Persisting a
+    selection only stops it evaporating between the click and the decision — which is the same
+    session-only loss that made Level & compare show nothing over six landed replies.
+    """
+    from bridge import approvals as approvals_mod
+
+    return {
+        "set_id": set_id,
+        "approvals": approvals_mod.save_approvals(
+            set_id, req.approvals, selected_by=x_cboq_actor.strip() or "operator"),
+    }
 
 
 @router.get("/{set_id}/route/proposal")

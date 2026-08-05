@@ -479,6 +479,21 @@ export const api = {
       setId: string,
       decisions: { package_key: string; chosen_route: string }[],
     ) => bpost<BridgeRouteDecisions>(`${setPath(setId)}/route/confirm`, { decisions }),
+
+    /** The persisted shortlist selection for a set — `{package_key: [firm_id, …]}`. Empty is a
+     *  legitimate answer (nothing selected yet), never a 404. */
+    approvals: (setId: string) =>
+      bget<{ set_id: string; approvals: Record<string, string[]> }>(`${setPath(setId)}/approvals`),
+
+    /** Record the selection so a reload does not lose it.
+     *
+     *  NOT the dispatch gate: nothing is composed, drafted or sent, and the operator still presses
+     *  Compose/Prepare on the Dispatch step. This only stops the selection evaporating between the
+     *  click and the decision. Replaces the stored list for every package named in the payload, so
+     *  a deselection persists too — an empty list means "none of them", which is a decision. */
+    saveApprovals: (setId: string, approvals: Record<string, string[]>) =>
+      bpost<{ set_id: string; approvals: Record<string, string[]> }>(
+        `${setPath(setId)}/approvals`, { approvals }),
   },
 
   // --- sourcing: the sublet fork -------------------------------------------

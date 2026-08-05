@@ -1053,6 +1053,13 @@ export interface TenderReplies {
   reply_count: number;
   last_received: string | null;
   replies: TenderReplyInfo[];
+  /** EVERY dispatched enquiry for this tender, replied or not — the persisted record of who was
+   *  asked, and the only source Level & compare should build its package list from.
+   *
+   *  `dispatch.bundles` is React state: close the tab and six landed replies rendered as "No
+   *  dispatched packages yet", because no dispatch had happened in THAT session. A reply that
+   *  exists must be visible regardless of what this browser did. */
+  dispatched: { firm_id: string; trade: string; ref: string; firm_name: string; received: boolean }[];
   outstanding: { firm_id: string; trade: string }[];
   comparison_available: boolean;
   /** routed-unit package_key -> that unit's bill-line count (the coverage denominator, Layer 1). */

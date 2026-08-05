@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api } from "../api";
 import type {
+  AwaitingFirm,
   AwaitingPackage,
   BidReply,
   BridgeRouteProposalRead,
@@ -103,6 +104,10 @@ export function SourcingTab({
   // The state the wizard held in App.tsx, lifted here so the tab owns its own.
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
+  /** What the SERVER holds for this set, as read on mount. Kept beside `approvals` so a re-run of
+   *  the shortlist can honour a package the operator has already decided on instead of resetting
+   *  it to the default — including a package they emptied, which is a decision, not an absence. */
+  const [storedApprovals, setStoredApprovals] = useState<Record<string, string[]> | null>(null);
   const [dispatch, setDispatch] = useState<DispatchSet | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
 
@@ -133,16 +138,26 @@ export function SourcingTab({
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [spl, prop, dec, cov] = await Promise.all([
+    const [spl, prop, dec, cov, appr, reps] = await Promise.all([
       api.bridge.split(setId).catch(() => null),
       api.bridge.proposal(setId).catch(() => null),
       api.bridge.decisions(setId).catch(() => null),
       api.sourcing.coverage().catch(() => null),
+      // The selection this set already carries. Read before the shortlist runs, so a reload lands
+      // on the same selection the operator left rather than back on the default.
+      api.bridge.approvals(setId).catch(() => null),
+      // What has actually been dispatched and what has landed. Read ON MOUNT, not only while the
+      // reply poller is running: six replies sat on disk and Level & compare said "No dispatched
+      // packages yet" because it had nothing but this session's own memory to build from.
+      api.sourcing.tenderReplies(setId).catch(() => null),
     ]);
     setSplit(spl?.scope ?? null);
     setProposal(prop);
     setSublet(dec?.sublet_packages ?? []);
     setCoverage(cov);
+    setStoredApprovals(appr?.approvals ?? null);
+    if (appr?.approvals && Object.keys(appr.approvals).length) setApprovals(appr.approvals);
+    setTenderReplies(reps);
     setLoading(false);
   }, [setId]);
 
@@ -179,9 +194,19 @@ export function SourcingTab({
       setShortlist(result);
       // Default the enquiry selection to the top clean firm per package. A default, not a
       // decision: every row still shows its flags and the person can change any of it.
+      //
+      // A package the operator has ALREADY decided keeps their decision — the default only fills
+      // the ones nobody has touched. Presence in `storedApprovals` is the test, not truthiness: an
+      // empty list means "none of them" and must not be overwritten with a suggestion. Stored
+      // firms are filtered to this shortlist so a selection can never point at a firm not on screen.
       setApprovals(
         Object.fromEntries(
           Object.entries(result.per_trade).map(([trade, cands]) => {
+            const stored = storedApprovals?.[trade];
+            if (stored) {
+              const ids = new Set(cands.map((c) => c.firm.firm_id));
+              return [trade, stored.filter((f) => ids.has(f))];
+            }
             const first = cands.find((c) => !c.recommended_against) ?? cands[0];
             return [trade, first ? [first.firm.firm_id] : []];
           }),
@@ -204,14 +229,20 @@ export function SourcingTab({
     };
   }, [demoMode, scope, approvals, step]);
 
-  const toggleApprove = (trade: string, firmId: string) =>
-    setApprovals((cur) => {
-      const ids = cur[trade] ?? [];
-      return {
-        ...cur,
-        [trade]: ids.includes(firmId) ? ids.filter((f) => f !== firmId) : [...ids, firmId],
-      };
-    });
+  // Selecting a firm is now recorded server-side. Persisting a selection is NOT approving a
+  // dispatch: nothing is composed, drafted or sent here, and the operator still presses
+  // Compose/Prepare on the Dispatch step. The gate has not moved — only the selection now survives
+  // a reload. Only the toggled package is sent, so a click cannot rewrite a package off-screen.
+  const toggleApprove = (trade: string, firmId: string) => {
+    const ids = approvals[trade] ?? [];
+    const next = ids.includes(firmId) ? ids.filter((f) => f !== firmId) : [...ids, firmId];
+    setApprovals((cur) => ({ ...cur, [trade]: next }));
+    setStoredApprovals((cur) => ({ ...(cur ?? {}), [trade]: next }));
+    // Fire and forget, and silent on failure: losing the write costs the persistence this change
+    // adds, nothing the operator is doing right now. An error banner over a click that visibly
+    // worked would be the worse lie.
+    void api.bridge.saveApprovals(setId, { [trade]: next }).catch(() => undefined);
+  };
 
   const dispatchBody = (send: boolean) => ({
     shortlist,
@@ -342,23 +373,54 @@ export function SourcingTab({
 
   // What was dispatched, and whether each firm's return has landed — by EITHER path (an active
   // reply aligned to the unit, or a manual upload that levelled into its section).
+  //
+  // Built from the SERVER's record of who was asked (`tenderReplies.dispatched`, the reply
+  // registry written at dispatch time), not from `dispatch.bundles`. That was React state: it died
+  // with the browser session, so six replies sitting on disk rendered as "No dispatched packages
+  // yet" whenever the dispatch had happened in some other tab, yesterday, or on another machine.
+  // A reply that exists must be visible regardless of what this session did.
+  //
+  // This session's bundles are still merged in where they exist, for the two things the registry
+  // does not carry: the bundle `status`, and a freshly-composed bundle in the seconds before the
+  // registry read catches up.
   const awaiting: AwaitingPackage[] = useMemo(() => {
-    if (!dispatch) return [];
     const byUnit = new Map<string, AwaitingPackage>();
-    for (const b of dispatch.bundles) {
-      const received =
-        (tenderReplies?.replies ?? []).some(
-          (r) => r.trade === b.trade && r.firm_id === b.firm_id && r.status === "active",
-        ) || (levelled?.[b.trade] ?? []).some((l) => l.firm_id === b.firm_id);
-      const pkg = byUnit.get(b.trade) ?? { trade: b.trade, firms: [] };
-      pkg.firms.push({
+    const seen = new Set<string>();
+
+    const landed = (trade: string, firmId: string) =>
+      (tenderReplies?.replies ?? []).some(
+        (r) => r.trade === trade && r.firm_id === firmId && r.status === "active",
+      ) || (levelled?.[trade] ?? []).some((l) => l.firm_id === firmId);
+
+    const push = (trade: string, firm: AwaitingFirm) => {
+      const key = `${trade} ${firm.firm_id}`;
+      if (seen.has(key)) return; // the in-session bundle already covered this firm
+      seen.add(key);
+      const pkg = byUnit.get(trade) ?? { trade, firms: [] };
+      pkg.firms.push(firm);
+      byUnit.set(trade, pkg);
+    };
+
+    // In-session bundles first — they are the richer record while the tab is open.
+    for (const b of dispatch?.bundles ?? []) {
+      push(b.trade, {
         firm_id: b.firm_id,
         firm_name: b.firm_name,
         ref: (b.email_subject.match(/\[SiteSource Ref:\s*([^\]]+)\]/) ?? [])[1]?.trim() ?? "",
-        received,
+        received: landed(b.trade, b.firm_id),
         status: b.status,
       });
-      byUnit.set(b.trade, pkg);
+    }
+    // Then everything the server says was dispatched. `status` is "sent": a registry row exists
+    // only because an enquiry went out, which is the fact this screen is reporting.
+    for (const d of tenderReplies?.dispatched ?? []) {
+      push(d.trade, {
+        firm_id: d.firm_id,
+        firm_name: d.firm_name,
+        ref: d.ref,
+        received: d.received || landed(d.trade, d.firm_id),
+        status: "sent",
+      });
     }
     return [...byUnit.values()];
   }, [dispatch, tenderReplies, levelled]);
