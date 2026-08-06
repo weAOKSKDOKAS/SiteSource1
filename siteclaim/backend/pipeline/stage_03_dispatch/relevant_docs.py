@@ -218,6 +218,63 @@ def _unit_out_name(trade: str, package_key: str, section: str) -> str:
     return f"SoR_{unit}_Section_{section}.pdf" if section else f"SoR_{unit}.pdf"
 
 
+# The revision suffix an issuer puts on a reissued document: `…-S_PS28-0.pdf` is the original,
+# `-1` the addendum's replacement. Read off the STEM, so a folder like `TA #1/` cannot be mistaken
+# for one.
+_REVISION_SUFFIX = re.compile(r"-(\d{1,2})$")
+
+# Named so it can be quoted on the gate rather than assumed. THE SUFFIX IS THE ONLY EVIDENCE the
+# pack carries: an addendum's replacement declares no revision inside the document, so precedence
+# cannot be established from the text. It is stated, not buried.
+REVISION_ASSUMPTION = (
+    "the -0/-1 filename suffix is the only revision evidence in this pack; the document declares "
+    "none inside itself"
+)
+SUPERSEDED_BY_ADDENDUM = "supersedes_earlier_revision"
+
+
+def _doc_revision(filename: str) -> int:
+    """The revision a filename claims (``…-S_PS28-1.pdf`` -> 1), or 0 when it claims none."""
+    stem = (filename or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    m = _REVISION_SUFFIX.search(stem)
+    return int(m.group(1)) if m else 0
+
+
+def _ps_revisions(doc_index: list[DocIndexEntry]) -> tuple[set[str], dict[str, int]]:
+    """``(filenames superseded, section -> the revision that won)``.
+
+    AN ADDENDUM REVISES A SECTION; IT DOES NOT DELETE THE REST. Two consequences, and the second is
+    the one that was broken:
+
+    * where a section WAS reissued, the highest revision is the operative document and the earlier
+      one is not enclosed — a firm pricing against a superseded specification is pricing the wrong
+      scope, and it must not receive both with nothing to tell them apart;
+    * where a section was NOT reissued, the ``-0`` original is the only version and IS enclosed.
+      PS28 was reaching an enquiry as neither, because it was never identified at all (see
+      ``doc_index._FILENAME_SECTION``); once identified, this must not then drop it for having no
+      addendum.
+
+    Only revisions of the SAME section compete. `PSA7.12-0` is an appendix, not PS7, and never
+    supersedes it — it resolves to no section number at all and so is not in this comparison.
+    """
+    best: dict[str, tuple[int, str]] = {}
+    for e in doc_index:
+        if e.kind != "particular_specification" or not e.spec_section_number:
+            continue
+        rev = _doc_revision(e.filename)
+        current = best.get(e.spec_section_number)
+        if current is None or rev > current[0]:
+            best[e.spec_section_number] = (rev, e.filename)
+    winners = {fn for _rev, fn in best.values()}
+    superseded = {
+        e.filename for e in doc_index
+        if e.kind == "particular_specification" and e.spec_section_number
+        and e.filename not in winners
+    }
+    revised = {sec: rev for sec, (rev, _fn) in best.items() if rev > 0}
+    return superseded, revised
+
+
 def _priced_return_attachment(
     doc_index: list[DocIndexEntry], *, sections: list[str], trade: str, package_key: str, sor_sheet_name: str,
 ) -> PlanAttachment:
@@ -361,6 +418,8 @@ def resolve_section_plan(
     present_ps: set[str] = set()
     present_appendices: set[str] = set()
     gs_covered: set[str] = set()  # GS clauses a present PS doc amends
+    unidentified_ps: list[str] = []               # present, but no section could be resolved
+    superseded_ps, revised_ps = _ps_revisions(doc_index)
 
     for e in doc_index:
         if e.kind == "clarification":
@@ -384,8 +443,17 @@ def resolve_section_plan(
                     reason=f"Method of Measurement — whole ({'scanned' if scanned else 'clause not located'})",
                     flags=["scanned_whole"] if scanned else ["whole_clause_not_located"]))
         elif e.kind == "particular_specification":
-            if not (e.spec_section_number and e.spec_section_number in relevant_ps_specs):
+            if not e.spec_section_number:
+                # PRESENT BUT UNIDENTIFIABLE. Page 1 declared no section and the filename convention
+                # did not resolve one, so nothing can say whether this document is referenced. It is
+                # not attached — attaching an unknown specification to an enquiry is worse than not
+                # — but it is NAMED below rather than dropped at a bare `continue`.
+                unidentified_ps.append(e.filename)
+                continue
+            if e.spec_section_number not in relevant_ps_specs:
                 continue  # this PS section is not referenced by the dispatched section
+            if e.filename in superseded_ps:
+                continue  # an addendum reissued this section — see `superseded_ps`
             present_ps.add(e.spec_section_number)
             blind = _resolving_ps_clauses(e, ps_clauses, gs_clauses) if e.text_layer else []
             directed = directed_by_doc.get(e.filename, {})  # referenced clauses the index missed
@@ -401,6 +469,15 @@ def resolve_section_plan(
             # the (present) section so a partial gap is never silent, per the no-drop invariant.
             not_located = [c for c in ps_clauses
                            if base_clause(c).split(".")[0] == e.spec_section_number and c not in located]
+            # WHICH VERSION, on the gate, before anything is drafted. A firm pricing against a
+            # superseded specification is pricing the wrong scope, and the operator must be able to
+            # see which revision went out — including the assumption that decided it.
+            rev = revised_ps.get(e.spec_section_number, 0)
+            rev_note = (
+                f" · Rev {rev}, superseding the earlier revision of this section ({REVISION_ASSUMPTION})"
+                if rev else ""
+            )
+            rev_flags = [SUPERSEDED_BY_ADDENDUM] if rev else []
             if pages:
                 reason = f"PS Section {e.spec_section_number} — referenced clauses"
                 if directed_ids:
@@ -410,13 +487,14 @@ def resolve_section_plan(
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages],
                     clauses=located, directed_clauses=directed_ids, clauses_not_located=not_located,
-                    reason=reason))
+                    reason=reason + rev_note, flags=rev_flags))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="whole",
-                    reason=f"PS Section {e.spec_section_number} — whole ({'scanned' if scanned else 'clause not located'})",
-                    flags=["scanned_whole"] if scanned else ["whole_clause_not_located"]))
+                    reason=(f"PS Section {e.spec_section_number} — whole "
+                            f"({'scanned' if scanned else 'clause not located'})" + rev_note),
+                    flags=(["scanned_whole"] if scanned else ["whole_clause_not_located"]) + rev_flags))
         elif e.kind == "appendix":
             if not (e.spec_section_number and (e.spec_section_number in cited_appendices or e.spec_section_number in relevant_ps_specs)):
                 continue
@@ -437,6 +515,13 @@ def resolve_section_plan(
         MissingSpec(spec=f"PS Section {spec}", referenced_by="SoR references")
         for spec in sorted(ps_ref_specs - present_ps)
     ]
+    # A Particular Specification that IS in the pack and could not be identified. Distinct from the
+    # line above, which says a referenced section is absent: this one says a document is present and
+    # unusable, which is a different thing to go and look at. It used to be a bare `continue`.
+    for fn in unidentified_ps:
+        missing.append(MissingSpec(
+            spec=f"{fn} — a Particular Specification with no identifiable section number",
+            referenced_by="present in the pack, not enclosed"))
     # A GS clause with no present PS amendment: the base General Specification text is not
     # enclosed — surface it so the human decides, never a silent omission.
     for g in gs_clauses:

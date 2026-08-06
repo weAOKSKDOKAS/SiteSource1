@@ -33,10 +33,23 @@ _APPENDIX_DECL = re.compile(r"\bAppendix\s+(\d+(?:\.\d+)*)", re.I)
 # "Appendix 7.4.16", so a Particular Specification that merely cites an appendix is not mistaken for
 # one. Used only to DECIDE kind (``_kind_for``); section extraction still uses ``_APPENDIX_DECL``.
 _APPENDIX_COVER = re.compile(r"\bAppendix\s+(\d+)(?!\.\d)", re.I)
-# A section number declared in the FILENAME (the HK "PS-S07" / "GS-S26" convention): "S" then the
-# section digits, leading zeros dropped. A fallback when a PS's page 1 lost its "SECTION n" header
-# (a scanned cover, or a file that starts mid-section) so the clause index can still scope.
-_FILENAME_SECTION = re.compile(r"(?:^|[^A-Za-z])S0*(\d+)\b", re.I)
+# A section number declared in the FILENAME. A fallback when a PS's page 1 lost its "SECTION n"
+# header (a scanned cover, or a file that starts mid-section) so the clause index can still scope.
+#
+# TWO conventions, because a real issuer uses the second and the first could never match it:
+#
+# * ``PS-S07`` / ``GS-S26`` — "S" then the section digits. What this pattern was written for.
+# * ``I-ND_2025_04-S_PS28-0.pdf`` — the section digits attached to ``PS``/``GS`` directly. CEDD
+#   ND/2025/04 names every specification this way, and the old pattern matched NONE of them: in
+#   ``S_PS28`` the lone ``S`` is followed by ``_``, and ``PS28``'s ``S`` is preceded by a letter.
+#   So every PS on that pack resolved to an empty ``spec_section_number`` and was skipped, silently,
+#   by ``relevant_docs``' PS branch — PS28 never reached an enquiry.
+#
+# ``PSA7.12`` is an APPENDIX to PS7, not PS7, and must not be claimed as one. Two guards keep them
+# apart: the digits must follow ``PS``/``GS`` IMMEDIATELY (the ``A`` in ``PSA`` breaks the match),
+# and a dotted continuation is rejected (``(?!\.\d)``), so ``PS7.12`` is not read as section 7
+# either. ``S07.pdf`` still matches — the lookahead rejects only a dot followed by a DIGIT.
+_FILENAME_SECTION = re.compile(r"(?:^|[^A-Za-z])(?:[PG]?S)0*(\d+)(?!\.\d)", re.I)
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
 # The Standard Method of Measurement, recovered from page 1 or the filename.
 #
