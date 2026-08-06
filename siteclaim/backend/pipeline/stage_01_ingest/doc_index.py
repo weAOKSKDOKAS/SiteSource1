@@ -437,9 +437,12 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     # up on the pack. A file whose own name says which section it is has already answered the
     # question; a contents page inside it does not reopen it.
     own_name = _own_name(filename)
-    names_a_section = bool(_FILENAME_PS_SECTION.search(own_name)
-                           or _FILENAME_GS_SECTION.search(own_name)
-                           or _FILENAME_APPENDIX.search(own_name))
+    # WHAT THE FILE'S OWN NAME SAYS IT IS. Kept separate per population, because a guard that is
+    # right for one branch is wrong for another: an SMM file names neither a PS nor a GS section, a
+    # General Specification file legitimately names a GS one, and only a PS file names a PS one.
+    names_ps = bool(_FILENAME_PS_SECTION.search(own_name) or _FILENAME_APPENDIX.search(own_name))
+    names_gs = bool(_FILENAME_GS_SECTION.search(own_name))
+    names_a_section = names_ps or names_gs
     if _PS_INDEX_NAME.search(own_name) or (
         not names_a_section
         and _PS_INDEX_PAGE1.search(page1)
@@ -470,7 +473,17 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     # `specifications` arrives as PARTICULAR_SPECIFICATION — which would otherwise claim the SMM
     # before it could be recognised. Both patterns are narrow enough that an ordinary PS citing
     # either does not match; see their definitions.
-    if _METHOD_OF_MEASUREMENT.search(hay):
+    # …AND NOT WHEN THE FILE'S OWN NAME SAYS IT IS A SPECIFICATION SECTION. The "deliberately
+    # narrow" claim above was wrong about one document: PS 1 is *General*, 101 pages of general
+    # preliminaries, and its clause 1.01 quotes the full title — "in accordance with the Standard
+    # Method of Measurement". So `S/PS/PS1/…-S_PS1-1.pdf` classified `method_of_measurement`, was
+    # enclosed on Builders Work as "Method of Measurement Section 1 (101 pages)", and — because it
+    # then shared the MM population AND section number 1 with the real `GP&PP/…-SMM_S01-0.pdf` —
+    # its `-1` revision SUPERSEDED the genuine SMM 1, which reached no enquiry at all.
+    #
+    # A phrase inside a document is weaker evidence than the name the issuer gave it. Same rule as
+    # the `ps_index` and addendum guards: read the file's own name, and let it close the question.
+    if _METHOD_OF_MEASUREMENT.search(hay) and not names_a_section:
         return "method_of_measurement"
     if _ADDENDUM.search(hay):
         # A REISSUED SPECIFICATION SECTION IS STILL A SPECIFICATION SECTION.
@@ -502,7 +515,9 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     # arrives as PARTICULAR_SPECIFICATION, so the PS branch would claim the GS before the existing
     # `_GENERAL_SPEC` check below could ever see it — and a PS entry with no section number is then
     # skipped by the assembler entirely, so the General Specification reached no enquiry at all.
-    if _GENERAL_SPEC.search(page1) and not _SECTION_DECL.search(page1):
+    # `not names_ps`, not `not names_a_section`: a General Specification file NAMES a GS section, so
+    # the MM branch's guard would block the very branch this is. Only a PS name is disqualifying.
+    if _GENERAL_SPEC.search(page1) and not _SECTION_DECL.search(page1) and not names_ps:
         return "general_specification"
     if doc_type == DocType.PARTICULAR_SPECIFICATION:
         return "appendix" if is_appendix_cover else "particular_specification"
@@ -1067,12 +1082,47 @@ def section_number_disagreements(entries: list[DocIndexEntry]) -> list[tuple[str
     return out
 
 
+# What a filename token says the document's POPULATION is. Only tokens that settle it.
+_NAME_KINDS = (
+    (lambda n: bool(_FILENAME_APPENDIX.search(n)), ("appendix",)),
+    (lambda n: bool(_FILENAME_PS_SECTION.search(n)), ("particular_specification", "appendix")),
+    (lambda n: bool(_FILENAME_GS_SECTION.search(n)), ("general_specification",)),
+    (lambda n: bool(_METHOD_OF_MEASUREMENT.search(n)), ("method_of_measurement",)),
+)
+
+
+def kind_disagreements(entries: list[DocIndexEntry]) -> list[tuple[str, str, str]]:
+    """``(filename, indexed kind, the kind its NAME implies)`` where the two disagree.
+
+    The number cross-check could not catch PS 1: it was indexed as section **1** and its filename
+    encodes **1**, so the numbers agreed perfectly. What disagreed was the POPULATION — a
+    Particular Specification labelled a Method of Measurement, which then contested the real SMM 1
+    for section 1 and superseded it. Two documents sharing a number across two populations must
+    never compete, and the only way to notice they are is to check the population too.
+    """
+    out: list[tuple[str, str, str]] = []
+    for e in entries:
+        name = _own_name(e.filename)
+        for matches, allowed in _NAME_KINDS:
+            if matches(name):
+                if e.kind not in allowed:
+                    out.append((e.filename, e.kind, allowed[0]))
+                break        # the first token that settles it is the answer
+    return out
+
+
 def _report_disagreements(entries: list[DocIndexEntry]) -> None:
     for filename, indexed, from_name in section_number_disagreements(entries):
         _log.warning(
             "doc index: %r is indexed as section %s but its filename encodes %s — one of the two "
             "is wrong, and a document indexed under the wrong number is reported MISSING while it "
             "sits in the pack", filename, indexed, from_name,
+        )
+    for filename, indexed, from_name in kind_disagreements(entries):
+        _log.warning(
+            "doc index: %r is indexed as %s but its filename says %s — a document in the wrong "
+            "population is enclosed under the wrong description AND contests the wrong documents "
+            "for its section number", filename, indexed, from_name,
         )
 
 
