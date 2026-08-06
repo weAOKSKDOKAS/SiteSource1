@@ -932,6 +932,28 @@ class DispatchRequest(BaseModel):
     attachment_overrides: list[AttachmentOverride] = Field(default_factory=list)
 
 
+def _confirmed_spec_map(tender_id: str) -> dict[str, str]:
+    """``{bill_section: ps_section}`` as a PERSON CONFIRMED it, for the dispatch planner.
+
+    Read here rather than inside ``plan_for_firms`` because ``pipeline`` does not import ``bridge``
+    and this is not the place to start that. Both call sites below pass it, so the gate preview and
+    the drafts cannot disagree about which specification is enclosed.
+
+    Only CONFIRMED rows exist in that table — a proposal is never written until a person decides —
+    so there is no filter here that could accidentally let an unconfirmed one through. A read
+    failure degrades to "nothing confirmed", which is the safe direction: the whole specification
+    goes out flagged rather than a mapping nobody stood behind.
+    """
+    from bridge.spec_map import load_spec_map
+
+    try:
+        return {code: row.ps_section for code, row in load_spec_map(tender_id).items()
+                if row.ps_section}
+    except Exception:  # noqa: BLE001 — never fail a dispatch preview on the mapping store
+        _log.warning("could not read the confirmed specification map for %r", tender_id, exc_info=True)
+        return {}
+
+
 def _apply_draft_overrides(dispatch: DispatchSet, overrides: list[DraftOverride]) -> DispatchSet:
     """Replace composed subject/body with the human's edits, matched by (trade, firm)."""
     if not overrides:
@@ -1024,7 +1046,7 @@ def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
             build_attachments(package_key, req.scope, None, project_name=req.project_name,
                               tender_id=req.project_name, workspace=workspace)
     plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name,
-                           workspace=workspace)
+                           workspace=workspace, spec_map=_confirmed_spec_map(req.project_name))
     return [p.model_dump() for p in plans.values()]
 
 
@@ -1079,7 +1101,8 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     dispatch = _apply_draft_overrides(dispatch, req.draft_overrides)
 
     ws = workspace or Workspace()
-    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name, workspace=ws)
+    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name, workspace=ws,
+                           spec_map=_confirmed_spec_map(req.project_name))
     # The human gate's per-section remove/expand decisions — the assembled set matches exactly
     # what the person confirmed in the preview (keyed by package_key == the bundle's trade).
     overrides_by_key = {o.package_key: o for o in req.attachment_overrides}

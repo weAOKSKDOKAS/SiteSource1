@@ -64,6 +64,18 @@ PRICED_RETURN = "priced_return"
 # substitute quietly".
 SUBSTITUTED = "substituted_priced_return"
 
+# THE FULL SPECIFICATION WENT OUT BECAUSE NOTHING ESTABLISHED WHICH PART OF IT APPLIES.
+#
+# This issuer's Bill of Quantities has no Clause Ref column, so no item cites a clause and
+# ``relevant_ps_specs`` came out empty — which attached NO specification at all. Two different
+# trades then received identical bundles, neither containing the document that governs the work.
+#
+# Sending too much is wasteful and visible. Sending nothing is a firm pricing without the
+# specification, and it looks exactly like a correct, tidy enquiry. So the fallback is to enclose
+# the whole thing, flagged, and the flag is the invitation to confirm a mapping and stop paying for
+# it — never a substitute for confirming one.
+NO_RELEVANCE_ESTABLISHED = "no_relevance_established"
+
 
 class MissingSpec(BaseModel):
     spec: str          # e.g. "PS Section 28"
@@ -75,6 +87,12 @@ class SectionPlan(BaseModel):
     section: str = ""
     attachments: list[PlanAttachment] = Field(default_factory=list)
     missing_specs: list[MissingSpec] = Field(default_factory=list)
+    # HOW the specification set was chosen, for the gate to state plainly:
+    #   "clause_refs"    the items cite clauses — the design's intent, and it always wins
+    #   "confirmed_map"  a person confirmed which PS section governs this bill section
+    #   "none"           neither — the full specification is enclosed (NO_RELEVANCE_ESTABLISHED)
+    #   ""               no specification was in play at all
+    relevance_source: str = ""
 
 
 def apply_attachment_overrides(
@@ -385,6 +403,7 @@ def resolve_section_plan(
     doc_index: list[DocIndexEntry], sor_sheet_name: str, section: str = "",
     sections: Optional[list[str]] = None,
     page_texts_of: Optional[Callable[[str], list[str]]] = None,
+    confirmed_ps_specs: Optional[set[str]] = None,
 ) -> SectionPlan:
     """The relevant-only attachment plan for one dispatched SoR section, driven by the clause
     references its items carry (Clause Ref column). See the module docstring for the slicing rules.
@@ -392,7 +411,13 @@ def resolve_section_plan(
     ``page_texts_of`` (filename -> cached OCR page texts) enables the DIRECTED clause search: a
     referenced clause the blind ``clause_index`` missed is located over the doc's cached text,
     engine-independent. Omitted (DEMO / no upload) -> the directed search is skipped and the plan is
-    exactly the blind-index behaviour."""
+    exactly the blind-index behaviour.
+
+    ``confirmed_ps_specs`` is the operator-CONFIRMED bill-section -> PS-section mapping for this
+    unit (``bridge/spec_map.py``), and it is a FALLBACK, not a replacement: where the items cite
+    clauses those still decide everything, exactly as before. It is consulted only when they cite
+    none, which is the case for an issuer whose bill has no Clause Ref column. An unconfirmed
+    proposal never reaches here — the caller passes what a person confirmed, or nothing."""
     refs = refs_for_items(items)
     ps_clauses = _dedup([clause_of(r) for r in refs.get("ps", [])])
     gs_clauses = _dedup([clause_of(r) for r in refs.get("gs", [])])
@@ -401,8 +426,33 @@ def resolve_section_plan(
 
     ps_ref_specs = {spec_section_of(r) for r in refs.get("ps", []) if spec_section_of(r)}
     gs_ref_specs = {spec_section_of(r) for r in refs.get("gs", []) if spec_section_of(r)}
-    relevant_ps_specs = ps_ref_specs | gs_ref_specs  # a PS section is relevant if a PS or GS clause in it is cited
+    cited_ps_specs = ps_ref_specs | gs_ref_specs  # a PS section is relevant if a PS or GS clause in it is cited
     cited_appendices = {spec_section_of(a) for a in refs.get("appendix", []) if spec_section_of(a)}
+
+    # WHERE THE RELEVANT SET COMES FROM — three sources, strictly ordered, and only the source
+    # changes. Everything downstream of here slices and reports exactly as it did before.
+    #
+    # 1. The items' own clause references. The design's intent, and it always wins where it exists.
+    # 2. A CONFIRMED bill-section -> PS-section mapping. A fallback for an issuer whose bill carries
+    #    no Clause Ref column at all, and only ever what a person confirmed.
+    # 3. Neither: the full Particular Specification, whole and flagged. See NO_RELEVANCE_ESTABLISHED
+    #    — the alternative was attaching nothing, which is what shipped identical bundles to
+    #    different trades with no specification in either.
+    all_ps_sections = {e.spec_section_number for e in doc_index
+                       if e.kind == "particular_specification" and e.spec_section_number}
+    whole_spec_sections: set[str] = set()
+    if cited_ps_specs:
+        relevant_ps_specs, relevance_source = cited_ps_specs, "clause_refs"
+    elif confirmed_ps_specs:
+        relevant_ps_specs, relevance_source = set(confirmed_ps_specs), "confirmed_map"
+    else:
+        relevant_ps_specs, relevance_source = all_ps_sections, ("none" if all_ps_sections else "")
+        whole_spec_sections = set(all_ps_sections)
+    # The APPENDIX branch is deliberately NOT opened up by the whole-specification fallback. An
+    # appendix is pulled because something referenced it, and on this pack a single section carries
+    # dozens (25 under PS1, 38 under PS31) — enclosing every appendix of every section because
+    # nothing was established would bury the enquiry rather than inform it.
+    appendix_relevant_specs = relevant_ps_specs - whole_spec_sections
 
     # Directed location (engine-independent): for each relevant PS doc, the referenced clauses the
     # blind clause_index missed, located by a heading search over the doc's CACHED OCR text. Each
@@ -421,6 +471,11 @@ def resolve_section_plan(
 
     directed_by_doc: dict[str, dict[str, list[int]]] = {}
     for e in doc_index:
+        # No clause was cited -> there is nothing for a directed search to look for, and reading
+        # every PS document's cached text to find nothing is the whole-specification fallback's
+        # cost paid twice.
+        if not (ps_clauses or gs_clauses):
+            break
         if e.kind == "particular_specification" and e.text_layer and e.spec_section_number in relevant_ps_specs:
             directed_by_doc[e.filename] = _directed_for_entry(e, ps_clauses, gs_clauses, _texts(e.filename))
 
@@ -534,6 +589,15 @@ def resolve_section_plan(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages],
                     clauses=located, directed_clauses=directed_ids, clauses_not_located=not_located,
                     reason=reason + rev_note, flags=rev_flags))
+            elif e.spec_section_number in whole_spec_sections:
+                # Nothing was cited and nothing confirmed, so no clause was ever LOOKED for here —
+                # saying "clause not located" would be a false report about a search that never ran.
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="whole",
+                    reason=(f"PS Section {e.spec_section_number} — whole. No per-item relevance "
+                            "established: this bill cites no clauses and no specification mapping "
+                            "is confirmed, so the full specification is enclosed." + rev_note),
+                    flags=[NO_RELEVANCE_ESTABLISHED] + (["scanned_whole"] if not e.text_layer else []) + rev_flags))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
@@ -542,7 +606,7 @@ def resolve_section_plan(
                             f"({'scanned' if scanned else 'clause not located'})" + rev_note),
                     flags=(["scanned_whole"] if scanned else ["whole_clause_not_located"]) + rev_flags))
         elif e.kind == "appendix":
-            if not (e.spec_section_number and (e.spec_section_number in cited_appendices or e.spec_section_number in relevant_ps_specs)):
+            if not (e.spec_section_number and (e.spec_section_number in cited_appendices or e.spec_section_number in appendix_relevant_specs)):
                 continue
             present_appendices.add(e.spec_section_number)
             pages = _slice_pages(e, appendix_clauses) if e.text_layer else []
@@ -584,7 +648,18 @@ def resolve_section_plan(
     # appendix document present — flagged, not silently dropped.
     for app_sec in sorted(cited_appendices - present_appendices):
         missing.append(MissingSpec(spec=f"Appendix {app_sec}", referenced_by="SoR references"))
-    return SectionPlan(package_key=package_key, section=section, attachments=plan, missing_specs=missing)
+    # ONE line on the gate for the whole-specification fallback, not one per enclosed section. It is
+    # a single fact about this unit — nothing established which part of the specification applies —
+    # and repeating it beside every section would read as thirty problems instead of one decision to
+    # make. Named here rather than left implicit in the attachment flags because ``missing_specs``
+    # is where the operator looks for what still needs a human.
+    if present_ps and whole_spec_sections & present_ps:
+        missing.append(MissingSpec(
+            spec=(f"No per-item relevance established — the full specification is enclosed "
+                  f"({len(whole_spec_sections & present_ps)} PS sections, whole)"),
+            referenced_by="this bill cites no clauses and no specification mapping is confirmed"))
+    return SectionPlan(package_key=package_key, section=section, attachments=plan,
+                       missing_specs=missing, relevance_source=relevance_source)
 
 
 def slice_pdf(data: bytes, pages_1based: list[int]) -> bytes:

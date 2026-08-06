@@ -98,6 +98,7 @@ def _pricing_workbook_attachment(
 def plan_for_firms(
     scope: Optional[ScopePackages], approvals: dict[str, list[str]], *, tender_id: str,
     workspace: Optional[Workspace] = None,
+    spec_map: Optional[dict[str, str]] = None,
 ) -> dict[str, SectionPlan]:
     """The relevant-document plan per dispatched section (keyed by package_key). Firms in the
     same section share the doc plan; the SoR sheet is per-section. Reads the run's persisted
@@ -107,9 +108,16 @@ def plan_for_firms(
     :data:`PRICING_WORKBOOK`. Added HERE rather than in ``relevant_docs`` so the one function both
     the gate preview (``/dispatch/plan``) and the draft assembly (``/dispatch/drafts``) call is the
     one place it is decided: the operator sees exactly what the firm will receive.
+
+    ``spec_map`` is ``{bill_section: ps_section}`` as a PERSON CONFIRMED it — plain data, loaded by
+    the caller from ``bridge/spec_map.py``, because ``pipeline`` does not import ``bridge`` and this
+    is not the place to start. Only confirmed rows exist there: a proposal nobody has looked at is
+    never stored, so it cannot arrive here and cannot select anything. Omitted -> nothing is
+    confirmed, and a bill citing no clauses falls to the whole-specification path.
     """
     ws = workspace or Workspace()
     doc_index = load_doc_index(ws, tender_id)
+    confirmed = {k: v for k, v in (spec_map or {}).items() if v}
     page_texts_of = _page_texts_reader(ws, tender_id)  # shared cache across this run's sections
     pkg_by_key = {p.trade: p for p in (scope.packages if scope else [])}
     plans: dict[str, SectionPlan] = {}
@@ -132,6 +140,7 @@ def plan_for_firms(
             items=items, doc_index=doc_index,
             sor_sheet_name=sheet_name,
             page_texts_of=page_texts_of,
+            confirmed_ps_specs={confirmed[c] for c in unit_sections if c in confirmed},
         )
         priced = next((a for a in plan.attachments if PRICED_RETURN in a.flags), None)
         book = (_pricing_workbook_attachment(priced, sheet_name, sheet_path)

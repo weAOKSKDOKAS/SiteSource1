@@ -292,6 +292,71 @@ def post_route_confirm(set_id: str, req: ConfirmBridgeRoutesRequest) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Which specification governs which bill section — proposed, then confirmed
+# ---------------------------------------------------------------------------
+class SpecMapConfirmation(BaseModel):
+    """One bill section's decision. ``ps_section = ""`` is a decision, not a blank."""
+
+    bill_section: str
+    ps_section: str = ""
+    bill_heading: str = ""
+    ps_title: str = ""
+    proposed_ps_section: str = ""
+    proposed_confidence: str = ""
+
+
+class SpecMapRequest(BaseModel):
+    confirmations: list[SpecMapConfirmation] = Field(default_factory=list)
+
+
+@router.get("/{set_id}/spec-map")
+def get_spec_map(set_id: str) -> dict:
+    """The proposed bill-section -> PS-section map, and whatever a person has confirmed.
+
+    A pure read that computes the proposals fresh from the persisted scope and doc index — they are
+    deterministic, so recomputing costs nothing and cannot drift from a stale copy. Nothing is
+    written, and nothing is auto-confirmed: ``confirmed`` is exactly the rows a human decided, and a
+    bill section absent from it is unmapped no matter how good its proposal looks.
+    """
+    from bridge import scope as scope_mod, spec_map as spec_map_mod
+    from pipeline.stage_01_ingest.doc_index import load_doc_index
+    from pipeline.stage_03_dispatch.spec_match import bill_headings_from_scope, propose_spec_map
+    from pipeline.workspace import Workspace
+
+    scope = scope_mod.load_scope(set_id)
+    doc_index = load_doc_index(Workspace(), set_id)
+    headings: dict[str, str] = {}
+    for pkg in (scope.packages if scope else []):
+        headings.update(bill_headings_from_scope(pkg))
+    confirmed = spec_map_mod.load_spec_map(set_id)
+    return {
+        "set_id": set_id,
+        "proposals": [p.model_dump() for p in propose_spec_map(headings, doc_index)],
+        "confirmed": {k: v.model_dump() for k, v in confirmed.items()},
+    }
+
+
+@router.post("/{set_id}/spec-map")
+def post_spec_map(set_id: str, req: SpecMapRequest,
+                  x_cboq_actor: str = Header("")) -> dict:
+    """The Layer-4 gate: record which specification section governs which bill section.
+
+    THE ONLY WRITER of the map, and it writes only what it was given. A proposal is never persisted
+    on the operator's behalf — an auto-confirmed match is the silent-wrong-specification failure the
+    whole design exists to prevent, and it would be indistinguishable, later, from a decision.
+    """
+    from bridge import spec_map as spec_map_mod
+
+    try:
+        confirmed = spec_map_mod.save_spec_map(
+            set_id, [c.model_dump() for c in req.confirmations],
+            confirmed_by=x_cboq_actor.strip() or "operator")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"set_id": set_id, "confirmed": {k: v.model_dump() for k, v in confirmed.items()}}
+
+
+# ---------------------------------------------------------------------------
 # The archive: a whole tender pack, at constant memory
 # ---------------------------------------------------------------------------
 def _archive_path(ws, name: str):
