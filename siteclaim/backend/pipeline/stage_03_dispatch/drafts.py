@@ -141,6 +141,7 @@ def plan_for_firms(
             sor_sheet_name=sheet_name,
             page_texts_of=page_texts_of,
             confirmed_ps_specs={confirmed[c] for c in unit_sections if c in confirmed},
+            unconfirmed_sections=[c for c in unit_sections if c not in confirmed],
         )
         priced = next((a for a in plan.attachments if PRICED_RETURN in a.flags), None)
         book = (_pricing_workbook_attachment(priced, sheet_name, sheet_path)

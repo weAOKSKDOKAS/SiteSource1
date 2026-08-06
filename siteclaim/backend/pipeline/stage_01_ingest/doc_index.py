@@ -82,6 +82,16 @@ _FILENAME_SECTION = re.compile(r"(?:^|[^A-Za-z])(?:[PG]?S)0*(\d+)(?!\.\d)", re.I
 # Group 1 is the SECTION the appendix belongs to (7), because that is what the appendix branch
 # matches against `cited_appendices` — an appendix's section is legitimately its parent's.
 _FILENAME_APPENDIX = re.compile(r"(?:^|[^A-Za-z])(?:PS|GS)A0*(\d+)", re.I)
+# The SAME convention, but committing to WHICH specification. `_FILENAME_SECTION`'s `[PG]?S` is
+# deliberately loose because it only has to recover a number; these two have to decide a KIND, and
+# calling a General Specification section a Particular one would send the wrong document.
+#
+# They exist for the reissue case: `TA #1/S/PS/PS25/I-ND_2025_04-S_PS25-1.pdf` is Particular
+# Specification section 25 at revision 1, filed under the addendum that issued it. The folder said
+# "addendum" and won, so the document never met the `-0` it supersedes. A folder is not an identity
+# — the same lesson `_own_name` records, and the reason both of these read the basename.
+_FILENAME_PS_SECTION = re.compile(r"(?:^|[^A-Za-z])PS0*(\d+)(?!\.\d)", re.I)
+_FILENAME_GS_SECTION = re.compile(r"(?:^|[^A-Za-z])GS0*(\d+)(?!\.\d)", re.I)
 
 
 def _own_name(filename: str) -> str:
@@ -352,6 +362,25 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     if _METHOD_OF_MEASUREMENT.search(hay):
         return "method_of_measurement"
     if _ADDENDUM.search(hay):
+        # A REISSUED SPECIFICATION SECTION IS STILL A SPECIFICATION SECTION.
+        #
+        # The pack ships `TA #1/S/PS/PS25/I-ND_2025_04-S_PS25-1.pdf` — PS 25 at revision 1, filed
+        # under the addendum that issued it. `_ADDENDUM` matched `TA #1` IN THE PATH, so it became
+        # a clarification: it went WHOLE to every firm through that branch, and it never entered
+        # `_ps_revisions`, so the `-0` it supersedes was enclosed beside it with nothing on the
+        # gate to say which governs. One contest, two doors.
+        #
+        # The document's OWN NAME decides, never the folder. `S_PS25-1` is a Particular
+        # Specification section; `S_PSA1.12-1` is an appendix to one; `S_GS7-1` is General. A
+        # genuine addendum LETTER names no section, matches none of these, and stays a
+        # clarification issued to everyone — which is exactly what it is.
+        own = _own_name(filename)
+        if _FILENAME_APPENDIX.search(own):
+            return "appendix"
+        if _FILENAME_PS_SECTION.search(own):
+            return "particular_specification"
+        if _FILENAME_GS_SECTION.search(own):
+            return "general_specification"
         return "clarification"
     # A GENERAL Specification whose page 1 declares itself and carries no `SECTION n` header of its
     # own. `_GENERAL_SPEC` is a loose pattern, so it is checked here against PAGE 1 ONLY and behind

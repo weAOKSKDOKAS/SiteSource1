@@ -157,23 +157,49 @@ def ps_specs_for_sections(spec_map: dict[str, ConfirmedSpec], sections: list[str
 # ---------------------------------------------------------------------------
 # The connection-owning wrappers, exactly as approvals.py pairs them
 # ---------------------------------------------------------------------------
+def storage_key(set_id: str) -> str:
+    """The key these rows are stored under: ``tender_slug(run_ref_for(set_id))``.
+
+    THE ONE DELIBERATE DIVERGENCE FROM ``approvals.py``, and it is what made the confirmed map
+    unreachable. Approvals are written and read from the bridge alone, so ``run_ref_for`` — the
+    identity function — is enough. This map is written from the bridge under a ``set_id`` and read
+    from the PROCUREMENT dispatch path, which is handed the tender's human ``project_name``. Six
+    confirmations were stored under ``nd-2025-04`` and looked up under ``Contract No. ND/2025/04``,
+    so the fallback fired and told the operator no mapping was confirmed while six sat in the table.
+
+    ``tender_slug`` is the equivalence the rest of the system already runs on — ``Workspace``
+    resolves a tender directory through it, which is why the doc index is reachable by either name —
+    and it is idempotent on its own output, so a ``set_id`` that is already a slug is unchanged.
+    """
+    from bridge.identity import run_ref_for
+    from pipeline.workspace import tender_slug
+
+    return tender_slug(run_ref_for(set_id))
+
+
 def load_spec_map(set_id: str) -> dict[str, ConfirmedSpec]:
     from bridge.identity import bridge_conn, run_ref_for
 
     conn = bridge_conn()
     try:
-        return load_spec_map_on(conn, run_ref_for(set_id))
+        rows = load_spec_map_on(conn, storage_key(set_id))
+        if not rows:
+            # Rows written before the key was canonicalised, under the raw ref. A read-side
+            # fallback rather than a migration: confirming is a human act and losing one silently
+            # is worse than one extra query on a table with a handful of rows per tender.
+            rows = load_spec_map_on(conn, run_ref_for(set_id))
+        return rows
     finally:
         conn.close()
 
 
 def save_spec_map(set_id: str, confirmations: list[ConfirmedSpec] | list[dict],
                   *, confirmed_by: str = "operator") -> dict[str, ConfirmedSpec]:
-    from bridge.identity import bridge_conn, run_ref_for
+    from bridge.identity import bridge_conn
 
     conn = bridge_conn()
     try:
-        return save_spec_map_on(conn, run_ref_for(set_id), confirmations,
+        return save_spec_map_on(conn, storage_key(set_id), confirmations,
                                 confirmed_by=confirmed_by)
     finally:
         conn.close()

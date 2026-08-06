@@ -26,7 +26,12 @@ from typing import Callable, Optional
 
 from pydantic import BaseModel, Field
 
-from pipeline.stage_01_ingest.doc_index import DocIndexEntry, _FILENAME_APPENDIX, _own_name
+from pipeline.stage_01_ingest.doc_index import (
+    DocIndexEntry,
+    _FILENAME_APPENDIX,
+    _FILENAME_PS_SECTION,
+    _own_name,
+)
 from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of, extract_refs, refs_for_items, spec_section_of
 
 
@@ -258,6 +263,34 @@ def _doc_revision(filename: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _effective_kind(e: DocIndexEntry) -> str:
+    """The kind this document ACTUALLY is, read off its own name — not the kind stored for it.
+
+    Every ``doc_index.json`` written before a classifier learned something carries the old answer,
+    and a 232 MB pack is not re-split to correct a string. Two corrections, both keyed on the
+    file's OWN basename so no folder can decide:
+
+    * ``PSA…`` stored as a specification is an APPENDIX. `_APPENDIX_COVER` needs a bare
+      "Appendix N", so a PSA file declaring only the dotted form was classified a specification and
+      competed in `_ps_revisions` as if it WERE the section it appends to.
+    * ``…PS25-1.pdf`` stored as a CLARIFICATION is a specification section. It lives under
+      ``TA #1/``, `_ADDENDUM` matched the folder, and the reissue went whole to every firm through
+      the clarification branch without ever meeting the ``-0`` it supersedes.
+
+    A genuine addendum letter names no section, so neither rule touches it and it stays a
+    clarification issued to everyone.
+    """
+    own = _own_name(e.filename)
+    if e.kind == "particular_specification" and _FILENAME_APPENDIX.search(own):
+        return "appendix"
+    if e.kind == "clarification":
+        if _FILENAME_APPENDIX.search(own):
+            return "appendix"
+        if _FILENAME_PS_SECTION.search(own):
+            return "particular_specification"
+    return e.kind
+
+
 def _competes_as_a_specification(e: DocIndexEntry) -> bool:
     """Whether this entry may compete to BE a PS section, as opposed to belonging to one.
 
@@ -404,6 +437,7 @@ def resolve_section_plan(
     sections: Optional[list[str]] = None,
     page_texts_of: Optional[Callable[[str], list[str]]] = None,
     confirmed_ps_specs: Optional[set[str]] = None,
+    unconfirmed_sections: Optional[list[str]] = None,
 ) -> SectionPlan:
     """The relevant-only attachment plan for one dispatched SoR section, driven by the clause
     references its items carry (Clause Ref column). See the module docstring for the slicing rules.
@@ -417,7 +451,12 @@ def resolve_section_plan(
     unit (``bridge/spec_map.py``), and it is a FALLBACK, not a replacement: where the items cite
     clauses those still decide everything, exactly as before. It is consulted only when they cite
     none, which is the case for an issuer whose bill has no Clause Ref column. An unconfirmed
-    proposal never reaches here — the caller passes what a person confirmed, or nothing."""
+    proposal never reaches here — the caller passes what a person confirmed, or nothing.
+
+    ``unconfirmed_sections`` names this unit's bill sections that have NO confirmation, so a
+    PARTIAL map is visible on the gate. A unit spanning bills 1 and 9 with only bill 9 confirmed
+    encloses PS 27 and says bill 1 is still unmapped — it does not fall back to the whole
+    specification, which would bury the one section somebody actually decided."""
     refs = refs_for_items(items)
     ps_clauses = _dedup([clause_of(r) for r in refs.get("ps", [])])
     gs_clauses = _dedup([clause_of(r) for r in refs.get("gs", [])])
@@ -513,16 +552,14 @@ def resolve_section_plan(
     present_appendices: set[str] = set()
     gs_covered: set[str] = set()  # GS clauses a present PS doc amends
     unidentified_ps: list[str] = []               # present, but no section could be resolved
+    # THE EFFECTIVE KINDS, applied ONCE and BEFORE the revision contest — see `_effective_kind`.
+    # Before this the override ran inside the loop below, so `_ps_revisions` was still reading the
+    # stored kinds and a reissue it should have judged was invisible to it.
+    doc_index = [e.model_copy(update={"kind": k}) if (k := _effective_kind(e)) != e.kind else e
+                 for e in doc_index]
     superseded_ps, revised_ps, contested_ps = _ps_revisions(doc_index)
 
     for e in doc_index:
-        # THE EFFECTIVE KIND, not the stored one. `_kind_for` now reads the issuer's `PSA` token, but
-        # every `doc_index.json` written before that carries `kind="particular_specification"` for an
-        # appendix — with a section number taken off its FOLDER. Overriding here fixes those without
-        # a re-split, and keeps one rule in one place: a `PSA` file is an appendix wherever it came
-        # from.
-        if e.kind == "particular_specification" and _FILENAME_APPENDIX.search(_own_name(e.filename)):
-            e = e.model_copy(update={"kind": "appendix"})
         if e.kind == "clarification":
             plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="Clarification / addendum — issued to all firms"))
         elif e.kind == "general_specification":
@@ -598,6 +635,16 @@ def resolve_section_plan(
                             "established: this bill cites no clauses and no specification mapping "
                             "is confirmed, so the full specification is enclosed." + rev_note),
                     flags=[NO_RELEVANCE_ESTABLISHED] + (["scanned_whole"] if not e.text_layer else []) + rev_flags))
+            elif relevance_source == "confirmed_map":
+                # SELECTED, not fallen back to. Saying "no mapping is confirmed" here was the
+                # false sentence on the gate: one IS confirmed, and it is why this document is in
+                # the bundle. There is simply no clause reference to slice it down to.
+                plan.append(PlanAttachment(
+                    source_doc=e.filename, mode="whole",
+                    reason=(f"PS Section {e.spec_section_number} — whole. Selected by the CONFIRMED "
+                            "specification map for this bill section; the bill cites no clauses, so "
+                            "there is nothing to slice to." + rev_note),
+                    flags=(["scanned_whole"] if not e.text_layer else []) + rev_flags))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
@@ -658,6 +705,14 @@ def resolve_section_plan(
             spec=(f"No per-item relevance established — the full specification is enclosed "
                   f"({len(whole_spec_sections & present_ps)} PS sections, whole)"),
             referenced_by="this bill cites no clauses and no specification mapping is confirmed"))
+    # A PARTIALLY confirmed unit. The confirmed sections were selected; these were not, and the
+    # operator is the only one who can close the gap. Named rather than silently absent, and
+    # deliberately NOT a reason to discard the confirmations that do exist.
+    if relevance_source == "confirmed_map" and unconfirmed_sections:
+        for code in unconfirmed_sections:
+            missing.append(MissingSpec(
+                spec=f"Bill section {code} — no specification mapping confirmed",
+                referenced_by="confirm it on the specification map, or its scope goes unspecified"))
     return SectionPlan(package_key=package_key, section=section, attachments=plan,
                        missing_specs=missing, relevance_source=relevance_source)
 

@@ -939,6 +939,12 @@ def _confirmed_spec_map(tender_id: str) -> dict[str, str]:
     and this is not the place to start that. Both call sites below pass it, so the gate preview and
     the drafts cannot disagree about which specification is enclosed.
 
+    ``tender_id`` here is the tender's human ``project_name`` — what ``/dispatch/plan`` is given —
+    while the confirmations were written under the bridge's ``set_id``. ``spec_map.storage_key``
+    reconciles the two through ``tender_slug``, the same equivalence ``Workspace`` already uses to
+    make the doc index reachable by either. Wiring this without it was the defect: six
+    confirmations sat in the table while the gate reported that none was confirmed.
+
     Only CONFIRMED rows exist in that table — a proposal is never written until a person decides —
     so there is no filter here that could accidentally let an unconfirmed one through. A read
     failure degrades to "nothing confirmed", which is the safe direction: the whole specification
