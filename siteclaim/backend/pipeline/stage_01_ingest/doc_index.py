@@ -50,8 +50,19 @@ _TITLE_MAX_WORDS = 6
 # same reason `spec_match._GENERIC_WORDS` is: it is a judgement about documents, and it should be
 # readable and arguable rather than buried in a regex.
 _TITLE_FURNITURE = re.compile(
-    r"^(?:particular|general)\s+specification$|^contract\s+no|^table\s+of\s+contents$"
+    r"^(?:particular|general)\s+(?:specification|preamble)s?$|^contract\s+no|^table\s+of\s+contents$"
     r"|^schedule\s+of\s+rates$|^bill\s+of\s+quantities$|^page\b|^rev(?:ision)?\b", re.I)
+# THE CONSULTANT'S NAME, matched on the COMPANY FORM rather than on any particular firm.
+# `SMM_S01-0.pdf`'s page-1 header block reads `Particular Preambles / Section 1 /
+# AECOM-AtkinsRealis JV / - 1a -`, and the declaration in that block took the line below it as its
+# title. A section title does not end in `JV`, `Ltd` or `& Partners`.
+#
+# Anchored at the END and applied with `search`, not `match`: the firm's own name comes first and is
+# unbounded, so only the suffix is recognisable. This is the ONE-PAGE backstop — on a document with
+# more than one page the consultant line repeats and `running_lines` catches it without a list.
+_TITLE_ORG_SUFFIX = re.compile(
+    r"(?:^|\s)(?:jv|ltd\.?|limited|llp|plc|inc\.?|n\.?v\.?)$|joint\s+venture$"
+    r"|&\s+partners$|consult\w*\s+engineers$|\bpartnership$", re.I)
 # AN AMENDMENT LEAD-IN IS NOT A DECLARATION. Page 1 of `GP&PP/…-SMM_S28-0.pdf` reads:
 #
 #     Particular Preambles / Section 28
@@ -350,11 +361,13 @@ def parse_ps_index(pages: list[str]) -> tuple[dict[str, str], list[str]]:
     return titles, unreadable
 
 
-def _is_title_continuation(line: str) -> bool:
+def _is_title_continuation(line: str, furniture: frozenset[str] = frozenset()) -> bool:
     """Whether ``line`` is more of the cover title above it, rather than what comes after it."""
     text = (line or "").strip()
     if not text or not text[0].isalpha():
         return False                       # blank, or a clause id / bullet — the heading has ended
+    if text in furniture:
+        return False                       # the running header — see `running_lines`
     if any(c.isdigit() for c in text):
         return False                       # "7.01 General", "Page 3 of 40" — body, not title
     if len(text) > _TITLE_MAX or len(text.split()) > _TITLE_MAX_WORDS:
@@ -362,6 +375,59 @@ def _is_title_continuation(line: str) -> bool:
     if _TITLE_FURNITURE.match(text) or _SECTION_DECL.match(text):
         return False                       # page furniture, or the NEXT section's declaration
     return True
+
+
+def _is_furniture_title(title: str, furniture: frozenset[str] = frozenset()) -> bool:
+    """Whether a captured "title" is page furniture rather than this section's name.
+
+    THE RULE FOR A PAGE THAT DECLARES ITS SECTION TWICE. `SMM_S01-0.pdf`'s page 1 does:
+
+        Contract No. ND/2025/04 / Ground Investigation Works … / Technopole (Phase 2) /
+        Particular Preambles / Section 1 / AECOM-AtkinsRealis JV / - 1a - /
+        SECTION 1 / PRELIMINARIES
+
+    The first is the HEADER BLOCK naming the section as metadata, alongside the contract number and
+    the consultant; the second is the document's own heading. The winner is NOT decided by position
+    — extraction order is not the page's order, as `SECTION 28`'s amendment lead-in already showed,
+    and the two orders here yield "AECOM-AtkinsRealis JV" and "Technopole (Phase 2)" respectively.
+
+    It is decided by the TITLE: **a declaration whose title is page furniture is not a
+    declaration**, and the scan moves on to the next candidate. That is order-independent, and it
+    is the same shape as the amendment-lead-in skip beside it. Where two candidates both survive,
+    the first still wins — but neither of them is furniture, so there is nothing to prefer between.
+
+    Two sources of furniture, and both are needed. ``furniture`` is what REPEATS on every page
+    (``running_lines``) and generalises to any pack; ``_TITLE_FURNITURE`` is the named forms, which
+    still work on a one-page document where there is no repetition to observe.
+    """
+    text = (title or "").strip()
+    return bool(text) and (text in furniture
+                           or bool(_TITLE_FURNITURE.match(text))
+                           or bool(_TITLE_ORG_SUFFIX.search(text)))
+
+
+def running_lines(pages: list[str]) -> frozenset[str]:
+    """Lines that appear on EVERY page of a document — its running header and footer.
+
+    The same signal ``ingest.running_furniture`` uses on a bill, for the same reason and with the
+    same argument behind it: content cannot distinguish a running header from a heading (the
+    project title is prose with plenty of letters), so REPETITION is the only evidence available;
+    and a line on every page discriminates nothing, so dropping it loses nothing.
+
+    "Every page", not "more than one", because a genuine heading spans its own section's pages, not
+    the whole document. Blank pages are ignored — they exclude everything and mean nothing — and a
+    document with fewer than two readable pages has no furniture, because there is no repetition to
+    observe.
+    """
+    common: Optional[set[str]] = None
+    seen = 0
+    for page in pages:
+        lines = {ln.strip() for ln in (page or "").splitlines() if ln.strip()}
+        if not lines:
+            continue
+        seen += 1
+        common = lines if common is None else (common & lines)
+    return frozenset(common or ()) if seen >= 2 else frozenset()
 
 
 def _is_amendment_lead_in(page1: str, m: "re.Match") -> bool:
@@ -376,7 +442,7 @@ def _is_amendment_lead_in(page1: str, m: "re.Match") -> bool:
     return bool(_AMENDMENT_VERB.search(m.group(2)))
 
 
-def section_declaration(page1: str) -> tuple[str, str]:
+def section_declaration(page1: str, furniture: frozenset[str] = frozenset()) -> tuple[str, str]:
     """``(section number, title)`` from a page-1 ``SECTION n`` declaration, WHOLE.
 
     The title is read past a line break where the cover set it on more than one line — see
@@ -394,7 +460,7 @@ def section_declaration(page1: str) -> tuple[str, str]:
         m = _SECTION_DECL.search(text, pos)
         if m is None:
             return "", ""
-        if not _is_amendment_lead_in(text, m):
+        if not _is_amendment_lead_in(text, m) and not _is_furniture_title(m.group(2), furniture):
             break
         # Resume just past the NUMBER, not past the whole match. A lead-in's captured "title" is
         # usually the genuine declaration on the next line — `…after Section 27 :\n\nSECTION 28` —
@@ -406,7 +472,7 @@ def section_declaration(page1: str) -> tuple[str, str]:
     tail = (page1 or "")[m.end():]
     following = tail.split("\n")[1:]
     for line in following[:_TITLE_CONTINUATION_LINES]:
-        if not _is_title_continuation(line):
+        if not _is_title_continuation(line, furniture):
             break
         joined = f"{title} {line.strip()}"
         if len(joined) > _TITLE_MAX:
@@ -896,7 +962,9 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
     page1 = pages[0] if pages else ""
     text_layer = any(p.strip() for p in pages)
 
-    section_number, section_title = section_declaration(page1)
+    # What repeats on every page is the running header, not this section's title — measured across
+    # the whole document, which is the one place that evidence exists. See `running_lines`.
+    section_number, section_title = section_declaration(page1, running_lines(pages))
     if not section_number:
         app = _APPENDIX_COVER.search(page1)  # a real "Appendix 7" cover, not an inline "Appendix 7.4.16"
         if app:
