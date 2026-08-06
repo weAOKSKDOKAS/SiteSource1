@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 from pydantic import BaseModel, Field
 
-from pipeline.stage_01_ingest.doc_index import DocIndexEntry
+from pipeline.stage_01_ingest.doc_index import DocIndexEntry, _FILENAME_APPENDIX, _own_name
 from pipeline.stage_03_dispatch.doc_refs import base_clause, clause_of, extract_refs, refs_for_items, spec_section_of
 
 
@@ -240,8 +240,33 @@ def _doc_revision(filename: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def _ps_revisions(doc_index: list[DocIndexEntry]) -> tuple[set[str], dict[str, int]]:
-    """``(filenames superseded, section -> the revision that won)``.
+def _competes_as_a_specification(e: DocIndexEntry) -> bool:
+    """Whether this entry may compete to BE a PS section, as opposed to belonging to one.
+
+    TWO independent guards, and neither can be fooled by a folder — which is the whole point, since
+    the pack files `I-ND_2025_04-S_PSA7.12-0.pdf` under `S/PS/PS7/` and the section number used to
+    be read off that path:
+
+    * ``kind`` — an appendix is not a specification. Necessary but NOT sufficient on its own:
+      `_APPENDIX_COVER` needs a BARE "Appendix N", so a PSA file declaring only the dotted
+      "Appendix 7.12" (or nothing) was classified `particular_specification` and competed.
+    * the issuer's own ``PSA`` token on the file's OWN NAME. This is the marker that distinguishes
+      the two names, and reading the basename is what makes the folder irrelevant.
+
+    Not "require a page-1 SECTION declaration": that would be the strictest rule and it would undo
+    the identity fix. PS28's page 1 declares nothing — the filename is the only evidence it has —
+    so demanding a declaration would drop the specification this whole path exists to deliver.
+    """
+    return (
+        e.kind == "particular_specification"
+        and not _FILENAME_APPENDIX.search(_own_name(e.filename))
+    )
+
+
+def _ps_revisions(
+    doc_index: list[DocIndexEntry],
+) -> tuple[set[str], dict[str, int], list[tuple[str, str]]]:
+    """``(filenames superseded, section -> the revision that won, contested pairs)``.
 
     AN ADDENDUM REVISES A SECTION; IT DOES NOT DELETE THE REST. Two consequences, and the second is
     the one that was broken:
@@ -254,25 +279,39 @@ def _ps_revisions(doc_index: list[DocIndexEntry]) -> tuple[set[str], dict[str, i
       ``doc_index._FILENAME_SECTION``); once identified, this must not then drop it for having no
       addendum.
 
-    Only revisions of the SAME section compete. `PSA7.12-0` is an appendix, not PS7, and never
-    supersedes it — it resolves to no section number at all and so is not in this comparison.
+    Only revisions of the SAME section compete, and only a genuine specification competes at all —
+    see :func:`_competes_as_a_specification`. The pack ships a revised APPENDIX
+    (`TA #1/…-S_PSA1.12-1.pdf`) beside the revised SPECIFICATION (`TA #1/…-S_PS1-1.pdf`); both once
+    resolved to section 1 at revision 1, `rev > current[0]` is strict, and so WHICHEVER THE INDEX
+    LISTED FIRST WON. Reversing the list handed the firm an appendix and not the section it appends
+    to, with nothing on the gate to say so.
+
+    A TIE IS NOT BROKEN BY LIST ORDER. Two documents claiming one section at one revision is a fact
+    about the pack, not a coin flip: the winner is the lexicographically smallest filename — chosen
+    only because it is stable and independent of how the index happened to be built — and every
+    contested pair is returned so the gate can name the one that was set aside.
     """
-    best: dict[str, tuple[int, str]] = {}
+    by_section: dict[str, list[tuple[int, str]]] = {}
     for e in doc_index:
-        if e.kind != "particular_specification" or not e.spec_section_number:
+        if not e.spec_section_number or not _competes_as_a_specification(e):
             continue
-        rev = _doc_revision(e.filename)
-        current = best.get(e.spec_section_number)
-        if current is None or rev > current[0]:
-            best[e.spec_section_number] = (rev, e.filename)
+        by_section.setdefault(e.spec_section_number, []).append((_doc_revision(e.filename), e.filename))
+
+    best: dict[str, tuple[int, str]] = {}
+    contested: list[tuple[str, str]] = []
+    for section, entries in by_section.items():
+        top = max(rev for rev, _fn in entries)
+        at_top = sorted(fn for rev, fn in entries if rev == top)
+        best[section] = (top, at_top[0])
+        contested += [(at_top[0], loser) for loser in at_top[1:]]
+
     winners = {fn for _rev, fn in best.values()}
     superseded = {
         e.filename for e in doc_index
-        if e.kind == "particular_specification" and e.spec_section_number
-        and e.filename not in winners
+        if e.spec_section_number and _competes_as_a_specification(e) and e.filename not in winners
     }
     revised = {sec: rev for sec, (rev, _fn) in best.items() if rev > 0}
-    return superseded, revised
+    return superseded, revised, contested
 
 
 def _priced_return_attachment(
@@ -419,9 +458,16 @@ def resolve_section_plan(
     present_appendices: set[str] = set()
     gs_covered: set[str] = set()  # GS clauses a present PS doc amends
     unidentified_ps: list[str] = []               # present, but no section could be resolved
-    superseded_ps, revised_ps = _ps_revisions(doc_index)
+    superseded_ps, revised_ps, contested_ps = _ps_revisions(doc_index)
 
     for e in doc_index:
+        # THE EFFECTIVE KIND, not the stored one. `_kind_for` now reads the issuer's `PSA` token, but
+        # every `doc_index.json` written before that carries `kind="particular_specification"` for an
+        # appendix — with a section number taken off its FOLDER. Overriding here fixes those without
+        # a re-split, and keeps one rule in one place: a `PSA` file is an appendix wherever it came
+        # from.
+        if e.kind == "particular_specification" and _FILENAME_APPENDIX.search(_own_name(e.filename)):
+            e = e.model_copy(update={"kind": "appendix"})
         if e.kind == "clarification":
             plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="Clarification / addendum — issued to all firms"))
         elif e.kind == "general_specification":
@@ -522,6 +568,13 @@ def resolve_section_plan(
         missing.append(MissingSpec(
             spec=f"{fn} — a Particular Specification with no identifiable section number",
             referenced_by="present in the pack, not enclosed"))
+    # Two documents claiming ONE section at ONE revision. The winner is picked deterministically
+    # (lexicographic filename), never by index order — but which one lost is a fact about the pack
+    # that the operator has to see, not a decision to make quietly.
+    for winner, loser in contested_ps:
+        missing.append(MissingSpec(
+            spec=f"{loser} — claims the same section and revision as {winner}, which was enclosed",
+            referenced_by="contested revision, resolved by filename order"))
     # A GS clause with no present PS amendment: the base General Specification text is not
     # enclosed — surface it so the human decides, never a silent omission.
     for g in gs_clauses:

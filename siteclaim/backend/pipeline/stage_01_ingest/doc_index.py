@@ -50,6 +50,27 @@ _APPENDIX_COVER = re.compile(r"\bAppendix\s+(\d+)(?!\.\d)", re.I)
 # and a dotted continuation is rejected (``(?!\.\d)``), so ``PS7.12`` is not read as section 7
 # either. ``S07.pdf`` still matches — the lookahead rejects only a dot followed by a DIGIT.
 _FILENAME_SECTION = re.compile(r"(?:^|[^A-Za-z])(?:[PG]?S)0*(\d+)(?!\.\d)", re.I)
+# THE APPENDIX FORM OF THE SAME CONVENTION: `PSA7.12` is Appendix 7.12 — an appendix TO section 7,
+# not section 7. The `A` is the issuer's own marker and it is the only thing distinguishing the two
+# names, which is why `_FILENAME_SECTION` refuses it and this pattern claims it.
+#
+# Group 1 is the SECTION the appendix belongs to (7), because that is what the appendix branch
+# matches against `cited_appendices` — an appendix's section is legitimately its parent's.
+_FILENAME_APPENDIX = re.compile(r"(?:^|[^A-Za-z])(?:PS|GS)A0*(\d+)", re.I)
+
+
+def _own_name(filename: str) -> str:
+    """The file's OWN name, without the folders it was filed under.
+
+    Every filename pattern here reads this, never the full path. On the real pack a Particular
+    Specification appendix lives at `S/PS/PS7/I-ND_2025_04-S_PSA7.12-0.pdf`, and matching over the
+    whole path found `PS7` IN THE FOLDER — so the appendix was handed
+    `spec_section_number = "7"` and claimed to BE the section it merely belongs to. A document's
+    identity must not depend on where somebody filed it.
+    """
+    return (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
 # The Standard Method of Measurement, recovered from page 1 or the filename.
 #
@@ -152,7 +173,15 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     # SECTION header — NOT an inline "Appendix 7.4.16" cross-reference. An explicit PARTICULAR_
     # SPECIFICATION is reclassified appendix ONLY on such a cover, so a PS whose page-1 SECTION header
     # was lost (scanned / starts mid-section) and merely cites an appendix still indexes as a PS.
-    is_appendix_cover = bool(_APPENDIX_COVER.search(hay)) and not _SECTION_DECL.search(page1)
+    # The issuer's own appendix marker, read off the file's OWN name. Needed because
+    # `_APPENDIX_COVER` requires a BARE "Appendix N": a PSA file whose page 1 declares only the
+    # dotted "Appendix 7.12" — or declares nothing at all — was classified
+    # `particular_specification`, and then competed in `_ps_revisions` as if it WERE section 7's
+    # specification. Verified against the real names.
+    is_appendix_cover = (
+        bool(_FILENAME_APPENDIX.search(_own_name(filename)))
+        or (bool(_APPENDIX_COVER.search(hay)) and not _SECTION_DECL.search(page1))
+    )
     # BEFORE the PS branch, and only these two, because a bridge part whose category is
     # `specifications` arrives as PARTICULAR_SPECIFICATION — which would otherwise claim the SMM
     # before it could be recognised. Both patterns are narrow enough that an ordinary PS citing
@@ -517,8 +546,12 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
         if app:
             section_number, section_title = app.group(1), f"Appendix {app.group(1)}"
         else:
-            fn = _FILENAME_SECTION.search(filename)
-            if fn:  # page-1 header lost (scanned / mid-section) -> scope from the "PS-S07" filename
+            own = _own_name(filename)
+            app_fn = _FILENAME_APPENDIX.search(own)
+            fn = _FILENAME_SECTION.search(own)
+            if app_fn:      # `PSA7.12` — an appendix to section 7; the section is its PARENT'S
+                section_number, section_title = app_fn.group(1), f"Appendix {app_fn.group(1)}"
+            elif fn:  # page-1 header lost (scanned / mid-section) -> scope from the "PS-S07" filename
                 section_number = fn.group(1)
 
     kind = _kind_for(doc_type, page1, filename)
