@@ -342,9 +342,27 @@ def _ps_revisions(
     only because it is stable and independent of how the index happened to be built — and every
     contested pair is returned so the gate can name the one that was set aside.
     """
+    return _revision_contest(doc_index, _competes_as_a_specification)
+
+
+def _revision_contest(
+    doc_index: list[DocIndexEntry], competes: Callable[[DocIndexEntry], bool],
+) -> tuple[set[str], dict[str, int], list[tuple[str, str]]]:
+    """THE precedence rule, once, for whichever population ``competes`` admits.
+
+    Extracted from :func:`_ps_revisions` when the Method of Measurement needed exactly the same
+    contest — the pack ships `TA #1/GP&PP/…-SMM_S02-1.pdf` beside the `-0`, and both were enclosed
+    with identical reasons. A second copy of "highest revision wins, ties by filename, losers
+    reported" would be a second place to drift; there is already a documented cost to having had
+    one contest behind two doors.
+
+    Only documents of the SAME population and the SAME section number compete: a Method of
+    Measurement section 2 does not contest a Particular Specification section 2, and the two
+    numbering systems mean nothing to each other.
+    """
     by_section: dict[str, list[tuple[int, str]]] = {}
     for e in doc_index:
-        if not e.spec_section_number or not _competes_as_a_specification(e):
+        if not e.spec_section_number or not competes(e):
             continue
         by_section.setdefault(e.spec_section_number, []).append((_doc_revision(e.filename), e.filename))
 
@@ -359,7 +377,7 @@ def _ps_revisions(
     winners = {fn for _rev, fn in best.values()}
     superseded = {
         e.filename for e in doc_index
-        if e.spec_section_number and _competes_as_a_specification(e) and e.filename not in winners
+        if e.spec_section_number and competes(e) and e.filename not in winners
     }
     revised = {sec: rev for sec, (rev, _fn) in best.items() if rev > 0}
     return superseded, revised, contested
@@ -586,6 +604,12 @@ def resolve_section_plan(
     doc_index = [e.model_copy(update={"kind": k}) if (k := _effective_kind(e)) != e.kind else e
                  for e in doc_index]
     superseded_ps, revised_ps, contested_ps = _ps_revisions(doc_index)
+    # THE SAME CONTEST, for the Method of Measurement. The pack ships
+    # `TA #1/GP&PP/…-SMM_S02-1.pdf` beside the `-0`, and both were enclosed with identical reasons
+    # and nothing saying which governs — the PS branch's defect, repeated on this branch because
+    # only the PS branch consulted the rule. One rule now, two populations: see `_revision_contest`.
+    superseded_mm, revised_mm, contested_mm = _revision_contest(
+        doc_index, lambda e: e.kind == "method_of_measurement")
 
     for e in doc_index:
         if e.kind == "clarification":
@@ -593,6 +617,14 @@ def resolve_section_plan(
         elif e.kind == "general_specification":
             plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="General Specification — issued to all firms"))
         elif e.kind == "method_of_measurement":
+            if e.filename in superseded_mm:
+                continue  # an addendum reissued this measurement section — see `_revision_contest`
+            mm_rev = revised_mm.get(e.spec_section_number, 0)
+            mm_note = (
+                f" · Rev {mm_rev}, superseding the earlier revision of this section "
+                f"({REVISION_ASSUMPTION})" if mm_rev else ""
+            )
+            mm_flags = [SUPERSEDED_BY_ADDENDUM] if mm_rev else []
             if not pb_clauses:
                 # No preamble clause cited — but the BILL names the measurement section it is
                 # priced under, on its own pages, and that section ships in the pack. A firm
@@ -600,14 +632,16 @@ def resolve_section_plan(
                 # deemed to include; without it the rate is a guess against unstated rules.
                 if e.spec_section_number and e.spec_section_number in mm_ref_sections:
                     mm_present.add(e.spec_section_number)
-                    bills = (f"Bill{'s' if len(unit_sections) > 1 else ''} "
-                             + ", ".join(unit_sections)) if unit_sections else "this unit"
+                    many = len(unit_sections) > 1
+                    bills = ((f"Bill{'s' if many else ''} " + ", ".join(unit_sections))
+                             if unit_sections else "this unit")
                     plan.append(PlanAttachment(
                         source_doc=e.filename, mode="whole",
                         reason=(f"Method of Measurement Section {e.spec_section_number} — the "
-                                f"measurement rules {bills} is priced under, named on the "
-                                f"bill's own pages ({e.page_count} pages)"),
-                        flags=["scanned_whole"] if not e.text_layer else []))
+                                f"measurement rules {bills} {'are' if many else 'is'} priced "
+                                f"under, named on the bill's own pages ({e.page_count} pages)"
+                                + mm_note),
+                        flags=(["scanned_whole"] if not e.text_layer else []) + mm_flags))
                 continue  # no preamble clause to slice on either way
             resolved = [c for c in pb_clauses if c in e.clause_index]
             # No ±1: a PB clause's page span is already precise; ±1 only pulls neighbouring pages.
@@ -615,13 +649,15 @@ def resolve_section_plan(
             if pages:
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=resolved,
-                    reason="Method of Measurement — referenced preamble clauses"))
+                    reason="Method of Measurement — referenced preamble clauses" + mm_note,
+                    flags=mm_flags))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="whole", clauses=pb_clauses,
-                    reason=f"Method of Measurement — whole ({'scanned' if scanned else 'clause not located'})",
-                    flags=["scanned_whole"] if scanned else ["whole_clause_not_located"]))
+                    reason=(f"Method of Measurement — whole "
+                            f"({'scanned' if scanned else 'clause not located'})" + mm_note),
+                    flags=(["scanned_whole"] if scanned else ["whole_clause_not_located"]) + mm_flags))
         elif e.kind == "particular_specification":
             if not e.spec_section_number:
                 # PRESENT BUT UNIDENTIFIABLE. Page 1 declared no section and the filename convention

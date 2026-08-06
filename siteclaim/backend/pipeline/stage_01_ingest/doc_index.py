@@ -52,6 +52,30 @@ _TITLE_MAX_WORDS = 6
 _TITLE_FURNITURE = re.compile(
     r"^(?:particular|general)\s+specification$|^contract\s+no|^table\s+of\s+contents$"
     r"|^schedule\s+of\s+rates$|^bill\s+of\s+quantities$|^page\b|^rev(?:ision)?\b", re.I)
+# AN AMENDMENT LEAD-IN IS NOT A DECLARATION. Page 1 of `GP&PP/…-SMM_S28-0.pdf` reads:
+#
+#     Particular Preambles / Section 28
+#     Add the following new section after Section 27 :
+#     SECTION 28
+#     SITE SAFETY MANAGEMENT
+#
+# `_SECTION_DECL` matched the LEAD-IN — "…after Section 27 :" — and its trailing colon plus the
+# next line made it look like a declaration with a title, so the document was indexed as section
+# **27** titled "SECTION 28". Extraction order decides which match is leftmost, so this is not
+# reliably visible: printed order gives 28 with a nonsense title; the order pymupdf actually
+# produced gives 27. Bill 9 then asked for MM 28, found none, and the gate truthfully reported a
+# missing document that was sitting in the pack under the wrong number.
+#
+# The distinction: A DECLARATION NAMES THIS DOCUMENT; A LEAD-IN NAMES ANOTHER SECTION AS A POSITION.
+# The verb gives it away ("Add", "Replace", "Delete", "in lieu of") and so does the positional word
+# in front of the number ("after Section 27", "following Section 30"). When both appear on a page,
+# the document's own name wins.
+_AMENDMENT_VERB = re.compile(
+    r"\b(?:add|adds|added|insert\w*|replac\w*|delet\w*|substitut\w*|amend\w*|omit\w*|"
+    r"supersed\w*)\b|\bin\s+lieu\s+of\b", re.I)
+# Positional words, checked ONLY on the text preceding the number on its own line. A number reached
+# through one of these is a place in another document, never this document's own identity.
+_AMENDMENT_POSITION = re.compile(r"\b(?:after|before|following|preceding|under|to)\b|\bin\s+lieu\s+of\b", re.I)
 _APPENDIX_DECL = re.compile(r"\bAppendix\s+(\d+(?:\.\d+)*)", re.I)
 # An appendix COVER declares a BARE "Appendix N" (not a dotted sub-reference): "Appendix 7",
 # "APPENDIX 7.pdf". The negative lookahead ``(?!\.\d)`` excludes an INLINE cross-reference like
@@ -340,16 +364,42 @@ def _is_title_continuation(line: str) -> bool:
     return True
 
 
+def _is_amendment_lead_in(page1: str, m: "re.Match") -> bool:
+    """Whether this ``SECTION n`` match names ANOTHER section as a position, rather than naming
+    this document. See ``_AMENDMENT_VERB`` for the case that made it necessary."""
+    before = (page1 or "")[:m.start()].rsplit("\n", 1)[-1]
+    if _AMENDMENT_VERB.search(before) or _AMENDMENT_POSITION.search(before):
+        return True                              # "…new section after Section 27"
+    # The captured "title" IS the lead-in, which happens when the number sits at a line end and the
+    # instruction follows on the next. Only a VERB counts here: a positional word can legitimately
+    # appear inside a real section title, an amendment verb effectively cannot.
+    return bool(_AMENDMENT_VERB.search(m.group(2)))
+
+
 def section_declaration(page1: str) -> tuple[str, str]:
     """``(section number, title)`` from a page-1 ``SECTION n`` declaration, WHOLE.
 
     The title is read past a line break where the cover set it on more than one line — see
     ``_TITLE_FURNITURE`` for what stops that read. A single-line declaration is byte-for-byte what
     ``_SECTION_DECL`` alone produced, so nothing that worked before reads differently now.
+
+    AMENDMENT LEAD-INS ARE SKIPPED, not merely out-ranked: the first match that is a genuine
+    declaration wins, wherever it falls in the extracted text. Extraction order is not the
+    document's order — pymupdf sorts by position — so a rule that trusted "leftmost" gave section
+    27 for a document titled SECTION 28 depending on how the page happened to linearise.
     """
-    m = _SECTION_DECL.search(page1 or "")
-    if not m:
-        return "", ""
+    text = page1 or ""
+    pos = 0
+    while True:
+        m = _SECTION_DECL.search(text, pos)
+        if m is None:
+            return "", ""
+        if not _is_amendment_lead_in(text, m):
+            break
+        # Resume just past the NUMBER, not past the whole match. A lead-in's captured "title" is
+        # usually the genuine declaration on the next line — `…after Section 27 :\n\nSECTION 28` —
+        # and skipping the whole match would swallow the very thing being looked for.
+        pos = m.end(1)
     title = m.group(2).strip()
     # The match ends mid-line (the title group is `[^\n]`), so the remainder's FIRST element is the
     # tail of the line already read — usually empty. The continuation starts at the line after it.
@@ -995,6 +1045,37 @@ def apply_ps_index_titles(entries: list[DocIndexEntry]) -> list[DocIndexEntry]:
     return out
 
 
+def section_number_disagreements(entries: list[DocIndexEntry]) -> list[tuple[str, str, str]]:
+    """``(filename, indexed number, the number the FILENAME encodes)`` for every disagreement.
+
+    THIS DEFECT CLASS IS SILENT BY CONSTRUCTION. `GP&PP/…-SMM_S28-0.pdf` was indexed as section
+    **27** because an amendment lead-in on page 1 out-matched the document's own declaration, and
+    nothing anywhere compared the two sources of identity. Bill 9 then asked for measurement section
+    28, found none, and the gate reported it missing — a true statement about a false index.
+
+    A cross-check, not a rule: the filename does not overrule page 1 (PS28's page 1 declares nothing
+    at all, and the filename is its only evidence — the reverse case). It reports where the two
+    disagree so a human can look, which is the only thing that catches the next one.
+    """
+    out: list[tuple[str, str, str]] = []
+    for e in entries:
+        if not e.spec_section_number or e.kind in ("appendix", "ps_index"):
+            continue     # an appendix's number is its PARENT'S — a disagreement there means nothing
+        m = _FILENAME_SECTION.search(_own_name(e.filename))
+        if m and (m.group(1).lstrip("0") or m.group(1)) != e.spec_section_number:
+            out.append((e.filename, e.spec_section_number, m.group(1).lstrip("0") or m.group(1)))
+    return out
+
+
+def _report_disagreements(entries: list[DocIndexEntry]) -> None:
+    for filename, indexed, from_name in section_number_disagreements(entries):
+        _log.warning(
+            "doc index: %r is indexed as section %s but its filename encodes %s — one of the two "
+            "is wrong, and a document indexed under the wrong number is reported MISSING while it "
+            "sits in the pack", filename, indexed, from_name,
+        )
+
+
 def build_doc_index(docs: list[tuple[str, DocType, bytes]]) -> list[DocIndexEntry]:
     """Index every uploaded original: ``(filename, doc_type, bytes)`` -> entries."""
     return apply_ps_index_titles(
@@ -1073,4 +1154,6 @@ def load_doc_index(workspace, tender_id: str) -> list[DocIndexEntry]:
         entries = [DocIndexEntry(**d) for d in json.loads(path.read_text(encoding="utf-8"))]
     except (json.JSONDecodeError, TypeError, ValueError):
         return []
-    return apply_ps_index_titles(entries)
+    entries = apply_ps_index_titles(entries)
+    _report_disagreements(entries)
+    return entries
