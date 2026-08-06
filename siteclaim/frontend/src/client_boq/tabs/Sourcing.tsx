@@ -104,6 +104,9 @@ export function SourcingTab({
 
   // The state the wizard held in App.tsx, lifted here so the tab owns its own.
   const [shortlist, setShortlist] = useState<ShortlistSet | null>(null);
+  /** When the RESTORED shortlist was computed — "" for one just run in this session. Shown so an
+   *  operator reading a list they did not run knows whether it predates a change to the split. */
+  const [shortlistAt, setShortlistAt] = useState("");
   const [approvals, setApprovals] = useState<Record<string, string[]>>({});
   /** What the SERVER holds for this set, as read on mount. Kept beside `approvals` so a re-run of
    *  the shortlist can honour a package the operator has already decided on instead of resetting
@@ -143,7 +146,7 @@ export function SourcingTab({
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [spl, prop, dec, cov, appr, reps, idx] = await Promise.all([
+    const [spl, prop, dec, cov, appr, reps, idx, sl] = await Promise.all([
       api.bridge.split(setId).catch(() => null),
       api.bridge.proposal(setId).catch(() => null),
       api.bridge.decisions(setId).catch(() => null),
@@ -158,6 +161,10 @@ export function SourcingTab({
       // The document index the dispatch gate will draft from — read here, not inside the step, so
       // the warning is on screen before anything is composed.
       api.bridge.docIndex(setId).catch(() => null),
+      // THE CANDIDATE LIST. Persisting the ticks was useless without it: `shortlist` was React
+      // state, so after a refresh the restored selection had nothing to land on and the operator
+      // re-ran a 148-firm screen to get back where they already were.
+      api.bridge.shortlist(setId).catch(() => null),
     ]);
     setSplit(spl?.scope ?? null);
     setProposal(prop);
@@ -167,6 +174,10 @@ export function SourcingTab({
     if (appr?.approvals && Object.keys(appr.approvals).length) setApprovals(appr.approvals);
     setTenderReplies(reps);
     setDocIndex(idx);
+    if (sl?.shortlist) {
+      setShortlist(sl.shortlist);
+      setShortlistAt(sl.created_at || "");
+    }
     setLoading(false);
   }, [setId]);
 
@@ -201,6 +212,11 @@ export function SourcingTab({
         demoMode ? undefined : { includePublic: true, k: 8 },
       );
       setShortlist(result);
+      setShortlistAt("");
+      // Store the CANDIDATES so a refresh does not throw the screen away. Fire and forget, and
+      // silent on failure: a lost write costs the persistence this adds, nothing the operator is
+      // doing right now — and the list they are looking at is already on screen.
+      void api.bridge.saveShortlist(setId, result).catch(() => undefined);
       // Default the enquiry selection to the top clean firm per package. A default, not a
       // decision: every row still shows its flags and the person can change any of it.
       //
@@ -493,12 +509,32 @@ export function SourcingTab({
 
           {step === "shortlist" ? (
             shortlist ? (
-              <Shortlist
-                shortlist={shortlist}
-                coverage={coverage}
-                approvals={approvals}
-                onToggleApprove={toggleApprove}
-              />
+              <>
+                {/* A RESTORED list, not one run in this session. Said out loud because the screen
+                    is otherwise identical either way, and a list computed before the split changed
+                    is a list worth re-running. */}
+                {shortlistAt && (
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-cb-muted">
+                    <span>
+                      Screened {new Date(shortlistAt).toLocaleString()} — restored, not re-run.
+                    </span>
+                    <button
+                      type="button"
+                      className="font-medium text-cb-brass-text underline"
+                      onClick={runShortlist}
+                      disabled={busy}
+                    >
+                      {busy ? "Screening…" : "Screen again"}
+                    </button>
+                  </div>
+                )}
+                <Shortlist
+                  shortlist={shortlist}
+                  coverage={coverage}
+                  approvals={approvals}
+                  onToggleApprove={toggleApprove}
+                />
+              </>
             ) : (
               <div className="space-y-3">
                 <p className="max-w-3xl text-[12px] leading-relaxed text-cb-muted">

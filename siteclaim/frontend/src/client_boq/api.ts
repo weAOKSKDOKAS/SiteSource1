@@ -676,6 +676,21 @@ export const api = {
      *  assembled under another. Never 404s: "no index" is the answer this exists to give. */
     docIndex: (setId: string) => bget<DocIndexState>(`${setPath(setId)}/doc-index`),
 
+    /** The stored SHORTLIST — the candidates, not the ticks. `shortlist: null` means it has never
+     *  been run for this set; never a 404.
+     *
+     *  Persisting the ticks was useless without this: `shortlist` was React state, so after a
+     *  refresh the restored selection had no candidate list to land on and the operator re-ran a
+     *  148-firm screen to get back where they already were. */
+    shortlist: (setId: string) =>
+      bget<{ set_id: string; shortlist: ShortlistSet | null; created_at: string }>(
+        `${setPath(setId)}/shortlist`),
+
+    /** Store the computed shortlist. NOT an approval and not the dispatch gate — it records the
+     *  candidates, which are a deterministic Layer-1 answer, so a refresh does not throw them away. */
+    saveShortlist: (setId: string, shortlist: ShortlistSet) =>
+      bpost<{ set_id: string; stored: boolean }>(`${setPath(setId)}/shortlist`, { shortlist }),
+
     /** The persisted shortlist selection for a set — `{package_key: [firm_id, …]}`. Empty is a
      *  legitimate answer (nothing selected yet), never a 404. */
     approvals: (setId: string) =>

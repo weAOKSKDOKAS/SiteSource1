@@ -139,6 +139,39 @@ def get_scope(set_id: str) -> dict:
     return {"set_id": set_id, "scope": scope.model_dump()}
 
 
+class ShortlistRequest(BaseModel):
+    """The computed shortlist for this set, as the screen received it."""
+
+    shortlist: dict = Field(default_factory=dict)
+
+
+@router.get("/{set_id}/shortlist")
+def get_shortlist(set_id: str) -> dict:
+    """The stored shortlist for this set — ``shortlist: null`` when it has never been run.
+
+    A pure read, and never a 404: "not run yet" is a state the screen renders normally, the same
+    reasoning as ``/route/proposal`` returning an empty list rather than 404ing.
+    """
+    from bridge import shortlist_store
+
+    body, created_at = shortlist_store.load_shortlist(set_id)
+    return {"set_id": set_id, "shortlist": body, "created_at": created_at}
+
+
+@router.post("/{set_id}/shortlist")
+def post_shortlist(set_id: str, req: ShortlistRequest) -> dict:
+    """Store the computed shortlist so a refresh does not throw away a 148-firm screen.
+
+    **This is not the dispatch gate and not an approval.** It records the CANDIDATES, which are a
+    deterministic Layer-1 answer, so the ticks made against them have something to be restored
+    onto. Nothing is composed, drafted or sent, and no selection is implied by storing a list.
+    """
+    from bridge import shortlist_store
+
+    shortlist_store.save_shortlist(set_id, req.shortlist)
+    return {"set_id": set_id, "stored": bool(req.shortlist)}
+
+
 @router.get("/{set_id}/doc-index")
 def get_doc_index_state(set_id: str) -> dict:
     """Does a document index exist for this tender, when was it built, and over how many documents.

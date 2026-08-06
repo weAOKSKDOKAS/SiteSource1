@@ -661,12 +661,21 @@ function RepliesDrawer({
 }) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showEarlier, setShowEarlier] = useState(false);
 
   const ordered = [...records].sort((a, b) => {
     if ((a.status === "active") !== (b.status === "active")) return a.status === "active" ? -1 : 1;
     return (b.received_at ?? "").localeCompare(a.received_at ?? "");
   });
   const activeCount = records.filter((r) => r.status === "active").length;
+  // HISTORY IS KEPT AND COLLAPSED, never deleted. Observed live: "2 active · 7 on file" rendered
+  // all seven, with the two genuine returns buried among five of our OWN outbound RFQs — ingested
+  // before the `X-SiteSource-Outbound` guard existed. The reply was there and could not be seen.
+  //
+  // A price that once entered a comparison must stay traceable, so the DEFAULT VIEW changes and
+  // the data does not: active first, the rest one click away, and the count line unchanged.
+  const earlier = ordered.filter((r) => r.status !== "active");
+  const shown = showEarlier ? ordered : ordered.filter((r) => r.status === "active");
 
   const withdraw = async (firmId: string) => {
     if (!unit || !onWithdraw) return;
@@ -702,8 +711,14 @@ function RepliesDrawer({
           {ordered.length === 0 && (
             <p className="text-[11px] text-cb-faint">No replies have landed for this enquiry yet.</p>
           )}
+          {ordered.length > 0 && shown.length === 0 && (
+            <p className="text-[11px] text-cb-faint">
+              Nothing active for this enquiry — every reply on file has been superseded or
+              withdrawn.
+            </p>
+          )}
           <ul className="space-y-2">
-            {ordered.map((r, i) => (
+            {shown.map((r, i) => (
               <li
                 key={`${r.firm_id}-${r.status}-${i}`}
                 className="rounded-cb-card border border-cb-border bg-cb-panel px-3 py-2"
@@ -734,6 +749,17 @@ function RepliesDrawer({
               </li>
             ))}
           </ul>
+          {earlier.length > 0 && (
+            <button
+              type="button"
+              className="text-[11px] font-medium text-cb-brass-text underline"
+              onClick={() => setShowEarlier((v) => !v)}
+            >
+              {showEarlier
+                ? `Hide ${earlier.length} earlier version${earlier.length === 1 ? "" : "s"}`
+                : `Show ${earlier.length} earlier version${earlier.length === 1 ? "" : "s"}`}
+            </button>
+          )}
           {comparisonUrl && (
             <a
               className="inline-block text-[10px] font-semibold text-cb-brass-text underline"
