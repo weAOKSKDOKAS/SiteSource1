@@ -157,7 +157,31 @@ _SOR_SECTION_HEADER = re.compile(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)\s*
 # `Bill No.3 Laboratory Testing` (no separator). Mirrors `ingest._BILL_HEADER_RE` for the same
 # reason the Section forms mirror: the guard must check against the vocabulary the extractor
 # assigns. Group 1 = bill number, group 2 = title.
-_BILL_SECTION_HEADER = re.compile(r"(?im)^\s*bill\s*(?:no\.?|number)?\s*(\d{1,2})\b\s*[:.\-–—]?\s*(.+?)\s*$")
+#
+# THE TITLE IS OPTIONAL, AND THAT IS THE WHOLE FIX. CEDD ND/2025/04's bill headers carry no title on
+# the header line — they are a bare `Bill No. 2` — so with `(.+?)` required the ONLY line that
+# matched was the collection footer at the END of each bill:
+#
+#     'Bill No. 2'                                    -> no match
+#     'Bill No. 2 - Total Carried to Grand Summary '  -> MATCH
+#
+# Every bill therefore "opened" after its own pages had passed, and the next `SECTION n` line found
+# belonged to the following bill: Bill 6 got SMM 24, Bill 7 got 29, Bill 8 got 28, and Bill 9 was
+# dropped entirely. A systematic off-by-one, invisible wherever consecutive bills share a section —
+# which bills 2 to 6 do, all naming SMM 2, and that is why a fixture never caught it.
+# `[^\S\n]` — whitespace that is NOT a newline — everywhere, so the title cannot come from the line
+# BELOW. Plain `\s*` crosses a line break, and on a title-less header `Bill No. 2\n  1.1 Some item`
+# it made the first ITEM ROW the bill's title. That predates the optional group (the required
+# `(.+?)` did it too); it is the same hazard `_SECTION_DECL` had, in the other direction.
+_BILL_SECTION_HEADER = re.compile(
+    r"(?im)^[^\S\n]*bill[^\S\n]*(?:no\.?|number)?[^\S\n]*(\d{1,2})\b"
+    r"[^\S\n]*[:.\-–—]?[^\S\n]*(.*?)[^\S\n]*$")
+# What distinguishes the header from the footer in the real text: the footer says what it is. A bare
+# `Bill No. n` opens a bill; `Bill No. n - Total Carried to Grand Summary` closes one, and is also
+# not a bill TITLE — `_section_titles` was recording it as one, which fed the specification matcher
+# a bill heading of "Total Carried to Grand Summary".
+_BILL_COLLECTION = re.compile(
+    r"total\s+carried|carried\s+(?:to|down|forward)|brought\s+forward|collection|summary", re.I)
 # THE SMM SECTION A BILL IS MEASURED UNDER, printed on the bill's own pages.
 #
 # `SECTION 2 : GROUND INVESTIGATION` inside a Bill of Quantities is not a section OF the bill — it
@@ -518,9 +542,9 @@ def _sor_section_markers(pages: list[str]) -> list[tuple[str, int]]:
     sections: list[tuple[str, int]] = []
     for page_no, text in enumerate(pages):
         for line in text.splitlines():
-            b = _BILL_SECTION_HEADER.match(line)
+            b = bill_header_number(line)
             if b:
-                bills.append((b.group(1).lstrip("0") or b.group(1), page_no))
+                bills.append((b, page_no))
                 continue
             m = _SOR_SECTION_HEADER.match(line)
             if m:
@@ -707,6 +731,19 @@ def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> 
     return markers, n_scanned, n_column
 
 
+def bill_header_number(line: str) -> Optional[str]:
+    """The bill number this line OPENS, or ``None`` if it opens no bill.
+
+    One rule, used everywhere a bill boundary is decided, so a header and a footer can never be told
+    apart two different ways. A bare `Bill No. 9` opens Bill 9; `Bill No. 9 - Total Carried to Grand
+    Summary` closes it and opens nothing.
+    """
+    m = _BILL_SECTION_HEADER.match(line or "")
+    if not m or _BILL_COLLECTION.search(m.group(2) or ""):
+        return None
+    return m.group(1).lstrip("0") or m.group(1)
+
+
 def bill_mm_sections(pages: list[str]) -> dict[str, list[str]]:
     """``bill number -> the SMM section numbers cited on that bill's pages``, in document order.
 
@@ -722,9 +759,9 @@ def bill_mm_sections(pages: list[str]) -> dict[str, list[str]]:
     current = ""
     for text in pages:
         for line in (text or "").splitlines():
-            bill = _BILL_SECTION_HEADER.match(line)
+            bill = bill_header_number(line)
             if bill:
-                current = bill.group(1).lstrip("0") or bill.group(1)
+                current = bill
                 out.setdefault(current, [])
                 continue
             mm = _BILL_MM_REFERENCE.match(line)

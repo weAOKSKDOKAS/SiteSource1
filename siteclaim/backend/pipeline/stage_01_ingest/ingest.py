@@ -127,7 +127,12 @@ _SECTION_HEADER_RE = re.compile(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)\s*[
 #   `Bill No.3 Laboratory Testing`          <- no separator at all
 # A title is required, exactly as the Section form requires one, so a bare `Bill No. 1` cross-
 # reference in prose is not read as a header. Group 1 = bill number, group 2 = title.
-_BILL_HEADER_RE = re.compile(r"(?im)^\s*bill\s*(?:no\.?|number)?\s*(\d{1,2})\b\s*[:.\-–—]?\s*(.+?)\s*$")
+# Mirrors `doc_index._BILL_SECTION_HEADER`, INCLUDING the optional title: a real bill header can be
+# a bare `Bill No. 2`. `_headers` drops the empty title, so a title-less header simply contributes
+# none — which is the truth about it — instead of the collection footer's words.
+_BILL_HEADER_RE = re.compile(
+    r"(?im)^[^\S\n]*bill[^\S\n]*(?:no\.?|number)?[^\S\n]*(\d{1,2})\b"
+    r"[^\S\n]*[:.\-–—]?[^\S\n]*(.*?)[^\S\n]*$")
 
 
 def section_of(item_ref: str) -> str:
@@ -265,11 +270,19 @@ def _normalise_sections(items: list, valid: frozenset[str], family: str = "sor")
 
 
 def _headers(pattern: re.Pattern, text: str) -> dict[str, str]:
-    """``{code: title}`` for one header pattern over ``text`` — first occurrence of a code wins."""
+    """``{code: title}`` for one header pattern over ``text`` — first occurrence of a code wins.
+
+    A CARRIED-FORWARD line is not a title. `Bill No. 2 - Total Carried to Grand Summary` matches the
+    header shape exactly, and on CEDD ND/2025/04 — whose real bill headers are a bare `Bill No. 2`
+    with no title at all — it was the only line that DID match, so every bill was titled "Total
+    Carried to Grand Summary". That title is what `spec_match` matches a specification against.
+    """
+    from pipeline.stage_01_ingest.doc_index import _BILL_COLLECTION  # one owner for the phrase list
+
     titles: dict[str, str] = {}
     for m in pattern.finditer(text or ""):
         code, title = m.group(1).upper(), m.group(2).strip()
-        if code and title and code not in titles:
+        if code and title and code not in titles and not _BILL_COLLECTION.search(title):
             titles[code] = title
     return titles
 
@@ -280,8 +293,17 @@ def _section_titles(text: str) -> dict[str, str]:
     Both header forms are read. Where a code is declared by BOTH — only possible numerically, and
     only when a bill's preamble also cites a spec section — the BILL header wins: in a Bill of
     Quantities a ``SECTION 24 :`` line is a cross-reference to the specification, not a section of
-    this document. A Schedule of Rates carries no Bill headers, so its titles are unchanged."""
+    this document. A Schedule of Rates carries no Bill headers, so its titles are unchanged.
+
+    "The bill header wins" HAS TO HOLD WHEN THE HEADER CARRIES NO TITLE, which is the real pack's
+    shape. Overriding only where a bill header supplies a title left the cross-reference standing:
+    Bill 3 is *Laboratory Testing* and names SMM 3, so it was titled **Site Clearance** — and that
+    title is what ``spec_match`` matches a specification against. A number a bill has claimed is the
+    bill's, titled or not; a ``SECTION n`` line inside it is pointing somewhere else."""
     titles = _headers(_SECTION_HEADER_RE, text)
+    claimed = {m.group(1).upper() for m in _BILL_HEADER_RE.finditer(text or "")}
+    if claimed:
+        titles = {code: title for code, title in titles.items() if code not in claimed}
     titles.update(_headers(_BILL_HEADER_RE, text))
     return titles
 
