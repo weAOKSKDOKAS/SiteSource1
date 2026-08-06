@@ -392,6 +392,7 @@ def scope_from_set(
     demo_fixture: Optional[str] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
     count_cb: Optional[Callable[[int, int], None]] = None,
+    extract_cb: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[ScopePackages, list[UnrecognisedItem]]:
     """Split a client_boq set's confirmed bill into ``ScopePackages`` — one package per trade.
 
@@ -399,9 +400,19 @@ def scope_from_set(
     confirmed. It never guesses which part is the bill: that is the Phase-3 gate, and guessing
     here would defeat it.
 
-    ``progress_cb(stage)`` and ``count_cb(done, total)`` are the job hooks, and both are optional —
-    called directly with no import of the job store, so this module still knows nothing about
-    jobs. EITHER MAY RAISE: that is how a cancel takes effect, at a stage or a part boundary.
+    Three job hooks, all optional, all called directly with no import of the job store — this
+    module still knows nothing about jobs:
+
+    * ``progress_cb(stage)`` — the stage name. MAY RAISE (a cancel at a stage boundary).
+    * ``count_cb(done, total)`` — DOCUMENTS INDEXED, in the ``indexing`` loop. MAY RAISE: that loop
+      is plain and sequential, so stopping it genuinely saves the remainder.
+    * ``extract_cb(done, total)`` — EXTRACTION UNITS, in the long ``splitting`` phase. Its own
+      parameter rather than a second use of ``count_cb``, because the two count different
+      populations against different denominators, and a caller reading document progress must not
+      silently start receiving chunk progress on the same channel. **Reporting only — do not raise
+      here.** `run_calls` submits every unit to one `pool.map`, whose context manager waits for
+      every future regardless, so raising would stop nothing and would report a cancel after a
+      full-price run.
     """
     from bridge import parts as parts_mod
     from bridge.identity import bridge_conn, register_set_on, run_ref_for
@@ -457,6 +468,18 @@ def scope_from_set(
         doc_text=doc_text,
         context_text=context_text,
         on_error=on_error,
+        # THE 199 SECONDS. This is the long phase — the bill is chunked and each chunk extracted —
+        # and `ingest_tender` has counted its units all along; nothing was reading them. Live, the
+        # strip sat on `splitting` with 0/0 for the whole run, which is indistinguishable from a
+        # hang. `progress_cb(0, total)` fires first so the DENOMINATOR is known from the start, then
+        # once per unit ON COMPLETION.
+        #
+        # REPORTING ONLY — this one does not raise. The units are submitted to `run_calls` in one
+        # `pool.map`, whose context manager waits for every future regardless, so raising here
+        # would stop nothing and would report "stopped before indexing" after a full-price run.
+        # The cancel that takes effect stays on the indexing loop below, where the work is a plain
+        # sequential loop and stopping it genuinely saves the remainder.
+        progress_cb=extract_cb,
     )
     if workbook_items:
         # Both kinds of bill were confirmed and neither shadowed the other. The workbook's items

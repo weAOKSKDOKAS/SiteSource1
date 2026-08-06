@@ -49,6 +49,10 @@ def run_scope_split_job(job_id: str, set_id: str) -> None:
         _begin(job_id, "reading")
         scope, unrecognised = scope_mod.scope_from_set(
             set_id, on_error=notes.append, progress_cb=stage, count_cb=_count,
+            # The long phase — the bill chunked and each chunk extracted. Live it ran 199 seconds
+            # reporting 0/0, which is indistinguishable from a hang. Same job counter, no cancel
+            # check: see `scope_from_set`'s note on why raising there would stop nothing.
+            extract_cb=_count_cb(job_id),
         )
         scope_mod.save_scope(set_id, scope)
         stage("split")
