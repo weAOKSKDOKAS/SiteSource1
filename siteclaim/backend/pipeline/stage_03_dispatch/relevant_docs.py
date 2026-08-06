@@ -487,11 +487,32 @@ def resolve_section_plan(
     else:
         relevant_ps_specs, relevance_source = all_ps_sections, ("none" if all_ps_sections else "")
         whole_spec_sections = set(all_ps_sections)
-    # The APPENDIX branch is deliberately NOT opened up by the whole-specification fallback. An
-    # appendix is pulled because something referenced it, and on this pack a single section carries
-    # dozens (25 under PS1, 38 under PS31) — enclosing every appendix of every section because
-    # nothing was established would bury the enquiry rather than inform it.
-    appendix_relevant_specs = relevant_ps_specs - whole_spec_sections
+    # ─────────────────────────────────────────────────────────────────────────────────────────────
+    # THE INVARIANT: ANYTHING SELECTED BY CLAUSE REFERENCE IS CLOSED WHEN THERE ARE NO CLAUSE
+    # REFERENCES. Every branch below is checked against it, once, here:
+    #
+    #   clarification / general_specification   not clause-driven — issued to all firms, always.
+    #   method_of_measurement                   TWO sources. `pb_clauses` (clause-driven, closed);
+    #                                           and the bill's own SMM section heading, which is
+    #                                           NOT a clause and stays open under every source.
+    #   particular_specification                driven by `relevant_ps_specs`, whose source is
+    #                                           chosen above — clauses, a confirmed map, or all.
+    #   appendix                                clause-driven on BOTH its inputs (`cited_appendices`
+    #                                           comes from the items' refs; the parent-section route
+    #                                           only makes sense when a clause picked the parent).
+    #                                           CLOSED unless clauses drove the selection.
+    #   GS amendments (`gs_covered`, `onward`)  clause-driven throughout; naturally empty with no
+    #                                           clauses, and nothing is reported missing.
+    #
+    # The appendix branch is why this is written down. `- whole_spec_sections` closed it on the
+    # fallback path only, so under a CONFIRMED map all 25 appendices of PS 1 qualified — a firm
+    # received twenty-five appendices narrowed by nothing.
+    appendix_relevant_specs = relevant_ps_specs if relevance_source == "clause_refs" else set()
+    # What the invariant withheld, so the gate can say so rather than leave a silent absence.
+    withheld_appendices = [e for e in doc_index
+                           if e.kind == "appendix" and e.spec_section_number
+                           and e.spec_section_number in relevant_ps_specs
+                           and e.spec_section_number not in appendix_relevant_specs]
 
     # Directed location (engine-independent): for each relevant PS doc, the referenced clauses the
     # blind clause_index missed, located by a heading search over the doc's CACHED OCR text. Each
@@ -543,6 +564,12 @@ def resolve_section_plan(
     # The unit's SoR section code(s): the caller's explicit list (a suffix-less package derives them
     # from its items) or, by default, the single ``:SECTION`` suffix. Never derive from clause refs.
     unit_sections = sections if sections is not None else ([section] if section else [])
+    # The measurement rules each dispatched bill section is priced under, read off the bill's OWN
+    # pages (`doc_index.bill_mm_sections`). Number-to-number, and correct here: both are SMM
+    # numbers. NOT the Particular Specification rule — see `_BILL_MM_REFERENCE` for why the two must
+    # never be merged. Open under every relevance source, because a heading is not a clause.
+    mm_ref_sections = _dedup([n for e in doc_index if e.kind == "schedule_of_rates"
+                              for code in unit_sections for n in e.bill_mm_sections.get(code, [])])
     plan: list[PlanAttachment] = [
         _priced_return_attachment(
             doc_index, sections=unit_sections, trade=trade, package_key=package_key,
@@ -550,6 +577,7 @@ def resolve_section_plan(
     ]
     present_ps: set[str] = set()
     present_appendices: set[str] = set()
+    mm_present: set[str] = set()     # SMM sections the bill named AND the pack supplies
     gs_covered: set[str] = set()  # GS clauses a present PS doc amends
     unidentified_ps: list[str] = []               # present, but no section could be resolved
     # THE EFFECTIVE KINDS, applied ONCE and BEFORE the revision contest — see `_effective_kind`.
@@ -566,7 +594,21 @@ def resolve_section_plan(
             plan.append(PlanAttachment(source_doc=e.filename, mode="whole", reason="General Specification — issued to all firms"))
         elif e.kind == "method_of_measurement":
             if not pb_clauses:
-                continue  # this section references no measurement preamble — no MM extract
+                # No preamble clause cited — but the BILL names the measurement section it is
+                # priced under, on its own pages, and that section ships in the pack. A firm
+                # pricing Bill 2's "moving rigs" needs SMM Section 2 to know what the rate is
+                # deemed to include; without it the rate is a guess against unstated rules.
+                if e.spec_section_number and e.spec_section_number in mm_ref_sections:
+                    mm_present.add(e.spec_section_number)
+                    bills = (f"Bill{'s' if len(unit_sections) > 1 else ''} "
+                             + ", ".join(unit_sections)) if unit_sections else "this unit"
+                    plan.append(PlanAttachment(
+                        source_doc=e.filename, mode="whole",
+                        reason=(f"Method of Measurement Section {e.spec_section_number} — the "
+                                f"measurement rules {bills} is priced under, named on the "
+                                f"bill's own pages ({e.page_count} pages)"),
+                        flags=["scanned_whole"] if not e.text_layer else []))
+                continue  # no preamble clause to slice on either way
             resolved = [c for c in pb_clauses if c in e.clause_index]
             # No ±1: a PB clause's page span is already precise; ±1 only pulls neighbouring pages.
             pages = _slice_pages(e, resolved, straddle=False) if e.text_layer else []
@@ -631,9 +673,10 @@ def resolve_section_plan(
                 # saying "clause not located" would be a false report about a search that never ran.
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="whole",
-                    reason=(f"PS Section {e.spec_section_number} — whole. No per-item relevance "
-                            "established: this bill cites no clauses and no specification mapping "
-                            "is confirmed, so the full specification is enclosed." + rev_note),
+                    reason=(f"PS Section {e.spec_section_number} — whole ({e.page_count} pages). No "
+                            "per-item relevance established: this bill cites no clauses and no "
+                            "specification mapping is confirmed, so the full specification is "
+                            "enclosed." + rev_note),
                     flags=[NO_RELEVANCE_ESTABLISHED] + (["scanned_whole"] if not e.text_layer else []) + rev_flags))
             elif relevance_source == "confirmed_map":
                 # SELECTED, not fallen back to. Saying "no mapping is confirmed" here was the
@@ -641,9 +684,9 @@ def resolve_section_plan(
                 # the bundle. There is simply no clause reference to slice it down to.
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="whole",
-                    reason=(f"PS Section {e.spec_section_number} — whole. Selected by the CONFIRMED "
-                            "specification map for this bill section; the bill cites no clauses, so "
-                            "there is nothing to slice to." + rev_note),
+                    reason=(f"PS Section {e.spec_section_number} — whole ({e.page_count} pages). "
+                            "Selected by the CONFIRMED specification map for this bill section; "
+                            "the bill cites no clauses, so there is nothing to slice to." + rev_note),
                     flags=(["scanned_whole"] if not e.text_layer else []) + rev_flags))
             else:
                 scanned = not e.text_layer
@@ -672,6 +715,15 @@ def resolve_section_plan(
         MissingSpec(spec=f"PS Section {spec}", referenced_by="SoR references")
         for spec in sorted(ps_ref_specs - present_ps)
     ]
+    # A section a PERSON CONFIRMED, with no document enclosed for it. Reported for the same reason
+    # the line above exists, and it had no equivalent: `ps_ref_specs` is the CLAUSE-cited set, so on
+    # a bill that cites nothing a confirmed section whose document is absent — or misfiled, or
+    # classified as something else — went missing in complete silence. Absent must never be a state
+    # a confirmed mapping can reach without saying so.
+    if relevance_source == "confirmed_map":
+        missing += [MissingSpec(spec=f"PS Section {spec}",
+                                referenced_by="confirmed specification map, no document enclosed")
+                    for spec in sorted(relevant_ps_specs - present_ps)]
     # A Particular Specification that IS in the pack and could not be identified. Distinct from the
     # line above, which says a referenced section is absent: this one says a document is present and
     # unusable, which is a different thing to go and look at. It used to be a bare `continue`.
@@ -708,6 +760,24 @@ def resolve_section_plan(
     # A PARTIALLY confirmed unit. The confirmed sections were selected; these were not, and the
     # operator is the only one who can close the gap. Named rather than silently absent, and
     # deliberately NOT a reason to discard the confirmations that do exist.
+    # A measurement section the bill NAMES and the pack does not supply. Named, never silently
+    # omitted: a firm pricing under rules nobody enclosed is pricing against unstated terms.
+    for smm in [s for s in mm_ref_sections if s not in mm_present]:
+        missing.append(MissingSpec(
+            spec=f"Method of Measurement Section {smm}",
+            referenced_by="named on the bill's own pages, no matching SMM document in the pack"))
+    # What the clause-reference invariant withheld. Counted, named, and given its page total, so an
+    # operator can see the size of what they would be sending if they narrowed it — and choose.
+    if withheld_appendices:
+        by_section: dict[str, list[DocIndexEntry]] = {}
+        for e in withheld_appendices:
+            by_section.setdefault(e.spec_section_number, []).append(e)
+        for sec, entries in sorted(by_section.items()):
+            pages = sum(e.page_count for e in entries)
+            missing.append(MissingSpec(
+                spec=(f"{len(entries)} appendices of PS {sec} available, not enclosed "
+                      f"({pages} pages) — no clause reference narrows them"),
+                referenced_by="an appendix is selected by citation; this bill cites none"))
     if relevance_source == "confirmed_map" and unconfirmed_sections:
         for code in unconfirmed_sections:
             missing.append(MissingSpec(

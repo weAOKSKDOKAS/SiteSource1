@@ -158,6 +158,23 @@ _SOR_SECTION_HEADER = re.compile(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)\s*
 # reason the Section forms mirror: the guard must check against the vocabulary the extractor
 # assigns. Group 1 = bill number, group 2 = title.
 _BILL_SECTION_HEADER = re.compile(r"(?im)^\s*bill\s*(?:no\.?|number)?\s*(\d{1,2})\b\s*[:.\-–—]?\s*(.+?)\s*$")
+# THE SMM SECTION A BILL IS MEASURED UNDER, printed on the bill's own pages.
+#
+# `SECTION 2 : GROUND INVESTIGATION` inside a Bill of Quantities is not a section OF the bill — it
+# names the Standard Method of Measurement section the bill's items are measured under, and the
+# corresponding `GP&PP/SMM_S02-0.pdf` ships in the pack. `_sor_section_markers` already sees these
+# lines and DISCARDS them (`return bills or sections`), correctly, because they are not bill
+# numbers; on CEDD ND/2025/04 it reported the bill's sections as ['1','2','24','28','29','3'] before
+# that fix, which is exactly the set of SMM sections the bills cite.
+#
+# ⚠️ THIS ONE IS NUMBER-TO-NUMBER, AND THAT IS CORRECT — because BOTH numbers are SMM numbers. It is
+# NOT the Particular Specification case, where a bill's number is an SMM number and a PS number is
+# the specification's own: Bill 9 heads "SECTION 28" (SMM 28, Site Safety Management) while PS 28 is
+# Environmental Ground Investigation. See `spec_match` for that side, which matches on TITLE and
+# requires a human to confirm. Never merge the two rules.
+#
+# Numeric only: a LETTER code (`SECTION A`) is a Schedule-of-Rates section of the document itself.
+_BILL_MM_REFERENCE = re.compile(r"(?im)^\s*section\s+(\d{1,3})\b")
 
 # A PS/GS clause id: a dotted number with optional letter / bracket / trailing-letter suffixes
 # (7.34, 7.34A, 7.39S, 7.41.(4)S, 7.72(6)S — the dot before the bracket is optional). Kept verbatim
@@ -199,6 +216,13 @@ class DocIndexEntry(BaseModel):
     # "7.07A" -> ["7.8.20"] from "refer to Appendix 7.8.20"). Lets dispatch pull the SEPARATE
     # appendix document a PS clause points to — the onward hop SoR item -> PS clause -> appendix.
     clause_onward_appendices: dict[str, list[str]] = Field(default_factory=dict)
+    # bill number -> the SMM section numbers its own pages cite ("2" -> ["2"], "1" -> ["1", "3"]).
+    # The one thing this issuer's bill DOES point at: it carries no Clause Ref column — page 9 of
+    # `BQ/I-ND_2025_04_BQ-0.pdf` is `Item No. | Item Description | Quantity | Unit | Rate | Amount`
+    # and that is this issuer's shape, permanently — but every bill page names the Method of
+    # Measurement section it is measured under, and every one of those ships in `GP&PP/`.
+    # Deterministic, no model, no operator confirmation. See `_BILL_MM_REFERENCE`.
+    bill_mm_sections: dict[str, list[str]] = Field(default_factory=dict)
     # SoR section code (upper) -> the 0-based pages that section spans, so dispatch can slice the
     # ORIGINAL Schedule of Rates to a dispatched unit's own section pages (the priced-return sheet)
     # instead of a derived .xlsx. Text-layer schedule_of_rates only; ±1 is applied at slice time.
@@ -330,8 +354,21 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     # so that a specification merely listing its own clauses is never stolen. Behind the same
     # no-competing-header guard the appendix-cover and General-Specification branches use: a document
     # that declares `SECTION n` on page 1 has said what it IS, and is never reclassified an index.
-    if _PS_INDEX_NAME.search(_own_name(filename)) or (
-        _PS_INDEX_PAGE1.search(page1)
+    #
+    # AND behind the filename. That guard was missing and it cost PS 1 — 101 pages, titled "General",
+    # long enough to carry its OWN table of contents on page 1 with the `SECTION 1` declaration
+    # further in. Both revisions classified `ps_index`, so neither was enclosed, neither competed in
+    # `_ps_revisions`, and a firm received twenty-five appendices of a section it never got. PS 27
+    # declares `SECTION 27` on page 1 and was untouched, which is exactly the difference that showed
+    # up on the pack. A file whose own name says which section it is has already answered the
+    # question; a contents page inside it does not reopen it.
+    own_name = _own_name(filename)
+    names_a_section = bool(_FILENAME_PS_SECTION.search(own_name)
+                           or _FILENAME_GS_SECTION.search(own_name)
+                           or _FILENAME_APPENDIX.search(own_name))
+    if _PS_INDEX_NAME.search(own_name) or (
+        not names_a_section
+        and _PS_INDEX_PAGE1.search(page1)
         and _TABLE_OF_CONTENTS.search(page1)
         and not _SECTION_DECL.search(page1)
     ):
@@ -670,6 +707,34 @@ def _spec_markers_layout(data: bytes, pages: list[str], section_number: str) -> 
     return markers, n_scanned, n_column
 
 
+def bill_mm_sections(pages: list[str]) -> dict[str, list[str]]:
+    """``bill number -> the SMM section numbers cited on that bill's pages``, in document order.
+
+    A single forward pass: `Bill No. 2 : …` opens a bill, and every `SECTION n` line after it
+    belongs to that bill until the next one. A `SECTION n` line before any bill header is ignored —
+    it belongs to the document's front matter, not to a bill nobody has opened yet.
+
+    Returns ``{}`` for a document that declares no bill headers at all, which is every Schedule of
+    Rates: an SoR is sectioned by LETTER and cites no method of measurement this way, so the whole
+    mechanism stays out of its path.
+    """
+    out: dict[str, list[str]] = {}
+    current = ""
+    for text in pages:
+        for line in (text or "").splitlines():
+            bill = _BILL_SECTION_HEADER.match(line)
+            if bill:
+                current = bill.group(1).lstrip("0") or bill.group(1)
+                out.setdefault(current, [])
+                continue
+            mm = _BILL_MM_REFERENCE.match(line)
+            if mm and current:
+                number = mm.group(1).lstrip("0") or mm.group(1)
+                if number not in out[current]:
+                    out[current].append(number)
+    return {k: v for k, v in out.items() if v}
+
+
 def _mm_markers(pages: list[str]) -> list[tuple[str, int]]:
     """``("PB N", page)`` for each Method-of-Measurement preamble clause, in document order."""
     markers: list[tuple[str, int]] = []
@@ -757,10 +822,13 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
     clause_index: dict[str, list[int]] = {}
     clause_onward: dict[str, list[str]] = {}
     sor_section_pages: dict[str, list[int]] = {}
+    mm_by_bill: dict[str, list[str]] = {}
     if text_layer and kind == "schedule_of_rates":
         # Index the original SoR's section page ranges so dispatch can slice it to a unit's own
         # section (the priced-return sheet) rather than send a derived .xlsx.
         sor_section_pages = _spans(_sor_section_markers(pages), len(pages))
+        # And WHICH MEASUREMENT RULES each bill is priced under — the one pointer this bill carries.
+        mm_by_bill = bill_mm_sections(pages)
     elif text_layer and kind == "method_of_measurement":
         clause_index = _spans(_mm_markers(pages), len(pages))
     elif text_layer and kind in ("particular_specification", "general_specification"):
@@ -798,7 +866,7 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
         filename=filename, kind=kind, spec_section_number=section_number,
         spec_section_title=section_title, text_layer=text_layer, page_count=len(pages),
         clause_index=clause_index, clause_onward_appendices=clause_onward,
-        sor_section_pages=sor_section_pages, source_path=source_path,
+        sor_section_pages=sor_section_pages, bill_mm_sections=mm_by_bill, source_path=source_path,
         spec_section_title_source="page_1" if section_title else "",
         ps_index_titles=ps_index_titles, ps_index_unreadable=ps_index_unreadable,
     )
