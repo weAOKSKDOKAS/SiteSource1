@@ -32,6 +32,7 @@ from typing import Callable, Optional
 
 from pipeline.stage_01_ingest.doc_index import (
     UnrecognisedItem,
+    apply_ps_index_titles,
     build_doc_entry,
     quarantine_unrecognised_items,
     save_doc_index,
@@ -291,8 +292,12 @@ def _apply_quarantine(
     sr_sections = {c for e in bill_entries if e.kind == "schedule_of_rates" for c in e.sor_section_pages}
 
     context_entries, _done = _index_each(context_docs, count_cb, done, total)
+    # The PS index names every specification section; a section that declares no title of its own
+    # takes it from there. A CROSS-DOCUMENT pass, so it runs once over the whole set rather than
+    # inside `_index_each` — `build_doc_index` does the same for the upload path.
+    all_entries = apply_ps_index_titles(bill_entries + context_entries)
     if tender_id:
-        save_doc_index(Workspace(), tender_id, bill_entries + context_entries)
+        save_doc_index(Workspace(), tender_id, all_entries)
     if on_error and context_docs:
         kinds: dict[str, int] = {}
         for e in context_entries:

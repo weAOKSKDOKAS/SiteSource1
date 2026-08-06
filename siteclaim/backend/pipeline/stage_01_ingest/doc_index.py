@@ -72,6 +72,29 @@ def _own_name(filename: str) -> str:
 
 
 _GENERAL_SPEC = re.compile(r"General\s+Specification", re.I)
+# The Particular Specification's own TABLE OF CONTENTS — `I-ND_2025_04-S_PS_Index-0.pdf`. It is not
+# a specification section and must not be treated as one: `_FILENAME_SECTION` correctly finds no
+# number in that basename, and a PS with no number is reported as unidentifiable, so before this the
+# index raised that false alarm on every run of the pack.
+#
+# It is also the only place the pack states each PS section's TITLE. The sections themselves declare
+# none on page 1 — which is why the filename fallback exists — so this document is the specification
+# side of any title match.
+_PS_INDEX_NAME = re.compile(r"(?:^|[^A-Za-z])PS[_\s-]?Index(?![A-Za-z])", re.I)
+_PS_INDEX_PAGE1 = re.compile(r"Particular\s+Specification", re.I)
+_TABLE_OF_CONTENTS = re.compile(r"Table\s+of\s+Contents|^\s*INDEX\s*$", re.I | re.M)
+# The header row that opens the list: `SECTION   TITLE`. ANCHORED ON, rather than scanning the whole
+# document, so a clause reference elsewhere in the pack cannot be read as an entry.
+_TOC_HEADER = re.compile(r"^\s*SECTION\s+TITLE\s*$", re.I)
+# One entry: a section number, irregular whitespace, then the title. The real pack's spacing is
+# ragged (`  1        General`, ` 26        Preservation…`), so the gap is `\s+` and never a column.
+#
+# The title group is OPTIONAL, and that is deliberate. A line the index printed as a bare number is
+# a row whose title did not come out — exactly the case the caller must REPORT — and requiring a
+# title here would have made it match nothing and be dropped in silence with the running header.
+# `(?!\S)` keeps a clause id out: in `7.28  Rotary drilling` the digits are followed by a dot, so
+# there is no row to read.
+_TOC_ROW = re.compile(r"^\s*(\d{1,3})(?!\S)\s*(.*?)\s*$")
 # The Standard Method of Measurement, recovered from page 1 or the filename.
 #
 # `_kind_for` could reach `method_of_measurement` only from an explicit DocType, so a bridge part
@@ -158,11 +181,87 @@ class DocIndexEntry(BaseModel):
     # An absolute path, not a copy: the part pdfs already exist, and duplicating a 232 MB pack into
     # `docs/` to make two names agree is paying disk to avoid saying where a file is.
     source_path: str = ""
+    # WHERE `spec_section_title` CAME FROM: "" (none), "page_1" (the document's own SECTION n
+    # declaration) or "ps_index" (the Particular Specification's table of contents). Provenance, not
+    # a silent fill — a title the pack states about a document is weaker evidence than one the
+    # document states about itself, and the gate must be able to say which it is showing.
+    spec_section_title_source: str = ""
+    # `section number -> title`, parsed from a PS INDEX document's table of contents. Non-empty on
+    # the index entry alone; every other entry reads it through `apply_ps_index_titles`.
+    ps_index_titles: dict[str, str] = Field(default_factory=dict)
+    # Entries the index printed that could not be read cleanly — reported, never guessed.
+    ps_index_unreadable: list[str] = Field(default_factory=list)
+
+
+def parse_ps_index(pages: list[str]) -> tuple[dict[str, str], list[str]]:
+    r"""``(section number -> title, rows that could not be read)`` from a PS table of contents.
+
+    ANCHORED ON THE `SECTION  TITLE` HEADER ROW, not scanned over the document, so a clause
+    reference or a numbered paragraph elsewhere in the pack can never be read as an entry.
+
+    Reading stops at the first page after the header that contributes no entry. The real pack's
+    list is one page, and a longer index that runs on is still followed to its end — but the
+    specification body that comes after it is not, because its prose yields no rows.
+
+    Every page carries the same running header (`Contract No. …`, `Particular Specification`) and
+    footer (`AECOM-AtkinsRealis JV  PS/iii`); none of them start with a number, so none can match a
+    row. Spacing between number and title is ragged in the source and is read as ``\s+``, never as
+    a column.
+
+    A row the rule cannot read is RETURNED, not filled with something plausible — a title invented
+    here would become the specification side of a match nobody could check. That includes a row the
+    index printed as a bare number: it is reported rather than dropped, which on a pack that footers
+    its pages with a bare numeral would name a line that was never an entry. Reporting a line that
+    turns out to be furniture is a question for the operator; dropping a section is a gap in the
+    enquiry nobody sees.
+    """
+    titles: dict[str, str] = {}
+    unreadable: list[str] = []
+    started = False
+    for page in pages:
+        found_here = False
+        for raw in (page or "").splitlines():
+            if not started:
+                started = bool(_TOC_HEADER.match(raw))
+                continue
+            line = raw.strip()
+            if not line:
+                continue
+            m = _TOC_ROW.match(raw)
+            if not m:
+                # Running header/footer and anything else that is not an entry. Only a line that
+                # OPENS with a number is a candidate, so this is not a silent drop of a real row.
+                continue
+            number, title = m.group(1).lstrip("0") or m.group(1), m.group(2).strip()
+            if sum(c.isalpha() for c in title) < 2:
+                unreadable.append(line)      # a number with no readable title — say so
+                continue
+            found_here = True
+            titles.setdefault(number, title)
+        if started and not found_here and titles:
+            break                            # the list ended on the previous page
+    return titles, unreadable
 
 
 def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     """Refine the coarse DocType into the assembler's kind, reading the page-1 declaration."""
     hay = f"{page1}\n{filename}"
+    # BEFORE every specification branch. The PS table of contents is not a specification section:
+    # it declares no `SECTION n` of its own, so it reached the PS branch with no number and FIX A
+    # reported it as an unidentifiable specification on every run of this pack. It is also the only
+    # document that states the PS section TITLES, so it needs an identity a reader can find.
+    #
+    # The filename is the certain signal (`…-S_PS_Index-0.pdf`); the page-1 pair is the fallback for
+    # an index named otherwise, and requires BOTH "Particular Specification" and a contents heading
+    # so that a specification merely listing its own clauses is never stolen. Behind the same
+    # no-competing-header guard the appendix-cover and General-Specification branches use: a document
+    # that declares `SECTION n` on page 1 has said what it IS, and is never reclassified an index.
+    if _PS_INDEX_NAME.search(_own_name(filename)) or (
+        _PS_INDEX_PAGE1.search(page1)
+        and _TABLE_OF_CONTENTS.search(page1)
+        and not _SECTION_DECL.search(page1)
+    ):
+        return "ps_index"
     if doc_type == DocType.SCHEDULE_OF_RATES:
         return "schedule_of_rates"
     if doc_type == DocType.METHOD_OF_MEASUREMENT:
@@ -555,6 +654,16 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
                 section_number = fn.group(1)
 
     kind = _kind_for(doc_type, page1, filename)
+    ps_index_titles: dict[str, str] = {}
+    ps_index_unreadable: list[str] = []
+    if kind == "ps_index" and text_layer:
+        ps_index_titles, ps_index_unreadable = parse_ps_index(pages)
+        if not ps_index_titles:
+            _log.warning(
+                "PS index %r has a text layer but no readable table of contents — the PS section "
+                "titles will stay empty; check its layout rather than trusting the empty result",
+                filename,
+            )
     clause_index: dict[str, list[int]] = {}
     clause_onward: dict[str, list[str]] = {}
     sor_section_pages: dict[str, list[int]] = {}
@@ -600,12 +709,57 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
         spec_section_title=section_title, text_layer=text_layer, page_count=len(pages),
         clause_index=clause_index, clause_onward_appendices=clause_onward,
         sor_section_pages=sor_section_pages, source_path=source_path,
+        spec_section_title_source="page_1" if section_title else "",
+        ps_index_titles=ps_index_titles, ps_index_unreadable=ps_index_unreadable,
     )
+
+
+def apply_ps_index_titles(entries: list[DocIndexEntry]) -> list[DocIndexEntry]:
+    """Fill ``spec_section_title`` from the PS index for sections that declare none themselves.
+
+    On CEDD ND/2025/04 no Particular Specification declares `SECTION n — Title` on page 1 — which is
+    why the section NUMBER has to come from the filename — so before this the specification side of
+    any title match was empty. The pack's own index states every title, and nothing read it.
+
+    A PAGE-1 DECLARATION ALWAYS WINS. A title the document states about itself is stronger evidence
+    than one another document states about it, and the fill is marked ``spec_section_title_source =
+    "ps_index"`` so the gate can show which it is looking at. Never a silent fill.
+
+    ---------------------------------------------------------------------------------------------
+    PHASE 3 NOTE — THE MATCHER MUST STRIP `SECTION n` FROM THE BILL'S HEADING.
+
+    These titles are the specification side of the bill-to-PS title match. The bill side arrives as
+    `SECTION 2 - GROUND INVESTIGATION` — an SMM/bill number FUSED with a title — and that leading
+    number must be discarded before matching, or the match silently becomes number-to-number, which
+    the domain forbids.
+
+    THIS PACK PROVES IT: **PS 28 is "Environmental Ground Investigation"**, while the bill headed
+    "Ground Investigation" is **Bill 2**. 28 and 2 do not correspond. Match on the words.
+    ---------------------------------------------------------------------------------------------
+    """
+    lookup: dict[str, str] = {}
+    for entry in entries:
+        lookup.update(entry.ps_index_titles)
+    if not lookup:
+        return entries
+    out: list[DocIndexEntry] = []
+    for entry in entries:
+        if (entry.kind in ("particular_specification", "appendix")
+                and entry.spec_section_number
+                and not entry.spec_section_title
+                and entry.spec_section_number in lookup):
+            entry = entry.model_copy(update={
+                "spec_section_title": lookup[entry.spec_section_number],
+                "spec_section_title_source": "ps_index",
+            })
+        out.append(entry)
+    return out
 
 
 def build_doc_index(docs: list[tuple[str, DocType, bytes]]) -> list[DocIndexEntry]:
     """Index every uploaded original: ``(filename, doc_type, bytes)`` -> entries."""
-    return [build_doc_entry(name, doc_type, data) for (name, doc_type, data) in docs]
+    return apply_ps_index_titles(
+        [build_doc_entry(name, doc_type, data) for (name, doc_type, data) in docs])
 
 
 class UnrecognisedItem(BaseModel):
