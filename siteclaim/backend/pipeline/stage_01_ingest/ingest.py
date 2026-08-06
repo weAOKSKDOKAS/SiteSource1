@@ -405,6 +405,51 @@ def _is_heading(text: str) -> bool:
     return sum(c.isalpha() for c in body) >= 2
 
 
+_PAGE_MARKER = re.compile(r"^\s*\[page (\d+)\]\s*$")
+
+
+def running_furniture(doc_text: str) -> set[str]:
+    """Heading-shaped lines that appear on EVERY page — the running header, not the structure.
+
+    A CEDD bill repeats its project title at the left margin on every page, above a repeated
+    column-header row. Both are prose with plenty of letters, so ``_NOT_HEADING`` (which catches
+    bare numbers, units, ``page N…`` and carried-forward footers) and ``_SKIP_LINE`` (which catches
+    ``[page N]`` markers) both pass them — verified. NO CONTENT RULE CAN SEPARATE
+    "Ground Investigation Works … (Phase 2)" from a genuine heading. The only signal is repetition.
+
+    The harm is not that the title occupies a slot in the chain; it is that the title, sitting
+    SHALLOWER than the section header, closes it on every page under the rule below. So
+    ``SECTION 2 - GROUND INVESTIGATION`` and its subheading survived only for items on a section's
+    first page, and every item after the page break carried page furniture where its scope should
+    be — in a bill, where an item's real description IS its ancestor path, that is the description.
+
+    THE RULE IS "ON EVERY PAGE", NOT "ON MORE THAN ONE". The obvious rule — a line that repeats
+    across pages is furniture — would wrongly drop a genuine heading continued over a page break,
+    which is the one thing that must not happen here. "Every page" cannot: a heading spans the pages
+    of its own section, not the whole document.
+
+    And where a line genuinely does appear on every page, dropping it loses nothing that
+    DISCRIMINATES: every item in the document would carry it, so it separates no item from any
+    other. That is what makes this safe rather than merely conservative.
+
+    Needs at least two pages — in a single-page document every line is on "every page", and there
+    is no page break for a heading to be lost across.
+    """
+    pages: list[set[str]] = []
+    for raw in (doc_text or "").splitlines():
+        if _PAGE_MARKER.match(raw):
+            pages.append(set())
+            continue
+        body = raw.strip()
+        if not body or _SKIP_LINE.match(raw) or _leading_ref(raw) or not _is_heading(body):
+            continue
+        if pages:
+            pages[-1].add(body)
+    if len(pages) < 2:
+        return set()
+    return set.intersection(*pages)
+
+
 def heading_chains(doc_text: str) -> dict[str, list[str]]:
     """``item_ref -> the chain of headings above it``, read from indentation.
 
@@ -414,14 +459,21 @@ def heading_chains(doc_text: str) -> dict[str, list[str]]:
     so an item at the same indent as the text above it inherits nothing, which is the honest
     answer rather than a guess.
 
+    Running furniture is neither pushed nor allowed to close anything — see
+    :func:`running_furniture`. Without that, a repeated left-margin page title destroyed the
+    section heading at every page break.
+
     First occurrence wins, matching ``_section_titles``: a ref repeated in a running header or a
     collection page must not overwrite the chain from where the item was actually priced.
     """
     chains: dict[str, list[str]] = {}
+    furniture = running_furniture(doc_text)
     stack: list[tuple[int, str]] = []   # (indent, heading text), outermost first
     for raw in (doc_text or "").splitlines():
         if not raw.strip() or _SKIP_LINE.match(raw):
             continue
+        if raw.strip() in furniture:
+            continue  # a running header closes nothing — it is not structure
         indent = _indent_of(raw)
         ref = _leading_ref(raw)
         if ref:
