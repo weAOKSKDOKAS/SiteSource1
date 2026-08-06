@@ -726,6 +726,14 @@ function RepliesDrawer({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[12px] font-medium text-cb-ink-text">{r.firm_id}</span>
                   <Chip className={statusChip(r.status)}>{r.status}</Chip>
+                  {/* Not a return from anyone: our own dispatched RFQ, ingested before the
+                      self-ingest guard existed. Labelled, never deleted and never auto-withdrawn —
+                      withdrawing is the operator's, and a labelled record is still history. */}
+                  {r.own_outbound && (
+                    <Chip className="border border-cb-brass-line text-cb-amber">
+                      our outbound, ingested in error
+                    </Chip>
+                  )}
                   <span className="ml-auto font-cb-mono text-[10px] text-cb-faint">
                     {unitTotal > 0 ? `${r.line_items}/${unitTotal}` : `${r.line_items}`} items priced
                   </span>

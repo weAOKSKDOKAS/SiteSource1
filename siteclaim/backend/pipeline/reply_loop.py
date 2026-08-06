@@ -195,12 +195,24 @@ def tender_replies(ws: Workspace, tender_id: str) -> list[BidReply]:
 
 def accumulate_replies(
     ws: Workspace, tender_id: str, new_replies: list[BidReply], *, received_at: Optional[str] = None,
+    message_id: str = "",
 ) -> list[BidReply]:
     """Store one firm's inbound (possibly SEVERAL per-unit bids) and return the ACTIVE replies.
 
     Keep-latest per (firm, routed unit): a new bid for the same (firm, ``trade``) supersedes the
     prior active one — the prior is kept as history (status "superseded"), never dropped. A firm can
     hold active bids in several units at once; only the units in this batch are superseded.
+
+    ``message_id`` — WHICH GMAIL MESSAGE THIS CAME FROM, when it came from one. A record carried no
+    link back to its message, so even a CURRENT self-ingest could not be identified after the fact:
+    the outbound ledger is keyed by message id and the reply file had none to match against. Five
+    of the operator's own dispatched RFQs sat in a comparison as returns from nobody, and nothing
+    on the record could say so.
+
+    Additive, defaulting empty. Every reply file written before this loads unchanged, and a manual
+    upload — which has no message — honestly carries none. This RECORDS; it never withdraws,
+    re-levels or deletes. A record that is merely labelled is still history, and withdrawing stays
+    the operator's only way to change a comparison.
     """
     stamp = received_at or _now_iso()
     records = _load_records(ws, tender_id)
@@ -208,7 +220,8 @@ def accumulate_replies(
     for rec in records:
         if rec.get("status") == _ACTIVE and _key(rec["reply"]) in incoming:
             rec["status"] = "superseded"
-    records.extend({"reply": r.model_dump(), "received_at": stamp, "status": _ACTIVE} for r in new_replies)
+    records.extend({"reply": r.model_dump(), "received_at": stamp, "status": _ACTIVE,
+                    "message_id": message_id} for r in new_replies)
     _save_records(ws, tender_id, records)
     return tender_replies(ws, tender_id)
 

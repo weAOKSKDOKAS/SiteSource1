@@ -1439,6 +1439,13 @@ export interface TenderReplyInfo {
   claimed_total: number | null;
   status: ReplyStatus;
   received_at: string | null;
+  /** OUR OWN dispatched RFQ, ingested as if it were a return — true only when this record's Gmail
+   *  message id is in the outbound ledger, so it is a fact rather than a guess from the content.
+   *  A LABEL AND NOTHING MORE: withdrawing stays the only action that changes a comparison, and it
+   *  stays the operator's. Always false for a record stored before the id was recorded (the five
+   *  from before the guard existed cannot be recovered) and for a manual upload, which has no
+   *  message. */
+  own_outbound?: boolean;
 }
 
 export interface TenderReplies {

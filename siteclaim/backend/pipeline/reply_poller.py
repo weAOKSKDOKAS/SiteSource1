@@ -24,10 +24,12 @@ thread (``asyncio.to_thread``), never on the event loop.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
 import threading
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -153,6 +155,15 @@ def mark_processed(ws: Workspace, message_id: str, *, ref: str, status: str) -> 
     path.write_text(json.dumps(processed, indent=2), encoding="utf-8")
 
 
+@lru_cache(maxsize=8)
+def _accepts_message_id(process) -> bool:
+    """Whether a reply processor declares a ``message_id`` parameter. Cached per callable."""
+    try:
+        return "message_id" in inspect.signature(process).parameters
+    except (TypeError, ValueError):   # a builtin / C callable has no inspectable signature
+        return False
+
+
 def ref_from_subject(subject: str) -> str:
     """The correlation ref off a reply subject (``Re: RFQ … [SiteSource Ref: x.y.z]``), or ``""``."""
     m = _REF_RE.search(subject or "")
@@ -214,7 +225,17 @@ def poll_once(process: ProcessReply, *, workspace: Optional[Workspace] = None, s
         ref = ref_from_subject(m.get("subject", ""))
         try:
             attachments = gmail_client.get_attachments(mid, service=service)
-            status = process(ref, attachments)
+            # The MESSAGE ID travels with the reply when the processor can take it. A stored
+            # reply carried no link back to its message, so even a current self-ingest could not
+            # be identified afterwards: the outbound ledger is keyed by message id and the reply
+            # file had nothing to match against.
+            #
+            # Passed by signature check rather than by widening the protocol: `process` is a plain
+            # `(ref, attachments) -> str` callable that tests supply their own version of, and a
+            # third positional would break every one of them to carry a fact only the real
+            # processor wants.
+            status = process(ref, attachments, **(
+                {"message_id": mid} if _accepts_message_id(process) else {}))
         except gmail_client.GmailUnavailable as exc:
             # Transport failure mid-poll: NOT marked processed — retried next tick.
             summary["failed"] += 1

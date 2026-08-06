@@ -1437,6 +1437,7 @@ class InboundReplyResponse(BaseModel):
 def process_inbound_reply(
     ref: str, sheets: list[BidReply], images: list[str], *, workspace: Optional[Workspace] = None,
     identity: Optional[dict] = None, notes: Optional[list[str]] = None,
+    message_id: str = "",
 ) -> InboundReplyResponse:
     """The ONE inbound-reply processing path — shared verbatim by the HTTP route and the Gmail
     poller (neither reimplements it): resolve the correlation ref deterministically (AI matching
@@ -1488,7 +1489,8 @@ def process_inbound_reply(
     # to know which one they are looking at before anything else on this list means what it says.
     extras_notes = (notes or []) + extras_notes
 
-    replies = reply_loop.accumulate_replies(workspace, tender_id, new_replies)
+    replies = reply_loop.accumulate_replies(workspace, tender_id, new_replies,
+                                            message_id=message_id)
     levelled = level_bids(replies, scope)  # scope-aware leveling (reserved param now populated)
     awaiting = _awaiting_by_unit(workspace, tender_id, replies)  # enquired-but-not-replied per unit
     units, unit_items = _sheet_layout(workspace, tender_id, scope, levelled, replies)
@@ -1526,7 +1528,8 @@ def post_inbound_reply(
     return process_inbound_reply(ref, sheets, images, notes=notes)
 
 
-def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]]) -> str:
+def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]],
+                          message_id: str = "") -> str:
     """The Gmail poller's adapter onto the SHARED processing path: read the downloaded attachment
     bytes exactly as the route reads uploads, then run :func:`process_inbound_reply`. Returns the
     outcome status ("matched" / "unmatched") the poller records against the message id.
@@ -1545,7 +1548,8 @@ def _poller_process_reply(ref: str, attachments: list[tuple[str, bytes]]) -> str
     typed = [(fn, mimetypes.guess_type(fn)[0], data) for fn, data in attachments]
     notes: list[str] = []
     sheets, images = _read_reply_files(typed, notes)
-    status = process_inbound_reply(ref, sheets, images, notes=notes).status
+    status = process_inbound_reply(ref, sheets, images, notes=notes,
+                                   message_id=message_id).status
     # The poller records ONE string per message id, and it is the only place a dropped page would
     # ever be visible on this path — so it is said here rather than left to the comparison alone.
     return f"{status} ({len(notes)} page-cap warning(s))" if notes else status
@@ -1663,6 +1667,13 @@ class TenderReplyInfo(BaseModel):
     claimed_total: float | None = None
     status: str = "active"  # active | superseded | withdrawn | migrated (history is never deleted)
     received_at: str | None = None
+    # OUR OWN DISPATCHED RFQ, ingested as if it were a return. True only when this record's Gmail
+    # message id is in the outbound ledger — so it is a fact, not an inference from the content.
+    # A LABEL AND NOTHING MORE: nothing is deleted and nothing is auto-withdrawn, because a record
+    # that is merely labelled is still history and withdrawing stays the operator's only way to
+    # change a comparison. Always False for a record stored before the id was recorded, and for a
+    # manual upload, which has no message.
+    own_outbound: bool = False
 
 
 class TenderRepliesResponse(BaseModel):
@@ -1734,6 +1745,7 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
     if scope is not None:
         reply_loop.migrate_stale_replies(workspace, canonical, scope)
     records = reply_loop.tender_reply_records(workspace, canonical)
+    own_ids = reply_loop.outbound_message_ids(workspace)
     active = [r for r in records if r.get("status") == "active"]
     replied = {(r["reply"].get("firm_id"), r["reply"].get("trade")) for r in active}  # aligned keys
     mine = [d for d in reply_loop.outstanding_dispatches(workspace)
@@ -1760,6 +1772,7 @@ def get_tender_replies(slug: str) -> TenderRepliesResponse:
                 firm_id=r["reply"].get("firm_id", ""), trade=r["reply"].get("trade", ""),
                 line_items=len(r["reply"].get("line_items", [])), claimed_total=r["reply"].get("claimed_total"),
                 status=r.get("status", "active"), received_at=r.get("received_at"),
+                own_outbound=bool(r.get("message_id")) and r.get("message_id") in own_ids,
             )
             for r in records
         ],
