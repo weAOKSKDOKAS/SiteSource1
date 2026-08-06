@@ -27,6 +27,31 @@ _log = logging.getLogger(__name__)
 # The dash/colon separator is optional (a scanned header may drop the en-dash glyph); the
 # title must start with a letter so a bare "SECTION 7" heading does not match with no title.
 _SECTION_DECL = re.compile(r"SECTION\s+(\d+)\s*[–—:.\-]?\s*([A-Za-z][^\n]{1,79})", re.I)
+# A COVER TITLE SET ON MORE THAN ONE LINE. `_SECTION_DECL`'s title group is `[^\n]`, so it stops at
+# the first line break — and on CEDD ND/2025/04 that silently truncated three of the eleven
+# specification titles at exactly the point the typesetter wrapped them:
+#
+#     SECTION 28 / Environmental Ground / Investigation  ->  "Environmental Ground"
+#     SECTION 26 / Preservation and / Protection of Trees ->  "Preservation and"
+#     SECTION 30 / Management / of Subcontractors         ->  "Management"
+#
+# A truncated title is worse than no title: it still matches, just against the wrong subject. "Site
+# Safety Management" found "Management" and proposed the subcontractor-management section.
+#
+# The continuation is read CONSERVATIVELY, because a wrong title is worse than a short one. A line
+# joins only if it still looks like part of a cover heading: short, no digits (a clause id or a page
+# number ends a heading), starting with a letter, and not a phrase that is page furniture rather
+# than the title. At most two lines, and the whole thing stays inside `_SECTION_DECL`'s own 80-char
+# bound. Anything else — a blank line, body prose, `7.01 General` — stops the read.
+_TITLE_MAX = 80
+_TITLE_CONTINUATION_LINES = 2
+_TITLE_MAX_WORDS = 6
+# Lines that follow a cover title on a real pack but are NOT part of it. Written down here for the
+# same reason `spec_match._GENERIC_WORDS` is: it is a judgement about documents, and it should be
+# readable and arguable rather than buried in a regex.
+_TITLE_FURNITURE = re.compile(
+    r"^(?:particular|general)\s+specification$|^contract\s+no|^table\s+of\s+contents$"
+    r"|^schedule\s+of\s+rates$|^bill\s+of\s+quantities$|^page\b|^rev(?:ision)?\b", re.I)
 _APPENDIX_DECL = re.compile(r"\bAppendix\s+(\d+(?:\.\d+)*)", re.I)
 # An appendix COVER declares a BARE "Appendix N" (not a dotted sub-reference): "Appendix 7",
 # "APPENDIX 7.pdf". The negative lookahead ``(?!\.\d)`` excludes an INLINE cross-reference like
@@ -241,6 +266,45 @@ def parse_ps_index(pages: list[str]) -> tuple[dict[str, str], list[str]]:
         if started and not found_here and titles:
             break                            # the list ended on the previous page
     return titles, unreadable
+
+
+def _is_title_continuation(line: str) -> bool:
+    """Whether ``line`` is more of the cover title above it, rather than what comes after it."""
+    text = (line or "").strip()
+    if not text or not text[0].isalpha():
+        return False                       # blank, or a clause id / bullet — the heading has ended
+    if any(c.isdigit() for c in text):
+        return False                       # "7.01 General", "Page 3 of 40" — body, not title
+    if len(text) > _TITLE_MAX or len(text.split()) > _TITLE_MAX_WORDS:
+        return False                       # a sentence, not a heading
+    if _TITLE_FURNITURE.match(text) or _SECTION_DECL.match(text):
+        return False                       # page furniture, or the NEXT section's declaration
+    return True
+
+
+def section_declaration(page1: str) -> tuple[str, str]:
+    """``(section number, title)`` from a page-1 ``SECTION n`` declaration, WHOLE.
+
+    The title is read past a line break where the cover set it on more than one line — see
+    ``_TITLE_FURNITURE`` for what stops that read. A single-line declaration is byte-for-byte what
+    ``_SECTION_DECL`` alone produced, so nothing that worked before reads differently now.
+    """
+    m = _SECTION_DECL.search(page1 or "")
+    if not m:
+        return "", ""
+    title = m.group(2).strip()
+    # The match ends mid-line (the title group is `[^\n]`), so the remainder's FIRST element is the
+    # tail of the line already read — usually empty. The continuation starts at the line after it.
+    tail = (page1 or "")[m.end():]
+    following = tail.split("\n")[1:]
+    for line in following[:_TITLE_CONTINUATION_LINES]:
+        if not _is_title_continuation(line):
+            break
+        joined = f"{title} {line.strip()}"
+        if len(joined) > _TITLE_MAX:
+            break
+        title = joined
+    return m.group(1), title
 
 
 def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
@@ -636,11 +700,8 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
     page1 = pages[0] if pages else ""
     text_layer = any(p.strip() for p in pages)
 
-    section_number, section_title = "", ""
-    sec = _SECTION_DECL.search(page1)
-    if sec:
-        section_number, section_title = sec.group(1), sec.group(2).strip()
-    else:
+    section_number, section_title = section_declaration(page1)
+    if not section_number:
         app = _APPENDIX_COVER.search(page1)  # a real "Appendix 7" cover, not an inline "Appendix 7.4.16"
         if app:
             section_number, section_title = app.group(1), f"Appendix {app.group(1)}"
@@ -714,6 +775,25 @@ def build_doc_entry(filename: str, doc_type: DocType, data: bytes,
     )
 
 
+def _title_words(title: str) -> list[str]:
+    """A title as a lowercase word list — the comparison ignores case, spacing and punctuation, and
+    NOTHING else. Deliberately not ``spec_match``'s normaliser: that one drops function words and
+    singularises, which is right for deciding whether two titles mean the same thing and wrong for
+    deciding whether one is the other with the end cut off."""
+    return re.findall(r"[a-z0-9]+", (title or "").lower())
+
+
+def _is_truncation_of(short: str, full: str) -> bool:
+    """Whether ``short`` is ``full`` with the end missing — a strict leading word-run.
+
+    A PREFIX, not a subset. "Preservation and" is the start of "Preservation and Protection of
+    Trees"; "Trees Preservation" is not, and is a different reading that this must not silently
+    replace.
+    """
+    a, b = _title_words(short), _title_words(full)
+    return bool(a) and len(a) < len(b) and b[:len(a)] == a
+
+
 def apply_ps_index_titles(entries: list[DocIndexEntry]) -> list[DocIndexEntry]:
     """Fill ``spec_section_title`` from the PS index for sections that declare none themselves.
 
@@ -721,9 +801,20 @@ def apply_ps_index_titles(entries: list[DocIndexEntry]) -> list[DocIndexEntry]:
     why the section NUMBER has to come from the filename — so before this the specification side of
     any title match was empty. The pack's own index states every title, and nothing read it.
 
-    A PAGE-1 DECLARATION ALWAYS WINS. A title the document states about itself is stronger evidence
-    than one another document states about it, and the fill is marked ``spec_section_title_source =
-    "ps_index"`` so the gate can show which it is looking at. Never a silent fill.
+    A PAGE-1 DECLARATION WINS — UNLESS IT IS A TRUNCATION OF THE INDEX ENTRY. A title the document
+    states about itself is stronger evidence than one another document states about it, and the fill
+    is marked ``spec_section_title_source = "ps_index"`` so the gate can show which it is looking at.
+    Never a silent fill.
+
+    The exception is the whole of the second half of this function, and it was earned. Three of this
+    pack's covers set the title on two lines, `_SECTION_DECL` stopped at the newline, and the
+    resulting page-1 titles — "Environmental Ground", "Preservation and", "Management" — beat the
+    complete index entries and went on to match the wrong specification. ``section_declaration`` now
+    reads past the break, so this is belt-and-braces; but the index is the only place that can prove
+    a declaration is short, and a title that is a strict subset of the index's is not a disagreement
+    with it — it is the same title with the end missing. A GENUINE disagreement (neither contains
+    the other) leaves the document's own words in place and is logged, because that is a fact about
+    the pack for a person to look at, not a tie for this function to break.
 
     ---------------------------------------------------------------------------------------------
     PHASE 3 NOTE — THE MATCHER MUST STRIP `SECTION n` FROM THE BILL'S HEADING.
@@ -740,18 +831,32 @@ def apply_ps_index_titles(entries: list[DocIndexEntry]) -> list[DocIndexEntry]:
     lookup: dict[str, str] = {}
     for entry in entries:
         lookup.update(entry.ps_index_titles)
-    if not lookup:
-        return entries
     out: list[DocIndexEntry] = []
     for entry in entries:
-        if (entry.kind in ("particular_specification", "appendix")
-                and entry.spec_section_number
-                and not entry.spec_section_title
-                and entry.spec_section_number in lookup):
-            entry = entry.model_copy(update={
-                "spec_section_title": lookup[entry.spec_section_number],
-                "spec_section_title_source": "ps_index",
-            })
+        if entry.kind not in ("particular_specification", "appendix") or not entry.spec_section_number:
+            out.append(entry)
+            continue
+        # PROVENANCE IS NEVER BLANK ON A TITLED ENTRY. An index persisted before this field existed
+        # loads with an empty source, and the gate then reported "an undeclared source" for a title
+        # that plainly came from page 1 — `build_doc_entry` sets a title from nowhere else.
+        if entry.spec_section_title and not entry.spec_section_title_source:
+            entry = entry.model_copy(update={"spec_section_title_source": "page_1"})
+        indexed = lookup.get(entry.spec_section_number, "")
+        if not indexed:
+            out.append(entry)
+            continue
+        if not entry.spec_section_title:
+            entry = entry.model_copy(update={"spec_section_title": indexed,
+                                             "spec_section_title_source": "ps_index"})
+        elif _is_truncation_of(entry.spec_section_title, indexed):
+            entry = entry.model_copy(update={"spec_section_title": indexed,
+                                             "spec_section_title_source": "ps_index"})
+        elif _title_words(entry.spec_section_title) != _title_words(indexed):
+            _log.warning(
+                "PS %s declares %r on page 1 but the index calls it %r — neither contains the "
+                "other, so the document's own words are kept; check which is right",
+                entry.spec_section_number, entry.spec_section_title, indexed,
+            )
         out.append(entry)
     return out
 
@@ -815,10 +920,23 @@ def save_doc_index(workspace, tender_id: str, entries: list[DocIndexEntry]) -> N
 
 
 def load_doc_index(workspace, tender_id: str) -> list[DocIndexEntry]:
+    """The persisted index, with the cross-document title pass re-applied on READ.
+
+    Re-applied rather than trusted from disk because the pass is deterministic, cheap and
+    idempotent, and because an index written before it existed is otherwise stuck: the operator
+    would have to re-split a 232 MB pack to get titles that are already sitting in the file. It also
+    backfills the provenance a pre-``spec_section_title_source`` index has no column for.
+
+    It cannot repair everything. An index written before the PS table of contents was recognised
+    carries no ``ps_index_titles`` at all, so there is nothing to complete a truncated title FROM —
+    that one does need a re-split, and the empty lookup makes the pass a no-op rather than a
+    plausible guess.
+    """
     path = workspace.doc_index_path(tender_id)
     if not path.is_file():
         return []
     try:
-        return [DocIndexEntry(**d) for d in json.loads(path.read_text(encoding="utf-8"))]
+        entries = [DocIndexEntry(**d) for d in json.loads(path.read_text(encoding="utf-8"))]
     except (json.JSONDecodeError, TypeError, ValueError):
         return []
+    return apply_ps_index_titles(entries)
