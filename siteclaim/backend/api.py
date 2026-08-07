@@ -2385,8 +2385,21 @@ def post_route_analyze(req: AnalyzeRequest) -> RouteProposal:
         packages, demo_fixture=ROUTE_SUGGESTIONS_FIXTURE if demo_mode() else None,
     )
 
+    notes: list[str] = []
     conn = store.get_connection()
     try:
+        # Read the losers BEFORE the write, while they still exist. A confirmed route for a key
+        # the new proposal still carries survives (write_proposal); one whose package no longer
+        # exists cannot, and the operator has to be told which rather than discovering it as an
+        # empty sourcing screen.
+        orphaned = routing.orphaned_decisions(
+            conn, run_ref, {p["package_key"] for p in recommended})
+        if orphaned:
+            notes.append(
+                f"{len(orphaned)} confirmed route(s) no longer apply after this re-analysis "
+                f"({', '.join(orphaned)}) — the packages they named are not in the new proposal. "
+                f"Confirm the routing again for the packages that replaced them."
+            )
         saved = routing.write_proposal(conn, run_ref, recommended)
         # Record the run as a unified project (Phase 4) — the identity that carries this
         # tender through the tracks. Thin umbrella, no cost data.
@@ -2397,7 +2410,7 @@ def post_route_analyze(req: AnalyzeRequest) -> RouteProposal:
     # The section code/title ride back on the response (persisted identity is the package_key).
     section = {u["package_key"]: u["section"] for u in units}
     section_title = {u["package_key"]: u["section_title"] for u in units}
-    return RouteProposal(run_ref=run_ref, packages=[
+    return RouteProposal(run_ref=run_ref, notes=notes, packages=[
         RoutePackage(**r, section=section.get(r["package_key"]), section_title=section_title.get(r["package_key"], ""))
         for r in saved
     ])

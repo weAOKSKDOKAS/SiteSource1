@@ -42,6 +42,10 @@ class RoutePackage(BaseModel):
 class RouteProposal(BaseModel):
     run_ref: str
     packages: list[RoutePackage] = Field(default_factory=list)
+    # A re-analysis that re-keys the packages drops the decisions naming the old keys. Confirmed
+    # routes for keys the new proposal DOES carry survive it (``db.routing.write_proposal``); the
+    # rest are named here so a re-confirm is a known step rather than a silent gap.
+    notes: list[str] = Field(default_factory=list)
 
 
 class AnalyzeRequest(BaseModel):

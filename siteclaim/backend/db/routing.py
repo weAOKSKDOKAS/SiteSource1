@@ -55,23 +55,54 @@ def _row_dict(row: sqlite3.Row) -> dict:
 
 def write_proposal(conn: sqlite3.Connection, run_ref: str, packages: list[dict]) -> list[dict]:
     """Replace the run's routing proposal with ``packages`` (each: package_key, trade,
-    scope_summary, recommended_route, rationale, signals, source). ``chosen_route`` starts
-    null — a human sets it via :func:`confirm_decisions`. Atomic."""
+    scope_summary, recommended_route, rationale, signals, source). Atomic.
+
+    **A HUMAN'S CHOSEN ROUTE SURVIVES A RE-PROPOSAL.** This deleted every row and re-inserted with
+    `chosen_route = NULL`, so re-running `/route/analyze` silently destroyed every Layer-4 decision
+    on the run — a recomputation wiping the human gate it exists to inform. The advisory columns
+    (recommended_route, rationale, signals) are the proposal's to replace; `chosen_route` is not
+    the proposal's to hold an opinion about at all.
+
+    A key the new proposal does NOT carry loses its decision, and correctly: it named a package
+    that no longer exists. The caller is told which — see `bridge.decisions.propose_routes`, which
+    reports the same thing for its own decision table — so a re-confirm is a known step rather than
+    a silent gap.
+    """
     ensure_routing_table(conn)
     try:
+        kept = {
+            row["package_key"]: (row["chosen_route"], row["decided_by"], row["decided_at"])
+            for row in conn.execute(
+                "SELECT package_key, chosen_route, decided_by, decided_at FROM package_routes "
+                "WHERE run_ref = ? AND chosen_route IS NOT NULL", (run_ref,)).fetchall()
+        }
         conn.execute("DELETE FROM package_routes WHERE run_ref = ?", (run_ref,))
         for p in packages:
+            chosen, by, at = kept.get(p["package_key"], (None, None, None))
             conn.execute(
                 "INSERT INTO package_routes (run_ref, package_key, trade, scope_summary, recommended_route, "
-                "rationale, signals, chosen_route, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+                "rationale, signals, chosen_route, decided_by, decided_at, source, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_ref, p["package_key"], p.get("trade"), p.get("scope_summary"), p.get("recommended_route"),
-                 p.get("rationale"), json.dumps(p.get("signals", {})), p.get("source"), _now()),
+                 p.get("rationale"), json.dumps(p.get("signals", {})), chosen, by, at,
+                 p.get("source"), _now()),
             )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     return read_proposal(conn, run_ref)
+
+
+def orphaned_decisions(conn: sqlite3.Connection, run_ref: str, package_keys: set) -> list[str]:
+    """Confirmed routes whose ``package_key`` a new proposal would not carry — the decisions a
+    re-proposal is about to drop. Read BEFORE `write_proposal`, so a caller can say which."""
+    if not has_routing_table(conn):
+        return []
+    rows = conn.execute(
+        "SELECT package_key FROM package_routes WHERE run_ref = ? AND chosen_route IS NOT NULL",
+        (run_ref,)).fetchall()
+    return sorted(r["package_key"] for r in rows if r["package_key"] not in package_keys)
 
 
 def read_proposal(conn: sqlite3.Connection, run_ref: str) -> list[dict]:
