@@ -36,6 +36,10 @@ _CONTRACT_RE = re.compile(r"[A-Za-z]{1,5}(?:\s*/\s*\d{1,4}){2,3}")
 # clause reference like "PS/7/34" or a bare date buried in a spec is not mistaken for a contract.
 _DOC_CONTRACT_RE = re.compile(r"[A-Za-z]{1,4}\s*/\s*(?:19|20)\d{2}\s*/\s*\d{1,3}\b")
 _SLUG_MAX = 40  # keep slugs short so nested artifact paths stay well under Windows' 259-char limit
+# A value already in canonical slug form: lowercase alphanumerics joined by single hyphens. The
+# length bound is `_SLUG_MAX` plus a `-` and the 8-hex digest, which is the longest this function
+# ever produces — anything longer is a name that has not been slugged yet.
+_ALREADY_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def name_has_contract_number(project_name: str) -> bool:
@@ -83,6 +87,21 @@ def tender_slug(project_name: str) -> str:
     function of the name — no timestamp, no randomness — so a ref always round-trips.
     """
     name = (project_name or "").strip()
+    # IDEMPOTENCE. `tender_slug(tender_slug(x))` MUST equal `tender_slug(x)`, and on the
+    # truncate-and-hash branch it did not: the hash is taken over the INPUT, so slugging an
+    # already-slugged name hashes the slug and yields a different directory every time —
+    #
+    #   'Ground Investigation Works for … (Phase 2)' -> 'ground-investigation-works-for-developme-ccd1cccd'
+    #                                                -> 'ground-investigation-works-for-developme-dc2fbca2'
+    #                                                -> 'ground-investigation-works-for-developme-eb58083d'
+    #
+    # A run_ref IS a slug, and every caller that resolves an id before addressing a directory slugs
+    # it once more — so registering a tender FLIPPED its workspace, and two of the operator's stray
+    # directories are the same tender slugged a different number of times. Recognising a value that
+    # is already in canonical form and returning it unchanged closes that: the function becomes a
+    # projection, and a slug is a fixed point of it.
+    if _ALREADY_SLUG.match(name) and len(name) <= _SLUG_MAX + 9:
+        return name
     match = _CONTRACT_RE.search(name)
     if match:
         contract = _SLUG_STRIP.sub("-", match.group(0).lower()).strip("-")
@@ -141,6 +160,34 @@ def safe_relative_path(relative_path: str) -> Path:
     return Path(*cleaned)
 
 
+def _alias_connections() -> list:
+    """Every database the alias registry might live in, in the order worth trying.
+
+    Normally one: with ``SITESOURCE_DB`` set — live, and in every test — procurement and client_boq
+    open the SAME file, so the first succeeds and the second is never reached.
+
+    They diverge in DEMO with no ``SITESOURCE_DB``, where client_boq deliberately opens a gitignored
+    scratch database so the committed ``sitesource.db`` is never written (trap 3b). The bridge
+    registers aliases through THAT connection, so a resolver that only knew about procurement's
+    would find nothing and quietly fall back to slugging a display name — the defect this whole
+    resolution exists to close, reappearing in exactly the mode that is hardest to notice.
+
+    Ordered procurement-first so the common path costs one open. The client_boq import is lazy and
+    inside the list, so `pipeline` still does not import it at module scope.
+    """
+    def _procurement():
+        from db.store import get_connection
+
+        return get_connection()
+
+    def _client_boq():
+        from client_boq import store as cb_store
+
+        return cb_store.get_conn()
+
+    return [_procurement, _client_boq]
+
+
 class Workspace:
     """Deterministic on-disk storage for one tender's originals and artifacts."""
 
@@ -175,17 +222,19 @@ class Workspace:
         if key in self._refs:
             return self._refs[key]
         ref: Optional[str] = None
-        try:
-            from db import project as uproject
-            from db.store import get_connection
-
-            conn = get_connection()
+        for open_conn in _alias_connections():
             try:
-                ref = uproject.resolve_ref(conn, key)
-            finally:
-                conn.close()
-        except Exception:  # noqa: BLE001 — no database is not a reason to fail a path lookup
-            ref = None
+                from db import project as uproject
+
+                conn = open_conn()
+                try:
+                    ref = uproject.resolve_ref(conn, key)
+                finally:
+                    conn.close()
+            except Exception:  # noqa: BLE001 — no database is not a reason to fail a path lookup
+                ref = None
+            if ref:
+                break
         self._refs[key] = ref
         return ref
 
