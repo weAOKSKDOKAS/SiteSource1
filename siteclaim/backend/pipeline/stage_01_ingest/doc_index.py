@@ -481,6 +481,28 @@ def section_declaration(page1: str, furniture: frozenset[str] = frozenset()) -> 
     return m.group(1), title
 
 
+def kind_from_own_name(filename: str) -> Optional[str]:
+    """The kind a file's OWN NAME declares, or ``None`` when it names no section.
+
+    THE one rule, in one place. It was written out three times — the addendum branch, the ps_index
+    guard, the `_effective_kind` override — and each copy answered a slightly different question.
+    Blocking a DocType door without it turned a wrongly-typed General Specification into ``other``,
+    which is dropped from every enquiry: refusing a bad answer is only half the job, the name has to
+    give the right one.
+
+    Order matters: ``PSA`` is checked before ``PS``, because `PSA1.12` contains neither a `PS1` nor
+    a section 1 — it is an appendix TO section 1.
+    """
+    own = _own_name(filename)
+    if _FILENAME_APPENDIX.search(own):
+        return "appendix"
+    if _FILENAME_PS_SECTION.search(own):
+        return "particular_specification"
+    if _FILENAME_GS_SECTION.search(own):
+        return "general_specification"
+    return None
+
+
 def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
     """Refine the coarse DocType into the assembler's kind, reading the page-1 declaration."""
     hay = f"{page1}\n{filename}"
@@ -516,12 +538,28 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
         and not _SECTION_DECL.search(page1)
     ):
         return "ps_index"
+    # A HUMAN confirms which part is the bill, and a human's answer outranks a filename.
     if doc_type == DocType.SCHEDULE_OF_RATES:
         return "schedule_of_rates"
-    if doc_type == DocType.METHOD_OF_MEASUREMENT:
-        return "method_of_measurement"
-    if doc_type == DocType.TENDER_ADDENDUM:
-        return "clarification"
+    # THE SAME OWN-NAME RULE, ON THE DOCTYPE DOORS. Both of these are AUTOMATIC classifications — a
+    # category mapping or a classifier's guess — and both sat in front of every own-name guard, so
+    # each reopened a defect that had already been closed behind them:
+    #
+    #   PS 1 arriving as METHOD_OF_MEASUREMENT  -> takes SMM 1's slot and SUPERSEDES the real one
+    #                                              (exactly C18, through a different door)
+    #   `TA #1/…-S_PS27-1.pdf` as TENDER_ADDENDUM -> a reissued specification section becomes a
+    #                                              clarification and goes WHOLE to every firm,
+    #                                              never meeting the `-0` it supersedes (C12)
+    #
+    # A file whose own name says which section it is has answered the question, and a coarse
+    # DocType assigned upstream is weaker evidence than the name the issuer gave it. A genuine SMM
+    # file and a genuine addendum LETTER name no section, so neither is touched.
+    if doc_type in (DocType.METHOD_OF_MEASUREMENT, DocType.TENDER_ADDENDUM):
+        by_name = kind_from_own_name(filename)
+        if by_name is not None:
+            return by_name          # the name decides, and it decides completely
+        return ("method_of_measurement" if doc_type == DocType.METHOD_OF_MEASUREMENT
+                else "clarification")
     # A genuine appendix COVER declares a BARE "Appendix N" (page 1 or filename) with no competing
     # SECTION header — NOT an inline "Appendix 7.4.16" cross-reference. An explicit PARTICULAR_
     # SPECIFICATION is reclassified appendix ONLY on such a cover, so a PS whose page-1 SECTION header
@@ -564,14 +602,7 @@ def _kind_for(doc_type: DocType, page1: str, filename: str) -> str:
         # Specification section; `S_PSA1.12-1` is an appendix to one; `S_GS7-1` is General. A
         # genuine addendum LETTER names no section, matches none of these, and stays a
         # clarification issued to everyone — which is exactly what it is.
-        own = _own_name(filename)
-        if _FILENAME_APPENDIX.search(own):
-            return "appendix"
-        if _FILENAME_PS_SECTION.search(own):
-            return "particular_specification"
-        if _FILENAME_GS_SECTION.search(own):
-            return "general_specification"
-        return "clarification"
+        return kind_from_own_name(filename) or "clarification"
     # A GENERAL Specification whose page 1 declares itself and carries no `SECTION n` header of its
     # own. `_GENERAL_SPEC` is a loose pattern, so it is checked here against PAGE 1 ONLY and behind
     # the same no-competing-header guard the appendix cover uses — a Particular Specification that

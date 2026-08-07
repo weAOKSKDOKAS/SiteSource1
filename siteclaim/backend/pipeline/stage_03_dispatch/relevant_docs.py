@@ -350,6 +350,23 @@ def _ps_revisions(
     return _revision_contest(doc_index, _competes_as_a_specification)
 
 
+def _revision_key(e: DocIndexEntry) -> str:
+    """What two documents must agree on to be revisions OF EACH OTHER.
+
+    For a specification or a measurement section that is the SECTION NUMBER: `TA #1/…-S_PS1-1.pdf`
+    and `S/PS/…-S_PS1-0.pdf` are section 1 at two revisions.
+
+    An APPENDIX cannot use it. Its `spec_section_number` is its PARENT'S — `PSA1.12` and `PSA1.13`
+    are both "section 1" — so a contest keyed on the section number would have twenty-five
+    appendices of PS 1 all claiming one identity and superseding each other. Its identity is its own
+    name with the revision suffix removed, which is exactly what a reissue keeps.
+    """
+    if e.kind != "appendix":
+        return e.spec_section_number
+    stem = _own_name(e.filename).rsplit(".", 1)[0]
+    return _REVISION_SUFFIX.sub("", stem) or stem
+
+
 def _revision_contest(
     doc_index: list[DocIndexEntry], competes: Callable[[DocIndexEntry], bool],
 ) -> tuple[set[str], dict[str, int], list[tuple[str, str]]]:
@@ -367,9 +384,10 @@ def _revision_contest(
     """
     by_section: dict[str, list[tuple[int, str]]] = {}
     for e in doc_index:
-        if not e.spec_section_number or not competes(e):
+        key = _revision_key(e)
+        if not key or not competes(e):
             continue
-        by_section.setdefault(e.spec_section_number, []).append((_doc_revision(e.filename), e.filename))
+        by_section.setdefault(key, []).append((_doc_revision(e.filename), e.filename))
 
     best: dict[str, tuple[int, str]] = {}
     contested: list[tuple[str, str]] = []
@@ -382,7 +400,7 @@ def _revision_contest(
     winners = {fn for _rev, fn in best.values()}
     superseded = {
         e.filename for e in doc_index
-        if e.spec_section_number and competes(e) and e.filename not in winners
+        if _revision_key(e) and competes(e) and e.filename not in winners
     }
     revised = {sec: rev for sec, (rev, _fn) in best.items() if rev > 0}
     return superseded, revised, contested
@@ -516,6 +534,17 @@ def resolve_section_plan(
     PARTIAL map is visible on the gate. A unit spanning bills 1 and 9 with only bill 9 confirmed
     encloses PS 27 and says bill 1 is still unmapped — it does not fall back to the whole
     specification, which would bury the one section somebody actually decided."""
+    # THE EFFECTIVE KINDS, APPLIED ONCE AND FIRST — so this function has exactly ONE view of the
+    # index. It used to run just before the attachment loop, which left every read ABOVE it on the
+    # stored kinds: `all_ps_sections` and `withheld_appendices` both did, so a document that
+    # `_effective_kind` rescues (a `-1` reissue stored as a `clarification`, a `PSA` stored as a
+    # specification) was absent from the relevant set and then dropped at a bare `continue` in the
+    # loop that had already reclassified it. Two views of one list inside one function is the same
+    # producer/consumer disagreement as any other seam — it was just close enough together to look
+    # like it could not happen.
+    doc_index = [e.model_copy(update={"kind": k}) if (k := _effective_kind(e)) != e.kind else e
+                 for e in doc_index]
+
     refs = refs_for_items(items)
     ps_clauses = _dedup([clause_of(r) for r in refs.get("ps", [])])
     gs_clauses = _dedup([clause_of(r) for r in refs.get("gs", [])])
@@ -639,11 +668,6 @@ def resolve_section_plan(
     mm_present: set[str] = set()     # SMM sections the bill named AND the pack supplies
     gs_covered: set[str] = set()  # GS clauses a present PS doc amends
     unidentified_ps: list[str] = []               # present, but no section could be resolved
-    # THE EFFECTIVE KINDS, applied ONCE and BEFORE the revision contest — see `_effective_kind`.
-    # Before this the override ran inside the loop below, so `_ps_revisions` was still reading the
-    # stored kinds and a reissue it should have judged was invisible to it.
-    doc_index = [e.model_copy(update={"kind": k}) if (k := _effective_kind(e)) != e.kind else e
-                 for e in doc_index]
     superseded_ps, revised_ps, contested_ps = _ps_revisions(doc_index)
     # THE SAME CONTEST, for the Method of Measurement. The pack ships
     # `TA #1/GP&PP/…-SMM_S02-1.pdf` beside the `-0`, and both were enclosed with identical reasons
@@ -651,6 +675,11 @@ def resolve_section_plan(
     # only the PS branch consulted the rule. One rule now, two populations: see `_revision_contest`.
     superseded_mm, revised_mm, contested_mm = _revision_contest(
         doc_index, lambda e: e.kind == "method_of_measurement")
+    # AND THE APPENDICES. Every population that can ship a `-1` beside its `-0` needs the contest,
+    # and this one did not have it: the pack reissues `PSA1.12-1` under `TA #1/`, so both revisions
+    # were enclosed with byte-identical reasons and nothing to tell a firm which governs.
+    superseded_app, revised_app, contested_app = _revision_contest(
+        doc_index, lambda e: e.kind == "appendix")
 
     for e in doc_index:
         if e.kind == "clarification":
@@ -666,6 +695,15 @@ def resolve_section_plan(
                 f"({REVISION_ASSUMPTION})" if mm_rev else ""
             )
             mm_flags = [SUPERSEDED_BY_ADDENDUM] if mm_rev else []
+            # RELEVANT, not merely present. With a PB clause cited this branch had no filter at
+            # all, so every Method-of-Measurement document in the pack was enclosed — each under a
+            # description ("referenced preamble clauses") that was untrue of most of them. A
+            # measurement section is relevant when the BILL names it or when it actually carries a
+            # cited preamble clause; anything else is another section's rulebook.
+            if pb_clauses and e.spec_section_number and mm_ref_sections:
+                if (e.spec_section_number not in mm_ref_sections
+                        and not any(c in e.clause_index for c in pb_clauses)):
+                    continue
             if not pb_clauses:
                 # No preamble clause cited — but the BILL names the measurement section it is
                 # priced under, on its own pages, and that section ships in the pack. A firm
@@ -684,6 +722,11 @@ def resolve_section_plan(
                                 + mm_note),
                         flags=(["scanned_whole"] if not e.text_layer else []) + mm_flags))
                 continue  # no preamble clause to slice on either way
+            # PRESENT is present, whichever branch enclosed it. `mm_present` was written only in
+            # the branch above, so a unit that cites a PB clause reported every SMM section the
+            # bill names as MISSING FROM THE PACK — about documents this very loop was attaching.
+            if e.spec_section_number:
+                mm_present.add(e.spec_section_number)
             resolved = [c for c in pb_clauses if c in e.clause_index]
             # No ±1: a PB clause's page span is already precise; ±1 only pulls neighbouring pages.
             pages = _slice_pages(e, resolved, straddle=False) if e.text_layer else []
@@ -775,18 +818,26 @@ def resolve_section_plan(
         elif e.kind == "appendix":
             if not (e.spec_section_number and (e.spec_section_number in cited_appendices or e.spec_section_number in appendix_relevant_specs)):
                 continue
+            if e.filename in superseded_app:
+                continue  # an addendum reissued this appendix — the `-1` is enclosed instead
+            app_rev = revised_app.get(_revision_key(e), 0)
+            app_note = (f" · Rev {app_rev}, superseding the earlier revision of this appendix "
+                        f"({REVISION_ASSUMPTION})" if app_rev else "")
+            app_flags = [SUPERSEDED_BY_ADDENDUM] if app_rev else []
             present_appendices.add(e.spec_section_number)
             pages = _slice_pages(e, appendix_clauses) if e.text_layer else []
             if pages:
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="sliced", pages=[p + 1 for p in pages], clauses=appendix_clauses,
-                    reason=f"Appendix {e.spec_section_number} — referenced pages"))
+                    reason=f"Appendix {e.spec_section_number} — referenced pages" + app_note,
+                    flags=app_flags))
             else:
                 scanned = not e.text_layer
                 plan.append(PlanAttachment(
                     source_doc=e.filename, mode="whole",
-                    reason=f"Appendix {e.spec_section_number} — whole ({'scanned' if scanned else 'referenced'})",
-                    flags=["scanned_whole"] if scanned else []))
+                    reason=(f"Appendix {e.spec_section_number} — whole "
+                            f"({'scanned' if scanned else 'referenced'})" + app_note),
+                    flags=(["scanned_whole"] if scanned else []) + app_flags))
 
     missing: list[MissingSpec] = [
         MissingSpec(spec=f"PS Section {spec}", referenced_by="SoR references")
@@ -811,7 +862,7 @@ def resolve_section_plan(
     # Two documents claiming ONE section at ONE revision. The winner is picked deterministically
     # (lexicographic filename), never by index order — but which one lost is a fact about the pack
     # that the operator has to see, not a decision to make quietly.
-    for winner, loser in contested_ps:
+    for winner, loser in contested_ps + contested_mm + contested_app:
         missing.append(MissingSpec(
             spec=f"{loser} — claims the same section and revision as {winner}, which was enclosed",
             referenced_by="contested revision, resolved by filename order"))
