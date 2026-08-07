@@ -114,3 +114,78 @@ def load_outcome(set_id: str) -> Optional[dict]:
         return _outcome_row(row) if row else None
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Lessons learned — human-authored, never model-drafted (node 51)
+# ---------------------------------------------------------------------------
+# The categories a lesson can be filed under. Free enough to be useful, closed enough that a future
+# read can group them; an unrecognised one falls to `other` rather than being refused, because a
+# lesson worth writing must never be lost to a taxonomy quibble.
+LESSON_CATEGORIES = ("pricing", "scope", "programme", "commercial", "other")
+
+
+def ensure_lessons_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS bridge_tender_lessons (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_id     TEXT NOT NULL,
+            category   TEXT NOT NULL DEFAULT 'other',       -- pricing|scope|programme|commercial|other
+            lesson     TEXT NOT NULL,                       -- the human's note; the machine never writes it
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_bridge_tender_lessons_set ON bridge_tender_lessons(set_id);
+        """
+    )
+    conn.commit()
+
+
+def add_lesson(set_id: str, category: str, lesson: str) -> dict:
+    """Append one lesson. Human-authored — there is no model path into this table. An empty lesson
+    is refused (nothing to record); an unrecognised category is filed as ``other`` rather than
+    rejected, because the note is what matters and losing it to a category typo would be the worse
+    outcome."""
+    ref = run_ref_for(set_id)
+    text = (lesson or "").strip()
+    if not text:
+        raise ValueError("a lesson needs text — an empty note records nothing.")
+    cat = (category or "").strip().lower()
+    if cat not in LESSON_CATEGORIES:
+        cat = "other"
+
+    conn = bridge_conn()
+    try:
+        ensure_lessons_table(conn)
+        cur = conn.execute(
+            "INSERT INTO bridge_tender_lessons (set_id, category, lesson, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (ref, cat, text, _now()),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM bridge_tender_lessons WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return _lesson_row(row)
+    finally:
+        conn.close()
+
+
+def _lesson_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "set_id": row["set_id"], "category": row["category"] or "other",
+        "lesson": row["lesson"] or "", "created_at": row["created_at"] or "",
+    }
+
+
+def list_lessons(set_id: str) -> list[dict]:
+    """Every lesson for a tender, oldest first — a pure read."""
+    ref = run_ref_for(set_id)
+    conn = bridge_conn()
+    try:
+        if not _table_exists(conn, "bridge_tender_lessons"):
+            return []
+        rows = conn.execute(
+            "SELECT * FROM bridge_tender_lessons WHERE set_id = ? ORDER BY id", (ref,)).fetchall()
+        return [_lesson_row(r) for r in rows]
+    finally:
+        conn.close()
