@@ -298,3 +298,29 @@ def load_submission(set_id: str) -> Optional[dict]:
 
 def is_submitted(set_id: str) -> bool:
     return load_submission(set_id) is not None
+
+
+def submission_state(set_id: str) -> dict:
+    """Everything the Offer/Submit surface reads in one call — approval, submission, deadline, and
+    whether a letter exists to submit. A pure read; the step chip and the panel share it.
+
+    ``letter_ready`` is the deterministic precondition the UI shows before approval is even offered:
+    there is nothing to approve until the estimate has assembled a letter of offer.
+    """
+    ref = run_ref_for(set_id)
+    conn = bridge_conn()
+    try:
+        from client_boq import store as cb_store
+
+        letter = cb_store.load_letter(conn, ref)
+        deadline, known = deadline_for(conn, ref)
+    finally:
+        conn.close()
+    return {
+        "set_id": ref,
+        "approval": load_final_approval(ref),
+        "submission": load_submission(ref),
+        "deadline": deadline,
+        "deadline_known": known,
+        "letter_ready": letter is not None,
+    }

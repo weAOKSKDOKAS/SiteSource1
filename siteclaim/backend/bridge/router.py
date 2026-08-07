@@ -36,6 +36,17 @@ class ConfirmBridgeRoutesRequest(BaseModel):
     decided_by: str = "operator"
 
 
+class FinalApprovalRequest(BaseModel):
+    verdict: str                              # 'approve' | 'revise'
+    rationale: str = ""                       # required for 'revise' — what to correct
+    approved_by: str = "operator"
+
+
+class SubmitRequest(BaseModel):
+    proof: str = ""                           # portal ref / filename — stored verbatim, never invented
+    submitted_by: str = "operator"
+
+
 @router.get("/{set_id}/bq-candidates")
 def get_bq_candidates(set_id: str) -> dict:
     """Every part in the set, with which one(s) are proposed as the bill. Never auto-selects.
@@ -287,6 +298,48 @@ def post_route_confirm(set_id: str, req: ConfirmBridgeRoutesRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# The back of the funnel — final approval, then submission (nodes 46–48)
+# ---------------------------------------------------------------------------
+@router.post("/{set_id}/final-approval")
+def post_final_approval(set_id: str, req: FinalApprovalRequest) -> dict:
+    """The tender's last human gate: ``approve`` or ``revise``. Mirrors ``/route/confirm`` — the
+    verdict is the human's, recorded and nothing else. A ``revise`` must say what to correct."""
+    from bridge import submission
+
+    try:
+        return submission.confirm_final_approval(
+            set_id, req.verdict, req.rationale, approved_by=req.approved_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{set_id}/submit")
+def post_submit(set_id: str, req: SubmitRequest) -> dict:
+    """Freeze the offer and record the submission. Refused (409) unless a final ``approve`` exists —
+    a hard precondition, named in the message."""
+    from bridge import submission
+
+    try:
+        return submission.record_submission(set_id, proof=req.proof, submitted_by=req.submitted_by)
+    except submission.NotApproved as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{set_id}/submission")
+def get_submission(set_id: str) -> dict:
+    """Approval + submission + deadline + whether a letter exists to submit — a pure read. Every
+    field is a state; nothing here 404s."""
+    from bridge import submission
+
+    try:
+        return submission.submission_state(set_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
