@@ -1191,6 +1191,10 @@ export interface BridgeRoutePackage {
   decided_by: string;
   decided_at: string;
   source: string;
+  /** True when this row's `package_key` is not in the CURRENT scope split — the split has been
+   *  re-run since the routing was analysed, so the row describes a package that no longer exists.
+   *  Only `GET /route/proposal` can produce it; `POST /route/analyze` recomputes both sides. */
+  stale?: boolean;
 }
 
 /** POST /route/analyze — runs the proposal. */
@@ -1209,6 +1213,11 @@ export interface BridgeRouteProposalRead {
   set_id: string;
   run_ref: string;
   packages: BridgeRoutePackage[];
+  /** Keys in the stored proposal that the current split no longer produces. Confirming is refused
+   *  while this is non-empty — a route recorded against a package that does not exist is a route
+   *  the sourcing screen then filters on. */
+  stale_packages: string[];
+  notes: string[];
   open_queries: number;
   review_approved: boolean;
   has_split: boolean;

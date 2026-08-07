@@ -246,6 +246,35 @@ def load_decisions(conn: sqlite3.Connection, set_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _current_unit_keys(conn: sqlite3.Connection, ref: str, fallback: set) -> set:
+    """The package keys the CURRENT persisted split produces, or ``fallback`` when none is stored.
+
+    A set reviewed from loose uploads has no split at all, and refusing to confirm its routing
+    because of that would be a gate on a state that is not wrong. Only a split that EXISTS and
+    disagrees is a disagreement.
+    """
+    from pipeline.routing.split import route_units
+
+    from bridge import scope as scope_mod
+
+    split = scope_mod.load_scope_on(conn, ref)
+    if split is None:
+        return set(fallback)
+    return {u["package_key"] for u in route_units(split)}
+
+
+def section_of_key(package_key: str) -> Optional[str]:
+    """The section a ``package_key`` NAMES — ``trade:SECTION`` -> ``"SECTION"``, ``trade`` -> None.
+
+    ``route_units`` builds the key as ``f"{trade}:{sec.code}"``, so the section is carried in the
+    key itself and never has to be inferred. This is the floor under
+    :func:`stored_proposal`: a key with a section suffix must never come back with no section,
+    because every consumer reads that absence as "the whole trade".
+    """
+    trade, sep, section = (package_key or "").partition(":")
+    return section.strip() if sep and section.strip() else None
+
+
 def stored_proposal(set_id: str) -> dict:
     """The persisted route proposal for ``set_id`` — a pure read, and NEVER a re-run.
 
@@ -258,6 +287,27 @@ def stored_proposal(set_id: str) -> dict:
     ``section``/``section_title`` are recovered by re-running ``route_units`` over the persisted
     split — deterministic Layer-1 Python, no model — so a reloaded tab shows the same headings as
     the one that just ran the analysis. With no split stored they are simply absent.
+
+    **A STORED KEY THE CURRENT SPLIT NO LONGER PRODUCES USED TO COME BACK WITH ``section: None``.**
+    This joins rows PERSISTED by the last ``/route/analyze`` against units RECOMPUTED from the
+    CURRENT split, and nothing keeps the two in step: re-running the split (the operator's
+    "Re-run the split" button) rewrites ``bridge_scopes`` and touches ``package_routes`` not at
+    all. A `dict.get` miss then produced `None` — which is the legitimate value for a WHOLE-TRADE
+    unit, so the contradiction was unreadable downstream:
+
+    * ``Route.tsx`` suppressed the package_key chip, dropped the section from the heading, titled
+      the panel "Bill lines", and ``itemsFor`` — which filters by section only when one is present
+      — listed the WHOLE trade. Exactly the reported card: *"Section 1 — General and Preliminaries
+      (30 items)"* over 145 bill lines.
+    * ``Sourcing.tsx::sourcingScope`` built that sublet package from all 145 items instead of its
+      own 30, while section 1's 30 rows also sat inside ``ground_investigation:2``. One firm is
+      asked to price the whole trade, and 30 lines are priced twice.
+
+    Two answers, because the wrong reading and the staleness are different problems. The section
+    is taken from the KEY when the recomputed units do not carry it, so the contradiction can no
+    longer exist at all; and every stored key the current split no longer produces is marked
+    ``stale`` and named in ``notes``, because a proposal that predates the split is a proposal to
+    re-run, not one to read carefully.
     """
     from db import routing
     from pipeline.routing.split import route_units
@@ -283,14 +333,34 @@ def stored_proposal(set_id: str) -> dict:
             section[unit["package_key"]] = unit["section"]
             section_title[unit["package_key"]] = unit["section_title"]
 
+    stale = [row["package_key"] for row in saved
+             if split is not None and row["package_key"] not in section]
+    packages = []
+    for row in saved:
+        key = row["package_key"]
+        is_stale = key in stale
+        packages.append({
+            **row,
+            # The key is the authority on its own section; the recomputed split only supplies the
+            # TITLE, which a stale row simply does not have.
+            "section": section.get(key) if key in section else section_of_key(key),
+            "section_title": section_title.get(key, ""),
+            "stale": is_stale,
+        })
+
+    notes: list[str] = []
+    if stale:
+        notes.append(
+            f"{len(stale)} package(s) in this proposal are not in the current scope split "
+            f"({', '.join(sorted(stale))}) — the split has been re-run since the routing was "
+            f"analysed. Re-run the routing analysis before confirming."
+        )
     return {
         "set_id": ref,
         "run_ref": ref,
-        "packages": [
-            {**row, "section": section.get(row["package_key"]),
-             "section_title": section_title.get(row["package_key"], "")}
-            for row in saved
-        ],
+        "packages": packages,
+        "stale_packages": sorted(stale),
+        "notes": notes,
         "open_queries": open_queries,
         "review_approved": review_approved,
         "has_split": split is not None,
@@ -378,6 +448,17 @@ def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = 
             raise ValueError(
                 f"Unknown package_key(s) for set {ref!r}: {', '.join(unknown)}. "
                 f"Proposed: {', '.join(sorted(proposed))}."
+            )
+        # ...AND the proposal itself may be stale. `proposed` is the LAST ANALYSIS's keys, so
+        # validating against it alone let a decision be recorded for a package the current split no
+        # longer produces — a route recorded against nothing, which the sourcing screen then
+        # filters on. Re-running the split is exactly the operator action that gets here.
+        stale = sorted(set(decisions) - _current_unit_keys(conn, ref, proposed))
+        if stale:
+            raise ValueError(
+                f"Package(s) {', '.join(stale)} are in the stored proposal but not in the current "
+                f"scope split for set {ref!r} — the split has been re-run since the routing was "
+                f"analysed. POST /bridge/{ref}/route/analyze again, then confirm."
             )
 
         stamp = _now()

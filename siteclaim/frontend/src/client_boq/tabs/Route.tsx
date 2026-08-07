@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SetData } from "../App";
 import { api } from "../api";
+import { sectionOfKey } from "./Sourcing";
 import type {
   BqCandidates,
   BridgeRouteDecisions,
@@ -68,11 +69,17 @@ function titleCase(s: string): string {
   return s.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 }
 
-/** The bill lines behind a routing card — for a section sub-package just that section's items. */
+/** The bill lines behind a routing card — for a section sub-package just that section's items.
+ *
+ *  Reads the section from the KEY when the server did not resolve one: a `trade:SECTION` key with
+ *  no section is a contradiction, and treating it as "the whole trade" is what put 145 bill lines
+ *  under a card captioned "Section 1 — General and Preliminaries (30 items)". `find` is also
+ *  `filter` now, because the split can produce two packages that normalise to one trade. */
 function itemsFor(p: BridgeRoutePackage, split: ScopePackages | null): SorItem[] {
-  const pkg = split?.packages.find((x) => x.trade === p.trade);
-  if (!pkg) return [];
-  return p.section ? pkg.sor_items.filter((it) => (it.section ?? "") === p.section) : pkg.sor_items;
+  const all = (split?.packages ?? []).filter((x) => x.trade === p.trade)
+    .flatMap((x) => x.sor_items ?? []);
+  const section = p.section ?? sectionOfKey(p.package_key);
+  return section ? all.filter((it) => (it.section ?? "") === section) : all;
 }
 
 /** The deterministic coverage signal. Counts, never a verdict — Layer 1 says how many firms exist,
@@ -252,6 +259,9 @@ export function RouteTab({
         set_id: res.set_id,
         run_ref: res.run_ref,
         packages: res.packages,
+        // A fresh analysis recomputes BOTH sides from the same split, so nothing can be stale.
+        stale_packages: [],
+        notes: res.notes ?? [],
         open_queries: res.open_queries,
         review_approved: true,
         has_split: true,
@@ -527,6 +537,21 @@ export function RouteTab({
                 </div>
               </div>
 
+              {/* THE PROPOSAL PREDATES THE SPLIT. Re-running the split rewrites `bridge_scopes`
+                  and touches `package_routes` not at all, so a stored row can name a package the
+                  current split no longer produces. The backend refuses to confirm one; this says
+                  so before the button is pressed, and names them. */}
+              {(proposal?.stale_packages?.length ?? 0) > 0 && (
+                <Card className="border-cb-brass-line bg-cb-selected">
+                  <SectionLabel>This routing predates the current split</SectionLabel>
+                  <p className="mt-1 text-[12px] leading-relaxed text-cb-body">
+                    {proposal!.stale_packages.length} package(s) below are not in the current scope
+                    split — <span className="font-cb-mono">{proposal!.stale_packages.join(", ")}</span>.
+                    Re-propose the routing before confirming; confirming is refused until you do.
+                  </p>
+                </Card>
+              )}
+
               {proposal && proposal.open_queries > 0 && (
                 <p className="text-[11px] text-cb-amber">
                   {proposal.open_queries} client question(s) still open — shown, not blocking: an
@@ -537,8 +562,9 @@ export function RouteTab({
               {packages.map((p) => {
                 const pick = chosen[p.package_key] ?? p.recommended_route;
                 const items = itemsFor(p, split);
-                const heading = p.section
-                  ? `${tradeLabel(p.trade)} · ${p.section_title ? titleCase(p.section_title) : `Section ${p.section}`}`
+                const section = p.section ?? sectionOfKey(p.package_key);
+                const heading = section
+                  ? `${tradeLabel(p.trade)} · ${p.section_title ? titleCase(p.section_title) : `Section ${section}`}`
                   : tradeLabel(p.trade);
                 return (
                   <Card key={p.package_key}>
@@ -553,8 +579,12 @@ export function RouteTab({
                           >
                             {heading}
                           </button>
-                          {p.section && (
-                            <span className="font-cb-mono text-[10px] text-cb-faint">{p.package_key}</span>
+                          {/* The key ALWAYS renders. It was gated on `p.section`, so the one card
+                              whose section failed to resolve was also the one card that did not say
+                              which package it was. */}
+                          <span className="font-cb-mono text-[10px] text-cb-faint">{p.package_key}</span>
+                          {p.stale && (
+                            <Chip className="bg-cb-negotiated text-cb-amber">not in the current split</Chip>
                           )}
                           {/* Brass says a model proposed this. It is a RECOMMENDATION and the word
                               stays on the chip, so it can never read as a decision already taken. */}
@@ -579,7 +609,7 @@ export function RouteTab({
                         {items.length > 0 && (
                           <div className="mt-2">
                             <Collapse
-                              title={p.section ? `Section ${p.section} lines` : "Bill lines"}
+                              title={section ? `Section ${section} lines` : "Bill lines"}
                               count={items.length}
                             >
                               <ul className="space-y-1">

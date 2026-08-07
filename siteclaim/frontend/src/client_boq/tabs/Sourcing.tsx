@@ -51,6 +51,17 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: "recommend", label: "Award" },
 ];
 
+/** The section a `package_key` NAMES: `trade:SECTION` → `"SECTION"`, a bare `trade` → `null`.
+ *
+ *  `route_units` builds the key as `` `${trade}:${sec.code}` ``, so a suffixed key always knows its
+ *  own section and none of its readers ever has to infer it. Mirrors `decisions.section_of_key`. */
+export function sectionOfKey(packageKey: string): string | null {
+  const at = (packageKey ?? "").indexOf(":");
+  if (at < 0) return null;
+  const section = packageKey.slice(at + 1).trim();
+  return section || null;
+}
+
 /** The sublet-only scope, re-keyed for sourcing.
  *
  *  Ported verbatim in behaviour from the wizard: a section sub-package carries its `package_key`
@@ -73,8 +84,15 @@ export function sourcingScope(
       // that on the read side so a stale or hand-built proposal cannot reintroduce it.
       const parents = split.packages.filter((x) => x.trade === p.trade);
       const all = parents.flatMap((x) => x.sor_items ?? []);
-      const items = p.section
-        ? all.filter((it) => (it.section ?? "") === p.section)
+      // A key of shape `trade:SECTION` NAMES its section. Reading only `p.section` meant a stale
+      // proposal row — one whose key the current split no longer produces, which the server used
+      // to hand back with `section: null` — was scoped to the WHOLE trade: one firm asked to price
+      // 145 lines under a caption reading "Section 1 … (30 items)", with those 30 lines also
+      // inside `ground_investigation:2`. The server no longer produces that contradiction; this
+      // keeps the read side from being the one place it can come back.
+      const section = p.section ?? sectionOfKey(p.package_key);
+      const items = section
+        ? all.filter((it) => (it.section ?? "") === section)
         : all;
       return {
         trade: p.package_key,
