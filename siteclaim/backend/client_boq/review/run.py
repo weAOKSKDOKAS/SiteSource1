@@ -195,10 +195,33 @@ def run_review(
             step("locating")
             s08_citation_verify.locate_citations(register, parsed, parts)
 
-        # Persist the register to both homes; the tables copy is authoritative for the gate.
+        # A RE-RUN MUST NOT THROW AWAY WHAT A PERSON DECIDED. The register is one JSON blob, so
+        # replacing it wholesale sent every `confirmed` back to `candidate` and emptied every
+        # `decided_by` and every line of negotiation text — while the gate flag, which
+        # `save_register` correctly never touches, still read APPROVED. An approved register that
+        # nobody has read is the worst state the gate can hold.
+        #
+        # Verdicts are carried onto the lines they were ABOUT (not the positions they sat at), and
+        # whatever cannot be carried is named. See `store.carry_human_decisions`.
+        lost = store.carry_human_decisions(store.load_register(conn, slug), register)
         store.save_register(conn, register)
         store.save_register_artifact(ws, final_name, register)
         store.upsert_document_set(conn, set_id=slug, name=final_name, slug=slug, status="reviewed")
+        if lost and store.review_is_approved(conn, slug):
+            # The register the human approved is not this register. Re-opening is the ONLY gate
+            # move any stage may make, and only ever in this direction — approve stays the sole
+            # writer of an APPROVAL. Leaving the flag up would let an unread departure schedule
+            # through to the estimate on a sign-off given for different lines.
+            store.set_review_approved(conn, slug, False)
+            if on_note:
+                on_note(
+                    f"The review gate has been re-opened: {len(lost)} verdict(s) could not be "
+                    f"carried onto this re-read, so the approved register is not this one. "
+                    f"Re-decide those lines and approve again."
+                )
+        if lost and on_note:
+            for sentence in lost:
+                on_note(f"Verdict not carried — {sentence}.")
         # Reload so the register carries the authoritative approved flag from the tables.
         return store.load_register(conn, slug) or register
     finally:

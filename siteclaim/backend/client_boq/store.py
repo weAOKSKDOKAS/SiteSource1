@@ -1596,6 +1596,113 @@ def overtake_rfis_for_parts(conn: sqlite3.Connection, set_id: str,
     return ids
 
 
+# The columns a HUMAN owns on a register line. Everything else on the line is the stages' to
+# rewrite on a re-run; these five are not, because nothing but a person can produce them.
+_HUMAN_COLUMNS = ("status", "decided_by", "register_status", "client_response", "contractor_response")
+
+
+def _line_identity(item: models.DepartureItem) -> tuple:
+    """What a register line is ABOUT — never where it sits.
+
+    ``item.item`` is a position assigned by s07 at assembly time, so it moves the moment a clause
+    is added or dropped. The stable identity is the departure itself: which check produced it,
+    which criterion it is against, which clause it cites, and (for the s04–s06 findings, which
+    carry neither) the finding's own wording.
+    """
+    anchored = bool(item.criterion_id) or bool(item.clause)
+    tail = "" if anchored else " ".join((item.rationale or "").lower().split())
+    return (item.source, item.criterion_id, item.clause, item.kind, tail)
+
+
+def carry_human_decisions(
+    previous: Optional[models.DepartureRegister], fresh: models.DepartureRegister,
+) -> list[str]:
+    """Move the human's columns from ``previous`` onto the matching lines of ``fresh``, in place.
+
+    **A RE-RUN OF THE REVIEW DESTROYED EVERY VERDICT AND LEFT THE GATE SAYING APPROVED.** The
+    register is one JSON blob and the re-run replaced it wholesale, so every ``confirmed`` went
+    back to ``candidate``, every ``decided_by`` emptied, and every line of negotiation text the
+    operator had typed was gone — while ``client_boq_review_registers.approved`` still read 1,
+    because ``save_register`` correctly never touches it. The result is the worst state the gate
+    can be in: APPROVED over a register nobody has read.
+
+    Probed before the fix::
+
+        after approve   : {'12.3': ('confirmed', 'R. Lam', 'we press this'), '14.1': ('dismissed', ...)}
+        after RE-review : {'12.3': ('candidate', '', ''),                    '14.1': ('candidate', ...)}
+
+    Only a HUMAN verdict is carried. A machine status (candidate, rule_flagged, uncovered,
+    unresolved, citation_failed) is the stages' answer and the fresh run's is the current one —
+    re-reading the document is the entire point of re-running.
+
+    Returns the verdicts that could NOT be carried, one readable sentence each, because that is
+    the number the operator has to act on. Three causes, none of them silent:
+
+    * the line is gone — the re-read no longer produces that departure at all;
+    * its identity is ambiguous — two lines share one identity on either side, and a verdict
+      attached to the wrong line is far worse than a verdict asked for again;
+    * (implicitly) the wording of an unanchored s04–s06 finding changed, which makes it a
+      different finding.
+
+    Pure: no DB, no gate. The caller decides what an uncarried verdict means for the gate flag —
+    see :func:`client_boq.review.run.run_review`.
+    """
+    if previous is None:
+        return []
+
+    decided = [it for it in previous.items if it.status in models.HUMAN_VERDICTS
+               or it.client_response or it.contractor_response]
+    if not decided:
+        return []
+
+    def _index(items) -> tuple[dict, set]:
+        seen: dict = {}
+        dupes: set = set()
+        for it in items:
+            key = _line_identity(it)
+            if key in seen:
+                dupes.add(key)
+            seen[key] = it
+        return seen, dupes
+
+    old_by_key, old_dupes = _index(previous.items)
+    new_by_key, new_dupes = _index(fresh.items)
+    ambiguous = old_dupes | new_dupes
+
+    lost: list[str] = []
+    for was in decided:
+        key = _line_identity(was)
+        target = new_by_key.get(key)
+        label = f"item {was.item}" + (f" ({was.clause})" if was.clause else "")
+        if key in ambiguous:
+            lost.append(f"{label} marked {was.status!r} — two lines share its identity, so the "
+                        f"verdict cannot be attached to one of them with confidence")
+            continue
+        if target is None:
+            lost.append(f"{label} marked {was.status!r} — the re-read no longer produces this line")
+            continue
+        if (was.status in models.HUMAN_VERDICTS
+                and target.status == models.STATUS_CITATION_FAILED):
+            # The fresh run could not find the quote this line rests on. `/review/approve` refuses
+            # to confirm such a line at all, so carrying a verdict onto it would smuggle in the
+            # exact state that gate exists to refuse. The negotiation text still travels — it is
+            # what someone typed, and it is not a verdict.
+            lost.append(f"{label} marked {was.status!r} — its citation no longer verifies, so the "
+                        f"verdict cannot stand until the line is re-reviewed")
+            for column in ("client_response", "contractor_response"):
+                if getattr(was, column):
+                    setattr(target, column, getattr(was, column))
+            continue
+        for column in _HUMAN_COLUMNS:
+            value = getattr(was, column)
+            # A machine status is the fresh run's to state; only a human verdict travels.
+            if column == "status" and value not in models.HUMAN_VERDICTS:
+                continue
+            if value:
+                setattr(target, column, value)
+    return lost
+
+
 def reopen_verdicts_for_parts(set_id: str, part_ids: list[str]) -> list[int]:
     """Clear human verdicts on register lines whose underlying part was just revised.
 
