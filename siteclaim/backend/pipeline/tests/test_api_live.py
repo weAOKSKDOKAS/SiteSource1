@@ -363,7 +363,7 @@ def _stub_live_ingest(monkeypatch, extracted_name: str):
     from schemas.models import ScopePackages
 
     monkeypatch.setenv("DEMO_MODE", "false")
-    monkeypatch.setattr("api.extract_document", lambda data, ct: ("[page 1]\nSoR rows", []))
+    monkeypatch.setattr("api.extract_document", lambda data, ct, **kw: ("[page 1]\nSoR rows", []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: ["page-png"])
     monkeypatch.setattr(
         "api.ingest_tender",
@@ -428,7 +428,7 @@ def test_ingest_upload_extracts_items_only_from_schedule_of_rates_text(monkeypat
 
     # extract_document returns per-file text keyed off the filename passed via content.
     texts = {"sr01.pdf": "A1 rotary drilling m 300", "mm01.pdf": "Method: measure net in place, 57 rules"}
-    monkeypatch.setattr("api.extract_document", lambda data, ct: (texts[data.decode()], []))
+    monkeypatch.setattr("api.extract_document", lambda data, ct, **kw: (texts[data.decode()], []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
 
     # Classifier: sr01 is the Schedule of Rates, mm01 is the Method of Measurement.
@@ -469,7 +469,7 @@ def test_ingest_upload_mom_only_yields_no_line_items(monkeypatch, tmp_path):
 
     monkeypatch.setenv("DEMO_MODE", "false")
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
-    monkeypatch.setattr("api.extract_document", lambda data, ct: ("Method of measurement rules, 57 of them", []))
+    monkeypatch.setattr("api.extract_document", lambda data, ct, **kw: ("Method of measurement rules, 57 of them", []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
     monkeypatch.setattr("api.classify_documents", lambda tender, imgs, per_doc_text=None: TenderPackage(
         project_name=tender.project_name,
@@ -503,7 +503,7 @@ def test_ingest_reports_the_deterministic_classification_and_gates_by_it(monkeyp
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
     texts = {"I-GE_2026_14_TSC-SR-01.pdf": "A1 rotary drilling m 300",
              "I-GE_2026_14_TSC-MM-01.pdf": "toolbox talks; payment of wages; sprayed concrete"}
-    monkeypatch.setattr("api.extract_document", lambda data, ct: (texts[data.decode()], []))
+    monkeypatch.setattr("api.extract_document", lambda data, ct, **kw: (texts[data.decode()], []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
     captured = {}
 
@@ -533,7 +533,7 @@ def test_a_classification_fallback_extracts_no_items_and_warns(monkeypatch, tmp_
 
     monkeypatch.setenv("DEMO_MODE", "false")
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
-    monkeypatch.setattr("api.extract_document", lambda data, ct: ("toolbox talks; payment of wages; sprayed concrete", []))
+    monkeypatch.setattr("api.extract_document", lambda data, ct, **kw: ("toolbox talks; payment of wages; sprayed concrete", []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
     monkeypatch.setattr("api.classify_documents", lambda tender, imgs, per_doc_text=None: TenderPackage(
         project_name=tender.project_name,

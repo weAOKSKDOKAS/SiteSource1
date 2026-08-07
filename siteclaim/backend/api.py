@@ -696,7 +696,12 @@ def _ingest_live(
         try:
             # Text-first: extract each page's text layer, rendering a page to an image only
             # when it is scanned.
-            text, page_images = extract_document(data, content_type)
+            # The page caps are REPORTED here. `TEXT_MAX_PAGES` never opens a 400-page binder's
+            # last 200 pages, and `IMAGE_MAX_PAGES` drops drawings past the eighth — both were
+            # silent, and a document read in part is indistinguishable downstream from a document
+            # that says less.
+            text, page_images = extract_document(
+                data, content_type, on_note=on_error, filename=filename or "upload")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         doc_texts.append(text)
@@ -733,7 +738,9 @@ def _ingest_live(
             # Defensive — any failure (incl. tesseract absent) keeps the plain extraction above.
             if not text.strip() or page_images:
                 try:
-                    structured, structured_images = extract_document(data, content_type, table_aware=True)
+                    structured, structured_images = extract_document(
+                        data, content_type, table_aware=True,
+                        on_note=on_error, filename=filename or "upload")
                 except Exception:  # noqa: BLE001 — table-aware OCR must never break ingest
                     structured, structured_images = "", []
                 if structured.strip():

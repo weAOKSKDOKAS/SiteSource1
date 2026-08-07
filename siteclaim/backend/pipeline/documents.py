@@ -23,8 +23,18 @@ from typing import Optional
 
 # Caps decoupled by modality: text is cheap, so allow many text pages; vision is
 # expensive, so keep a low cap on rendered images (scanned pages only).
-TEXT_MAX_PAGES = 200
-IMAGE_MAX_PAGES = 8
+# Env-overridable, and the warnings above name the variable — an operator who meets a 400-page
+# binder should be able to raise the cap without a code change, exactly as `REPLY_MAX_PAGES` and
+# `DEEPSEEK_MIN_MAX_TOKENS` already work. The defaults are unchanged.
+def _cap(env: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(env, "").strip() or default))
+    except ValueError:
+        return default
+
+
+TEXT_MAX_PAGES = _cap("DOCUMENTS_TEXT_MAX_PAGES", 200)
+IMAGE_MAX_PAGES = _cap("DOCUMENTS_IMAGE_MAX_PAGES", 8)
 DEFAULT_DPI = 150
 MIN_TEXT_CHARS = 20  # a page with fewer usable characters is treated as scanned (image)
 
@@ -127,8 +137,38 @@ def _has_image_content(page) -> bool:
         return True
 
 
+def _report_caps(on_note, *, filename: str, total_pages: int, text_max_pages: int,
+                 image_pages_dropped: int, image_max_pages: int) -> None:
+    """Say when a cap actually bit. Both of these were silent, and both lose CONTENT.
+
+    `TEXT_MAX_PAGES = 200` is the worse of the two: a real tender binder runs to 400+ pages, and
+    the pages past the cap are never opened at all — the extractor returns what reads as the whole
+    document. Downstream that is indistinguishable from a document that simply says less.
+
+    `IMAGE_MAX_PAGES = 8` bounds vision on documents being SAMPLED, which is the right idea, but a
+    drawing page past it is dropped with nothing said. The reply path already learned this lesson
+    (`REPLY_MAX_PAGES`, reported through `on_note`); the same reporting belongs here.
+
+    Off by default (`on_note=None`), so every existing caller behaves exactly as it did.
+    """
+    if on_note is None:
+        return
+    where = f" of {filename!r}" if filename else ""
+    if total_pages > text_max_pages:
+        on_note(
+            f"{total_pages - text_max_pages} page(s){where} were NOT READ — the text cap is "
+            f"{text_max_pages} (DOCUMENTS_TEXT_MAX_PAGES). Pages {text_max_pages + 1}-{total_pages} "
+            f"contributed nothing, and a document read in part is not a document read.")
+    if image_pages_dropped:
+        on_note(
+            f"{image_pages_dropped} image page(s){where} were not rendered — the vision cap is "
+            f"{image_max_pages} (DOCUMENTS_IMAGE_MAX_PAGES). They contributed nothing to what was "
+            f"read.")
+
+
 def _pdf_text_first(
-    data: bytes, text_max_pages: int, image_max_pages: int, dpi: int, min_chars: int
+    data: bytes, text_max_pages: int, image_max_pages: int, dpi: int, min_chars: int,
+    on_note=None, filename: str = "",
 ) -> tuple[str, list[str]]:
     import fitz  # PyMuPDF — lazy
 
@@ -143,16 +183,25 @@ def _pdf_text_first(
     matrix = fitz.Matrix(zoom, zoom)
     texts: list[str] = []
     images: list[str] = []
+    dropped_images = 0
+    total_pages = 0
     with fitz.open(stream=data, filetype="pdf") as doc:
         for index in range(min(len(doc), text_max_pages)):
             page = doc[index]
             text = (page_text[index] if index < len(page_text) else "").strip()
             if len(text) >= min_chars:
                 texts.append(f"[page {index + 1}]\n{text}")  # native or OCR text (cheap, to DeepSeek)
-            elif len(images) < image_max_pages and _has_image_content(page):
-                pix = page.get_pixmap(matrix=matrix, alpha=False)  # genuine image page (a drawing) -> vision
-                images.append(_b64_png(pix.tobytes("png")))
-            # else: negligible text and no raster content (blank), or past the image cap -> skipped
+            elif _has_image_content(page):
+                if len(images) < image_max_pages:
+                    pix = page.get_pixmap(matrix=matrix, alpha=False)  # a drawing -> vision
+                    images.append(_b64_png(pix.tobytes("png")))
+                else:
+                    dropped_images += 1   # past the cap — counted, and reported below
+            # else: negligible text and no raster content (blank page)
+        total_pages = len(doc)
+    _report_caps(on_note, filename=filename, total_pages=total_pages,
+                 text_max_pages=text_max_pages, image_pages_dropped=dropped_images,
+                 image_max_pages=image_max_pages)
     if not texts and not images:
         # OcrEngineUnavailable (a config fault) propagates from ocr.page_texts above and never
         # reaches here — so this message means a healthy OCR run found a genuinely empty document.
@@ -161,7 +210,8 @@ def _pdf_text_first(
 
 
 def _pdf_table_aware(
-    data: bytes, text_max_pages: int, image_max_pages: int, dpi: int, min_chars: int
+    data: bytes, text_max_pages: int, image_max_pages: int, dpi: int, min_chars: int,
+    on_note=None, filename: str = "",
 ) -> tuple[str, list[str]]:
     """Like ``_pdf_text_first`` but a scanned page is read with TABLE-AWARE OCR (``ocr_table``),
     so a ruled Schedule-of-Rates page keeps its Item / Description / Clause Ref / Unit / Rate
@@ -175,6 +225,8 @@ def _pdf_table_aware(
     vis_matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
     texts: list[str] = []
     images: list[str] = []
+    dropped_images = 0
+    total_pages = 0
     with fitz.open(stream=data, filetype="pdf") as doc:
         for index in range(min(len(doc), text_max_pages)):
             page = doc[index]
@@ -186,9 +238,16 @@ def _pdf_table_aware(
             row_text, confident = ocr_table.rows_text(png)
             if confident and row_text.strip():
                 texts.append(f"[page {index + 1}]\n{row_text}")  # column-structured rows -> DeepSeek
-            elif len(images) < image_max_pages and _has_image_content(page):
-                pix = page.get_pixmap(matrix=vis_matrix, alpha=False)
-                images.append(_b64_png(pix.tobytes("png")))  # low-confidence page -> vision fallback
+            elif _has_image_content(page):
+                if len(images) < image_max_pages:
+                    pix = page.get_pixmap(matrix=vis_matrix, alpha=False)
+                    images.append(_b64_png(pix.tobytes("png")))  # low confidence -> vision fallback
+                else:
+                    dropped_images += 1   # past the cap — counted, and reported below
+        total_pages = len(doc)
+    _report_caps(on_note, filename=filename, total_pages=total_pages,
+                 text_max_pages=text_max_pages, image_pages_dropped=dropped_images,
+                 image_max_pages=image_max_pages)
     if not texts and not images:
         # OcrEngineUnavailable (a config fault) propagates from ocr.page_texts above and never
         # reaches here — so this message means a healthy OCR run found a genuinely empty document.
@@ -205,6 +264,8 @@ def extract_document(
     dpi: int = DEFAULT_DPI,
     min_chars: int = MIN_TEXT_CHARS,
     table_aware: bool = False,
+    on_note=None,
+    filename: str = "",
 ) -> tuple[str, list[str]]:
     """Text-first extraction: return ``(text, images)``.
 
@@ -222,8 +283,10 @@ def extract_document(
         from pipeline import ocr  # lazy
 
         if table_aware and ocr.ocr_enabled():
-            return _pdf_table_aware(file_bytes, text_max_pages, image_max_pages, dpi, min_chars)
-        return _pdf_text_first(file_bytes, text_max_pages, image_max_pages, dpi, min_chars)
+            return _pdf_table_aware(file_bytes, text_max_pages, image_max_pages, dpi, min_chars,
+                                    on_note, filename)
+        return _pdf_text_first(file_bytes, text_max_pages, image_max_pages, dpi, min_chars,
+                               on_note, filename)
     if ct.startswith("image/"):
         return "", [_image_to_png(file_bytes)]
     raise ValueError(

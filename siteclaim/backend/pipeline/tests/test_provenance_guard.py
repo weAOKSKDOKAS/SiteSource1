@@ -79,7 +79,7 @@ def test_ingest_quarantines_a_non_sor_section_item_and_warns(monkeypatch, tmp_pa
 
     monkeypatch.setenv("DEMO_MODE", "false")
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
-    monkeypatch.setattr("api.extract_document", lambda data, ct: ("G/H/I/J priced rows", []))
+    monkeypatch.setattr("api.extract_document", lambda data, ct, **kw: ("G/H/I/J priced rows", []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
 
     def fake_ingest(tender, images=None, doc_text="", context_text="", progress_cb=None, on_error=None):
@@ -103,7 +103,7 @@ def test_ingest_skips_the_guard_when_the_sor_declares_no_sections(monkeypatch, t
 
     monkeypatch.setenv("DEMO_MODE", "false")
     monkeypatch.setenv("SITESOURCE_WORKDIR", str(tmp_path))
-    monkeypatch.setattr("api.extract_document", lambda data, ct: ("rows", []))
+    monkeypatch.setattr("api.extract_document", lambda data, ct, **kw: ("rows", []))
     monkeypatch.setattr("api.to_images", lambda data, ct, max_pages=2: [])
     monkeypatch.setattr("api.ingest_tender", lambda tender, images=None, doc_text="", context_text="",
                         progress_cb=None, on_error=None: ScopePackages(
