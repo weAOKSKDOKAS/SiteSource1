@@ -1247,9 +1247,48 @@ def quarantine_unrecognised_items(
     return scope.model_copy(update={"packages": kept_packages}), unrecognised
 
 
+# WHICH READER WROTE AN INDEX. Bump this whenever a change alters what indexing PRODUCES — a
+# kind, a section number, a title, a page span. Not when selection at dispatch changes: that reads
+# the index and can be fixed without rebuilding it.
+#
+# It exists because an index is written once and read for the life of a tender, and every recent
+# fix changed what reading a document yields: the PS Index naming the sections, the amendment
+# lead-in that made SMM 28 index itself as 27, PS 1 stealing the Method-of-Measurement slot, the
+# bill header whose title came from its own collection footer, section titles taken from the page
+# header. An index written before those carries their wrong answers with no way to tell — and the
+# gate reported `stale: false`, because "stale" meant only "documents arrived since".
+#
+# The operator's symptom is "the PS is missing and some documents are not attached", on a tender
+# whose index predates the fixes that would have found them. Saying so is the whole point.
+DOC_INDEX_READER_VERSION = 6
+
+
+def _meta_path(path):
+    """The sidecar beside ``doc_index.json``.
+
+    A sidecar rather than a header inside the file: `save_doc_index` writes a plain list and
+    `load_doc_index` reads one, and adding a wrapper would make every reader learn a new shape to
+    answer a question a second small file answers. Its ABSENCE is itself the signal — an index
+    written before versioning existed is exactly the one most likely to be stale.
+    """
+    return path.with_name(path.name.replace(".json", ".meta.json"))
+
+
+def index_reader_version(workspace, tender_id: str) -> Optional[int]:
+    """The reader version that wrote this tender's index, or ``None`` when it predates versioning."""
+    try:
+        meta = json.loads(_meta_path(workspace.doc_index_path(tender_id)).read_text(encoding="utf-8"))
+        value = meta.get("reader_version")
+        return int(value) if value is not None else None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
 def save_doc_index(workspace, tender_id: str, entries: list[DocIndexEntry]) -> None:
     path = workspace.doc_index_path(tender_id, create=True)
     path.write_text(json.dumps([e.model_dump() for e in entries], indent=2), encoding="utf-8")
+    _meta_path(path).write_text(
+        json.dumps({"reader_version": DOC_INDEX_READER_VERSION}, indent=2), encoding="utf-8")
 
 
 def load_doc_index(workspace, tender_id: str) -> list[DocIndexEntry]:

@@ -43,7 +43,11 @@ def doc_index_state(set_id: str) -> dict:
     same population counted at two different times. That is what makes the comparison meaningful
     rather than two unrelated numbers next to each other.
     """
-    from pipeline.stage_01_ingest.doc_index import load_doc_index
+    from pipeline.stage_01_ingest.doc_index import (
+        DOC_INDEX_READER_VERSION,
+        index_reader_version,
+        load_doc_index,
+    )
     from pipeline.workspace import Workspace, tender_slug
 
     from bridge import parts as parts_mod
@@ -81,10 +85,34 @@ def doc_index_state(set_id: str) -> dict:
         conn.close()
 
     exists = path.is_file() and bool(entries)
-    # STALE means documents arrived after the index was built — an addendum, a re-upload, a part
-    # confirmed as the bill since. Fewer indexed than indexable is the only direction that costs
-    # an attachment; more is a part that has since been removed, which loses nothing.
-    stale = exists and indexable > len(entries)
+    # STALE has TWO causes, and only one of them was reported.
+    #
+    # 1. Documents arrived after the index was built — an addendum, a re-upload, a part confirmed
+    #    as the bill since. Fewer indexed than indexable is the only direction that costs an
+    #    attachment; more is a part that has since been removed, which loses nothing.
+    # 2. The index was built by an OLDER READER. Every recent fix changed what indexing produces —
+    #    the PS section titles, the amendment lead-in that made SMM 28 index itself as 27, PS 1
+    #    taking the Method-of-Measurement slot, the bill header read from its collection footer.
+    #    An index written before them carries those wrong answers, and nothing said so: the gate
+    #    reported `stale: false` on exactly the index whose PS was missing.
+    #
+    # Both are "re-run the split", so both set `stale` — and `stale_reason` says which, because the
+    # remedy for one is uploading nothing and the remedy for the other is uploading nothing either,
+    # but only one of them looks like a data problem.
+    written_by = index_reader_version(workspace, ref)
+    outdated = exists and (written_by is None or written_by < DOC_INDEX_READER_VERSION)
+    incomplete = exists and indexable > len(entries)
+    stale = incomplete or outdated
+    reasons: list[str] = []
+    if incomplete:
+        reasons.append(
+            f"{indexable - len(entries)} document(s) have been added since this index was built")
+    if outdated:
+        reasons.append(
+            f"this index was built by reader version {written_by if written_by is not None else 'unversioned'}, "
+            f"and the current reader is version {DOC_INDEX_READER_VERSION} — document titles, "
+            f"section numbers and kinds are decided at indexing time, so re-run the scope split to "
+            f"pick up how documents are read now")
     return {
         "set_id": set_id,
         "tender_slug": tender_slug(ref),
@@ -95,11 +123,15 @@ def doc_index_state(set_id: str) -> dict:
         "kinds": kinds,
         "sor_sections": sections,
         "stale": stale,
-        "warning": _warning(exists, stale, len(entries), indexable, tender_slug(ref)),
+        "stale_reason": "; ".join(reasons),
+        "reader_version": written_by,
+        "current_reader_version": DOC_INDEX_READER_VERSION,
+        "warning": _warning(exists, stale, len(entries), indexable, tender_slug(ref), reasons),
     }
 
 
-def _warning(exists: bool, stale: bool, documents: int, indexable: int, slug: str) -> str:
+def _warning(exists: bool, stale: bool, documents: int, indexable: int, slug: str,
+             reasons: Optional[list] = None) -> str:
     """The sentence the gate shows, or ``""`` when there is nothing to warn about.
 
     Written to name the slug. The failure this exists for was a slug mismatch, and a warning that
@@ -114,9 +146,25 @@ def _warning(exists: bool, stale: bool, documents: int, indexable: int, slug: st
             "different slug is not visible here."
         )
     if stale:
-        return (
-            f"The index for {slug!r} covers {documents} document(s), but this set now has "
-            f"{indexable} to index. Anything added since — an addendum, a re-upload — cannot be "
-            "sliced or attached until the split is re-run."
-        )
+        # Two causes, and they look identical from the outside. The documents-added sentence is
+        # UNCHANGED — it is what the gate has always said and what a reader already recognises —
+        # and the older-reader sentence is appended beside it, because only one of the two is about
+        # documents at all and the remedy is the same for both.
+        parts: list[str] = []
+        if indexable > documents:
+            parts.append(
+                f"The index for {slug!r} covers {documents} document(s), but this set now has "
+                f"{indexable} to index. Anything added since — an addendum, a re-upload — cannot be "
+                "sliced or attached until the split is re-run.")
+        if any("reader version" in r for r in (reasons or [])):
+            parts.append(
+                f"This index was also built by an OLDER READER: document titles, section numbers "
+                f"and kinds are decided at indexing time, so it still carries whatever the code "
+                f"understood when it ran. Re-run the scope split for {slug!r} to pick up how "
+                f"documents are read now — otherwise a specification can be missing, or attached "
+                f"under a stale title or the wrong section number."
+                if not parts else
+                f"It was also built by an OLDER READER, so its titles, section numbers and kinds "
+                f"are whatever the code understood when it ran. The same re-split fixes both.")
+        return " ".join(parts)
     return ""
