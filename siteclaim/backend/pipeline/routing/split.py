@@ -13,6 +13,8 @@ Pure Python, no DB, no LLM.
 
 from __future__ import annotations
 
+import re
+
 from schemas.models import ScopePackages, TradeWorkPackage
 
 # Auto-propose a split when a package spans more than this many sections OR carries more than
@@ -30,6 +32,27 @@ def _summary(code: str, title: str, items: list) -> str:
     head = f"Section {code}" + (f" — {title}" if title else "")
     sample = ", ".join((it.description or it.item_ref) for it in items[:4] if (it.description or it.item_ref))
     return f"{head} ({len(items)} item{'s' if len(items) != 1 else ''})" + (f": {sample}" if sample else "")
+
+
+def summary_heading(summary: str) -> str:
+    """The `Section 2 — DRILLING` part of a rendered :func:`_summary`, without its item sample.
+
+    A rendered summary is a DISPLAY string that happens to end in the first four item descriptions.
+    Matching keywords over the whole of it means item 3's wording decides something about the
+    section — `stage_02_shortlist._section_specialty_for` was choosing a firm pool that way, so a
+    single description mentioning "geophysical" moved the whole section to the geophysical pool
+    however the section was actually titled. A sample is evidence for a reader, never a signal.
+
+    A summary that is not a rendered one (an LLM scope summary on a whole-trade package) has no
+    ` (N items)` marker and is returned unchanged — there is no rendering to strip.
+    """
+    text = (summary or "").strip()
+    m = _RENDERED_HEAD.match(text)
+    return m.group(1).strip() if m else text
+
+
+# `Section 2 — DRILLING (28 items): rotary core drilling, casing, …` -> group 1 is the heading.
+_RENDERED_HEAD = re.compile(r"^(.*?)\s*\(\d+\s+items?\)\s*(?::|$)")
 
 
 def _cover_all_items(sections: list, items: list) -> list:

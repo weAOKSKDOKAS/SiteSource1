@@ -336,6 +336,7 @@ def parse_ps_index(pages: list[str]) -> tuple[dict[str, str], list[str]]:
     titles: dict[str, str] = {}
     unreadable: list[str] = []
     started = False
+    quiet = 0
     for page in pages:
         found_here = False
         for raw in (page or "").splitlines():
@@ -351,13 +352,24 @@ def parse_ps_index(pages: list[str]) -> tuple[dict[str, str], list[str]]:
                 # OPENS with a number is a candidate, so this is not a silent drop of a real row.
                 continue
             number, title = m.group(1).lstrip("0") or m.group(1), m.group(2).strip()
+            # A PAGE OF UNREADABLE ROWS IS STILL A PAGE OF THE LIST. `found_here` counted only
+            # rows that PARSED, so an index page whose titles all came out blank — a scan, a
+            # column that extracted badly — read as "the list ended here" and every section after
+            # it was dropped in silence. The page participated; that is what the stop condition is
+            # asking about.
+            found_here = True
             if sum(c.isalpha() for c in title) < 2:
                 unreadable.append(line)      # a number with no readable title — say so
                 continue
-            found_here = True
             titles.setdefault(number, title)
-        if started and not found_here and titles:
-            break                            # the list ended on the previous page
+        if not started or not titles:
+            continue
+        quiet = 0 if found_here else quiet + 1
+        # ONE quiet page is tolerated, because a real two-page list can be broken by a page that
+        # holds only a continued title or nothing at all. Two in a row is the list having ended —
+        # and a `ps_index` document is only the contents pages, so there is no body to run into.
+        if quiet >= 2:
+            break
     return titles, unreadable
 
 
@@ -1340,8 +1352,45 @@ def load_doc_index(workspace, tender_id: str) -> list[DocIndexEntry]:
         return []
     try:
         entries = [DocIndexEntry(**d) for d in json.loads(path.read_text(encoding="utf-8"))]
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        # AN UNREADABLE INDEX IS NOT AN EMPTY ONE. A half-written or corrupt `doc_index.json` — a
+        # killed split, a full disk, a restart mid-write — degraded to `[]`, which is byte-for-byte
+        # the answer for "this tender was never indexed". Downstream, `_why_no_bill` then told the
+        # operator "the pack that was indexed carries none", a confident and false statement about
+        # a file that was never parsed; the gate said "No document index", pointing at a re-split
+        # that would in fact have fixed it but for the wrong reason.
+        #
+        # The read still returns `[]`, because every caller treats "no index" as a state and a
+        # raise here would turn a pure read into a 500. What changes is that the reason is
+        # RECOVERABLE — `index_read_error` re-reads and says so — and it is logged loudly, the same
+        # rule as `OcrEngineUnavailable`: a configuration fault must not be mistaken for an answer.
+        _log.error("doc_index: %s exists but could not be read (%s: %s) — treating it as ABSENT. "
+                   "This is not the same as an unindexed tender; re-run the scope split.",
+                   path, type(exc).__name__, exc)
         return []
     entries = apply_ps_index_titles(entries)
     _report_disagreements(entries)
     return entries
+
+
+def index_read_error(workspace, tender_id: str) -> str:
+    """Why the index file could not be read, or ``""`` when there is nothing wrong with it.
+
+    Separate from :func:`load_doc_index` so a pure read stays a pure read: the loader answers
+    "what is in the index", this answers "is the emptiness a fact or a failure", and only the
+    places that EXPLAIN an absence have to ask.
+    """
+    path = workspace.doc_index_path(tender_id)
+    if not path.is_file():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"{path} is not readable JSON ({type(exc).__name__}: {exc})"
+    if not isinstance(payload, list):
+        return f"{path} holds {type(payload).__name__}, not the list of entries an index is"
+    try:
+        [DocIndexEntry(**d) for d in payload]
+    except (TypeError, ValueError) as exc:
+        return f"{path} holds entries this reader cannot parse ({type(exc).__name__}: {exc})"
+    return ""

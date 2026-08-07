@@ -45,6 +45,7 @@ def doc_index_state(set_id: str) -> dict:
     """
     from pipeline.stage_01_ingest.doc_index import (
         DOC_INDEX_READER_VERSION,
+        index_read_error,
         index_reader_version,
         load_doc_index,
     )
@@ -99,11 +100,19 @@ def doc_index_state(set_id: str) -> dict:
     # Both are "re-run the split", so both set `stale` — and `stale_reason` says which, because the
     # remedy for one is uploading nothing and the remedy for the other is uploading nothing either,
     # but only one of them looks like a data problem.
+    # ...and a THIRD state that is neither: the file is there and cannot be read. `load_doc_index`
+    # degrades that to `[]`, which makes `exists` False and produces the "No document index for
+    # this tender — run the split" sentence. The remedy happens to be right; the diagnosis is not,
+    # and an operator who has just run the split reads it as the split having done nothing.
+    unreadable = index_read_error(workspace, ref)
     written_by = index_reader_version(workspace, ref)
     outdated = exists and (written_by is None or written_by < DOC_INDEX_READER_VERSION)
     incomplete = exists and indexable > len(entries)
-    stale = incomplete or outdated
+    stale = incomplete or outdated or bool(unreadable)
     reasons: list[str] = []
+    if unreadable:
+        reasons.append(f"the index file exists but could not be read ({unreadable}) — this says "
+                       f"nothing about the pack; re-run the scope split to rebuild it")
     if incomplete:
         reasons.append(
             f"{indexable - len(entries)} document(s) have been added since this index was built")
@@ -126,18 +135,28 @@ def doc_index_state(set_id: str) -> dict:
         "stale_reason": "; ".join(reasons),
         "reader_version": written_by,
         "current_reader_version": DOC_INDEX_READER_VERSION,
-        "warning": _warning(exists, stale, len(entries), indexable, tender_slug(ref), reasons),
+        "unreadable": unreadable,
+        "warning": _warning(exists, stale, len(entries), indexable, tender_slug(ref), reasons,
+                            unreadable),
     }
 
 
 def _warning(exists: bool, stale: bool, documents: int, indexable: int, slug: str,
-             reasons: Optional[list] = None) -> str:
+             reasons: Optional[list] = None, unreadable: str = "") -> str:
     """The sentence the gate shows, or ``""`` when there is nothing to warn about.
 
     Written to name the slug. The failure this exists for was a slug mismatch, and a warning that
     says "no index" without saying which tender it looked under sends the reader to the same dead
     end the original failure did.
     """
+    if unreadable:
+        # Said BEFORE the no-index sentence, which would otherwise be the answer: an unreadable
+        # index loads as `[]` and so looks exactly like a tender that was never split. The remedy
+        # is the same re-split, but an operator who has just run one needs to know the file was
+        # written and is damaged rather than that their split did nothing.
+        return (f"The document index for {slug!r} EXISTS BUT IS UNREADABLE — {unreadable}. Nothing "
+                f"can be sliced or attached from it, and its emptiness is a read failure, not a "
+                f"statement about the pack. Re-run the scope split to rebuild it.")
     if not exists:
         return (
             f"No document index for {slug!r}. Every enquiry will carry the generated pricing sheet "

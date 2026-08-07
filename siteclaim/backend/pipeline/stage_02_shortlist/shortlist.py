@@ -32,12 +32,26 @@ from schemas.models import ScopePackages, ShortlistSet, TradeWorkPackage
 def _section_specialty_for(pkg: TradeWorkPackage) -> Optional[str]:
     """The GI specialty pool this package's section shortlists against, or ``None`` to keep the
     parent trade. Prefers the specialty annotated at ingest (a single-section package's
-    ``section_trade``); else derives it from the routed sub-package's summary (which carries the
-    section header title). Only a real specialty whose parent is this package's trade is used — so
-    a non-GI package (electrical, mechanical) never leaves its own pool."""
+    ``section_trade``); else the section's own TITLE. Only a real specialty whose parent is this
+    package's trade is used — so a non-GI package (electrical, mechanical) never leaves its own
+    pool.
+
+    **THE ITEM SAMPLE DOES NOT CHOOSE THE POOL.** This matched over `pkg.scope_summary`, and for a
+    routed sub-package that string is `_summary`'s RENDERING — `Section 2 — DRILLING (28 items):`
+    followed by the first four item descriptions. So a single description mentioning "geophysical"
+    among 28 rotary-drilling items moved the whole section to the geophysical pool, and which four
+    descriptions were sampled is decided by document order. A sample is evidence for a reader,
+    never a signal: the title is what names the section.
+    """
+    from pipeline.routing.split import summary_heading
+
     parent = base_trade(pkg.trade)
-    stored = pkg.sections[0].section_trade if len(pkg.sections) == 1 else ""
-    cand = stored or section_specialty(pkg.scope_summary or "") or ""
+    sole = pkg.sections[0] if len(pkg.sections) == 1 else None
+    stored = sole.section_trade if sole else ""
+    # A declared title first; otherwise the summary's HEADING (a whole-trade package's summary is
+    # an LLM sentence with no rendering to strip, and `summary_heading` returns it unchanged).
+    from_title = (section_specialty(sole.title) if sole and sole.title else None)
+    cand = stored or from_title or section_specialty(summary_heading(pkg.scope_summary or "")) or ""
     return cand if (cand and cand != parent and parent_trade(cand) == parent) else None
 
 

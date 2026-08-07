@@ -444,8 +444,38 @@ def _why_no_bill(doc_index: list[DocIndexEntry], index_source: str) -> str:
     if not Path(index_source).is_file():
         return (f"no document index exists at {index_source} — this tender has not been indexed by "
                 f"this run.")
+    # A FIFTH state, and the one that was being answered wrongly. `load_doc_index` degrades an
+    # unreadable file to `[]`, which is byte-for-byte its answer for "never indexed" — so a corrupt
+    # or half-written index (a killed split, a full disk, a restart mid-write) reached the sentence
+    # below and was reported as a pack that genuinely ships no bill. That is a confident claim about
+    # a file nobody parsed, and it sends the operator to look for a bill instead of re-running.
+    unreadable = _index_read_error(index_source)
+    if unreadable:
+        return (f"the document index at {index_source} EXISTS BUT COULD NOT BE READ ({unreadable}) "
+                f"— this says nothing about what the pack contains. Re-run the scope split.")
     return (f"the document index at {index_source} contains no Schedule of Rates: the pack that was "
             f"indexed carries none.")
+
+
+def _index_read_error(index_source: str) -> str:
+    """Why the index at ``index_source`` is unreadable, or ``""``. Path-keyed, because this module
+    is handed a path rather than a Workspace."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    from pipeline.stage_01_ingest.doc_index import DocIndexEntry as _Entry
+
+    try:
+        payload = _json.loads(_Path(index_source).read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    if not isinstance(payload, list):
+        return f"it holds {type(payload).__name__}, not the list of entries an index is"
+    try:
+        [_Entry(**d) for d in payload]
+    except (TypeError, ValueError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return ""
 
 
 def _priced_return_attachment(
@@ -918,6 +948,17 @@ def resolve_section_plan(
     # A PARTIALLY confirmed unit. The confirmed sections were selected; these were not, and the
     # operator is the only one who can close the gap. Named rather than silently absent, and
     # deliberately NOT a reason to discard the confirmations that do exist.
+    # A ROW OF THE SPECIFICATION'S CONTENTS PAGE THAT COULD NOT BE READ. `parse_ps_index` returns
+    # these rather than inventing a plausible title — a title invented there would become the
+    # specification side of a match nobody could check — and then NOTHING read them. The PS Index
+    # is what gives a bill→PS title match a specification side at all, so an unread row is a
+    # section that can never be matched by title, and the enquiry is quietly missing it.
+    for entry in [e for e in doc_index if e.kind == "ps_index" and e.ps_index_unreadable]:
+        missing.append(MissingSpec(
+            spec=(f"{len(entry.ps_index_unreadable)} row(s) of the specification contents page "
+                  f"could not be read: {'; '.join(entry.ps_index_unreadable[:4])}"
+                  + (" …" if len(entry.ps_index_unreadable) > 4 else "")),
+            referenced_by=f"{entry.filename} — those sections cannot be matched to a bill by title"))
     # THE PRICED RETURN ITSELF WENT OUT SHORT. `_priced_return_attachment` slices the sections the
     # bill's index could locate; a unit enquired on 2 and 9 whose index knows only 2 got a sheet
     # with no section 9 pages and a reason naming only section 2, so it read as complete. The firm

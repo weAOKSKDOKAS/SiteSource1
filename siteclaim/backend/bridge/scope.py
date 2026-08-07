@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Callable, Optional
@@ -505,6 +506,31 @@ def _project_name(conn: sqlite3.Connection, set_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Workbook bills
 # ---------------------------------------------------------------------------
+_RENDERING_PREFIX = re.compile(r"^[a-z]-(?=.{4})")
+
+
+def _bill_identity(filename: str) -> str:
+    """What two files have to share to be the SAME bill in two renderings.
+
+    **THE GUARD COULD NOT MATCH THE PACK IT WAS WRITTEN FOR.** It compared raw stems, and this
+    issuer distinguishes the renderings by a one-letter prefix: `BQ/E-ND_2025_04_BQ-0.xlsx` is the
+    workbook and `BQ/I-ND_2025_04_BQ-0.pdf` is its PDF render. `e-nd_2025_04_bq-0` and
+    `i-nd_2025_04_bq-0` share no stem, so the guard never fired on the one pack it exists for: the
+    same bill was read twice — once deterministically from the workbook and once by putting a
+    26-page render through the extractor — and the second reading can establish neither a lump sum
+    nor an Employer-fixed rate.
+
+    Only a SINGLE letter followed by a hyphen is dropped, and only when four characters remain, so
+    a bill genuinely named `A-something` is not collapsed onto `B-something`; anything longer is a
+    name, not a rendering marker. A PDF sharing no identity with a workbook is a DIFFERENT bill and
+    is read as normal — that behaviour is what this must not cost.
+    """
+    from pathlib import Path as _Path
+
+    stem = _Path(filename or "").stem.lower()
+    return _RENDERING_PREFIX.sub("", stem)
+
+
 def _read_confirmed_workbooks(bill: list, name: str, on_error=None):
     """Read every confirmed bill part that is a workbook. Returns ``(items, remaining_pdf_parts)``.
 
@@ -528,7 +554,7 @@ def _read_confirmed_workbooks(bill: list, name: str, on_error=None):
     stems = set()
     for spec, pdf_path, _ctx in books:
         label = _label(spec)
-        stems.add(_Path(label).stem.lower())
+        stems.add(_bill_identity(label))
         data = _part_bytes(pdf_path)
         if data is None:
             _note(on_error, (
@@ -557,7 +583,7 @@ def _read_confirmed_workbooks(bill: list, name: str, on_error=None):
         label = _label(spec)
         if wb.is_workbook(label or pdf_path or ""):
             continue
-        if _Path(label).stem.lower() in stems:
+        if _bill_identity(label) in stems:
             _note(on_error, (
                 f"bill part {label!r} is a PDF render of a bill this set also carries as a "
                 "workbook, so it was NOT read: pricing the same bill twice is worse than reading "
