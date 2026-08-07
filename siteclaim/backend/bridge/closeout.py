@@ -189,3 +189,81 @@ def list_lessons(set_id: str) -> list[dict]:
         return [_lesson_row(r) for r in rows]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Post-submission change-control log — LIGHT (nodes 49–50)
+# ---------------------------------------------------------------------------
+# A minimal append-only trail of what happened after submission: a clarification asked, a
+# negotiation point, a change, a note. DELIBERATELY NOT a re-pricing engine — if a price or a bill
+# moved, a human states that in `detail`; the log records the fact, it does not recompute anything.
+# Actual client questions still go through the RFI machinery where that already fits; this is the
+# tender-level trail beside it.
+EVENT_KINDS = ("clarification", "negotiation", "change", "note")
+
+
+def ensure_events_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS bridge_post_submission_events (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_id     TEXT NOT NULL,
+            kind       TEXT NOT NULL DEFAULT 'note',        -- clarification|negotiation|change|note
+            detail     TEXT NOT NULL,                       -- what changed / was asked — human-stated
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_bridge_post_submission_events_set
+            ON bridge_post_submission_events(set_id);
+        """
+    )
+    conn.commit()
+
+
+def log_event(set_id: str, kind: str, detail: str) -> dict:
+    """Append one change-control entry. Append-only — nothing here edits or deletes a prior entry,
+    because a negotiation trail you can rewrite is not a trail. An unrecognised kind falls to
+    ``note``; an empty detail is refused."""
+    ref = run_ref_for(set_id)
+    text = (detail or "").strip()
+    if not text:
+        raise ValueError("an event needs a detail — an empty entry records nothing.")
+    k = (kind or "").strip().lower()
+    if k not in EVENT_KINDS:
+        k = "note"
+
+    conn = bridge_conn()
+    try:
+        ensure_events_table(conn)
+        cur = conn.execute(
+            "INSERT INTO bridge_post_submission_events (set_id, kind, detail, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (ref, k, text, _now()),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM bridge_post_submission_events WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return _event_row(row)
+    finally:
+        conn.close()
+
+
+def _event_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "set_id": row["set_id"], "kind": row["kind"] or "note",
+        "detail": row["detail"] or "", "created_at": row["created_at"] or "",
+    }
+
+
+def list_events(set_id: str) -> list[dict]:
+    """Every post-submission event for a tender, oldest first — a pure read."""
+    ref = run_ref_for(set_id)
+    conn = bridge_conn()
+    try:
+        if not _table_exists(conn, "bridge_post_submission_events"):
+            return []
+        rows = conn.execute(
+            "SELECT * FROM bridge_post_submission_events WHERE set_id = ? ORDER BY id", (ref,)
+        ).fetchall()
+        return [_event_row(r) for r in rows]
+    finally:
+        conn.close()
