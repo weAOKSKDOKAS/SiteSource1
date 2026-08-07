@@ -73,26 +73,49 @@ def tender_ref(name_or_id: str) -> str:
     Never guesses, and never invents an id: an unregistered tender addresses its own workspace under
     its own name, as it always did.
     """
+    return tender_ref_or_none(name_or_id) or (name_or_id or "").strip()
+
+
+def tender_ref_or_none(name_or_id: str) -> Optional[str]:
+    """As :func:`tender_ref`, but ``None`` when the string is registered to NO tender.
+
+    The distinction is what lets a caller SAY SO. "No Schedule of Rates PDF is indexed for this
+    tender" was reported for a name that had never been registered to anything — a searched
+    directory that was never going to exist — and the operator could not tell that from an empty
+    pack. See ``relevant_docs`` for the four causes that message now distinguishes.
+    """
     ref = (name_or_id or "").strip()
     if not ref:
-        return ref
+        return None
     try:
         conn = bridge_conn()
     except Exception:  # noqa: BLE001 — no database is not a reason to fail a dispatch preview
-        return ref
+        return None
     try:
         from db import project as uproject
 
-        if not uproject.has_unified_table(conn):
-            return ref
-        if uproject.get(conn, ref) is not None:
-            return ref                       # already the canonical id
-        row = conn.execute(
-            "SELECT run_ref FROM unified_projects WHERE name = ? ORDER BY id LIMIT 1", (ref,)
-        ).fetchone()
-        return row["run_ref"] if row and row["run_ref"] else ref
-    except Exception:  # noqa: BLE001 — a lookup failure degrades to the caller's own string
-        return ref
+        return uproject.resolve_ref(conn, ref)
+    except Exception:  # noqa: BLE001 — a lookup failure is not a resolution
+        return None
+    finally:
+        conn.close()
+
+
+def register_tender_names(set_id: str, *names: str) -> list[str]:
+    """Record every name this tender is known by, so any of them resolves to its ``run_ref``.
+
+    Called where a tender is created or first touched. THE POINT: a caller downstream holds
+    whatever string it was given — the ``set_id``, the set's display name, the long project title
+    read off the documents — and each of those used to become its own directory. Registering them
+    all makes the lookup exact for every one, and exact is the only acceptable kind: a fuzzy match
+    across two tender names would put one tender's documents into another's enquiry.
+    """
+    ref = run_ref_for(set_id)
+    conn = bridge_conn()
+    try:
+        from db import project as uproject
+
+        return uproject.register_aliases(conn, ref, *names)
     finally:
         conn.close()
 
@@ -126,8 +149,12 @@ def register_set_on(conn: sqlite3.Connection, set_id: str, name: str = "") -> di
     from db import project as uproject
 
     run_ref = run_ref_for(set_id)
-    return uproject.get_or_create(
-        conn, run_ref,
-        name=(name or set_name(conn, run_ref)),
-        provenance=("demo" if demo_mode() else "live"),
+    resolved = name or set_name(conn, run_ref)
+    row = uproject.get_or_create(
+        conn, run_ref, name=resolved, provenance=("demo" if demo_mode() else "live"),
     )
+    # EVERY NAME THIS TENDER IS KNOWN BY, registered the moment it is first seen. Without this the
+    # set_id, the display name and the project title each slugged into their own directory, and one
+    # tender ended up with five of them. Registering costs three rows and closes the whole class.
+    uproject.register_aliases(conn, run_ref, resolved, (row or {}).get("name", ""))
+    return row

@@ -20,6 +20,7 @@ from typing import Callable, Optional
 from pipeline.stage_01_ingest.doc_index import load_doc_index
 from pipeline.stage_03_dispatch.relevant_docs import (
     PRICED_RETURN,
+    UNREGISTERED_TENDER,
     PlanAttachment,
     SectionPlan,
     resolve_section_plan,
@@ -117,10 +118,11 @@ def plan_for_firms(
     """
     ws = workspace or Workspace()
     doc_index = load_doc_index(ws, tender_id)
-    # WHERE the index was read from, carried into the plan so the substitution reason can say it.
-    # "No Schedule of Rates PDF is indexed for this tender" was true of an empty index and equally
-    # true of the wrong one, and a tender's workspace used to be addressable under two names.
-    index_source = str(ws.doc_index_path(tender_id))
+    # WHERE the index was read from — carried into the plan so the substitution reason can state
+    # which of its four causes actually happened rather than guessing between two that were both
+    # false. An UNREGISTERED string searched no workspace at all, and that is its own answer.
+    index_source = (str(ws.doc_index_path(tender_id)) if ws.resolve_ref(tender_id)
+                    else UNREGISTERED_TENDER)
     confirmed = {k: v for k, v in (spec_map or {}).items() if v}
     page_texts_of = _page_texts_reader(ws, tender_id)  # shared cache across this run's sections
     pkg_by_key = {p.trade: p for p in (scope.packages if scope else [])}

@@ -17,9 +17,13 @@ the same directory and the paths are reproducible.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from pathlib import Path
+from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 _DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "out" / "workspace"
 
@@ -143,10 +147,66 @@ class Workspace:
     def __init__(self, root: Path | str | None = None) -> None:
         env = os.getenv("SITESOURCE_WORKDIR", "").strip()
         self.root = Path(root) if root is not None else (Path(env) if env else _DEFAULT_ROOT)
+        self._refs: dict[str, Optional[str]] = {}   # per-instance resolution cache
+
+    # -- identity -----------------------------------------------------------
+    def resolve_ref(self, tender_id: str) -> Optional[str]:
+        """The ``run_ref`` this string addresses, or ``None`` when it addresses no known tender.
+
+        A tender is addressed by its ``run_ref`` and by nothing else — but the callers that reach a
+        workspace hold whatever string they have: the bridge holds the ``set_id``, client_boq's
+        ingest holds the set's display NAME, `/ingest-upload` holds the project title read off the
+        documents, and one archive upload held a FILENAME. Slugging each of them produced a
+        different directory, and one tender ended up with five.
+
+        Resolved HERE, and not only at the API boundary, because several of those writers are not
+        callers this can change: `client_boq/ingest/run.py` saves its uploads under the set's name
+        and `bridge/archive.py` extracts under the same, so a boundary-only fix would leave the
+        originals in one directory and the index in another. One lookup inside the one class every
+        path goes through fixes all of them at once.
+
+        STRICTLY READ-ONLY and cached per instance. It never creates a table and never writes a
+        row: this runs against whatever database is open, including the committed demo one, and
+        `CREATE TABLE IF NOT EXISTS` on that file is a documented way to damage it.
+        """
+        key = (tender_id or "").strip()
+        if not key:
+            return None
+        if key in self._refs:
+            return self._refs[key]
+        ref: Optional[str] = None
+        try:
+            from db import project as uproject
+            from db.store import get_connection
+
+            conn = get_connection()
+            try:
+                ref = uproject.resolve_ref(conn, key)
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — no database is not a reason to fail a path lookup
+            ref = None
+        self._refs[key] = ref
+        return ref
 
     # -- directories --------------------------------------------------------
     def tender_dir(self, tender_id: str) -> Path:
-        return self.root / tender_slug(tender_id)
+        """This tender's directory — by ``run_ref`` where one is registered, never by a display
+        string. An UNREGISTERED string still gets its own directory (that is the pure procurement
+        path, where the name IS the identity, and every existing run depends on it) — but it is
+        logged, so a new name-derived directory is never minted in silence. See
+        :meth:`resolve_ref`."""
+        ref = self.resolve_ref(tender_id)
+        if ref is None:
+            slug = tender_slug(tender_id)
+            if not (self.root / slug).exists():
+                _log.info(
+                    "workspace: %r is not registered to any tender — addressing a new directory %r. "
+                    "If this tender already exists under another name, that name needs registering "
+                    "(db.project.register_aliases) or its artifacts will be split across two.",
+                    tender_id, slug)
+            return self.root / slug
+        return self.root / tender_slug(ref)
 
     def docs_dir(self, tender_id: str, *, create: bool = False) -> Path:
         path = self.tender_dir(tender_id) / "docs"

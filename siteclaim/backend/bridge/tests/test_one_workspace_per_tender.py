@@ -68,7 +68,13 @@ def tender(monkeypatch, tmp_path):
     ws = Workspace()
     register_set(SET_ID, NAME)
     save_doc_index(ws, SET_ID, [BILL, SMM2, PS28])
-    save_doc_index(ws, NAME, [])                 # the stale 570-byte one, in the other directory
+    # The stale index, written to the LITERAL legacy directory. It cannot be written through
+    # `save_doc_index` any more: `NAME` now resolves to `SET_ID`, so it would land on the same file
+    # and clobber the good one — which IS the fix, and is why the disk state has to be built by
+    # hand to reproduce what the operator actually had.
+    stale = tmp_path / tender_slug(NAME) / "artifacts"
+    stale.mkdir(parents=True, exist_ok=True)
+    (stale / "doc_index.json").write_text("[]", encoding="utf-8")
     return ws
 
 
@@ -130,9 +136,10 @@ def test_the_priced_return_is_the_sliced_bill_not_the_generated_sheet(tender, cl
 
 
 # -- when it genuinely cannot find one, it says where it looked ------------------------------------------
-def test_the_substitution_reason_names_the_workspace_it_searched(tender, client):
-    """A truly unindexed tender still substitutes — but the sentence now carries the directory, so
-    a mismatch is visible instead of reading as "nothing was uploaded"."""
+def test_the_substitution_reason_says_the_name_is_not_registered(tender, client):
+    """A truly unknown name still substitutes — but the sentence now says WHICH of its four causes
+    happened. "None uploaded, or the bill is a workbook" was two false options with the real one
+    (the wrong directory) not among them."""
     plans = client.post("/dispatch/plan", json={
         "scope": ScopePackages(project_name="Unindexed Tender 2027",
                                packages=SCOPE.packages).model_dump(),
@@ -141,28 +148,38 @@ def test_the_substitution_reason_names_the_workspace_it_searched(tender, client)
     priced = next(a for p in plans for a in p["attachments"] if "priced_return" in a["flags"])
 
     assert "substituted_priced_return" in priced["flags"]
-    assert "Searched:" in priced["reason"]
-    assert "unindexed-tender-2027" in priced["reason"], priced["reason"]
-    assert "doc_index.json" in priced["reason"]
+    assert "not registered to any tender" in priced["reason"], priced["reason"]
+    assert "none uploaded, or the bill is a workbook" not in priced["reason"].lower()
 
 
 # -- every artifact, not just the index -------------------------------------------------------------------
-@pytest.mark.parametrize("artifact", [
-    "doc_index_path", "scope_path",
-])
-def test_every_artifact_in_the_workspace_had_this_latent(tender, artifact):
-    """The workspace is one directory: if it can be addressed two ways, so can everything in it."""
+@pytest.mark.parametrize("artifact", ["doc_index_path", "scope_path", "docs_dir", "artifacts_dir"])
+def test_every_artifact_in_the_workspace_resolves_to_one_place(tender, artifact):
+    """The workspace is ONE directory, so everything in it is too.
+
+    This assertion is the inverse of the one it replaces. That one pinned that the two identities
+    addressed DIFFERENT files — true of `Workspace` before it resolved, and the whole defect. Now
+    `tender_dir` resolves first, so the convergence is the property worth holding: every artifact
+    was latent, and every artifact is fixed by the same lookup.
+    """
     ws = Workspace()
     by_name = getattr(ws, artifact)(NAME)
-    by_ref = getattr(ws, artifact)(tender_ref(NAME))
+    by_set = getattr(ws, artifact)(SET_ID)
 
-    assert by_name != by_ref, "the two identities really do address different files"
-    assert by_ref.parent.parent.name == SET_ID
+    assert by_name == by_set, "the display name and the set_id must address the same file"
+    assert SET_ID in str(by_name), "and it is the set_id's directory, never the display name's"
 
 
-def test_the_generated_sheets_land_where_dispatch_reads_them(tender, client):
-    """`sor_sheet_path` is keyed by the same id, so a sheet written under one identity and looked
-    for under the other is a file that exists and cannot be found."""
+def test_the_generated_sheets_land_where_dispatch_reads_them(tender):
+    """The nastiest of the latent cases: a sheet written under one identity and looked for under
+    the other is a file that exists and cannot be found."""
     ws = Workspace()
-    assert ws.sor_sheet_path(NAME, "gi") != ws.sor_sheet_path(SET_ID, "gi")
-    assert ws.sor_sheet_path(tender_ref(NAME), "gi") == ws.sor_sheet_path(SET_ID, "gi")
+    assert ws.sor_sheet_path(NAME, "gi") == ws.sor_sheet_path(SET_ID, "gi")
+
+
+def test_the_legacy_directory_is_left_alone_not_read_and_not_deleted(tender, tmp_path):
+    """The stale directory is still on disk — the operator decides what to clean up — and nothing
+    reads it any more."""
+    legacy = tmp_path / tender_slug(NAME) / "artifacts" / "doc_index.json"
+    assert legacy.is_file(), "not deleted"
+    assert Workspace().doc_index_path(NAME) != legacy, "and not read"

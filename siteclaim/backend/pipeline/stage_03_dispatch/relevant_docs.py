@@ -81,6 +81,11 @@ SUBSTITUTED = "substituted_priced_return"
 # it — never a substitute for confirming one.
 NO_RELEVANCE_ESTABLISHED = "no_relevance_established"
 
+# The caller's string resolved to no tender at all. Distinct from "the index is empty" and from "the
+# index is missing", and it is the state that produced six rounds of the same bug report: a lookup
+# that went to a directory that was never going to exist, reported as though the pack were empty.
+UNREGISTERED_TENDER = "<unregistered>"
+
 
 class MissingSpec(BaseModel):
     spec: str          # e.g. "PS Section 28"
@@ -383,6 +388,41 @@ def _revision_contest(
     return superseded, revised, contested
 
 
+def _why_no_bill(doc_index: list[DocIndexEntry], index_source: str) -> str:
+    """WHICH of the four things actually happened — never a guess between them.
+
+    The message used to read "no Schedule of Rates PDF is indexed for this tender (none uploaded, or
+    the bill is a workbook, which has no pages to slice)" while a 156 KB index containing one sat on
+    disk for that tender. BOTH stated causes were false, and the real one — the wrong directory —
+    was not among the options offered. An operator reading it had no way to tell a genuinely empty
+    pack from a lookup that went somewhere else.
+
+    Four states, and they are distinguishable from what is in hand:
+
+    * the name is registered to no tender          -> nothing was ever going to be found;
+    * an index was searched for and is not there   -> the tender exists, this run has not indexed it;
+    * the index is there and holds no bill         -> the pack genuinely has no Schedule of Rates;
+    * the index holds a bill with no text layer    -> it is a workbook or a scan, with no pages to
+      slice, which is the ONLY case the old sentence's second half was ever about.
+    """
+    from pathlib import Path
+
+    sr = [e for e in doc_index if e.kind == "schedule_of_rates"]
+    if sr:
+        return (f"the indexed Schedule of Rates ({sr[0].filename}) has no text layer, so it has no "
+                f"pages to slice — a workbook or a scan.")
+    if index_source == UNREGISTERED_TENDER:
+        return ("this name is not registered to any tender, so no workspace was searched. Register "
+                "the tender's names, or dispatch under the name its documents were indexed under.")
+    if not index_source:
+        return "no document index was supplied to this plan."
+    if not Path(index_source).is_file():
+        return (f"no document index exists at {index_source} — this tender has not been indexed by "
+                f"this run.")
+    return (f"the document index at {index_source} contains no Schedule of Rates: the pack that was "
+            f"indexed carries none.")
+
+
 def _priced_return_attachment(
     doc_index: list[DocIndexEntry], *, sections: list[str], trade: str, package_key: str, sor_sheet_name: str,
     index_source: str = "",
@@ -414,15 +454,8 @@ def _priced_return_attachment(
         return PlanAttachment(
             source_doc=sor_sheet_name, mode="generated", flags=[PRICED_RETURN, SUBSTITUTED],
             reason=(
-                "GENERATED sheet, not the original bill — no Schedule of Rates PDF is indexed for "
-                "this tender (none uploaded, or the bill is a workbook, which has no pages to "
-                "slice). The firm will be asked to price this .xlsx and will return a workbook."
-                # WHERE IT LOOKED. This sentence was true of an empty index and equally true of the
-                # WRONG index: a tender's workspace was addressable by two names, so a 168-document
-                # index sat in one directory while this read a stale 570-byte one out of another and
-                # reported the pack empty. Naming the directory makes a mismatch visible instead of
-                # reading as an honest "nothing was uploaded".
-                + (f" Searched: {index_source}." if index_source else "")
+                "GENERATED sheet, not the original bill — " + _why_no_bill(doc_index, index_source)
+                + " The firm will be asked to price this .xlsx and will return a workbook."
             ))
     hit = next(
         (e for e in sr_entries if e.text_layer and any(sk in e.sor_section_pages for sk in section_keys)), None)

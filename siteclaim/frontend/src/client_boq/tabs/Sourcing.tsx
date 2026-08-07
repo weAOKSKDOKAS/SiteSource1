@@ -66,16 +66,22 @@ export function sourcingScope(
   const packages = proposal.packages
     .filter((p) => wanted.has(p.package_key))
     .map((p) => {
-      const parent = split.packages.find((x) => x.trade === p.trade);
+      // EVERY package of this trade, not the first. `find` returned only the first match, and the
+      // scope split can produce two packages that normalise to one trade — so a section unit whose
+      // items lived in the second package resolved to an empty item list, and the package reached
+      // the shortlist carrying nothing. `route_units` now merges them on the server; this mirrors
+      // that on the read side so a stale or hand-built proposal cannot reintroduce it.
+      const parents = split.packages.filter((x) => x.trade === p.trade);
+      const all = parents.flatMap((x) => x.sor_items ?? []);
       const items = p.section
-        ? (parent?.sor_items ?? []).filter((it) => (it.section ?? "") === p.section)
-        : (parent?.sor_items ?? []);
+        ? all.filter((it) => (it.section ?? "") === p.section)
+        : all;
       return {
         trade: p.package_key,
         scope_summary: p.scope_summary,
         sor_items: items,
-        source_refs: parent?.source_refs ?? [],
-        sections: parent?.sections ?? [],
+        source_refs: [...new Set(parents.flatMap((x) => x.source_refs ?? []))],
+        sections: parents.flatMap((x) => x.sections ?? []),
       };
     });
   return { project_name: split.project_name, packages };

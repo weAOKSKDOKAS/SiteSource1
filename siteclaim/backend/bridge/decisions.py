@@ -152,6 +152,29 @@ def propose_routes(set_id: str, *, on_error: Optional[Callable[[str], None]] = N
             packages, demo_fixture=ROUTE_SUGGESTIONS_FIXTURE if demo_mode() else None,
         )
         saved = routing.write_proposal(conn, ref, recommended)
+        # A RE-ROUTE CAN CHANGE THE KEYS, AND A DECISION FOR A KEY THAT NO LONGER EXISTS IS NOT A
+        # DECISION. `write_proposal` replaces `package_routes` wholesale, but `bridge_route_decisions`
+        # is a separate table that nothing cleared — so after a re-route it still held rows for the
+        # previous shape. `sublet_packages` is read straight off those rows, and the sourcing screen
+        # then filters the CURRENT proposal by them: a stale key matches nothing and a new key has no
+        # decision, so packages the operator had routed to sublet simply stopped arriving.
+        #
+        # Dropped, not silently: the operator is told which decisions the re-route invalidated, so a
+        # re-confirm is a known step rather than a mystery.
+        ensure_tables(conn)
+        live = {p["package_key"] for p in saved}
+        orphaned = [d["package_key"] for d in load_decisions(conn, ref)
+                    if d["package_key"] not in live]
+        if orphaned:
+            conn.executemany(
+                "DELETE FROM bridge_route_decisions WHERE set_id = ? AND package_key = ?",
+                [(ref, key) for key in orphaned])
+            conn.commit()
+            _note(on_error, (
+                f"{len(orphaned)} previous route decision(s) no longer apply after this re-route "
+                f"({', '.join(sorted(orphaned))}) — the packages they named are not in the new "
+                f"proposal. Confirm the routing again."
+            ))
     finally:
         conn.close()
 

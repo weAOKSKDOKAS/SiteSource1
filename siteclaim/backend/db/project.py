@@ -40,6 +40,102 @@ def ensure_unified_table(conn: sqlite3.Connection) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Every name a tender is known by — so one tender is one workspace
+# ---------------------------------------------------------------------------
+# A TENDER IS ADDRESSED BY ITS ``run_ref`` AND BY NOTHING ELSE, but the callers that reach a
+# workspace hold whatever string they happen to have: the bridge holds the ``set_id``, client_boq's
+# ingest holds the set's display NAME, `/ingest-upload` holds the project title read off the
+# documents, and `Workspace.tender_dir` slugged each of them into a DIFFERENT directory. One tender
+# on the operator's disk had five:
+#
+#   nd-2025-04-san-tin-technopole                       the set_id — 156 KB index, current
+#   nd-2025-04                                          tender_slug("Contract No. ND/2025/04")
+#   ground-investigation-works-for-developme-ccd1cccd   tender_slug(<long title>) — the hash branch
+#   san-tin-technopole-phase-2-ground-invest-68caed6d   another title, another hash
+#   i-nd-2025-04-bq-0                                   a FILENAME used as the project name
+#
+# Six rounds of fixing one caller at a time did not converge, because each fix only revealed the
+# next string somebody happened to hold. This table ends that: every name a tender is known by maps
+# to its one ``run_ref``, and resolution is an EXACT lookup. Never fuzzy — a near-match across two
+# tender names would put one tender's documents into another's enquiry, which is worse than the
+# defect it would be fixing.
+def ensure_alias_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS unified_project_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alias TEXT NOT NULL UNIQUE,
+            run_ref TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_unified_aliases_run ON unified_project_aliases(run_ref);
+        """
+    )
+
+
+def has_alias_table(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='unified_project_aliases'"
+    ).fetchone()
+    return row is not None
+
+
+def register_aliases(conn: sqlite3.Connection, run_ref: str, *names: str) -> list[str]:
+    """Record every ``name`` as another way of addressing ``run_ref``. Returns what was stored.
+
+    The ``run_ref`` registers as an alias of itself, so one lookup answers every case. An alias
+    already pointing at a DIFFERENT tender is left alone and reported by omission: re-pointing it
+    would move one tender's artifacts under another, and a collision between two tenders' names is
+    a fact for a person to resolve, not for this to overwrite.
+    """
+    ref = (run_ref or "").strip()
+    if not ref:
+        return []
+    ensure_alias_table(conn)
+    stored: list[str] = []
+    for raw in (ref, *names):
+        alias = (raw or "").strip()
+        if not alias:
+            continue
+        row = conn.execute(
+            "SELECT run_ref FROM unified_project_aliases WHERE alias = ?", (alias,)).fetchone()
+        if row is not None:
+            if row["run_ref"] == ref:
+                stored.append(alias)
+            continue                      # claimed by another tender — never re-pointed
+        conn.execute(
+            "INSERT INTO unified_project_aliases (alias, run_ref, created_at) VALUES (?, ?, ?)",
+            (alias, ref, _now()))
+        stored.append(alias)
+    conn.commit()
+    return stored
+
+
+def resolve_ref(conn: sqlite3.Connection, name_or_ref: str) -> Optional[str]:
+    """The ``run_ref`` this string addresses, or ``None`` when it addresses no known tender.
+
+    STRICTLY READ-ONLY — it creates no table and writes no row, because it is called from
+    ``Workspace.tender_dir``, which runs against whatever database is open, including the committed
+    demo one. A missing table is simply "nothing is registered".
+    """
+    ref = (name_or_ref or "").strip()
+    if not ref:
+        return None
+    if has_alias_table(conn):
+        row = conn.execute(
+            "SELECT run_ref FROM unified_project_aliases WHERE alias = ?", (ref,)).fetchone()
+        if row is not None and row["run_ref"]:
+            return row["run_ref"]
+    if not has_unified_table(conn):
+        return None
+    if conn.execute("SELECT 1 FROM unified_projects WHERE run_ref = ?", (ref,)).fetchone():
+        return ref                        # already canonical
+    row = conn.execute(
+        "SELECT run_ref FROM unified_projects WHERE name = ? ORDER BY id LIMIT 1", (ref,)).fetchone()
+    return row["run_ref"] if row and row["run_ref"] else None
+
+
 def _row_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"], "run_ref": row["run_ref"], "name": row["name"] or "",
