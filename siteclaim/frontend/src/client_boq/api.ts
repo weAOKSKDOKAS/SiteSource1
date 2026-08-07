@@ -8,11 +8,14 @@ import type {
   BidReply,
   BillCandidate,
   BqCandidates,
+  BridgeFinalApproval,
   BridgeRouteDecisions,
   BridgeRouteProposal,
   BridgeRouteProposalRead,
   BridgeSplitRead,
   BridgeSplitResponse,
+  BridgeSubmissionRecord,
+  BridgeSubmissionState,
   CitationsResponse,
   Coverage,
   CriteriaResponse,
@@ -667,6 +670,27 @@ export const api = {
       setId: string,
       decisions: { package_key: string; chosen_route: string }[],
     ) => bpost<BridgeRouteDecisions>(`${setPath(setId)}/route/confirm`, { decisions }),
+
+    // --- the back of the funnel: final approval, then submission (nodes 46–48) ---
+    /** Approval + submission + deadline + whether a letter exists to submit. A pure read; every
+     *  field is a state and nothing 404s. */
+    submission: (setId: string) =>
+      bget<BridgeSubmissionState>(`${setPath(setId)}/submission`),
+
+    /** The tender's last human gate: `approve` or `revise`. A `revise` MUST say what to correct
+     *  (400 otherwise). The verdict is the human's — recorded, nothing else. */
+    finalApproval: (
+      setId: string, verdict: "approve" | "revise", rationale = "", approvedBy?: string,
+    ) => bpost<BridgeFinalApproval>(`${setPath(setId)}/final-approval`, {
+      verdict, rationale, ...(approvedBy ? { approved_by: approvedBy } : {}),
+    }),
+
+    /** Freeze the offer and record the submission. 409 (naming the missing approval) unless a
+     *  final `approve` exists — a hard precondition. `proof` is stored verbatim, never invented. */
+    submit: (setId: string, proof: string, submittedBy?: string) =>
+      bpost<BridgeSubmissionRecord>(`${setPath(setId)}/submit`, {
+        proof, ...(submittedBy ? { submitted_by: submittedBy } : {}),
+      }),
 
     /** Does a document index exist for this tender, when was it built, over how many documents.
      *

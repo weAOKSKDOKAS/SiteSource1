@@ -40,6 +40,7 @@ import { ScopeTab } from "./tabs/Scope";
 import { SiteTab } from "./tabs/Site";
 import { SourcingTab } from "./tabs/Sourcing";
 import type {
+  BridgeSubmissionState,
   CitationsResponse,
   CriteriaResponse,
   GateStates,
@@ -78,6 +79,9 @@ export interface SetData {
    *  a step chip to a state the tender is already past. Both reads are pure: they never re-run the
    *  analysis, which would be a write and, live, a model call. */
   route: { hasProposal: boolean; hasDecisions: boolean };
+  /** The back of the funnel — final approval + submission — read from the bridge, so a reload
+   *  shows the tender's real state (approved / submitted) rather than resetting it. */
+  submission: BridgeSubmissionState | null;
 }
 
 const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false };
@@ -750,17 +754,21 @@ function SetView({
     const setRow = rows.sets.find((r) => r.set_id === setId);
     const optional = <T,>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
 
-    const [manifest, parts, register, scope, proposal, decisions, site] = await Promise.all([
-      optional(api.manifest(setId)),
-      optional(api.parts(setId)),
-      optional(api.register(setId)),
-      optional(api.scope(setId)),
-      optional(api.bridge.proposal(setId)),
-      optional(api.bridge.decisions(setId)),
-      // The take-off, for the step strip: the Site chip must not say "not read yet" about a
-      // schedule somebody has read, and Price carries the unassigned-hole count live.
-      optional(api.stationSchedule(setId)),
-    ]);
+    const [manifest, parts, register, scope, proposal, decisions, site, submission] =
+      await Promise.all([
+        optional(api.manifest(setId)),
+        optional(api.parts(setId)),
+        optional(api.register(setId)),
+        optional(api.scope(setId)),
+        optional(api.bridge.proposal(setId)),
+        optional(api.bridge.decisions(setId)),
+        // The take-off, for the step strip: the Site chip must not say "not read yet" about a
+        // schedule somebody has read, and Price carries the unassigned-hole count live.
+        optional(api.stationSchedule(setId)),
+        // The approval/submission state, read the same pure way — so the Offer chip and panel
+        // show APPROVED / SUBMITTED after a reload instead of resetting to "not yet approved".
+        optional(api.bridge.submission(setId)),
+      ]);
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
     const citations = register ? await optional(api.citations(setId)) : null;
@@ -781,6 +789,7 @@ function SetView({
         hasProposal: Boolean(proposal?.packages.length),
         hasDecisions: Boolean(decisions?.decisions.length),
       },
+      submission,
     });
   }, [setId]);
 
@@ -883,6 +892,7 @@ function SetView({
         unassignedHoles: (data?.site?.stations ?? []).filter(
           (s: Station) => !data?.site?.classes[s.station]?.access_class,
         ).length,
+        submitted: Boolean(data?.submission?.submission),
       }, runningTab, reviewGateSoft),
     [data, runningTab, reviewGateSoft],
   );
@@ -948,7 +958,7 @@ function SetView({
         ) : (
           // The fallthrough renders Offer. A new tab appended after `offer` would silently show
           // the letter instead of itself, so every tab above needs an explicit branch.
-          <OfferTab data={data} onError={onError} />
+          <OfferTab data={data} onError={onError} onRefresh={refresh} />
         )}
       </main>
 

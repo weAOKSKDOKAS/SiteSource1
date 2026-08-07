@@ -17,7 +17,11 @@
 import { useEffect, useState } from "react";
 import type { SetData } from "../App";
 import { api } from "../api";
-import type { LetterAppendixItem, LetterResponse } from "../types";
+import type {
+  BridgeSubmissionState,
+  LetterAppendixItem,
+  LetterResponse,
+} from "../types";
 import { Button, Chip, SectionLabel, WaitingOn, cx, money } from "../ui";
 
 /** `LetterMeta`'s built-in fallback. Matching it is how the screen knows the letterhead has never
@@ -27,9 +31,11 @@ const DEFAULT_COMPANY = "SiteSource Contracting Ltd";
 export function OfferTab({
   data,
   onError,
+  onRefresh,
 }: {
   data: SetData;
   onError: (message: string) => void;
+  onRefresh?: () => Promise<void> | void;
 }) {
   const [letter, setLetter] = useState<LetterResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,8 +90,11 @@ export function OfferTab({
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[760px] p-[18px]">
+          {/* --- approval + submission: the last human gate before it goes out --- */}
+          <SubmitPanel data={data} doc={doc} onError={onError} onRefresh={onRefresh} />
+
           {/* --- the header: what this is, and what it is not --- */}
-          <div className="flex flex-wrap items-start gap-3">
+          <div className="mt-4 flex flex-wrap items-start gap-3">
             <div className="min-w-0 flex-1">
               <SectionLabel>LETTER OF OFFER · DRAFT</SectionLabel>
               <h1 className="mt-1 font-cb-serif text-[20px] font-semibold text-cb-ink-text">
@@ -308,6 +317,235 @@ function Bullets({ items }: { items: string[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The back of the funnel: final approval, then submission (nodes 46–48).
+// ---------------------------------------------------------------------------
+// The same rules the rest of the product lives by, at the point they matter most — this is the
+// screen where the tender actually leaves the building:
+//   * THE VERDICT IS THE HUMAN'S. The machine assembles the letter and surfaces a checklist; a
+//     person presses Approve or Revise. Nothing here is inferred.
+//   * SUBMISSION IS IMPOSSIBLE WITHOUT AN APPROVE — a hard precondition the backend enforces (409),
+//     restated on screen so the Submit control is not even offered before it.
+//   * NOTHING IS FABRICATED. An unknown deadline says "deadline unknown", never an invented pass;
+//     proof is what the operator types, never generated.
+
+type Doc = LetterResponse["letter"];
+
+/** One line of the final-review checklist. `navy` = a deterministic fact; `bad` = a failed check
+ *  (the one authorship colour that stops a submission being sensible). */
+function CheckLine({ ok, label, detail }: { ok: boolean; label: string; detail: string }) {
+  return (
+    <li className="flex items-start gap-2">
+      <span
+        className={cx(
+          "mt-[1px] flex h-4 w-4 flex-none items-center justify-center rounded-full font-cb-mono text-[9px] font-semibold",
+          ok ? "bg-cb-info-fill text-cb-navy" : "bg-cb-bad-tint text-cb-bad-dark",
+        )}
+        aria-hidden
+      >
+        {ok ? "✓" : "!"}
+      </span>
+      <span className="font-cb-sans text-[11px] leading-[1.5]">
+        <span className={cx("font-semibold", ok ? "text-cb-ink-text" : "text-cb-bad-dark")}>
+          {label}
+        </span>
+        <span className="text-cb-muted"> — {detail}</span>
+      </span>
+    </li>
+  );
+}
+
+function SubmitPanel({
+  data,
+  doc,
+  onError,
+  onRefresh,
+}: {
+  data: SetData;
+  doc: Doc;
+  onError: (message: string) => void;
+  onRefresh?: () => Promise<void> | void;
+}) {
+  const state: BridgeSubmissionState | null = data.submission;
+  const approval = state?.approval ?? null;
+  const submission = state?.submission ?? null;
+  const isApproved = approval?.verdict === "approve";
+
+  const [rationale, setRationale] = useState("");
+  const [proof, setProof] = useState("");
+  const [busy, setBusy] = useState<"" | "approve" | "revise" | "submit">("");
+
+  const reviewApproved = data.gates.review;
+
+  // The final-review checklist, surfaced from what already exists. Deterministic reads — no model.
+  const departures = doc.appendix.filter((a) => a.source === "register").length;
+  const checks = [
+    { ok: reviewApproved, label: "Review register approved",
+      detail: reviewApproved
+        ? "the departures were signed off"
+        : "the register is NOT approved — these terms are unread (Register tab)" },
+    { ok: Boolean(data.scope), label: "Scope frozen",
+      detail: data.scope ? "the scope of record is set" : "no scope of record yet (Scope tab)" },
+    { ok: doc.price > 0, label: "Price present",
+      detail: doc.price > 0 ? `${doc.price_str || money(doc.price)} from the estimate`
+        : "the letter carries no price" },
+    { ok: true, label: "Confirmed departures & exclusions",
+      detail: `${departures} confirmed departure(s), ${doc.exclusions.length} exclusion(s) in the letter` },
+  ];
+
+  const run = async (
+    kind: "approve" | "revise" | "submit", fn: () => Promise<unknown>,
+  ) => {
+    setBusy(kind);
+    try {
+      await fn();
+      await onRefresh?.();
+      if (kind === "revise") setRationale("");
+      if (kind === "submit") setProof("");
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // --- SUBMITTED: show the frozen record, nothing more to do ---
+  if (submission) {
+    const onTime =
+      submission.on_time == null
+        ? { text: "deadline unknown", cls: "bg-cb-panel text-cb-muted" }
+        : submission.on_time === 1
+          ? { text: "ON TIME", cls: "bg-cb-ok-tint text-cb-ok-dark" }
+          : { text: "AFTER THE DEADLINE", cls: "bg-cb-bad-tint text-cb-bad-dark" };
+    return (
+      <section className="rounded-cb-card border border-cb-ok bg-cb-ok-tint/40 p-[14px]">
+        <div className="flex flex-wrap items-center gap-2">
+          <SectionLabel>SUBMITTED</SectionLabel>
+          <Chip className={cx("font-cb-mono text-[8px]", onTime.cls)}>{onTime.text}</Chip>
+        </div>
+        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-cb-sans text-[11px]">
+          <dt className="text-cb-faint">Submitted</dt>
+          <dd className="text-cb-ink-text">
+            {submission.submitted_at} · by {submission.submitted_by}
+          </dd>
+          <dt className="text-cb-faint">Approved</dt>
+          <dd className="text-cb-ink-text">{submission.approval_ref || "—"}</dd>
+          <dt className="text-cb-faint">Deadline</dt>
+          <dd className="text-cb-ink-text">{submission.deadline || "unknown"}</dd>
+          <dt className="text-cb-faint">Price submitted</dt>
+          <dd className="font-cb-mono text-cb-ink-text">
+            {submission.price_str || money(submission.price_snapshot ?? 0)}
+          </dd>
+          <dt className="text-cb-faint">Proof</dt>
+          <dd className="text-cb-ink-text">{submission.proof || "— none recorded —"}</dd>
+        </dl>
+        <p className="mt-2 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
+          This is the FROZEN letter as it went out. Editing the estimate now changes the draft
+          above, never this record.
+        </p>
+      </section>
+    );
+  }
+
+  // --- PRICED → NOT YET APPROVED → APPROVED (ready to submit) ---
+  return (
+    <section className="rounded-cb-card border border-cb-brass-line bg-cb-warm p-[14px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <SectionLabel>FINAL APPROVAL &amp; SUBMISSION</SectionLabel>
+        <Chip
+          className={cx(
+            "font-cb-mono text-[8px]",
+            isApproved ? "bg-cb-ok-tint text-cb-ok-dark" : "bg-cb-panel text-cb-muted",
+          )}
+        >
+          {isApproved ? "APPROVED" : approval?.verdict === "revise" ? "REVISE REQUESTED" : "NOT YET APPROVED"}
+        </Chip>
+      </div>
+
+      <ul className="mt-2 flex flex-col gap-1.5">
+        {checks.map((c) => (
+          <CheckLine key={c.label} ok={c.ok} label={c.label} detail={c.detail} />
+        ))}
+      </ul>
+
+      {approval?.verdict === "revise" && approval.rationale && (
+        <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
+          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+            REVISE — WHAT TO CORRECT
+          </div>
+          <p className="font-cb-serif text-[11.5px] leading-[1.5] text-cb-ink-text">
+            {approval.rationale}
+          </p>
+        </div>
+      )}
+
+      {!isApproved ? (
+        <div className="mt-3">
+          <textarea
+            value={rationale}
+            onChange={(e) => setRationale(e.target.value)}
+            placeholder="If revising: what must be corrected before this goes out (required to Revise)"
+            rows={2}
+            className="w-full rounded-cb-btn border border-cb-border-strong bg-white px-2.5 py-1.5 text-[11px] leading-relaxed text-cb-ink-text"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button
+              variant="brass"
+              disabled={busy !== ""}
+              onClick={() => void run("approve", () => api.bridge.finalApproval(data.setId, "approve"))}
+            >
+              {busy === "approve" ? "Recording…" : "Approve for submission"}
+            </Button>
+            <Button
+              variant="amber"
+              disabled={busy !== "" || !rationale.trim()}
+              onClick={() =>
+                void run("revise", () =>
+                  api.bridge.finalApproval(data.setId, "revise", rationale.trim()))
+              }
+            >
+              {busy === "revise" ? "Recording…" : "Request a revision"}
+            </Button>
+            <span className="font-cb-sans text-[10px] text-cb-muted">
+              The verdict is yours — the machine only assembled the letter.
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-cb-card border border-cb-border bg-cb-page p-3">
+          <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
+            SUBMIT — FREEZE THIS VERSION
+          </div>
+          <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.5] text-cb-muted">
+            Submitting snapshots the letter above and its price as the record of what went out. A
+            later estimate edit never changes a recorded submission.
+          </p>
+          <input
+            value={proof}
+            onChange={(e) => setProof(e.target.value)}
+            placeholder="Submission proof — portal reference or filename (stored as typed)"
+            className="mt-2 w-full rounded-cb-btn border border-cb-border-strong bg-white px-2.5 py-1.5 font-cb-mono text-[11px] text-cb-ink-text"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <Button
+              variant="dark"
+              disabled={busy !== ""}
+              onClick={() => void run("submit", () => api.bridge.submit(data.setId, proof.trim()))}
+            >
+              {busy === "submit" ? "Submitting…" : "Record submission"}
+            </Button>
+            {!state?.deadline_known && (
+              <span className="font-cb-sans text-[10px] text-cb-muted">
+                Deadline unknown — the record will not claim on-time or late.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

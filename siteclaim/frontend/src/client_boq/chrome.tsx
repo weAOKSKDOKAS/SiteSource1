@@ -63,6 +63,10 @@ export function stepStates(
      *  you pricing, but it is the sweep that will refuse, and the warning belongs where the
      *  consequence lands. */
     unassignedHoles?: number;
+    /** The tender has been submitted — the offer step's terminal `done`. The finer lifecycle
+     *  (priced → not yet approved → approved → submitted) lives inside the Offer tab, which is
+     *  where the approve and submit actions are; the chip only needs the terminal fact. */
+    submitted?: boolean;
   },
   /** The tab whose work is RUNNING right now, if any.
    *
@@ -138,7 +142,14 @@ export function stepStates(
           : gates.scope
             ? { kind: "waiting", label: "NOT YET RUN" }
             : { kind: "waiting", label: "WAITS ON THE SCOPE" },
-    offer: has.estimate ? { kind: "open" } : { kind: "waiting", label: "WAITS ON THE PRICE" },
+    // The last step: priced → (approve/submit happen in-tab) → submitted. `done` only once the
+    // tender is actually out the door; before that it opens, because approving and submitting are
+    // both actions you take here, not states you wait on.
+    offer: has.submitted
+      ? { kind: "done" }
+      : has.estimate
+        ? { kind: "open" }
+        : { kind: "waiting", label: "WAITS ON THE PRICE" },
   } as Record<TabId, StepState>;
   // A running step says so, whatever it would otherwise have said — including over a `done`,
   // because a RE-run is still a run in flight.

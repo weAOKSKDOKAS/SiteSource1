@@ -1059,6 +1059,40 @@ export interface LetterResponse {
   letter: LetterOfOffer;
 }
 
+// The back of the funnel — final approval, then submission (nodes 46–48).
+export interface BridgeFinalApproval {
+  set_id: string;
+  verdict: "approve" | "revise";
+  rationale: string;
+  approved_by: string;
+  approved_at: string;
+}
+
+export interface BridgeSubmissionRecord {
+  set_id: string;
+  submitted_at: string;
+  deadline: string;
+  /** 1 on time, 0 late, null when the deadline is unknown — never an invented pass. */
+  on_time: number | null;
+  /** The FROZEN letter of offer as it went out — immutable, not the live letter. */
+  letter_snapshot: LetterOfOffer;
+  price_snapshot: number | null;
+  price_str: string;
+  approval_ref: string;
+  proof: string;
+  submitted_by: string;
+}
+
+/** GET /bridge/{set_id}/submission — approval + submission + deadline + whether a letter exists. */
+export interface BridgeSubmissionState {
+  set_id: string;
+  approval: BridgeFinalApproval | null;
+  submission: BridgeSubmissionRecord | null;
+  deadline: string;
+  deadline_known: boolean;
+  letter_ready: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // The bridge (/bridge/*) — the join between this review and the procurement fork
 // ---------------------------------------------------------------------------
