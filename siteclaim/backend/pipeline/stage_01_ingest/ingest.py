@@ -758,12 +758,32 @@ def sequence_gaps(scope: ScopePackages) -> dict[str, list[int]]:
     gaps: dict[str, list[int]] = {}
     for bill, numbers in seen.items():
         lo, hi = min(numbers), max(numbers)
-        if hi - lo > _MAX_REPORTED_GAP:
-            continue
         missing = [n for n in range(lo, hi + 1) if n not in numbers]
-        if missing:
-            gaps[bill] = missing
+        # THE CAP IS ON A GAP, WHICH IS WHAT ITS OWN COMMENT ALWAYS SAID. It was applied to the
+        # bill's whole SPAN (`hi - lo`), so any bill numbered past ~40 had its ENTIRE completeness
+        # report suppressed — and a real bill is exactly that. On ND/2025/04 Bill 1 runs past item
+        # 53 and its only missing row is item 53, so the one mechanism that reports dropped bill
+        # rows was switched off on the one bill that had a gap. A guard that cannot match its input
+        # is not a guard.
+        #
+        # A long RUN of consecutive missing numbers still means the numbering is not contiguous
+        # (a different bill's block, a sub-numbered range) rather than dropped rows, so runs longer
+        # than the cap are dropped and the shorter ones — the actual signal — are kept.
+        kept = [n for run in _consecutive_runs(missing) if len(run) <= _MAX_REPORTED_GAP for n in run]
+        if kept:
+            gaps[bill] = kept
     return gaps
+
+
+def _consecutive_runs(numbers: list[int]) -> list[list[int]]:
+    """``[1, 2, 5, 9, 10]`` -> ``[[1, 2], [5], [9, 10]]``. Sorted input assumed."""
+    runs: list[list[int]] = []
+    for n in numbers:
+        if runs and n == runs[-1][-1] + 1:
+            runs[-1].append(n)
+        else:
+            runs.append([n])
+    return runs
 
 
 def report_sequence_gaps(

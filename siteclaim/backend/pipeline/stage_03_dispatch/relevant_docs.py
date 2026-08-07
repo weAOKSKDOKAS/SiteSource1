@@ -361,8 +361,12 @@ def _revision_key(e: DocIndexEntry) -> str:
     appendices of PS 1 all claiming one identity and superseding each other. Its identity is its own
     name with the revision suffix removed, which is exactly what a reissue keeps.
     """
-    if e.kind != "appendix":
+    if e.kind != "appendix" and e.spec_section_number:
         return e.spec_section_number
+    # No section number to key on — an appendix (whose number is its parent's) or a document that
+    # is not sectioned at all, the BILL above all. `I-ND_2025_04_BQ-0` and `TA #1/…_BQ-1` share
+    # this key; the `.xlsx` companion (`E-…`) does not, because a different rendering of the bill
+    # is not a revision of it.
     stem = _own_name(e.filename).rsplit(".", 1)[0]
     return _REVISION_SUFFIX.sub("", stem) or stem
 
@@ -455,7 +459,15 @@ def _priced_return_attachment(
     carry; a multi-section unit slices the UNION of their pages. Always flagged :data:`PRICED_RETURN`
     so the human gate never drops it."""
     section_keys = list(dict.fromkeys(s.upper() for s in sections if s))  # distinct, order-preserved
-    sr_entries = [e for e in doc_index if e.kind == "schedule_of_rates"]
+    # THE BILL HAS REVISIONS TOO, and this chose by LIST POSITION. The pack reissues the bill twice
+    # — `TA #1/…_BQ-1.pdf` and `TA #2/…_BQ-2.pdf` — so `next(...)` over the index could hand a firm
+    # the SUPERSEDED original to price: the single most consequential document in an enquiry,
+    # decided by whichever order the index happened to be built in. Every other population got this
+    # contest; the one the firm actually fills in did not.
+    superseded_sor, _revised_sor, _contested_sor = _revision_contest(
+        doc_index, lambda e: e.kind == "schedule_of_rates")
+    sr_entries = [e for e in doc_index
+                  if e.kind == "schedule_of_rates" and e.filename not in superseded_sor]
     if not sr_entries:
         # No original Schedule of Rates in the run's doc index. Reachable three ways: DEMO, no
         # upload at all, or a genuinely workbook-only bill (`doc_index._pages_text` returns None
@@ -906,6 +918,31 @@ def resolve_section_plan(
                 spec=(f"{len(entries)} appendices of PS {sec} available, not enclosed "
                       f"({pages} pages) — no clause reference narrows them"),
                 referenced_by="an appendix is selected by citation; this bill cites none"))
+    # DOCUMENTS THE ASSEMBLER HAS NO BRANCH FOR. Six kinds are handled and `other` is not, so the
+    # pack's contract conditions, tender conditions, notes to tenderers and site information
+    # reached no branch, produced no attachment and no line — they simply were not in any enquiry,
+    # and nothing said so. On ND/2025/04 that is 31 documents.
+    #
+    # `ps_index` is EXCLUDED. It is the specification's contents page, and not enclosing it is a
+    # decision already taken and already tested — naming it here would be a false alarm in a report
+    # whose whole value is that every line in it is worth reading. That is C15's lesson: a fix that
+    # adds a report can add a false alarm, so check what it now names.
+    #
+    # Counted and NAMED, not attached. Whether a subcontractor needs the General Conditions of
+    # Tender is a judgement for the operator — but "we did not send these" has to be visible before
+    # dispatch, not discovered afterwards. Enclosing them by default would be the other error: a
+    # firm buried in a 232 MB pack reads nothing.
+    enclosed = {a.source_doc for a in plan}
+    unhandled: dict[str, list[str]] = {}
+    for e in doc_index:
+        if e.kind == "other" and e.filename not in enclosed:
+            unhandled.setdefault(e.kind, []).append(e.filename)
+    for kind, names in sorted(unhandled.items()):
+        pages = sum(e.page_count for e in doc_index if e.filename in set(names))
+        missing.append(MissingSpec(
+            spec=(f"{len(names)} {kind!r} document(s) in the pack reach NO enquiry "
+                  f"({pages} pages) — e.g. {', '.join(sorted(names)[:3])}"),
+            referenced_by="no assembler branch selects this kind; attach at the gate if a firm needs it"))
     if relevance_source == "confirmed_map" and unconfirmed_sections:
         for code in unconfirmed_sections:
             missing.append(MissingSpec(
