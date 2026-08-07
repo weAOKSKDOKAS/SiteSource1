@@ -341,3 +341,173 @@ def feed_outcome_to_corpus(set_id: str) -> dict:
         return {"fed": True, "benchmark_project_id": pid, "reason": ""}
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Handover package — assemble from existing artifacts, never re-enter (node 53)
+# ---------------------------------------------------------------------------
+def closeout_state(set_id: str) -> dict:
+    """The Closeout tab's one read: outcome + lessons + events + whether a handover is meaningful.
+
+    ``handover_ready`` is ``status == 'won'`` — a handover package is what you assemble for a job
+    you are about to run, and there is nothing to hand over on a tender that lost.
+    """
+    ref = run_ref_for(set_id)
+    outcome = load_outcome(ref)
+    return {
+        "set_id": ref,
+        "outcome": outcome,
+        "lessons": list_lessons(ref),
+        "events": list_events(ref),
+        "handover_ready": bool(outcome and outcome["status"] == WON),
+    }
+
+
+def assemble_handover(set_id: str) -> dict:
+    """A READ-ONLY projection of everything a won tender hands to the delivery team — assembled from
+    artifacts that already exist, never re-typed.
+
+    Nothing here is authored: the scope of record, the confirmed bill parts, the review register's
+    CONFIRMED positions, the priced estimate baseline, the sublet route decisions, and the approval
+    + submission record are all read back and laid out. A piece that is absent is NAMED in
+    ``missing`` — the "nothing leaves quietly" rule — rather than dropped, because a handover that
+    silently omits the estimate looks complete and is not.
+
+    ``ready`` is ``status == 'won'``. Before that the projection still assembles (it is useful to
+    preview), but ``ready`` is false and ``pending`` says what the tender is still waiting for.
+    """
+    from client_boq import store as cb_store
+
+    from bridge import decisions, parts as parts_mod, submission
+    from bridge.identity import set_name
+
+    ref = run_ref_for(set_id)
+    outcome = load_outcome(ref)
+    ready = bool(outcome and outcome["status"] == WON)
+
+    conn = bridge_conn()
+    try:
+        name = set_name(conn, ref) or ref
+        scope_items = cb_store.load_scope_items(conn, ref)
+        register = cb_store.load_register(conn, ref)
+        estimate = cb_store.load_estimate(conn, ref)
+        letter = cb_store.load_letter(conn, ref)
+        bill_parts = parts_mod.confirmed_bill_parts(conn, ref)
+    finally:
+        conn.close()
+
+    decision_state = decisions.stored_decisions(ref)
+    sublet = decision_state.get("sublet_packages", [])
+    self_perform = decision_state.get("self_perform_packages", [])
+    approval = submission.load_final_approval(ref)
+    submitted = submission.load_submission(ref)
+    confirmed_positions = (
+        [it for it in register.items if it.status == "confirmed"] if register else [])
+
+    missing: list[str] = []
+    if not bill_parts:
+        missing.append("confirmed bill part(s) — no bill was confirmed for this tender")
+    if not scope_items:
+        missing.append("scope of record — the Scope tab has no frozen lines")
+    if estimate is None:
+        missing.append("priced estimate baseline — the estimate has not been run")
+    if register is None:
+        missing.append("review register — the review never ran, so there are no confirmed positions")
+    if submitted is None:
+        missing.append("submission record — this tender was not recorded as submitted")
+
+    sections = {
+        "tender": {"name": name, "status": (outcome or {}).get("status", "no outcome recorded"),
+                   "outcome_notes": (outcome or {}).get("outcome_notes", "")},
+        "approval": approval,
+        "submission": submitted,
+        "price": {"price": letter.price if letter else None,
+                  "price_str": letter.price_str if letter else ""},
+        "estimate_totals": estimate.totals.model_dump() if estimate else None,
+        "bill_parts": bill_parts,
+        "scope_of_record": [
+            {"section": s.section, "title": s.title, "text": s.text, "badge": s.badge}
+            for s in scope_items],
+        "confirmed_positions": [
+            {"clause": p.clause, "criterion_id": p.criterion_id,
+             "position": p.proposed_position or p.rationale} for p in confirmed_positions],
+        "sublet_packages": sublet,
+        "self_perform_packages": self_perform,
+        "lessons": list_lessons(ref),
+        "events": list_events(ref),
+    }
+
+    return {
+        "set_id": ref,
+        "name": name,
+        "ready": ready,
+        "status": (outcome or {}).get("status", "no outcome recorded"),
+        "pending": "" if ready else (
+            "This tender is not marked 'won' — a handover is a projection for a job about to run, "
+            "so this is a preview. Record the outcome as 'won' on the Closeout tab."),
+        "missing": missing,
+        "sections": sections,
+        "markdown": _handover_markdown(sections, ready, missing),
+    }
+
+
+def _handover_markdown(s: dict, ready: bool, missing: list[str]) -> str:
+    """Render the handover projection as Markdown — the chosen deliverable format, consistent with
+    the letter of offer. A pure function of what was assembled; it authors nothing."""
+    from schemas.routing import SELF_PERFORM, SUBLET  # noqa: F401  (labels align with the store)
+
+    t = s["tender"]
+    out = [f"# Handover — {t['name']}", "", f"**Tender outcome:** {t['status']}"]
+    if not ready:
+        out += ["", "> PREVIEW — this tender is not marked 'won'. Nothing here is final."]
+    if t["outcome_notes"]:
+        out += ["", t["outcome_notes"]]
+
+    if missing:
+        out += ["", "## Not yet available", *[f"- {m}" for m in missing]]
+
+    sub = s["submission"]
+    if sub:
+        on_time = ("on time" if sub["on_time"] == 1 else "after the deadline"
+                   if sub["on_time"] == 0 else "deadline unknown")
+        out += ["", "## Submission",
+                f"- Submitted {sub['submitted_at']} by {sub['submitted_by']} ({on_time})",
+                f"- Approved: {sub['approval_ref'] or '—'}",
+                f"- Proof: {sub['proof'] or '—'}"]
+
+    price = s["price"]
+    if price["price"] is not None:
+        out += ["", "## Price", f"- Tendered price: {price['price_str'] or price['price']}"]
+    tot = s["estimate_totals"]
+    if tot:
+        out += [f"- Cost baseline: direct {tot['total_direct']}, indirect {tot['total_indirect']}, "
+                f"total cost {tot['total_cost']}, margin {tot['margin_pct']}%"]
+
+    if s["bill_parts"]:
+        out += ["", "## Confirmed bill part(s)", *[f"- {p}" for p in s["bill_parts"]]]
+
+    if s["scope_of_record"]:
+        out += ["", "## Scope of record"]
+        for line in s["scope_of_record"]:
+            tag = "✎" if line["badge"] == "user" else "·"
+            out.append(f"- {tag} **{line['title'] or line['section']}** — {line['text']}")
+
+    if s["confirmed_positions"]:
+        out += ["", "## Confirmed contractual positions (from the review register)"]
+        for p in s["confirmed_positions"]:
+            out.append(f"- **{p['clause'] or p['criterion_id']}** — {p['position']}")
+
+    if s["sublet_packages"] or s["self_perform_packages"]:
+        out += ["", "## Package routing"]
+        if s["self_perform_packages"]:
+            out.append(f"- Self-perform: {', '.join(s['self_perform_packages'])}")
+        if s["sublet_packages"]:
+            out.append(f"- Sublet (award per package downstream): {', '.join(s['sublet_packages'])}")
+
+    if s["lessons"]:
+        out += ["", "## Lessons learned", *[f"- [{l['category']}] {l['lesson']}" for l in s["lessons"]]]
+    if s["events"]:
+        out += ["", "## Post-submission change-control",
+                *[f"- ({e['kind']}) {e['detail']}" for e in s["events"]]]
+
+    return "\n".join(out) + "\n"
