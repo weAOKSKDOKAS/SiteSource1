@@ -50,6 +50,9 @@ class PlanAttachment(BaseModel):
     #   (neither index nor directed) though this section IS present — surfaced, never silently dropped
     reason: str = ""
     flags: list[str] = Field(default_factory=list)   # e.g. "scanned_whole" | "whole_clause_not_located"
+    missing_sections: list[str] = Field(default_factory=list)  # sections this enquiry covers that the
+    #   bill's section index could NOT locate, so the priced return goes out without their pages —
+    #   the partial-miss case, which used to be indistinguishable from a complete slice
 
 
 # The priced-return sheet the enquiry asks the firm to fill and send back — the SoR sliced to this
@@ -498,10 +501,25 @@ def _priced_return_attachment(
         # was never enquired on).
         pages = [p + 1 for p in sorted({p for sk in located for p in hit.sor_section_pages[sk]})]
         plural = "s" if len(located) > 1 else ""
+        # A PARTIAL MISS WAS INVISIBLE. `located` is the sections this bill's index could find;
+        # anything else in `section_keys` was dropped with no flag, no MissingSpec, and a reason
+        # naming only the survivors — so it read as complete. The whole-bill fallback below fires
+        # only when NOTHING is located, so a unit enquired on sections 2 and 9 whose index knows
+        # only 2 was handed a sheet with no section 9 pages in it. The firm returns section 9
+        # unpriced and stage_04 levels that as the firm's scope gap rather than as pages we never
+        # sent — and `doc_index` is exactly the component known to lose a whole bill.
+        unlocated = [sk for sk in section_keys if sk not in located]
+        reason = (f"Schedule of Rates — Section{plural} {', '.join(located)} "
+                  f"(the priced-return sheet for this enquiry)")
+        if unlocated:
+            reason += (f" — WITHOUT Section{'s' if len(unlocated) > 1 else ''} "
+                       f"{', '.join(unlocated)}, which this enquiry covers but the bill's section "
+                       f"index could not locate. The firm will return those lines unpriced.")
         return PlanAttachment(
             source_doc=hit.filename, out_filename=_unit_out_name(trade, package_key, "-".join(located)),
-            mode="sliced", pages=pages, flags=[PRICED_RETURN],
-            reason=f"Schedule of Rates — Section{plural} {', '.join(located)} (the priced-return sheet for this enquiry)")
+            mode="sliced", pages=pages,
+            flags=[PRICED_RETURN] + ([SUBSTITUTED] if unlocated else []),
+            reason=reason, missing_sections=unlocated)
     # The SoR is present but none of this unit's sections could be located (scanned / unindexed) -> whole, flagged.
     e = sr_entries[0]
     scanned = not e.text_layer
@@ -900,6 +918,17 @@ def resolve_section_plan(
     # A PARTIALLY confirmed unit. The confirmed sections were selected; these were not, and the
     # operator is the only one who can close the gap. Named rather than silently absent, and
     # deliberately NOT a reason to discard the confirmations that do exist.
+    # THE PRICED RETURN ITSELF WENT OUT SHORT. `_priced_return_attachment` slices the sections the
+    # bill's index could locate; a unit enquired on 2 and 9 whose index knows only 2 got a sheet
+    # with no section 9 pages and a reason naming only section 2, so it read as complete. The firm
+    # returns those lines unpriced and stage_04 levels it as the firm's scope gap. This is the ONE
+    # document the enquiry asks them to fill in, so it belongs on the gate above everything else
+    # here — the operator can send the whole bill instead, or re-index, before drafting.
+    for att in plan:
+        for sk in att.missing_sections:
+            missing.append(MissingSpec(
+                spec=f"Schedule of Rates Section {sk} — not in the priced return",
+                referenced_by="enquired section, not located in the Schedule of Rates index"))
     # A measurement section the bill NAMES and the pack does not supply. Named, never silently
     # omitted: a firm pricing under rules nobody enclosed is pricing against unstated terms.
     for smm in [s for s in mm_ref_sections if s not in mm_present]:

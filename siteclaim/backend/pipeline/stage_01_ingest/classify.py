@@ -139,24 +139,76 @@ def _resolve_doc_type(label: str) -> Optional[DocType]:
 _DOC_TEXT_SNIPPET_CHARS = 2000  # the header / first page identifies the kind; a snippet suffices
 
 
+# Lines the extractor inserts, which are boundaries rather than content: a title directly under
+# `[page 1]` opens the page, and nothing before the marker is context for it.
+_EXTRACTOR_MARKER = re.compile(r"^\s*(?:\[page \d+\]|===.*===)\s*$")
+# A finished sentence, or a lead-in that introduces what follows.
+_SENTENCE_END = re.compile(r"[.:;?!]\s*$")
+# A word that is entirely lower-case — what makes a line PROSE rather than a heading. A cover page
+# is written in headings ("CONTRACT NO. ND/2025/04", "Particular Specification", "SECTION 1"); a
+# clause is written in sentences. Two letters minimum, so an initial or a unit is not prose.
+_PROSE_WORD = re.compile(r"(?<![A-Za-z])[a-z]{3,}(?![A-Za-z])")
+
+
+def _is_title_line(lines: list[str], index: int) -> bool:
+    """True when line ``index`` can be a document's own title rather than a wrapped continuation.
+
+    **SKIP WHAT IS NOT A TITLE; NEVER RANK WHAT IS.** This used to keep whichever `_TITLE_SIGNALS`
+    match had the smallest `m.start()` — position in pymupdf's linearisation of page 1, which is
+    not the page's printed order. A Particular Specification whose page 1 both carries the title
+    "Particular Specification" and quotes, wrapped across two lines,
+
+        1.01 Measurement shall be in accordance with the Standard
+        Method of Measurement for Civil Engineering Works.
+
+    classified as either kind depending purely on which the extractor emitted first — and
+    `doc_index._kind_for` reads that DocType. The same hazard `_is_amendment_lead_in` and
+    `_is_furniture_title` were both rewritten to remove.
+
+    The discriminator is the one the page actually offers: a title OPENS something, so the line
+    above it has finished. A line above that is PROSE with no terminal punctuation has not — that
+    is a wrap, whatever order it was extracted in. A heading above (a contract number, a section
+    number, another title) has finished by construction, so it does not block the line below it.
+    """
+    for prev in reversed(lines[:index]):
+        if not prev.strip() or _EXTRACTOR_MARKER.match(prev):
+            return True          # a page/file boundary — this line opens the page
+        if not _PROSE_WORD.search(prev):
+            return True          # a heading, not an unfinished sentence
+        return bool(_SENTENCE_END.search(prev))
+    return True                  # nothing above it at all
+
+
 def _deterministic_doc_type(filename: str, text: str = "") -> tuple[Optional[DocType], str]:
     """The document's kind from deterministic Layer-1 signals, or ``(None, "")`` when none applies.
 
-    Filename tokens first (they win over the page title so an MM's SoR mentions cannot flip it), then
-    the first-page TITLE — of the title matches, the EARLIEST wins, so a document's own top-of-page
-    title beats a later inline mention of another kind. Pure regex; writes no decision value."""
+    Filename tokens first (they win over the page title so an MM's SoR mentions cannot flip it),
+    then the first-page TITLE. A candidate must be a title LINE (see :func:`_is_title_line`), and
+    where two survive the precedence is the DECLARED order of ``_TITLE_SIGNALS`` — a fixed,
+    reviewable rule — never which one the extractor linearised first. Pure regex; writes no
+    decision value."""
     name = filename or ""
     for pattern, dt in _FILENAME_SIGNALS:
         if pattern.search(name):
             return dt, "filename"
     head = (text or "")[:_DOC_TEXT_SNIPPET_CHARS]
-    best_pos: Optional[int] = None
-    best_dt: Optional[DocType] = None
+    lines = head.splitlines()
+    # line start offset -> line index, so a match can be told which line it landed on.
+    starts: dict[int, int] = {}
+    offset = 0
+    for i, line in enumerate(lines):
+        starts[offset] = i
+        offset += len(line) + 1
     for pattern, dt in _TITLE_SIGNALS:
-        m = pattern.search(head)
-        if m is not None and (best_pos is None or m.start() < best_pos):
-            best_pos, best_dt = m.start(), dt
-    return (best_dt, "title") if best_dt is not None else (None, "")
+        for m in pattern.finditer(head):
+            # Where the TITLE WORDS start, not where the match does: every pattern opens `^\s*`,
+            # and `\s` crosses newlines — so a match anchored on a blank line above the title
+            # reported that blank line, and the title was judged against the wrong neighbour.
+            text_pos = m.start() + (len(m.group(0)) - len(m.group(0).lstrip()))
+            index = starts.get(head.rfind("\n", 0, text_pos) + 1)
+            if index is not None and _is_title_line(lines, index):
+                return dt, "title"
+    return None, ""
 
 
 def _doc_prompt(doc: TenderDocument, text: str = "") -> str:

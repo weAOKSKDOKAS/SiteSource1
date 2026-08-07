@@ -306,7 +306,14 @@ def run_split(set_id: str, *, progress_cb: Progress = None, count_cb: Count = No
         )
         conn = store.get_conn()
         try:
-            store.save_part_context(conn, set_id, part.part_id, context)
+            # `rev=0` EXPLICITLY. `save_part_context` defaults to the operative revision, and a
+            # re-split reads the REV 0 bytes — `save_parts(..., rev=0)` twelve lines above says so.
+            # Once an addendum had been applied, MAX(rev) was 1, so re-splitting wrote the
+            # superseded document's reading onto the addendum's row: `load_parts` then returned the
+            # replacement's page range and source_doc paired with the old pages' summary, key
+            # points and strategy flags. `apply_document` passes its rev explicitly for exactly
+            # this reason; this was the one site that did not.
+            store.save_part_context(conn, set_id, part.part_id, context, rev=0)
         finally:
             conn.close()
         path = pdf_paths.get(part.part_id)

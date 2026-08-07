@@ -879,11 +879,65 @@ def _split_on(text: str, pattern: re.Pattern) -> list[str]:
     return [b for b in blocks if b.strip()]
 
 
+def _split_on_bill_headers(text: str) -> list[str]:
+    """Split at every line that OPENS a bill, keeping each header with its rows.
+
+    Line-level and on the shared rule rather than `_split_on(text, _BILL_RE)`, because `_BILL_RE`
+    cannot tell `Bill No. 9` from `Bill No. 9 - Total Carried to Grand Summary`. Splitting on the
+    regex started a new block at every collection footer, so each bill produced a phantom trailing
+    block named after the line that CLOSES it. On the shared rule the footer stays where it belongs
+    — inside its own bill, as that bill's last line.
+    """
+    lines = text.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if _bill_number_of(line)]
+    if not starts:
+        return [text]
+    bounds = ([0] if starts[0] > 0 else []) + starts
+    blocks = ["".join(lines[a:b]) for a, b in zip(bounds, bounds[1:] + [len(lines)])]
+    return [b for b in blocks if b.strip()]
+
+
+def _bill_number_of(line: str) -> Optional[str]:
+    """The bill this line OPENS, via the one shared rule (a collection footer opens nothing)."""
+    from pipeline.stage_01_ingest.doc_index import bill_header_number
+
+    return bill_header_number(line)
+
+
+def declares_bills(text: str) -> bool:
+    """True when ``text`` OPENS at least two bills — a Bill of Quantities, not a Schedule of Rates.
+
+    Decided with :func:`doc_index.bill_header_number`, the one rule that tells a bill header from
+    the collection footer that closes one, so a family cannot be decided two different ways in two
+    places. A single bill is not enough: one `Bill No. 3` line in prose is a cross-reference, and
+    the same threshold the boundary regexes use keeps it out.
+    """
+    from pipeline.stage_01_ingest.doc_index import bill_header_number
+
+    seen = {n for n in (bill_header_number(ln) for ln in (text or "").splitlines()) if n}
+    return len(seen) >= 2
+
+
 def _split_into_blocks(text: str) -> list[str]:
-    """Prefer Section-header boundaries when cleanly detectable (>=2), then Bill headers, else
-    page boundaries. Section is tried FIRST so a Schedule of Rates chunks exactly as before; a
-    Bill of Quantities has no Section headers to find and falls through to the Bill form, which
-    used to leave it as one undivided block on the page fallback."""
+    """Chunk on the boundary of the family this document actually belongs to.
+
+    **A BILL OF QUANTITIES WAS CHUNKED ON ITS SPECIFICATION CROSS-REFERENCES.** Section was tried
+    unconditionally first, on the stated belief that "a Bill of Quantities has no Section headers
+    to find". It has dozens: this issuer prints `SECTION n : …` on EVERY bill page, naming the
+    Standard Method of Measurement section the bill is measured under — the same line
+    `doc_index.bill_mm_sections` reads as a cross-reference, ten for ten on the real pack. So the
+    Bill branch never ran, and Bill 1's rows landed in a block headed `SECTION 3 : SITE CLEARANCE`.
+    `_row_batches` then repeated that line as the header on every 30-row batch, handing the model a
+    specification reference as each batch's context instead of `Bill No. 1`, and a failed batch was
+    reported to the operator as "section 3 (SITE CLEARANCE)" — naming a document that contains none
+    of the lost rows.
+
+    The family is decided FIRST, the way `annotate_sections` and `section_family` already decide
+    it: a `SECTION n` line inside a document that has said `Bill No. n` is pointing somewhere else.
+    A Schedule of Rates declares no bills, so its path is byte-for-byte what it was.
+    """
+    if declares_bills(text):
+        return _split_on_bill_headers(text)
     if len(_SECTION_RE.findall(text)) >= 2:
         return _split_on(text, _SECTION_RE)
     if len(_BILL_RE.findall(text)) >= 2:
@@ -1040,15 +1094,33 @@ def _context_block(context: str) -> str:
 
 
 def _chunk_label(text: str) -> str:
-    """A human name for a batch, for a per-section error message — the Section header if present."""
+    """A human name for a batch, for a per-section error message — the Section header if present.
+
+    A batch that OPENS a bill is named by that bill, even though the bill's pages are covered in
+    `SECTION n` measurement cross-references. Searching Section first told the operator a skipped
+    batch was "section 3 (SITE CLEARANCE)" when the rows that went missing were Bill 1's — sending
+    them to a specification that holds none of them.
+    """
+    for line in (text or "").splitlines():
+        opened = _bill_number_of(line)
+        if opened:
+            b0 = _BILL_HEADER_RE.match(line)
+            title = (b0.group(2).strip() if b0 else "")
+            return f"bill {opened}" + (f" ({title})" if title else "")
+        if line.strip():
+            break  # only the batch's OWN leading header decides; a later line is a reference
     m = _SECTION_HEADER_RE.search(text or "")
     if m:
         title = m.group(2).strip()
         return f"section {m.group(1).upper()}" + (f" ({title})" if title else "")
-    b = _BILL_HEADER_RE.search(text or "")
-    if b:
-        title = b.group(2).strip()
-        return f"bill {b.group(1)}" + (f" ({title})" if title else "")
+    for line in (text or "").splitlines():
+        # ...the shared rule again, so the fallback cannot name a batch after the collection footer
+        # that CLOSES a bill rather than the header that opens one.
+        opened = _bill_number_of(line)
+        if opened:
+            b = _BILL_HEADER_RE.match(line)
+            title = (b.group(2).strip() if b else "")
+            return f"bill {opened}" + (f" ({title})" if title else "")
     m2 = re.search(r"(?im)^\s*(?:section|part)\s+([A-Za-z0-9]+)", text or "")
     if m2:
         return f"section {m2.group(1).upper()}"

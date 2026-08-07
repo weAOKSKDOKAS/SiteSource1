@@ -103,14 +103,23 @@ def derive(conn: sqlite3.Connection, set_id: str) -> Optional[dict]:
     if current["close_date_status"] == "confirmed":
         return None
 
+    # NOT_FOUND MUST CLEAR WHAT WAS FOUND. `upsert_set_meta` merges, so writing only the status
+    # left `close_date`, its clause, page and quote in place from a run that DID find one — and
+    # `FolderCard.daysToClose` and the app header read `close_date` with no status check, so the
+    # desk kept counting down to a deadline whose provenance had just disappeared. Reachable by a
+    # re-split that moved the part carrying the clause, a vision failure on that part, or a DEMO
+    # run over a set previously derived live. The found branch already gets this right.
+    NOT_FOUND = {"close_date_status": "not_found", "close_date": "", "close_date_clause": "",
+                 "close_date_page": None, "close_date_part_id": "", "close_date_quote": ""}
+
     fields: dict = {}
     if demo_mode():
-        fields = {"close_date_status": "not_found"}
+        fields = dict(NOT_FOUND)
     else:
         flags = _flag_rows(conn, set_id)
         deadline = next((f for f in flags if f["kind"] == models.RULE_SUBMISSION_DEADLINE), None)
         if deadline is None:
-            fields = {"close_date_status": "not_found"}
+            fields = dict(NOT_FOUND)
         else:
             parsed = parse_close_date(deadline.get("quote", ""))
             fields = {

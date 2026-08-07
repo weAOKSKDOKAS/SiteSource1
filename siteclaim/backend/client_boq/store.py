@@ -1453,8 +1453,49 @@ def _rfi_from_row(row) -> RFIItem:
     )
 
 
+def open_register_rfi_id(conn: sqlite3.Connection, set_id: str, register_item: int) -> str:
+    """The id of the OPEN question already raised from register line ``register_item``, or ``""``.
+
+    One register line asks the client one question. Re-recording a `query` verdict on the same
+    line — pressing Query twice, or query → dismissed → query, and `Register.tsx` posts one
+    decision per click with no clear-verdict path — used to raise `rfi-002`, `rfi-003`, … each
+    identical. `open_rfi_count` then over-reported, which drives the routing proposal's
+    open-queries note, the desk card's blocking sentence and the freeze gate, and the batch letter
+    carried the same question to the client N times.
+
+    Only an OPEN one is reused. A question already ANSWERED, WITHDRAWN or OVERTAKEN is a closed
+    piece of history: asking again after an answer is a new question and must get a new id.
+    """
+    marks = ",".join("?" for _ in models.RFI_OPEN)
+    row = conn.execute(
+        f"SELECT rfi_id FROM client_boq_rfi_items WHERE set_id = ? AND origin = ? "
+        f"AND register_item = ? AND status IN ({marks}) ORDER BY rfi_id LIMIT 1",
+        (set_id, models.RFI_FROM_REGISTER, register_item, *sorted(models.RFI_OPEN)),
+    ).fetchone()
+    return row["rfi_id"] if row else ""
+
+
 def save_rfi(conn: sqlite3.Connection, set_id: str, item: RFIItem) -> RFIItem:
-    """Raise or update one question. Returns it with its id assigned."""
+    """Raise or update one question. Returns it with its id assigned.
+
+    An id-less question from a register line REUSES the open question that line already raised —
+    see :func:`open_register_rfi_id`. Every other id-less question is genuinely new.
+    """
+    if not item.rfi_id and item.origin == models.RFI_FROM_REGISTER and item.register_item:
+        existing = open_register_rfi_id(conn, set_id, item.register_item)
+        if existing:
+            # Reuse the id AND the lifecycle. The upsert writes every column, so taking only the id
+            # would reset a question already in a sent batch back to `draft` with no `batch_id` —
+            # trading a duplicate for a lost one. A question the client has already been asked also
+            # keeps its wording: what went out in the letter is a fact, not a draft.
+            was = conn.execute(
+                "SELECT number, status, batch_id, question FROM client_boq_rfi_items "
+                "WHERE set_id = ? AND rfi_id = ?", (set_id, existing)).fetchone()
+            keep = {"rfi_id": existing, "number": was["number"], "status": was["status"],
+                    "batch_id": was["batch_id"]}
+            if was["status"] != models.RFI_DRAFT:
+                keep["question"] = was["question"]
+            item = item.model_copy(update=keep)
     if not item.rfi_id:
         count = conn.execute(
             "SELECT COUNT(*) AS n FROM client_boq_rfi_items WHERE set_id = ?", (set_id,)
