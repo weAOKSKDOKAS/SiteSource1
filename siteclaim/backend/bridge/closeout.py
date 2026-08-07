@@ -267,3 +267,77 @@ def list_events(set_id: str) -> list[dict]:
         return [_event_row(r) for r in rows]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# The feedback loop — feed a won/lost outcome into the EXISTING benchmark corpus (nodes 52–53)
+# ---------------------------------------------------------------------------
+def _corpus_narrative(outcome: dict, lessons: list[dict]) -> str:
+    """The EoS-style narrative recorded on the benchmark project: the tender's result and the
+    lessons behind it, so a future tender's benchmark read can see how the last job of this shape
+    actually went. Human words only — the outcome notes and the lessons, verbatim."""
+    lines = [f"# Tender outcome: {outcome['status'].upper()}"]
+    if outcome.get("outcome_notes"):
+        lines += ["", outcome["outcome_notes"]]
+    lines += ["", f"## Lessons learned ({len(lessons)})"]
+    if lessons:
+        lines += [f"- [{l['category']}] {l['lesson']}" for l in lessons]
+    else:
+        lines.append("- None recorded.")
+    return "\n".join(lines)
+
+
+def feed_outcome_to_corpus(set_id: str) -> dict:
+    """Record a WON/LOST tender's result + lessons into the benchmark corpus — HOOKING INTO the
+    existing snapshot machinery, never duplicating it.
+
+    The mechanism the procurement ``/estimate/{id}/to-benchmark`` already established: a tender's
+    ``unified_projects`` umbrella row carries a ``benchmark_project_id``. This reuses that link when
+    it exists (the estimate may already have been captured), and otherwise creates one benchmark
+    project for the tender and links it. The outcome + lessons are attached as the project's EoS
+    narrative via :func:`db.benchmark.attach_eos`, which REPLACES one-per-project — so re-setting an
+    outcome records once, never twice.
+
+    **Append-only across the corpus.** It touches only this tender's own umbrella row, its own
+    benchmark project, and that project's EoS narrative. It never deletes a project, never withdraws
+    a prior entry, and never mutates another project's rows — a lost tender does not un-record a
+    previously won one. ``submitted``/``withdrawn`` feed nothing; only ``won``/``lost`` reach here.
+
+    Returns ``{"fed": bool, "benchmark_project_id": int|None, "reason": str}``. Not fed is a STATE
+    (no resolved outcome yet), not an error.
+    """
+    from db import benchmark as bench
+    from db import project as uproject
+    from pipeline.llm_client import demo_mode
+
+    from bridge.identity import set_name
+
+    ref = run_ref_for(set_id)
+    outcome = load_outcome(ref)
+    if outcome is None or outcome["status"] not in CORPUS_OUTCOMES:
+        return {"fed": False, "benchmark_project_id": None,
+                "reason": "no won/lost outcome to record"}
+
+    lessons = list_lessons(ref)
+    provenance = "demo" if demo_mode() else "live"
+
+    conn = bridge_conn()
+    try:
+        name = set_name(conn, ref) or ref
+        up = uproject.get_or_create(conn, ref, name=name, provenance=provenance)
+        pid = up.get("benchmark_project_id")
+        # Reuse the estimate's captured project when it exists; otherwise create ONE for the tender.
+        if not (pid and bench.get_project(conn, pid)):
+            created = bench.create_project(
+                conn, name=name, source="tender-outcome", provenance=provenance,
+                notes=f"Tender outcome captured for {ref}.")
+            pid = created["id"]
+            uproject.link_benchmark(conn, ref, pid)
+        # Idempotent replace of THIS tender's own outcome narrative — not a second row, not another
+        # project's data.
+        bench.attach_eos(conn, pid, narrative=_corpus_narrative(outcome, lessons),
+                         summary=f"Tender {outcome['status']}", source_doc="tender-outcome",
+                         provenance=provenance)
+        return {"fed": True, "benchmark_project_id": pid, "reason": ""}
+    finally:
+        conn.close()
