@@ -117,6 +117,10 @@ def plan_for_firms(
     """
     ws = workspace or Workspace()
     doc_index = load_doc_index(ws, tender_id)
+    # WHERE the index was read from, carried into the plan so the substitution reason can say it.
+    # "No Schedule of Rates PDF is indexed for this tender" was true of an empty index and equally
+    # true of the wrong one, and a tender's workspace used to be addressable under two names.
+    index_source = str(ws.doc_index_path(tender_id))
     confirmed = {k: v for k, v in (spec_map or {}).items() if v}
     page_texts_of = _page_texts_reader(ws, tender_id)  # shared cache across this run's sections
     pkg_by_key = {p.trade: p for p in (scope.packages if scope else [])}
@@ -142,6 +146,7 @@ def plan_for_firms(
             page_texts_of=page_texts_of,
             confirmed_ps_specs={confirmed[c] for c in unit_sections if c in confirmed},
             unconfirmed_sections=[c for c in unit_sections if c not in confirmed],
+            index_source=index_source,
         )
         priced = next((a for a in plan.attachments if PRICED_RETURN in a.flags), None)
         book = (_pricing_workbook_attachment(priced, sheet_name, sheet_path)

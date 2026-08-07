@@ -50,6 +50,53 @@ def run_ref_for(set_id: str) -> str:
     return ref
 
 
+def tender_ref(name_or_id: str) -> str:
+    """THE canonical id for a tender's artifacts, from whatever a caller happens to hold.
+
+    ONE IDENTITY, RESOLVED THE SAME WAY BY EVERY CALLER. The bridge owns a tender and addresses it
+    by ``set_id``; the procurement endpoints are handed a ``ScopePackages`` and address it by
+    ``project_name``. Those are different strings, and ``tender_slug`` does not reconcile them —
+    it maps ``nd-2025-04-san-tin-technopole`` to itself and ``Contract No. ND/2025/04`` to
+    ``nd-2025-04``. So the bridge wrote a 168-document index into one workspace while dispatch read
+    a stale 570-byte one out of another, and the gate reported "no Schedule of Rates PDF is indexed
+    for this tender" — an honest sentence about the wrong directory.
+
+    ``unified_projects`` already holds the mapping: the bridge registers ``(run_ref, name)`` the
+    first time it touches a set (:func:`register_set`), and ``run_ref`` IS the ``set_id``. So this
+    is an EXACT lookup, never a fuzzy match:
+
+    * the string is already a ``run_ref``     -> itself, unchanged;
+    * the string is a registered ``name``     -> that row's ``run_ref``;
+    * neither (a pure procurement run, or a tender the bridge never registered) -> itself, which is
+      exactly today's behaviour and keeps the non-bridge path byte-for-byte as it was.
+
+    Never guesses, and never invents an id: an unregistered tender addresses its own workspace under
+    its own name, as it always did.
+    """
+    ref = (name_or_id or "").strip()
+    if not ref:
+        return ref
+    try:
+        conn = bridge_conn()
+    except Exception:  # noqa: BLE001 — no database is not a reason to fail a dispatch preview
+        return ref
+    try:
+        from db import project as uproject
+
+        if not uproject.has_unified_table(conn):
+            return ref
+        if uproject.get(conn, ref) is not None:
+            return ref                       # already the canonical id
+        row = conn.execute(
+            "SELECT run_ref FROM unified_projects WHERE name = ? ORDER BY id LIMIT 1", (ref,)
+        ).fetchone()
+        return row["run_ref"] if row and row["run_ref"] else ref
+    except Exception:  # noqa: BLE001 — a lookup failure degrades to the caller's own string
+        return ref
+    finally:
+        conn.close()
+
+
 def set_name(conn: sqlite3.Connection, set_id: str) -> str:
     """The tender's human name from its client_boq set row, or "" when the set is unknown."""
     from client_boq import store as cb_store

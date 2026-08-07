@@ -932,6 +932,29 @@ class DispatchRequest(BaseModel):
     attachment_overrides: list[AttachmentOverride] = Field(default_factory=list)
 
 
+def _tender_ref(project_name: str) -> str:
+    """The canonical id for this tender's artifacts — resolved ONCE, here, at the boundary.
+
+    Every endpoint below is handed a ``project_name`` and every artifact is addressed by an id, and
+    those were not the same string: the bridge writes a tender's workspace under its ``set_id``
+    while these endpoints slugged the display name, so ``/dispatch/plan`` read a different (stale)
+    directory and reported the pack empty. See :func:`bridge.identity.tender_ref` — it is an exact
+    lookup through ``unified_projects``, and a tender the bridge never registered resolves to its
+    own name exactly as before.
+
+    Resolved at the boundary rather than inside ``Workspace`` so there is no hidden query on a path
+    lookup, and so ONE call fixes the doc index, the spec map, the generated sheets and the
+    attachments together — they are all keyed by the same id.
+    """
+    from bridge.identity import tender_ref
+
+    try:
+        return tender_ref(project_name)
+    except Exception:  # noqa: BLE001 — never fail a dispatch on the identity registry
+        _log.warning("could not resolve the tender ref for %r", project_name, exc_info=True)
+        return project_name
+
+
 def _confirmed_spec_map(tender_id: str) -> dict[str, str]:
     """``{bill_section: ps_section}`` as a PERSON CONFIRMED it, for the dispatch planner.
 
@@ -985,7 +1008,7 @@ def post_dispatch(req: DispatchRequest) -> DispatchSet:
     dispatch = build_dispatch(
         req.shortlist, req.approvals, demo_fixture=req.demo_fixture,
         scope=req.scope, project_name=req.project_name,
-        tender=req.tender, tender_id=req.project_name, workspace=workspace,
+        tender=req.tender, tender_id=_tender_ref(req.project_name), workspace=workspace,
     )
     dispatch = _apply_draft_overrides(dispatch, req.draft_overrides)
     return send_bundles(dispatch, dry_run=req.dry_run) if req.send else dispatch
@@ -1042,6 +1065,7 @@ def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
     from pipeline.stage_03_dispatch.drafts import plan_for_firms
 
     workspace = None if demo_mode() else Workspace()
+    ref = _tender_ref(req.project_name)   # ONE identity for every artifact this handler touches
     if workspace is not None and req.scope is not None:
         # Write each package's pricing workbook BEFORE planning, so the gate previews exactly what
         # the drafts will carry. `/dispatch/drafts` gets this for free — `build_dispatch` runs
@@ -1050,9 +1074,9 @@ def post_dispatch_plan(req: DispatchPlanRequest) -> list[dict]:
         # from the package's own `sor_items`; it composes nothing and sends nothing.
         for package_key in req.approvals:
             build_attachments(package_key, req.scope, None, project_name=req.project_name,
-                              tender_id=req.project_name, workspace=workspace)
-    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name,
-                           workspace=workspace, spec_map=_confirmed_spec_map(req.project_name))
+                              tender_id=ref, workspace=workspace)
+    plans = plan_for_firms(req.scope, req.approvals, tender_id=ref,
+                           workspace=workspace, spec_map=_confirmed_spec_map(ref))
     return [p.model_dump() for p in plans.values()]
 
 
@@ -1100,15 +1124,16 @@ def post_dispatch_drafts(req: DispatchRequest) -> DispatchDraftsResponse:
     from rules_engine.taxonomy import base_trade
 
     workspace = None if demo_mode() else Workspace()
+    ref = _tender_ref(req.project_name)   # the SAME identity the preview resolved
     dispatch = build_dispatch(
         req.shortlist, req.approvals, demo_fixture=req.demo_fixture, scope=req.scope,
-        project_name=req.project_name, tender=req.tender, tender_id=req.project_name, workspace=workspace,
+        project_name=req.project_name, tender=req.tender, tender_id=ref, workspace=workspace,
     )
     dispatch = _apply_draft_overrides(dispatch, req.draft_overrides)
 
     ws = workspace or Workspace()
-    plans = plan_for_firms(req.scope, req.approvals, tender_id=req.project_name, workspace=ws,
-                           spec_map=_confirmed_spec_map(req.project_name))
+    plans = plan_for_firms(req.scope, req.approvals, tender_id=ref, workspace=ws,
+                           spec_map=_confirmed_spec_map(ref))
     # The human gate's per-section remove/expand decisions — the assembled set matches exactly
     # what the person confirmed in the preview (keyed by package_key == the bundle's trade).
     overrides_by_key = {o.package_key: o for o in req.attachment_overrides}

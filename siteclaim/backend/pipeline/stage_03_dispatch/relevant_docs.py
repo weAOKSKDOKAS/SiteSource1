@@ -385,6 +385,7 @@ def _revision_contest(
 
 def _priced_return_attachment(
     doc_index: list[DocIndexEntry], *, sections: list[str], trade: str, package_key: str, sor_sheet_name: str,
+    index_source: str = "",
 ) -> PlanAttachment:
     """The priced-return sheet this enquiry asks the firm to fill and send back. In order of
     preference: the ORIGINAL Schedule of Rates sliced to this unit's section pages (``mode="sliced"``,
@@ -416,6 +417,12 @@ def _priced_return_attachment(
                 "GENERATED sheet, not the original bill — no Schedule of Rates PDF is indexed for "
                 "this tender (none uploaded, or the bill is a workbook, which has no pages to "
                 "slice). The firm will be asked to price this .xlsx and will return a workbook."
+                # WHERE IT LOOKED. This sentence was true of an empty index and equally true of the
+                # WRONG index: a tender's workspace was addressable by two names, so a 168-document
+                # index sat in one directory while this read a stale 570-byte one out of another and
+                # reported the pack empty. Naming the directory makes a mismatch visible instead of
+                # reading as an honest "nothing was uploaded".
+                + (f" Searched: {index_source}." if index_source else "")
             ))
     hit = next(
         (e for e in sr_entries if e.text_layer and any(sk in e.sor_section_pages for sk in section_keys)), None)
@@ -456,6 +463,7 @@ def resolve_section_plan(
     page_texts_of: Optional[Callable[[str], list[str]]] = None,
     confirmed_ps_specs: Optional[set[str]] = None,
     unconfirmed_sections: Optional[list[str]] = None,
+    index_source: str = "",
 ) -> SectionPlan:
     """The relevant-only attachment plan for one dispatched SoR section, driven by the clause
     references its items carry (Clause Ref column). See the module docstring for the slicing rules.
@@ -591,7 +599,7 @@ def resolve_section_plan(
     plan: list[PlanAttachment] = [
         _priced_return_attachment(
             doc_index, sections=unit_sections, trade=trade, package_key=package_key,
-            sor_sheet_name=sor_sheet_name),
+            sor_sheet_name=sor_sheet_name, index_source=index_source),
     ]
     present_ps: set[str] = set()
     present_appendices: set[str] = set()
