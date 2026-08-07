@@ -16,7 +16,8 @@ export type TabId =
   | "route"
   | "sourcing"
   | "price"
-  | "offer";
+  | "offer"
+  | "closeout";
 
 // The order IS the reading order of a tender: what arrived, what we found in it, what we are
 // pricing, who builds each package, who quotes the ones we sublet, the price, the offer.
@@ -33,6 +34,7 @@ export const TABS: { id: TabId; label: string }[] = [
   { id: "sourcing", label: "Sourcing" },
   { id: "price", label: "Price" },
   { id: "offer", label: "Offer" },
+  { id: "closeout", label: "Closeout" },
 ];
 
 export type StepState =
@@ -67,6 +69,9 @@ export function stepStates(
      *  (priced → not yet approved → approved → submitted) lives inside the Offer tab, which is
      *  where the approve and submit actions are; the chip only needs the terminal fact. */
     submitted?: boolean;
+    /** A won/lost/withdrawn outcome has been recorded — the closeout step's terminal `done`. Before
+     *  submission the step waits; after it, it opens to record the outcome; once recorded, done. */
+    outcomeRecorded?: boolean;
   },
   /** The tab whose work is RUNNING right now, if any.
    *
@@ -150,6 +155,14 @@ export function stepStates(
       : has.estimate
         ? { kind: "open" }
         : { kind: "waiting", label: "WAITS ON THE PRICE" },
+    // The feedback edge: nothing to close out until the tender is out the door. Submitted → open
+    // (record the outcome, lessons, handover in-tab) → done once an outcome is recorded. The finer
+    // "awaiting outcome" vs the recorded result lives in the tab, like the offer lifecycle.
+    closeout: has.outcomeRecorded
+      ? { kind: "done" }
+      : has.submitted
+        ? { kind: "open" }
+        : { kind: "waiting", label: "WAITS ON SUBMISSION" },
   } as Record<TabId, StepState>;
   // A running step says so, whatever it would otherwise have said — including over a `done`,
   // because a RE-run is still a run in flight.

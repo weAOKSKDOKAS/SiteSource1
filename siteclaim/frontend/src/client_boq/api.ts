@@ -8,7 +8,12 @@ import type {
   BidReply,
   BillCandidate,
   BqCandidates,
+  BridgeCloseoutState,
   BridgeFinalApproval,
+  BridgeHandover,
+  BridgeLesson,
+  BridgeOutcome,
+  BridgePostSubmissionEvent,
   BridgeRouteDecisions,
   BridgeRouteProposal,
   BridgeRouteProposalRead,
@@ -691,6 +696,33 @@ export const api = {
       bpost<BridgeSubmissionRecord>(`${setPath(setId)}/submit`, {
         proof, ...(submittedBy ? { submitted_by: submittedBy } : {}),
       }),
+
+    // --- closeout: outcome, lessons, change-control, handover (nodes 49–53) ---
+    /** Outcome + lessons + events + whether a handover is meaningful. A pure read; nothing 404s. */
+    closeout: (setId: string) =>
+      bget<BridgeCloseoutState>(`${setPath(setId)}/closeout`),
+
+    /** Record the tender outcome (did WE win — NOT the sublet award). A won/lost also feeds the
+     *  benchmark corpus. `notes` are the human's. */
+    setOutcome: (setId: string, status: string, notes = "") =>
+      bpost<{ outcome: BridgeOutcome; corpus: { fed: boolean; benchmark_project_id: number | null } }>(
+        `${setPath(setId)}/outcome`, { status, notes }),
+
+    /** Add one human-authored lesson (400 on an empty note). */
+    addLesson: (setId: string, category: string, lesson: string) =>
+      bpost<BridgeLesson>(`${setPath(setId)}/lessons`, { category, lesson }),
+    lessons: (setId: string) =>
+      bget<{ set_id: string; lessons: BridgeLesson[] }>(`${setPath(setId)}/lessons`),
+
+    /** Append one change-control entry (400 on an empty detail). */
+    logEvent: (setId: string, kind: string, detail: string) =>
+      bpost<BridgePostSubmissionEvent>(`${setPath(setId)}/post-submission`, { kind, detail }),
+    events: (setId: string) =>
+      bget<{ set_id: string; events: BridgePostSubmissionEvent[] }>(`${setPath(setId)}/post-submission`),
+
+    /** The assembled handover projection — a preview before won, ready after. */
+    handover: (setId: string) =>
+      bget<BridgeHandover>(`${setPath(setId)}/handover`),
 
     /** Does a document index exist for this tender, when was it built, over how many documents.
      *

@@ -1093,6 +1093,53 @@ export interface BridgeSubmissionState {
   letter_ready: boolean;
 }
 
+// Closeout — the only feedback edge (nodes 49–53). The tender OUTCOME (did we win) is NOT the
+// sublet award; they are kept apart in the API and here.
+export interface BridgeOutcome {
+  set_id: string;
+  status: "submitted" | "won" | "lost" | "withdrawn";
+  outcome_notes: string;
+  decided_by: string;
+  decided_at: string;
+}
+
+export interface BridgeLesson {
+  id: number;
+  set_id: string;
+  category: string;
+  lesson: string;
+  created_at: string;
+}
+
+export interface BridgePostSubmissionEvent {
+  id: number;
+  set_id: string;
+  kind: string;
+  detail: string;
+  created_at: string;
+}
+
+/** GET /bridge/{set_id}/closeout — the Closeout tab's one read. */
+export interface BridgeCloseoutState {
+  set_id: string;
+  outcome: BridgeOutcome | null;
+  lessons: BridgeLesson[];
+  events: BridgePostSubmissionEvent[];
+  handover_ready: boolean;
+}
+
+/** GET /bridge/{set_id}/handover — a read-only projection, meaningful once won. */
+export interface BridgeHandover {
+  set_id: string;
+  name: string;
+  ready: boolean;
+  status: string;
+  pending: string;
+  missing: string[];
+  markdown: string;
+  sections: Record<string, unknown>;
+}
+
 // ---------------------------------------------------------------------------
 // The bridge (/bridge/*) — the join between this review and the procurement fork
 // ---------------------------------------------------------------------------

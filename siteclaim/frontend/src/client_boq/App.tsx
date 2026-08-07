@@ -32,6 +32,7 @@ import { Settings } from "./screens/Settings";
 import { Subcontractors } from "./screens/Subcontractors";
 import { Team } from "./screens/Team";
 import { DocumentsTab } from "./tabs/Documents";
+import { CloseoutTab } from "./tabs/Closeout";
 import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
 import { RegisterTab } from "./tabs/Register";
@@ -40,6 +41,7 @@ import { ScopeTab } from "./tabs/Scope";
 import { SiteTab } from "./tabs/Site";
 import { SourcingTab } from "./tabs/Sourcing";
 import type {
+  BridgeCloseoutState,
   BridgeSubmissionState,
   CitationsResponse,
   CriteriaResponse,
@@ -82,6 +84,9 @@ export interface SetData {
   /** The back of the funnel — final approval + submission — read from the bridge, so a reload
    *  shows the tender's real state (approved / submitted) rather than resetting it. */
   submission: BridgeSubmissionState | null;
+  /** The feedback edge — outcome, lessons, change-control — read from the bridge for the same
+   *  reason: the Closeout chip and tab show the recorded outcome after a reload. */
+  closeout: BridgeCloseoutState | null;
 }
 
 const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false };
@@ -769,6 +774,7 @@ function SetView({
         // show APPROVED / SUBMITTED after a reload instead of resetting to "not yet approved".
         optional(api.bridge.submission(setId)),
       ]);
+    const closeout = await optional(api.bridge.closeout(setId));
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
     const citations = register ? await optional(api.citations(setId)) : null;
@@ -790,6 +796,7 @@ function SetView({
         hasDecisions: Boolean(decisions?.decisions.length),
       },
       submission,
+      closeout,
     });
   }, [setId]);
 
@@ -893,6 +900,8 @@ function SetView({
           (s: Station) => !data?.site?.classes[s.station]?.access_class,
         ).length,
         submitted: Boolean(data?.submission?.submission),
+        outcomeRecorded: Boolean(
+          data?.closeout?.outcome && data.closeout.outcome.status !== "submitted"),
       }, runningTab, reviewGateSoft),
     [data, runningTab, reviewGateSoft],
   );
@@ -955,10 +964,12 @@ function SetView({
             onProgress={onJob}
             onTrack={onTrack}
           />
-        ) : (
-          // The fallthrough renders Offer. A new tab appended after `offer` would silently show
-          // the letter instead of itself, so every tab above needs an explicit branch.
+        ) : tab === "offer" ? (
           <OfferTab data={data} onError={onError} onRefresh={refresh} />
+        ) : (
+          // The fallthrough renders Closeout — the last tab. A tab appended after it would need its
+          // own explicit branch above, exactly as `offer` now has one.
+          <CloseoutTab data={data} onError={onError} onRefresh={refresh} />
         )}
       </main>
 
