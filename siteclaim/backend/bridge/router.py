@@ -47,6 +47,22 @@ class SubmitRequest(BaseModel):
     submitted_by: str = "operator"
 
 
+class OutcomeRequest(BaseModel):
+    status: str                               # submitted | won | lost | withdrawn
+    notes: str = ""                           # human — award value, competitor, why
+    decided_by: str = "operator"
+
+
+class LessonRequest(BaseModel):
+    category: str = "other"                   # pricing | scope | programme | commercial | other
+    lesson: str                               # human-authored
+
+
+class PostSubmissionRequest(BaseModel):
+    kind: str = "note"                        # clarification | negotiation | change | note
+    detail: str                               # human-stated
+
+
 @router.get("/{set_id}/bq-candidates")
 def get_bq_candidates(set_id: str) -> dict:
     """Every part in the set, with which one(s) are proposed as the bill. Never auto-selects.
@@ -340,6 +356,81 @@ def get_submission(set_id: str) -> dict:
 
     try:
         return submission.submission_state(set_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Closeout — outcome, lessons, change-control, corpus feedback, handover (nodes 49–53)
+# ---------------------------------------------------------------------------
+@router.post("/{set_id}/outcome")
+def post_outcome(set_id: str, req: OutcomeRequest) -> dict:
+    """Record the tender outcome (did WE win — NOT the sublet award). A ``won``/``lost`` outcome
+    also feeds the benchmark corpus; the feed result rides back under ``corpus``."""
+    from bridge import closeout
+
+    try:
+        outcome = closeout.set_outcome(set_id, req.status, req.notes, decided_by=req.decided_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    corpus = closeout.feed_outcome_to_corpus(set_id)  # no-op for submitted/withdrawn
+    return {"outcome": outcome, "corpus": corpus}
+
+
+@router.post("/{set_id}/lessons")
+def post_lesson(set_id: str, req: LessonRequest) -> dict:
+    """Add one human-authored lesson. 400 on an empty note."""
+    from bridge import closeout
+
+    try:
+        return closeout.add_lesson(set_id, req.category, req.lesson)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{set_id}/lessons")
+def get_lessons(set_id: str) -> dict:
+    from bridge import closeout
+
+    return {"set_id": set_id, "lessons": closeout.list_lessons(set_id)}
+
+
+@router.post("/{set_id}/post-submission")
+def post_post_submission(set_id: str, req: PostSubmissionRequest) -> dict:
+    """Append one change-control entry. 400 on an empty detail."""
+    from bridge import closeout
+
+    try:
+        return closeout.log_event(set_id, req.kind, req.detail)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{set_id}/post-submission")
+def get_post_submission(set_id: str) -> dict:
+    from bridge import closeout
+
+    return {"set_id": set_id, "events": closeout.list_events(set_id)}
+
+
+@router.get("/{set_id}/closeout")
+def get_closeout(set_id: str) -> dict:
+    """Outcome + lessons + events + whether a handover is meaningful — the Closeout tab's one read."""
+    from bridge import closeout
+
+    try:
+        return closeout.closeout_state(set_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{set_id}/handover")
+def get_handover(set_id: str) -> dict:
+    """The assembled handover package — a read-only projection, meaningful once the tender is won."""
+    from bridge import closeout
+
+    try:
+        return closeout.assemble_handover(set_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
