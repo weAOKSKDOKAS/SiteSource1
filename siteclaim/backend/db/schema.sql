@@ -20,6 +20,7 @@ DROP TABLE IF EXISTS staged_flags;
 DROP TABLE IF EXISTS meta;
 -- Benchmark estimator (Phase B1) — dropped child-first so the FKs unwind cleanly.
 DROP TABLE IF EXISTS rubric_items;
+DROP TABLE IF EXISTS project_outcomes;
 DROP TABLE IF EXISTS project_eos;
 DROP TABLE IF EXISTS variance_records;
 DROP TABLE IF EXISTS actual_items;
@@ -283,6 +284,20 @@ CREATE TABLE project_eos (
     created_at  TEXT NOT NULL
 );
 
+-- The TENDER outcome fed back into the corpus (won/lost + lessons) — a SEPARATE slot from
+-- project_eos so an operator's End-of-Site document and a tender's outcome for the same benchmark
+-- project never overwrite each other. One outcome per project (a re-feed replaces). The tender
+-- side is keyed on run_ref; this is its landing in the corpus, linked to the benchmark project.
+CREATE TABLE project_outcomes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id),
+    status      TEXT NOT NULL,               -- 'won' | 'lost'
+    narrative   TEXT,                         -- the outcome + lessons, as fed
+    source_doc  TEXT,                         -- 'tender-outcome'                 (provenance)
+    provenance  TEXT NOT NULL DEFAULT 'live', -- 'demo' (fictional) | 'live' (real)
+    created_at  TEXT NOT NULL
+);
+
 -- The B2 estimator's evidence-linked guidance. Ships EMPTY (needs real evidence).
 CREATE TABLE rubric_items (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -389,6 +404,7 @@ CREATE INDEX idx_actual_items_ref     ON actual_items(item_ref);
 CREATE INDEX idx_variance_project     ON variance_records(project_id);
 CREATE INDEX idx_variance_reason      ON variance_records(reason_code);
 CREATE INDEX idx_project_eos_project  ON project_eos(project_id);
+CREATE INDEX idx_project_outcomes_project ON project_outcomes(project_id);
 CREATE INDEX idx_projects_provenance  ON projects(provenance);
 CREATE INDEX idx_package_routes_run   ON package_routes(run_ref);
 CREATE INDEX idx_estimate_items_est   ON estimate_items(estimate_id);

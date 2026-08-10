@@ -134,6 +134,11 @@ def ensure_benchmark_tables(conn: sqlite3.Connection) -> None:
             narrative TEXT, summary TEXT, source_doc TEXT, has_images INTEGER NOT NULL DEFAULT 0,
             provenance TEXT NOT NULL DEFAULT 'live', created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS project_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id),
+            status TEXT NOT NULL, narrative TEXT, source_doc TEXT,
+            provenance TEXT NOT NULL DEFAULT 'live', created_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_tender_items_project ON tender_items(project_id);
         CREATE INDEX IF NOT EXISTS idx_tender_items_ref     ON tender_items(item_ref);
         CREATE INDEX IF NOT EXISTS idx_actual_items_project ON actual_items(project_id);
@@ -463,6 +468,61 @@ def get_eos(conn: sqlite3.Connection, project_id: int) -> Optional[dict]:
         "SELECT * FROM project_eos WHERE project_id = ? ORDER BY id DESC LIMIT 1", (project_id,)
     ).fetchone()
     return _eos_dict(row) if row is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Tender OUTCOME in the corpus — a SEPARATE slot from the EoS document.
+# ---------------------------------------------------------------------------
+# The won/lost tender result + lessons, fed back so a future tender's benchmark read learns from
+# this one. It lives in its OWN table, not project_eos, because that slot is the operator's
+# End-of-Site document: one project can carry BOTH, and neither may overwrite the other. Same
+# one-per-project-replace shape as attach_eos, so a re-feed is idempotent, but a different table
+# and a different reader — get_eos and get_project_outcome never see each other's rows.
+def _has_project_outcomes_table(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='project_outcomes'"
+    ).fetchone()
+    return row is not None
+
+
+def _outcome_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "project_id": row["project_id"], "status": row["status"],
+        "narrative": row["narrative"] or "", "source_doc": row["source_doc"] or "",
+        "provenance": row["provenance"] or "live", "created_at": row["created_at"] or "",
+    }
+
+
+def attach_project_outcome(conn: sqlite3.Connection, project_id: int, *, status: str,
+                           narrative: str, source_doc: str = "tender-outcome",
+                           provenance: str = "live") -> dict:
+    """Record (or replace) the project's tender outcome. One per project — a re-feed replaces,
+    never double-attaches — and it NEVER touches project_eos, so an operator's EoS document
+    survives it. Atomic. Returns the stored record."""
+    ensure_benchmark_tables(conn)
+    try:
+        conn.execute("DELETE FROM project_outcomes WHERE project_id = ?", (project_id,))
+        conn.execute(
+            "INSERT INTO project_outcomes (project_id, status, narrative, source_doc, provenance, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, status, narrative, source_doc, provenance, _now()),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return get_project_outcome(conn, project_id)
+
+
+def get_project_outcome(conn: sqlite3.Connection, project_id: int) -> Optional[dict]:
+    """The project's fed tender outcome, or None. Reads project_outcomes only — an EoS document on
+    the same project is invisible here, exactly as this outcome is invisible to ``get_eos``."""
+    if not _has_project_outcomes_table(conn):
+        return None
+    row = conn.execute(
+        "SELECT * FROM project_outcomes WHERE project_id = ? ORDER BY id DESC LIMIT 1", (project_id,)
+    ).fetchone()
+    return _outcome_dict(row) if row is not None else None
 
 
 # ---------------------------------------------------------------------------

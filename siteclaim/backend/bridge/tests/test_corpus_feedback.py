@@ -1,7 +1,13 @@
 """The one feedback edge: a won/lost tender's result + lessons into the benchmark corpus.
 
-Hooks into the EXISTING snapshot machinery (unified_projects.benchmark_project_id + attach_eos),
-never duplicates it, and is append-only across the corpus.
+Hooks into the EXISTING snapshot machinery (unified_projects.benchmark_project_id), never
+duplicates it, and is append-only across the corpus.
+
+NOTE ON THE READ PATH: the outcome lands in its OWN corpus slot, ``project_outcomes``, NOT in
+``project_eos`` (that slot is the operator's End-of-Site document — the two collided when both
+routed through ``attach_eos``). So these guarantees are read back through ``get_project_outcome``;
+every guarantee is unchanged, only the slot it is inspected in is the corrected one. The collision
+itself is covered in ``db/tests/test_benchmark_eos.py`` (the crossing test).
 """
 
 import pytest
@@ -12,10 +18,10 @@ from db import benchmark as bench
 from db import project as uproject
 
 
-def _eos(pid: int) -> dict:
+def _outcome(pid: int) -> dict:
     conn = bridge_conn()
     try:
-        return bench.get_eos(conn, pid)
+        return bench.get_project_outcome(conn, pid)
     finally:
         conn.close()
 
@@ -28,9 +34,10 @@ def test_a_won_outcome_is_recorded_into_the_corpus():
     result = closeout.feed_outcome_to_corpus("nd-2025-04")
     assert result["fed"] is True and result["benchmark_project_id"]
 
-    eos = _eos(result["benchmark_project_id"])
-    assert "WON" in eos["narrative"]
-    assert "hard rock" in eos["narrative"], "the lessons ride into the corpus"
+    outcome = _outcome(result["benchmark_project_id"])
+    assert outcome["status"] == "won"
+    assert "WON" in outcome["narrative"]
+    assert "hard rock" in outcome["narrative"], "the lessons ride into the corpus"
 
 
 def test_a_lost_outcome_also_feeds():
@@ -58,13 +65,18 @@ def test_feeding_twice_records_once_not_twice():
     assert first["benchmark_project_id"] == second["benchmark_project_id"], "reuses the same project"
     conn = bridge_conn()
     try:
-        # one benchmark project for the tender, one EoS row on it
+        # one benchmark project for the tender, one outcome row on it
         projects = [p for p in bench.list_projects(conn) if p["source"] == "tender-outcome"]
         assert len(projects) == 1
         rows = conn.execute(
+            "SELECT COUNT(*) AS n FROM project_outcomes WHERE project_id = ?",
+            (first["benchmark_project_id"],)).fetchone()["n"]
+        assert rows == 1, "attach_project_outcome replaces, one outcome per project"
+        # and it never touched the EoS slot
+        eos_rows = conn.execute(
             "SELECT COUNT(*) AS n FROM project_eos WHERE project_id = ?",
             (first["benchmark_project_id"],)).fetchone()["n"]
-        assert rows == 1, "attach_eos replaces, one narrative per project"
+        assert eos_rows == 0, "the outcome does not live in the EoS slot"
     finally:
         conn.close()
 
@@ -72,12 +84,13 @@ def test_feeding_twice_records_once_not_twice():
 def test_a_re_fed_outcome_updates_its_own_narrative():
     closeout.set_outcome("nd-2025-04", "won")
     pid = closeout.feed_outcome_to_corpus("nd-2025-04")["benchmark_project_id"]
-    assert "WON" in _eos(pid)["narrative"]
+    assert "WON" in _outcome(pid)["narrative"]
 
     closeout.set_outcome("nd-2025-04", "lost", "Reversed on appeal.")
     again = closeout.feed_outcome_to_corpus("nd-2025-04")
     assert again["benchmark_project_id"] == pid
-    assert "LOST" in _eos(pid)["narrative"] and "WON" not in _eos(pid)["narrative"]
+    assert _outcome(pid)["status"] == "lost"
+    assert "LOST" in _outcome(pid)["narrative"] and "WON" not in _outcome(pid)["narrative"]
 
 
 # -- hooks into the existing link, does not duplicate ----------------------------------------------
@@ -115,5 +128,6 @@ def test_it_does_not_mutate_an_unrelated_corpus_project():
     try:
         assert len(bench.tender_items(conn, other["id"])) == 1, "the other project is untouched"
         assert bench.get_eos(conn, other["id"]) is None
+        assert bench.get_project_outcome(conn, other["id"]) is None
     finally:
         conn.close()

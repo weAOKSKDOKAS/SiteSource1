@@ -294,12 +294,17 @@ def feed_outcome_to_corpus(set_id: str) -> dict:
     The mechanism the procurement ``/estimate/{id}/to-benchmark`` already established: a tender's
     ``unified_projects`` umbrella row carries a ``benchmark_project_id``. This reuses that link when
     it exists (the estimate may already have been captured), and otherwise creates one benchmark
-    project for the tender and links it. The outcome + lessons are attached as the project's EoS
-    narrative via :func:`db.benchmark.attach_eos`, which REPLACES one-per-project — so re-setting an
-    outcome records once, never twice.
+    project for the tender and links it. The outcome + lessons are recorded in the project's OWN
+    outcome slot via :func:`db.benchmark.attach_project_outcome`, which REPLACES one-per-project —
+    so re-setting an outcome records once, never twice.
+
+    That slot is DELIBERATELY separate from ``project_eos`` (the operator's End-of-Site document):
+    one project can carry both, so routing the outcome through ``attach_eos`` silently clobbered a
+    real EoS upload and made ``get_eos`` return the wrong kind. See the crossing test in
+    ``db/tests/test_benchmark_eos.py``.
 
     **Append-only across the corpus.** It touches only this tender's own umbrella row, its own
-    benchmark project, and that project's EoS narrative. It never deletes a project, never withdraws
+    benchmark project, and that project's outcome slot. It never deletes a project, never withdraws
     a prior entry, and never mutates another project's rows — a lost tender does not un-record a
     previously won one. ``submitted``/``withdrawn`` feed nothing; only ``won``/``lost`` reach here.
 
@@ -333,11 +338,14 @@ def feed_outcome_to_corpus(set_id: str) -> dict:
                 notes=f"Tender outcome captured for {ref}.")
             pid = created["id"]
             uproject.link_benchmark(conn, ref, pid)
-        # Idempotent replace of THIS tender's own outcome narrative — not a second row, not another
-        # project's data.
-        bench.attach_eos(conn, pid, narrative=_corpus_narrative(outcome, lessons),
-                         summary=f"Tender {outcome['status']}", source_doc="tender-outcome",
-                         provenance=provenance)
+        # Idempotent replace of THIS tender's own outcome — into its OWN corpus slot
+        # (project_outcomes), NEVER project_eos. That slot is the operator's End-of-Site document,
+        # and one project can carry both: routing the outcome through attach_eos silently DELETEd a
+        # real EoS upload (and vice versa), and get_eos then surfaced the wrong kind — including
+        # into the variance reason-suggestion path. attach_project_outcome keeps them apart.
+        bench.attach_project_outcome(
+            conn, pid, status=outcome["status"], narrative=_corpus_narrative(outcome, lessons),
+            source_doc="tender-outcome", provenance=provenance)
         return {"fed": True, "benchmark_project_id": pid, "reason": ""}
     finally:
         conn.close()
