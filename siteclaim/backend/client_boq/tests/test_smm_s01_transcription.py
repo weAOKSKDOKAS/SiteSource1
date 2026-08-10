@@ -209,6 +209,30 @@ class TestTheCitationsPointSomewhereOrNowhere:
             assert head.authored_by == "rule"
 
 
+class TestAgainstASourceThatWasNotThisOne:
+    def test_the_four_obligations_the_costing_prd_names_are_all_here(self):
+        """A CROSS-CHECK, and the only one available. Everything else in this file reads the
+        transcription against itself, which catches a dropped bullet but not a misread one.
+
+        `docs/client_boq/prd_boq_costing.md` §2.8 was written from the same pack, independently and
+        earlier, and it names four things ¶¶1.14/1.15 oblige — "a Traffic Consultant, temporary
+        street lighting, tow-truck and emergency telephone provision" — to make a point about
+        caption changes. Four claims from another author about the same document.
+
+        Two of them, the tow-truck aside, live in sub-heads that only exist because ¶1.14(z)'s
+        run-on was split: the emergency telephone system is (ab), which the extractor had folded
+        into a head about street lighting. Without that split this test fails, which is the point
+        of writing it — it is the one place a silent misreading would surface from outside.
+        """
+        heads = smm_s01.CLAUSES["1.14"] + smm_s01.CLAUSES["1.15"]
+        for phrase in ("Traffic Consultant", "temporary street lighting", "tow-truck",
+                       "temporary emergency telephone"):
+            assert [h.key for h in heads if phrase.lower() in h.label.lower()], phrase
+
+        recovered = next(h for h in heads if h.key == "smm.s01.1.14.ab")
+        assert recovered.label == "Provisions of temporary emergency telephone system"
+
+
 class TestWhatTheModuleWillNotDo:
     def test_it_refuses_a_clause_it_does_not_have(self):
         """A typo that silently produced "no coverage" is the failure this package is built on."""
