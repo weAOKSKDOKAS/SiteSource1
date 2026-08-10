@@ -37,6 +37,36 @@ Measurement and its Particular Preambles. It is **data, not law**: another contr
 differently, and every head carries the clause that produced it so a wrong transcription shows up the
 moment somebody clicks through to the page. A head whose clause the specification index cannot
 resolve says so rather than pretending to a page number.
+
+⚠ EVERY LIST HERE IS PARTIAL, AND THAT IS NOT A TEMPORARY STATE
+---------------------------------------------------------------
+The tender pack carries this contract's **amendments** to the base *Standard Method of Measurement
+for Civil Engineering Works (1992)* — "Delete paragraph 2.13(d) and substitute…", "Add the following
+to paragraph 2.35…". **The base SMM 1992 is not in the pack.** So under every clause below there are
+base sub-heads that are real, binding, and invisible from here: base ``2.13(a)``–``(c)``,
+``2.35(a)`` and ``(c)``–``(f)``, ``2.30(a)``–``(g)`` and ``(i)``, and so on. Closing that gap needs
+the base document, not more reading of this one.
+
+Three mechanisms keep it from reading as complete, because *"12 heads · all covered"* on a tidy
+checklist is exactly how a partial list passes for a whole one — the same failure as an empty list
+reading as "fully covered", just slower to notice:
+
+* :data:`PARTIAL_BY_CONSTRUCTION` rides on every :class:`CoverageList` and :class:`TitleRule`, and
+  reaches the reader through :attr:`ItemCoverage.partial` and the summary line;
+* :data:`FROM_BASE_SMM` marks an individual head whose words came from the base document, so a
+  reader can see which ones cannot be checked against anything in their possession;
+* :data:`BILL_1_AWAITING_TEXT` names the 27 SMM S01 clauses whose sub-heads were never transcribed.
+  Their mapping is known and their words are not, so they carry no heads at all — **a head with an
+  invented label is worse than a named gap**, and an item governed by one of them reports "the
+  clause is known; the words are outstanding" rather than settling on nothing.
+
+WHERE A HEAD COMES FROM — three routes, one list
+------------------------------------------------
+``SECTION_COVERAGE`` by bill, ``TITLE_COVERAGE`` by what an item is CALLED, ``ITEM_COVERAGE`` by BQ
+reference. The middle one exists because a BQ item number is not an SMM clause number (BQ 1.12 is
+*Contract Computer Facilities*; SMM ¶1.12 is something else), and because most of Bills 1, 7, 8 and
+9's references were never transcribed — a reference guessed here would attach a real clause to the
+wrong item. :func:`heads_for` merges all three and de-duplicates on the key.
 """
 
 from __future__ import annotations

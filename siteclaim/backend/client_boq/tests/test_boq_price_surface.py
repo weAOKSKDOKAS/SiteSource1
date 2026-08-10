@@ -129,14 +129,22 @@ class TestWhatARateMustCover:
 
     def test_an_untranscribed_section_says_so_instead_of_showing_an_empty_checklist(
             self, client, priced):
-        # Only Section 2's item coverage has been transcribed. An empty list on Section 1 must read
-        # as "nobody has read this yet", never as "this rate carries no obligations" — the two look
-        # identical on screen and mean opposite things to somebody about to price the item.
+        # RE-ANCHORED IN THE OPEN. The subject is unchanged and is the whole point: an empty list
+        # must read as "nobody has read this yet", never as "this rate carries no obligations" —
+        # the two look identical on screen and mean opposite things to somebody about to price the
+        # item. What changed is that the sentence is now SPECIFIC. It used to be one message for
+        # every empty list; there are three different reasons a list can be empty, with three
+        # different fixes, and saying the wrong one sends somebody to do the wrong work. This
+        # asserts the invariant rather than the old wording.
         other = next(r for r in _refs(client) if r not in _refs(client, "2"))
         body = client.get(f"{BASE}/price/{SET}/coverage/{other}").json()
         assert body["entries"] == []
-        assert "has not been transcribed yet" in body["waiting_on"]
-        assert "not because the rate carries no obligations" in body["waiting_on"]
+        assert body["waiting_on"], "an empty list never travels without its reason"
+        assert "not been transcribed" in body["waiting_on"]
+        assert body["settled"] is False, "nothing to check is not the same as checked"
+        # The old sentence spelt this out ("not because the rate carries no obligations"). The new
+        # ones say it by naming what IS outstanding — the clause, or the mapping, or the reading —
+        # which is the same claim made useful. `settled is False` above is the invariant itself.
 
 
 class TestTheWorking:

@@ -4088,7 +4088,6 @@ def get_item_coverage(set_id: str, full_ref: str, rev: Optional[int] = None) -> 
 
     merged = {**ticks.get(full_ref, {}), **ticks.get("", {})}
     coverage = boq_coverage.coverage_for(item, docmap=docmap, ticks=merged)
-    section = (item.bill_no or full_ref.split(".", 1)[0]).strip()
     return {
         "set_id": set_id, "rev": bill.rev,
         "full_ref": full_ref, "description": item.description,
@@ -4098,14 +4097,18 @@ def get_item_coverage(set_id: str, full_ref: str, rev: Optional[int] = None) -> 
         "uncovered": [e.key for e in coverage.uncovered()],
         "settled": coverage.settled(),
         "note": coverage.note,
-        # An empty list must never read as "this rate covers nothing". It means the item coverage
-        # for this bill section has not been transcribed yet — a gap in the app, not in the
-        # contract, and the difference matters enormously to somebody about to price the item.
-        "waiting_on": ("" if coverage.entries else
-                       f"The item coverage for Bill No.{section} has not been transcribed yet, so "
-                       f"this list is empty because nobody has read it — not because the rate "
-                       f"carries no obligations. Read Section {section} of the Method of "
-                       f"Measurement before pricing this item."),
+        # WHY THIS LIST IS NOT THE WHOLE COVERAGE. The pack carries this contract's AMENDMENTS to
+        # the SMM 1992, not the SMM itself, so every list here is partial by construction. A
+        # partial list that reads as complete is the same failure as an empty one reading as
+        # "fully covered" — it just takes longer to notice.
+        "partial": coverage.partial,
+        # A tick recorded against a head this item no longer has. Never applied; always named.
+        "orphan_ticks": coverage.orphan_ticks,
+        # An empty list must never read as "this rate covers nothing". `no_list_reason` says which
+        # of the three cases it is — the clause is known and its words are not, nothing matched the
+        # item by title, or nothing has been transcribed for this bill at all. They are three
+        # different problems with three different fixes.
+        "waiting_on": coverage.no_list_reason,
     }
 
 

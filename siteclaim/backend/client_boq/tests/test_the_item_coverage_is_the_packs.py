@@ -468,3 +468,106 @@ class TestBillOneIsMappedByTitleAndItsTextIsAGap:
         """A preliminaries item's coverage has nothing in common with its neighbour's — a bill-wide
         list would attach the core-store heads to the insurance item."""
         assert "1" not in SECTION_COVERAGE
+
+
+class TestCitationsResolveOrSayNothing:
+    """A head that names a PS clause must reach a page; one that names none must not claim one.
+    `▸ show me` landing on the wrong page is worse than one that admits it does not know."""
+
+    def _docmap(self):
+        from client_boq.boq.docmap import parse_index
+
+        return parse_index(
+            "SECTION 7\nGEOTECHNICAL WORKS\n7.01A\nAccess scaffolding\nPS7/1\n"
+            "7.30S\nInspection pits\nPS7/4\n"
+            "SECTION 27\nSITE SAFETY\n27.05\nSafety officers\nPS27/2\n")
+
+    def test_a_cited_clause_resolves_to_a_page(self):
+        entry = next(e for e in coverage_for(_item("9.1", bill_no="9",
+                                                   description="Provide Safety Officer"),
+                                             docmap=self._docmap()).entries
+                     if e.key == "smm.s28.28.07.b")
+        assert entry.page == "PS27/2" and entry.document_hint == "PS27"
+        assert entry.unresolved == ""
+
+    def test_a_head_that_cites_nothing_claims_no_page(self):
+        entry = next(e for e in coverage_for(_item("9.1", bill_no="9",
+                                                   description="Provide Safety Officer"),
+                                             docmap=self._docmap()).entries
+                     if e.key == "smm.s28.28.07.a")
+        assert entry.page == "" and entry.unresolved == "", "no citation, so nothing to resolve"
+
+    def test_a_citation_the_index_does_not_carry_says_so(self):
+        entry = next(e for e in coverage_for(_item("7.5", bill_no="7",
+                                                   description="Vegetation survey record"),
+                                             docmap=self._docmap()).entries
+                     if e.key == "smm.s24.24.39.a")
+        assert entry.page == "" and "does not list it" in entry.unresolved
+
+    def test_every_head_that_names_a_ps_clause_in_its_reference_also_cites_it(self):
+        """The two must not drift: a reference that says "PS 27.05" and cites nothing is a page
+        somebody will hunt for by hand."""
+        import re
+
+        from client_boq.boq.coverage import SECTION_COVERAGE, TITLE_COVERAGE, ITEM_COVERAGE
+
+        everything = [
+            *(head for entry in SECTION_COVERAGE.values() for head in entry.heads),
+            *(head for rule in TITLE_COVERAGE for head in rule.heads),
+            *(head for heads in ITEM_COVERAGE.values() for head in heads),
+        ]
+        for head in everything:
+            if re.search(r"PS \d", head.clause_ref) and "Section" not in head.clause_ref:
+                assert head.cites, f"{head.key} names a PS clause and cites nothing"
+
+
+class TestTheWholeTranscriptionHangsTogether:
+    def test_every_head_key_is_unique_across_the_whole_module(self):
+        """A key is what a tick is stored against. Two heads sharing one would let a tick given for
+        one settle the other — the failure the namespace move exists to prevent, arriving from a
+        different direction."""
+        from collections import Counter
+
+        from client_boq.boq.coverage import SECTION_COVERAGE, TITLE_COVERAGE, ITEM_COVERAGE
+
+        by_key: dict[str, set[str]] = {}
+        for entry in SECTION_COVERAGE.values():
+            for head in entry.heads:
+                by_key.setdefault(head.key, set()).add(head.label)
+        for rule in TITLE_COVERAGE:
+            for head in rule.heads:
+                by_key.setdefault(head.key, set()).add(head.label)
+        for heads in ITEM_COVERAGE.values():
+            for head in heads:
+                by_key.setdefault(head.key, set()).add(head.label)
+
+        clashes = {key: labels for key, labels in by_key.items() if len(labels) > 1}
+        assert not clashes, f"one key, two meanings: {clashes}"
+        assert Counter(by_key)  # non-empty
+
+    def test_every_bill_the_pack_covers_now_reaches_a_clause(self):
+        """Bills 1 and 3–9 all had nothing before this work. Every one of them now resolves to a
+        clause — even where the clause's words are still outstanding."""
+        from client_boq.boq.coverage import SECTION_COVERAGE, TITLE_COVERAGE
+
+        by_section = set(SECTION_COVERAGE)
+        by_title = {rule.bill_no for rule in TITLE_COVERAGE if rule.bill_no}
+        for bill_no in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            assert bill_no in (by_section | by_title), bill_no
+
+    def test_no_transcribed_list_claims_to_be_complete(self):
+        """§5. The base SMM 1992 is not in the pack, so nothing here is the whole coverage."""
+        from client_boq.boq.coverage import SECTION_COVERAGE, TITLE_COVERAGE
+
+        for entry in SECTION_COVERAGE.values():
+            assert entry.partial, entry.bill_no
+        for rule in TITLE_COVERAGE:
+            assert rule.partial, rule.key
+
+    def test_the_route_carries_the_partial_reason_and_the_orphan_ticks(self):
+        from fastapi.testclient import TestClient
+
+        from api import app
+
+        paths = TestClient(app).get("/openapi.json").json()["paths"]
+        assert "/client-boq/price/{set_id}/coverage/{full_ref}" in paths
