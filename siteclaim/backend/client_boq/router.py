@@ -36,6 +36,7 @@ from client_boq.boq import costing_workbook as boq_costing_workbook
 from client_boq.boq import coverage as boq_coverage
 from client_boq.boq import derive as boq_derive
 from client_boq.boq import diff as boq_diff
+from client_boq.boq import hk1980 as boq_hk1980
 from client_boq.boq import optimiser as boq_optimiser
 from client_boq.boq import docmap as boq_docmap
 from client_boq.boq import model as boq_model
@@ -3653,6 +3654,35 @@ def get_station_schedule(set_id: str) -> dict:
             "instruments": schedule.instruments(), "deepest": schedule.deepest(),
             "trial_pits": len(schedule.trial_pits),
         },
+    }
+
+
+@router.get("/site/{set_id}/positions")
+def get_station_positions(set_id: str) -> dict:
+    """Every located station in WGS84, with a keyless per-point map link — the Site map's data.
+
+    Deterministic (EPSG:2326 → 4326 in `boq/hk1980.py`, ~1 m — the accuracy of the published
+    transformation). A coordinate that converts to somewhere outside Hong Kong is REFUSED into the
+    list and named in ``problems``: a wrong point plotted confidently on satellite imagery is
+    exactly the picture somebody trusts. ``providers`` is the config seam — the Lands Department
+    basemap is keyless and always on; everything Google lights up only when a key is configured,
+    and its absence never blocks the map.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+    finally:
+        conn.close()
+    if schedule is None:
+        return {"set_id": set_id, "positions": [], "problems": [],
+                "providers": boq_hk1980.provider_config(),
+                "waiting_on": "the borehole details schedule has not been read yet"}
+    placed, problems = boq_hk1980.positions(schedule)
+    return {
+        "set_id": set_id,
+        "positions": [p.model_dump() for p in placed],
+        "problems": problems,
+        "providers": boq_hk1980.provider_config(),
     }
 
 
