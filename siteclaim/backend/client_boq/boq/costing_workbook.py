@@ -53,7 +53,9 @@ from client_boq.boq.model import (
     CHARGE_GFT,
     CHARGE_PRELIM,
     CHARGE_RIG_DAY,
+    INPUT_BLOCKS,
     CostingModel,
+    specs_in,
 )
 from client_boq.boq.programme import Programme
 
@@ -190,12 +192,22 @@ def _inputs(ws, model: CostingModel, where: _Ref, contract_reference: str) -> No
         where.put(f"inputs.{key}", ws.title, f"$C${row}")
         row += 1
 
-    block("CONTRACT")
+    # THE DECLARATIONS COME FROM THE MODEL, not from argument lists written here. This sheet and
+    # the Library screen show the same inputs with the same labels, units and notes because there
+    # is one place they are said. See `model.INPUT_SPECS`.
+    def scalars(block_title: str) -> None:
+        block(block_title)
+        for spec in specs_in(block_title):
+            scalar(spec.key, spec.label, spec.unit, spec.note,
+                   fmt=PERCENT if spec.percent else None, key_assumption=spec.key_assumption)
+
+    block(INPUT_BLOCKS[0])                         # CONTRACT
     ws.cell(row=row, column=2, value="Contract reference")
     ws.cell(row=row, column=3, value=contract_reference or model.name).font = INPUT
     row += 1
-    scalar("contract_period_months", "Contract period", "month")
-    scalar("working_days_per_month", "Working days per month", "day", "6-day week, HK civils norm.")
+    for spec in specs_in(INPUT_BLOCKS[0]):
+        scalar(spec.key, spec.label, spec.unit, spec.note,
+               fmt=PERCENT if spec.percent else None, key_assumption=spec.key_assumption)
 
     block("PRODUCTION BANDS  (a lookup, not a regression — see 07 for why)")
     for n, head in enumerate(["Band", "Lower bound", "m/work-day", "n holes",
@@ -223,44 +235,8 @@ def _inputs(ws, model: CostingModel, where: _Ref, contract_reference: str) -> No
                   "set-up. Refit whenever the corpus changes.").font = NOTE
     row += 2
 
-    block("PRODUCTIVITY")
-    scalar("residual_site_factor", "Residual site factor", "x",
-           "What is left AFTER the rock-fraction band. 1.00 means the band explains the site. "
-           "Raise it only for a named reason, recorded on 06.", key_assumption=True)
-    scalar("calendar_to_work_day", "Calendar : work-day ratio", "x",
-           "Observed 1.18 / 1.18 / 1.36. Weather lands here — it costs programme, not production.")
-    scalar("standing_allowance", "Standing / idle allowance", "of work-days",
-           "Observed 18%–36%. Drives the standing time item.", fmt=PERCENT, key_assumption=True)
-    scalar("p90_multiplier", "Productivity band — P90 multiplier", "x")
-    scalar("p10_multiplier", "Productivity band — P10 multiplier", "x")
-    scalar("hours_per_day", "Hours per working day", "h")
-
-    block("SPLIT-RATE CROSS-CHECK  (Method B — not the pricing basis)")
-    scalar("setup_days_per_hole", "Fixed set-up time per hole", "work-day",
-           "Regression intercept. Used only for the cross-check on 02.")
-    scalar("soil_m_per_day", "Soil production rate", "m/work-day")
-    scalar("rock_m_per_day", "Rock production rate", "m/work-day")
-
-    block("COMMERCIAL")
-    for key, label, note in (
-        ("margin", "Direct margin", "Taken on the selling price, not added to cost."),
-        ("overhead_local", "Local overhead", "Site + local office establishment."),
-        ("overhead_regional", "Regional overhead", ""),
-        ("overhead_international", "International overhead", ""),
-        ("nec_fee", "NEC fee percentage",
-         "Applies to compensation-event Defined Cost, NOT to the BQ rates."),
-        ("risk_loading", "Risk / contingency loading",
-         "Priced-in allowance for the productivity spread. See the P90 column on 02."),
-    ):
-        scalar(key, label, "", note, fmt=PERCENT, key_assumption=key == "margin")
-
-    block("ORGANISATION")
-    scalar("site_count", "Number of sites", "nr",
-           "The site team is carried per site, not per rig.")
-    scalar("site_team_per_site", "Site teams per site", "nr",
-           "A coefficient: 1.0 dedicated, 0.5 shared with another contract. Not rounded up.")
-    scalar("gft_ratio", "One GFT supervises", "rigs",
-           "The GFT manages RIGS. A different resource from the site team, which manages a site.")
+    for title in INPUT_BLOCKS[1:5]:                # PRODUCTIVITY … ORGANISATION
+        scalars(title)
 
     block("SPREAD  (per day — the resources standing on site)")
     for n, head in enumerate(["Resource", "Multiplier", "Rate ($/day)", "Charged to"], start=2):
@@ -279,28 +255,8 @@ def _inputs(ws, model: CostingModel, where: _Ref, contract_reference: str) -> No
         row += 1
     row += 1
 
-    block("MATERIALS")
-    for key, label, unit in (
-        ("mazier_interval_m", "Mazier sample interval", "m"),
-        ("mazier_sample_length_m", "Mazier sample length", "m"),
-        ("soil_tube_cost", "Soil tube — unit cost", "$/nr"),
-        ("core_box_cost", "Wooden core box — unit cost", "$/nr"),
-        ("soil_box_capacity_m", "Soil box capacity", "m/box"),
-        ("rock_box_capacity_m", "Rock box capacity", "m/box"),
-        ("grout_hole_diameter_m", "Grout hole diameter", "m"),
-        ("grout_cost_per_litre", "Cement grout — unit cost", "$/L"),
-    ):
-        scalar(key, label, unit)
-
-    block("MOBILISATION")
-    for key, label, unit in (
-        ("crane_lorry_rate", "Crane lorry", "$/day"),
-        ("crane_lorry_days", "Crane lorry days", "day"),
-        ("truck_rate", "Truck (equipment)", "$/day"),
-        ("truck_days", "Truck days", "day"),
-        ("survey_per_location", "Surveying / setting out", "$/location"),
-    ):
-        scalar(key, label, unit)
+    for title in INPUT_BLOCKS[5:]:                 # MATERIALS, MOBILISATION
+        scalars(title)
 
     block("LABORATORY  (subcontract buy rates)")
     for lab in model.laboratory:

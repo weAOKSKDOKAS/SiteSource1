@@ -5,7 +5,7 @@
 //   #/tender                      the desk (home)
 //   #/tender/archived             submitted / won / lost — off the shelf, on the record
 //   #/tender/awaiting             tenders with open queries
-//   #/tender/criteria|rates|outputs|team|settings     the customise screens
+//   #/tender/criteria|rates|costing|outputs|team|settings   the library screens
 //   #/tender/subcontractors|benchmarks|projects   the management screens
 //   #/tender/letters|positions|clients|audit  entry points without screens yet
 //   #/tender/s/{setId}/{tab}      one tender, one tab
@@ -23,6 +23,7 @@ export type ShelfFilter = "desk" | "archived" | "awaiting";
 const SCREENS = [
   "criteria",
   "rates",
+  "costing",
   "outputs",
   "team",
   "settings",

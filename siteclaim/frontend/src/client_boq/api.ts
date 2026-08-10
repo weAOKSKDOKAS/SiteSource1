@@ -54,6 +54,7 @@ import type {
   PartsResponse,
   CostingModelShape,
   CostingResponse,
+  LibraryModelResponse,
   DerivedResponse,
   GroupPreview,
   GroupsResponse,
@@ -311,6 +312,12 @@ export const api = {
     ),
   resetSetCostingModel: (setId: string) =>
     del<{ using_own_model: boolean; note: string }>(`/costing/${setId}/model`),
+  /** THE LIBRARY's model — the company default every new tender inherits. Saving it changes every
+   *  FUTURE tender and rewrites none already priced. Not the same call as the tender-level one
+   *  above, and deliberately on a different screen. */
+  libraryCostingModel: () => get<LibraryModelResponse>("/costing/model"),
+  saveLibraryCostingModel: (model: CostingModelShape) =>
+    put<{ model: CostingModelShape; problems: string[] }>("/costing/model", { model }),
 
   // --- the take-off (Site) --------------------------------------------------
   stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),

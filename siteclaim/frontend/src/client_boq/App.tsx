@@ -27,6 +27,7 @@ import { CriteriaLibrary } from "./screens/CriteriaLibrary";
 import { NotDesigned } from "./screens/NotDesigned";
 import { Outputs } from "./screens/Outputs";
 import { Projects } from "./screens/Projects";
+import { CostingModelScreen } from "./screens/CostingModel";
 import { Rates } from "./screens/Rates";
 import { Settings } from "./screens/Settings";
 import { Subcontractors } from "./screens/Subcontractors";
@@ -98,6 +99,7 @@ const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false }
 const SCREEN_TITLES: Record<ScreenId | NotDesignedId, string> = {
   criteria: "Criteria library",
   rates: "Pricing & rates",
+  costing: "Costing model",
   outputs: "Outputs and norms",
   team: "Team & access",
   settings: "AI model",
@@ -563,6 +565,8 @@ export default function ClientBoqApp() {
             <CriteriaLibrary criteria={criteria} onChanged={() => void loadCriteria()} onError={setError} />
           ) : surface.screen === "rates" ? (
             <RatesScreen onError={setError} />
+          ) : surface.screen === "costing" ? (
+            <CostingModelScreen onError={setError} />
           ) : surface.screen === "outputs" ? (
             <OutputsScreen onError={setError} />
           ) : surface.screen === "team" ? (

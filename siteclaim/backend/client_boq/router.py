@@ -4346,7 +4346,30 @@ def get_library_model() -> dict:
         model = store.load_library_model(conn)
     finally:
         conn.close()
-    return {"model": model.model_dump(), "problems": model.problems(), "usable": model.usable()}
+    return {"model": model.model_dump(), "problems": model.problems(), "usable": model.usable(),
+            **_model_declarations(model)}
+
+
+def _model_declarations(model: boq_model.CostingModel) -> dict:
+    """What the inputs MEAN, so a screen can render them without a second copy of the knowledge.
+
+    The workbook reads the same declarations (``model.INPUT_SPECS``). A key with no spec would be
+    invisible on both, which is what the drift test in the costing-model tests exists to prevent.
+    """
+    return {
+        "input_blocks": list(boq_model.INPUT_BLOCKS),
+        "input_specs": [spec.model_dump() for spec in boq_model.INPUT_SPECS],
+        "charge_labels": {
+            boq_model.CHARGE_RIG_DAY: "per rig-day — scales with the rig count",
+            boq_model.CHARGE_CONTRACT_DAY: "per contract-day — the SITE team, per site",
+            boq_model.CHARGE_GFT: "per GFT-day — the GFT, one per gft_ratio rigs",
+            boq_model.CHARGE_PRELIM: "billed as its own item — in neither day-cost",
+            boq_model.CHARGE_NONE: "not charged",
+        },
+        # Inputs this model still carries that nothing reads. Inert by construction; said out loud
+        # so a knob that stopped being connected is not discovered from a number that never moves.
+        "retired": [{"key": key, "value": value, "why": why} for key, value, why in model.retired()],
+    }
 
 
 @router.put("/costing/model")
@@ -4397,6 +4420,7 @@ def get_costing(set_id: str, rev: Optional[int] = None) -> dict:
             "gate": register.gate(), "summary": register.summary(),
             "outstanding": len(register.outstanding()),
         },
+        **_model_declarations(parts["model"]),
     }
 
 

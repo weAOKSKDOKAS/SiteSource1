@@ -233,14 +233,20 @@ export interface HoleGroup {
   rock_m: number;
   deepest_m: number;
   holes_past_20m: number;
+  /** The measured shapes, one per station, straight off the schedule. The totals above are their
+   *  sum — a group's programme is run over HOLES, not over one hole as deep as the group. */
+  shapes: { station: string; soil_m: number; rock_m: number }[];
   rigs: number;
   soil_output: number;
   rock_output: number;
+  /** Efficiency lost per 20 m DOWN ONE HOLE. Defaults to 0: measured at zero across 205 real
+   *  drilling-days, and rock fraction — which the band table already carries — is the driver.
+   *  Above zero it is deliberate padding, and it resets at every hole. */
   decay: number;
   access_build_cost: number;
   badge: string;
   basis: string;
-  /** Which fields the estimator typed. Recorded as an act — `decay` defaults to 0.05, so the
+  /** Which fields the estimator typed. Recorded as an act — `decay` defaults to 0, so the
    *  value alone cannot say whether anybody chose it. */
   overrides: string[];
 }
@@ -319,6 +325,43 @@ export interface CostingModelShape {
   rounding: { threshold: number; decimals: number }[];
 }
 
+/** What one scalar input IS. Declared once on the backend (`model.INPUT_SPECS`) and read by BOTH
+ *  the workbook writer and the Library screen — a second copy here would drift the first time
+ *  somebody added a knob. */
+export interface InputSpec {
+  key: string;
+  label: string;
+  block: string;
+  unit: string;
+  note: string;
+  /** Held as a fraction, said out loud as a percentage. Nothing converts the stored value. */
+  percent: boolean;
+  /** The template's highlight — the handful that move the answer most. */
+  key_assumption: boolean;
+}
+
+/** An input the model still carries that nothing reads. Inert by construction, said out loud so a
+ *  knob that stopped being connected is not discovered from a number that never moves. */
+export interface RetiredInput {
+  key: string;
+  value: number;
+  why: string;
+}
+
+/** These three travel with every model payload — library and tender alike. */
+export interface ModelDeclarations {
+  input_blocks: string[];
+  input_specs: InputSpec[];
+  charge_labels: Record<string, string>;
+  retired: RetiredInput[];
+}
+
+export interface LibraryModelResponse extends ModelDeclarations {
+  model: CostingModelShape;
+  problems: string[];
+  usable: boolean;
+}
+
 /** A thing worth knowing before pricing. `stop` is the template's "do not price". */
 export interface CostingCheck {
   key: string;
@@ -384,7 +427,7 @@ export interface AssumptionRow {
   comment: string;
 }
 
-export interface CostingResponse {
+export interface CostingResponse extends ModelDeclarations {
   set_id: string;
   rev: number;
   model: CostingModelShape;

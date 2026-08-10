@@ -43,10 +43,12 @@ export function NavSidebar({
   // The LIBRARY: what the company knows, as against what one job needs. Everything here is
   // inherited by every tender and overridable on any of them — rates and outputs are the two
   // halves of the same idea (what a crew costs an hour; how many hours the work takes), so they
-  // sit together at the top.
+  // sit together at the top — and the costing model, which is how the engine turns the two into a
+  // bill rate, sits between them.
   const customise: NavItem[] = [
     { label: "Criteria library", short: "CL", surface: { kind: "screen", screen: "criteria" }, count: counts.criteria },
     { label: "Pricing & rates", short: "PR", surface: { kind: "screen", screen: "rates" } },
+    { label: "Costing model", short: "CM", surface: { kind: "screen", screen: "costing" } },
     { label: "Outputs & norms", short: "ON", surface: { kind: "screen", screen: "outputs" } },
     { label: "AI model", short: "AI", surface: { kind: "screen", screen: "settings" } },
     { label: "Letter templates", short: "LT", surface: { kind: "notdesigned", screen: "letters" } },

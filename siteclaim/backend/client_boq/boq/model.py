@@ -65,6 +65,11 @@ CHARGE_NONE = "none"                    # priced elsewhere; kept on the sheet fo
 # and again on the line the client asked for it on.
 CHARGE_PRELIM = "prelim"
 
+# Every charge class there is, in the order a reader meets them. Declared like `DRIVERS` and for
+# the same reason: a class the rest of the app has never heard of renders under a blank heading and
+# sums into nothing. Anything that maps over the classes maps over THIS.
+CHARGES = (CHARGE_RIG_DAY, CHARGE_CONTRACT_DAY, CHARGE_GFT, CHARGE_PRELIM, CHARGE_NONE)
+
 # Units a bill uses for a resource that runs with time, and how many of them are in a day. The
 # bill's own unit column is what separates a time-related preliminary from a one-off — see
 # `docs/client_boq/how_an_estimator_works.md` Stage 6 — so this table is the classifier, not a guess.
@@ -507,6 +512,121 @@ def _same(a: Any, b: Any) -> bool:
 def effective(library: CostingModel, tender: Optional[CostingModel]) -> CostingModel:
     """The model actually pricing this tender. Copy-on-write: the tender's if it has one."""
     return tender if tender is not None else library
+
+
+# ---------------------------------------------------------------------------
+# What each input IS — declared once, read by the workbook AND by the screen
+# ---------------------------------------------------------------------------
+# `inputs` is a bare `dict[str, float]`, which is right for the engine and useless for a human: a
+# key and a number say nothing about what the number means, what it is measured in, or whether 0.1
+# is ten percent or a tenth of a metre. The workbook already knew all of that — it was written into
+# the writer as literal argument lists, where nothing else could reach it. So a screen that lets
+# somebody edit the model would have needed a SECOND copy of the same knowledge, and the two would
+# have drifted the first time an input was added.
+#
+# Declared here instead, and read by both. `test_the_costing_model_is_editable.py` fails if an
+# input exists with no spec or a spec names an input that does not exist, so a new knob cannot be
+# added invisibly.
+INPUT_BLOCKS: tuple[str, ...] = (
+    "CONTRACT",
+    "PRODUCTIVITY",
+    "SPLIT-RATE CROSS-CHECK  (Method B — not the pricing basis)",
+    "COMMERCIAL",
+    "ORGANISATION",
+    "MATERIALS",
+    "MOBILISATION",
+)
+
+
+class InputSpec(BaseModel):
+    """What one scalar input is, in the terms a person needs to edit it."""
+
+    key: str
+    label: str
+    block: str
+    unit: str = ""
+    note: str = ""
+    #: Held as a fraction, said out loud as a percentage. The screen and the sheet both format it;
+    #: nothing converts it, because the stored value never changes.
+    percent: bool = False
+    #: The template's highlight — the handful that move the answer most.
+    key_assumption: bool = False
+
+
+def _spec(key, label, block, unit="", note="", percent=False, key_assumption=False) -> InputSpec:
+    return InputSpec(key=key, label=label, block=block, unit=unit, note=note, percent=percent,
+                     key_assumption=key_assumption)
+
+
+_CONTRACT, _PRODUCTIVITY = INPUT_BLOCKS[0], INPUT_BLOCKS[1]
+_METHOD_B, _COMMERCIAL = INPUT_BLOCKS[2], INPUT_BLOCKS[3]
+_ORGANISATION, _MATERIALS, _MOBILISATION = INPUT_BLOCKS[4], INPUT_BLOCKS[5], INPUT_BLOCKS[6]
+
+INPUT_SPECS: tuple[InputSpec, ...] = (
+    _spec("contract_period_months", "Contract period", _CONTRACT, "month"),
+    _spec("working_days_per_month", "Working days per month", _CONTRACT, "day",
+          "6-day week, HK civils norm."),
+
+    _spec("residual_site_factor", "Residual site factor", _PRODUCTIVITY, "x",
+          "What is left AFTER the rock-fraction band. 1.00 means the band explains the site. "
+          "Raise it only for a named reason, recorded on the assumptions register.",
+          key_assumption=True),
+    _spec("calendar_to_work_day", "Calendar : work-day ratio", _PRODUCTIVITY, "x",
+          "Observed 1.18 / 1.18 / 1.36. Weather lands here — it costs programme, not production."),
+    _spec("standing_allowance", "Standing / idle allowance", _PRODUCTIVITY, "of work-days",
+          "Observed 18%–36%. Drives the standing time item.", percent=True, key_assumption=True),
+    _spec("p90_multiplier", "Productivity band — P90 multiplier", _PRODUCTIVITY, "x"),
+    _spec("p10_multiplier", "Productivity band — P10 multiplier", _PRODUCTIVITY, "x"),
+    _spec("hours_per_day", "Hours per working day", _PRODUCTIVITY, "h"),
+
+    _spec("setup_days_per_hole", "Fixed set-up time per hole", _METHOD_B, "work-day",
+          "Regression intercept. Used only for the cross-check."),
+    _spec("soil_m_per_day", "Soil production rate", _METHOD_B, "m/work-day"),
+    _spec("rock_m_per_day", "Rock production rate", _METHOD_B, "m/work-day"),
+
+    _spec("margin", "Direct margin", _COMMERCIAL, "",
+          "Taken on the selling price, not added to cost — 10% is x1.111, not x1.100.",
+          percent=True, key_assumption=True),
+    _spec("overhead_local", "Local overhead", _COMMERCIAL, "",
+          "Site + local office establishment.", percent=True),
+    _spec("overhead_regional", "Regional overhead", _COMMERCIAL, "", percent=True),
+    _spec("overhead_international", "International overhead", _COMMERCIAL, "", percent=True),
+    _spec("nec_fee", "NEC fee percentage", _COMMERCIAL, "",
+          "Applies to compensation-event Defined Cost, NOT to the BQ rates.", percent=True),
+    _spec("risk_loading", "Risk / contingency loading", _COMMERCIAL, "",
+          "Priced-in allowance for the productivity spread. See the P90 column.", percent=True),
+
+    _spec("site_count", "Number of sites", _ORGANISATION, "nr",
+          "The site team is carried per site, not per rig."),
+    _spec("site_team_per_site", "Site teams per site", _ORGANISATION, "nr",
+          "A coefficient: 1.0 dedicated, 0.5 shared with another contract. Deliberately NOT "
+          "rounded up — rounding invents a team nobody employs."),
+    _spec("gft_ratio", "One GFT supervises", _ORGANISATION, "rigs",
+          "The GFT manages RIGS, at one per this many. A different resource from the site team, "
+          "which manages a site and does not move with the rig count.", key_assumption=True),
+
+    _spec("mazier_interval_m", "Mazier sample interval", _MATERIALS, "m"),
+    _spec("mazier_sample_length_m", "Mazier sample length", _MATERIALS, "m"),
+    _spec("soil_tube_cost", "Soil tube — unit cost", _MATERIALS, "$/nr"),
+    _spec("core_box_cost", "Wooden core box — unit cost", _MATERIALS, "$/nr"),
+    _spec("soil_box_capacity_m", "Soil box capacity", _MATERIALS, "m/box"),
+    _spec("rock_box_capacity_m", "Rock box capacity", _MATERIALS, "m/box"),
+    _spec("grout_hole_diameter_m", "Grout hole diameter", _MATERIALS, "m"),
+    _spec("grout_cost_per_litre", "Cement grout — unit cost", _MATERIALS, "$/L"),
+
+    _spec("crane_lorry_rate", "Crane lorry", _MOBILISATION, "$/day"),
+    _spec("crane_lorry_days", "Crane lorry days", _MOBILISATION, "day"),
+    _spec("truck_rate", "Truck (equipment)", _MOBILISATION, "$/day"),
+    _spec("truck_days", "Truck days", _MOBILISATION, "day"),
+    _spec("survey_per_location", "Surveying / setting out", _MOBILISATION, "$/location"),
+)
+
+INPUT_SPEC_INDEX: dict[str, InputSpec] = {spec.key: spec for spec in INPUT_SPECS}
+
+
+def specs_in(block: str) -> list[InputSpec]:
+    """Every input declared under one block, in declaration order."""
+    return [spec for spec in INPUT_SPECS if spec.block == block]
 
 
 # ---------------------------------------------------------------------------
