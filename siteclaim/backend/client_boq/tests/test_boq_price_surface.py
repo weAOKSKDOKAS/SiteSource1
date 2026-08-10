@@ -127,24 +127,33 @@ class TestWhatARateMustCover:
         response = client.get(f"{BASE}/price/{SET}/coverage/99.99")
         assert response.status_code == 404
 
-    def test_an_untranscribed_section_says_so_instead_of_showing_an_empty_checklist(
+    def test_an_item_with_no_list_says_so_instead_of_showing_an_empty_checklist(
             self, client, priced):
-        # RE-ANCHORED IN THE OPEN. The subject is unchanged and is the whole point: an empty list
-        # must read as "nobody has read this yet", never as "this rate carries no obligations" —
-        # the two look identical on screen and mean opposite things to somebody about to price the
-        # item. What changed is that the sentence is now SPECIFIC. It used to be one message for
-        # every empty list; there are three different reasons a list can be empty, with three
-        # different fixes, and saying the wrong one sends somebody to do the wrong work. This
-        # asserts the invariant rather than the old wording.
-        other = next(r for r in _refs(client) if r not in _refs(client, "2"))
+        # RE-ANCHORED IN THE OPEN, TWICE, AND THE SUBJECT HAS NEVER MOVED: an empty list must read
+        # as "nobody has said what this rate must carry", never as "this rate carries no
+        # obligations". Those look identical on screen and mean opposite things to somebody about
+        # to price the item, and `settled is False` is the invariant that separates them.
+        #
+        # First re-anchor: the sentence became SPECIFIC, because there are three reasons a list can
+        # be empty and saying the wrong one sends somebody to do the wrong work.
+        #
+        # Second re-anchor (SMM S01 transcribed): this used to take the first non-Bill-2 item and
+        # assert "not been transcribed". The fixture's first Bill 1 item is "Provision of measures",
+        # which now carries ¶1.14's sixteen sub-heads — so that item stopped being an example of an
+        # empty list at all. It is re-pointed at one that still is, and asserts the sentence that is
+        # actually true of it rather than the one that used to be true of a different item.
+        listed = {r for r in _refs(client, "1")
+                  if client.get(f"{BASE}/price/{SET}/coverage/{r}").json()["entries"]}
+        assert listed, "Bill 1's transcribed items should carry their heads"
+        other = next(r for r in _refs(client, "1") if r not in listed)
+
         body = client.get(f"{BASE}/price/{SET}/coverage/{other}").json()
         assert body["entries"] == []
         assert body["waiting_on"], "an empty list never travels without its reason"
-        assert "not been transcribed" in body["waiting_on"]
+        assert "matched this item by title" in body["waiting_on"], (
+            "Bill 1 HAS transcribed clauses now — none of them fits this item, which is a mapping "
+            "to check and not a Method of Measurement to go and read")
         assert body["settled"] is False, "nothing to check is not the same as checked"
-        # The old sentence spelt this out ("not because the rate carries no obligations"). The new
-        # ones say it by naming what IS outstanding — the clause, or the mapping, or the reading —
-        # which is the same claim made useful. `settled is False` above is the invariant itself.
 
 
 class TestTheWorking:

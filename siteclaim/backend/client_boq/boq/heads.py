@@ -106,6 +106,13 @@ class TitleRule(BaseModel):
     title: str = ""                 # what the clause governs, in the pack's words
     heads: list[CoverageHead] = Field(default_factory=list)
     partial: str = PARTIAL_BY_CONSTRUCTION
+    #: WHY this rule carries no heads, when it carries none. There is more than one reason a clause
+    #: can be named and unusable — its words may never have been transcribed, or they may be sitting
+    #: right there while the MAPPING that would attach them is in doubt. Those are different
+    #: problems with different owners, and reporting one when it is really the other sends somebody
+    #: off to transcribe a thing that is already in the file. Empty falls back to the general
+    #: "not transcribed" reading, which is the common case.
+    no_heads_reason: str = ""
 
     def matches(self, item: BillItem) -> bool:
         if self.bill_no and (item.bill_no or "").strip() != self.bill_no:

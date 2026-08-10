@@ -55,10 +55,12 @@ reading as "fully covered", just slower to notice:
   reaches the reader through :attr:`ItemCoverage.partial` and the summary line;
 * :data:`FROM_BASE_SMM` marks an individual head whose words came from the base document, so a
   reader can see which ones cannot be checked against anything in their possession;
-* :data:`BILL_1_AWAITING_TEXT` names the 27 SMM S01 clauses whose sub-heads were never transcribed.
-  Their mapping is known and their words are not, so they carry no heads at all — **a head with an
-  invented label is worse than a named gap**, and an item governed by one of them reports "the
-  clause is known; the words are outstanding" rather than settling on nothing.
+* :data:`BILL_1_AWAITING_TEXT` names what is STILL missing from SMM S01 now that the pack's Section 1
+  has been transcribed into :mod:`client_boq.boq.smm_s01` — the base sub-heads the lettering proves
+  are absent, the second ¶1.06(k) the pack prints and nobody read, the two clauses that extracted
+  only as fragments, the three sub-heads that stop mid-sentence, and the one BQ mapping that
+  contradicts the Method of Measurement. It is much shorter than it was, and shorter is not the same
+  as finished — **a head with an invented label is still worse than a named gap.**
 
 WHERE A HEAD COMES FROM — three routes, one list
 ------------------------------------------------
@@ -75,6 +77,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from client_boq.boq import smm_s01
 from client_boq.boq.docmap import DocumentMap
 from client_boq.models import BillItem, ClientBill
 
@@ -681,84 +684,162 @@ _WAGES_29 = [
 # insurance item. There is no genuinely universal subset to put beside these — the one thing every
 # rate in the contract is deemed to include is already `DEEMED_INCLUDED`, ticked once at bill level.
 #
-# WHAT IS AND IS NOT HERE. The title → clause mapping below was read from the real BQ pages and is
-# transcribed in full. The clauses' SUB-HEADS were not: the deep-dive captured the numbers, not the
-# text of 42 blocks. **A head with a made-up label is worse than a named gap**, so no labels are
-# invented. Each entry carries its clause number, its title, and `heads=[]` — and
-# `BILL_1_AWAITING_TEXT` reports exactly which clauses still need their words supplied.
+# WHAT IS HERE NOW. The title → clause mapping below was read from the real BQ pages. The clauses'
+# SUB-HEADS have since been read off the pack too and live in `client_boq.boq.smm_s01` — 40 clauses,
+# 264 heads — so all but one of these rules now carries the words its rate must actually cover.
 #
-# An entry with no heads still does useful work: `has_list_for` stays FALSE for it, so the item
-# reads "no list" rather than "all covered", and `no_list_reason` names the clause that governs it.
-# That is the difference between "nobody knows what this rate must carry" and "we know which clause
-# says, and we have not read it yet".
-_BILL_1_MAPPING: tuple[tuple[str, tuple[str, ...], str, str], ...] = (
-    # (rule key, title phrases, SMM clause, what the BQ calls it)
+# ⚠ THE TRANSCRIPTION CORRECTED THREE OF THESE CLAUSE NUMBERS. The mapping's TITLES came from the
+# BQ and are right; three of its SMM references were off by one clause, and attaching the text
+# proved it:
+#
+#     an item titled …  used to name …               and is really …
+#     "dust covering"   ¶1.76–1.77                   ¶1.76 alone (1.77 is the smoke screens)
+#     "smoke screen"    ¶1.85 (acoustic screens)     ¶1.77
+#     "acoustic screen" ¶1.86 (other noise practices) ¶1.85 — and it is NOISE abatement, not air
+#
+# Left alone, transcribing would have hung the acoustic-screen heads on an item about smoke screens
+# — precisely the mis-attachment `TitleRule`'s docstring says a per-item list exists to prevent, and
+# it would have arrived wearing the authority of a verbatim quotation. The rule keys move with the
+# clauses (`smm1.85` → `smm1.77`, `smm1.86` → `smm1.85`); a rule key is an id for the rule, never
+# what a tick is stored against, so nothing migrates and no verdict is disturbed.
+#
+# ⚠ ONE RULE IS DELIBERATELY LEFT WITHOUT ITS TEXT. `smm1.45` matches an item titled "…noise…
+# mitigation…" and names ¶1.45–1.47 — but those three clauses are environmental MONITORING, and
+# mitigation is ¶1.40–1.42. Either the BQ item is really monitoring, or it is mitigation and shares
+# ¶1.40–1.42 with the air item. Which one cannot be settled from the Method of Measurement; it needs
+# the BQ page. So the text stays transcribed and unattached, and the rule says why — a plausible
+# guess here would read exactly like the twenty-five that were actually verified.
+_BILL_1_MAPPING: tuple[tuple[str, tuple[str, ...], str, str, tuple[str, ...]], ...] = (
+    # (rule key, title phrases, SMM clause, what the BQ calls it, the clauses its heads come from)
     ("smm1.05", ("project manager", "take over"), "SMM S01 ¶1.05",
-     "Project Manager's Site Office — take over"),
+     "Project Manager's Site Office — take over", ("1.05",)),
     ("smm1.06", ("project manager", "maintain"), "SMM S01 ¶1.06",
-     "Project Manager's Site Office — maintain"),
+     "Project Manager's Site Office — maintain", ("1.06",)),
     ("smm1.07", ("project manager", "hand back"), "SMM S01 ¶1.07",
-     "Project Manager's Site Office — hand back"),
+     "Project Manager's Site Office — hand back", ("1.07",)),
     ("smm1.11", ("temporary accommodation",), "SMM S01 ¶1.11",
-     "Temporary accommodation for the Contractor"),
+     "Temporary accommodation for the Contractor", ("1.11",)),
     ("smm1.14", ("provision of measures",), "SMM S01 ¶1.14",
-     "Maintenance of traffic flow — provision of measures"),
+     "Maintenance of traffic flow — provision of measures", ("1.14",)),
     ("smm1.15", ("maintenance of measures",), "SMM S01 ¶1.15",
-     "Maintenance of traffic flow — maintenance of measures"),
-    ("smm1.18", ("insurance",), "SMM S01 ¶1.18", "Insurance"),
+     "Maintenance of traffic flow — maintenance of measures", ("1.15",)),
+    ("smm1.18", ("insurance",), "SMM S01 ¶1.18", "Insurance", ("1.18",)),
+    # Provision (¶1.22) and running (¶1.23) of the vehicles, billed as one item.
     ("smm1.22", ("vehicle", "project manager"), "SMM S01 ¶1.22–1.23",
-     "Vehicles for the Project Manager"),
+     "Vehicles for the Project Manager", ("1.22", "1.23")),
+    # ONE clause, TWO bill items: ¶1.28's sub-heads name both systems, and the BQ bills them apart.
     ("smm1.28", ("computer facilities",), "SMM S01 ¶1.28",
-     "Contract Computer Facilities"),
+     "Contract Computer Facilities", ("1.28",)),
     ("smm1.28.edms", ("electronic document management",), "SMM S01 ¶1.28",
-     "Electronic Document Management System"),
+     "Electronic Document Management System", ("1.28",)),
     ("smm1.32", ("photograph",), "SMM S01 ¶1.32",
-     "Photographs — progress set, additional, record"),
-    ("smm1.37", ("hoarding",), "SMM S01 ¶1.37", "Hoardings"),
+     "Photographs — progress set, additional, record", ("1.32",)),
+    ("smm1.37", ("hoarding",), "SMM S01 ¶1.37", "Hoardings", ("1.37",)),
+    # Provision / maintenance / removal of the mitigation measures, billed as one item.
     ("smm1.40", ("air", "mitigation"), "SMM S01 ¶1.40–1.42",
-     "Environmental mitigation measures — air"),
+     "Environmental mitigation measures — air", ("1.40", "1.41", "1.42")),
+    # No clauses: the mapping contradicts the Method of Measurement. See the note above.
     ("smm1.45", ("noise", "mitigation"), "SMM S01 ¶1.45–1.47",
-     "Environmental mitigation measures — noise"),
+     "Environmental mitigation measures — noise", ()),
     ("smm1.66", ("trip ticket", "complete"), "SMM S01 ¶1.66",
-     "Site management plan for trip ticket system — complete"),
+     "Site management plan for trip ticket system — complete", ("1.66",)),
     ("smm1.67", ("trip ticket", "implement"), "SMM S01 ¶1.67",
-     "Site management plan for trip ticket system — implement"),
-    ("smm1.76", ("dust covering",), "SMM S01 ¶1.76–1.77",
-     "Air pollution abatement — dust covering"),
-    ("smm1.85", ("smoke screen",), "SMM S01 ¶1.85", "Air pollution abatement — smoke screens"),
-    ("smm1.86", ("acoustic screen",), "SMM S01 ¶1.86",
-     "Air pollution abatement — acoustic screens"),
-    ("smm1.100", ("fuel sample",), "SMM S01 ¶1.100", "Fuel sample"),
-    ("smm1.104", ("survey of the site",), "SMM S01 ¶1.104", "Survey of the Site"),
+     "Site management plan for trip ticket system — implement", ("1.67",)),
+    ("smm1.76", ("dust covering",), "SMM S01 ¶1.76",
+     "Air pollution abatement — dust covering", ("1.76",)),
+    ("smm1.77", ("smoke screen",), "SMM S01 ¶1.77",
+     "Air pollution abatement — smoke screens", ("1.77",)),
+    ("smm1.85", ("acoustic screen",), "SMM S01 ¶1.85",
+     "Noise pollution abatement — acoustic screens", ("1.85",)),
+    ("smm1.100", ("fuel sample",), "SMM S01 ¶1.100", "Fuel sample", ("1.100",)),
+    ("smm1.104", ("survey of the site",), "SMM S01 ¶1.104", "Survey of the Site", ("1.104",)),
+    # Erection (¶1.109), servicing (¶1.110) and handing back (¶1.111), billed as one item.
     ("smm1.109", ("core and sample store",), "SMM S01 ¶1.109–1.111",
-     "Core and sample store"),
+     "Core and sample store", ("1.109", "1.110", "1.111")),
     ("smm1.116", ("telephone line",), "SMM S01 ¶1.116–1.117",
-     "24-hour telephone line"),
+     "24-hour telephone line", ("1.116", "1.117")),
     ("smm1.140", ("smart site safety", "plan"), "SMM S01 ¶1.140",
-     "Smart Site Safety System — plan"),
+     "Smart Site Safety System — plan", ("1.140",)),
     ("smm1.141", ("smart site safety", "review"), "SMM S01 ¶1.141",
-     "Smart Site Safety System — review"),
+     "Smart Site Safety System — review", ("1.141",)),
     ("smm1.146", ("smart site safety", "network"), "SMM S01 ¶1.146",
-     "Smart Site Safety System — network"),
+     "Smart Site Safety System — network", ("1.146",)),
     ("smm1.151", ("smart site safety", "component"), "SMM S01 ¶1.151",
-     "Smart Site Safety System — components"),
+     "Smart Site Safety System — components", ("1.151",)),
 )
 
-_BILL_1_NO_TEXT = (
-    "The clause that governs this item is known; its sub-heads were NOT transcribed. Inventing "
-    "labels for them would put words in the contract's mouth, so the clause is named and the text "
-    "is reported as outstanding — see `BILL_1_AWAITING_TEXT`.")
+_MAPPING_UNVERIFIED = (
+    "This rule's clause range is environmental MONITORING (¶1.45–1.47); the item it matches is "
+    "titled mitigation, which is ¶1.40–1.42. The sub-heads of both ARE transcribed — see "
+    "`client_boq.boq.smm_s01` — and neither set is attached here, because settling which one "
+    "governs this item needs the BQ page and not the Method of Measurement. A guess would read "
+    "exactly like the twenty-five mappings that were verified.")
+
+
+def _bill_1_partial(clauses: tuple[str, ...]) -> str:
+    """Why this rule's list is not the whole coverage — naming the missing letters where it can.
+
+    Every list here is the pack's amendments only, which `PARTIAL_BY_CONSTRUCTION` already says. For
+    ten of these clauses the lettering says something sharper: ¶1.06 prints (c), (f), (h)–(p) and
+    (w), so (a), (b), (d), (e), (g) and (q)–(v) are base SMM 1992 sub-heads — real, binding, and not
+    in anybody's possession here. Naming them beats "this list is partial", because a reader can
+    count them.
+    """
+    named = [f"¶{clause} prints no "
+             f"({'), ('.join(smm_s01.BASE_SMM_GAPS[clause])})"
+             for clause in clauses if clause in smm_s01.BASE_SMM_GAPS]
+    if not named:
+        return PARTIAL_BY_CONSTRUCTION
+    return (f"{PARTIAL_BY_CONSTRUCTION} Here the lettering says which: {'; '.join(named)} — those "
+            f"sub-heads are in the base SMM 1992 and are binding and unlisted.")
+
 
 _PRELIMINARIES_1 = [
     TitleRule(key=key, bill_no="1", match=match, smm_clause=clause, title=title,
-              heads=[], partial=_BILL_1_NO_TEXT)
-    for key, match, clause, title in _BILL_1_MAPPING
+              heads=smm_s01.heads_for_clauses(*clauses),
+              partial=_bill_1_partial(clauses) if clauses else _MAPPING_UNVERIFIED,
+              no_heads_reason="" if clauses else _MAPPING_UNVERIFIED)
+    for key, match, clause, title, clauses in _BILL_1_MAPPING
 ]
 
+# WHAT IS STILL OUTSTANDING IN SMM S01, assembled from the transcription's own records rather than
+# maintained by hand beside them — a second copy of a list is a list that drifts.
+#
+# This used to name all 27 mapped clauses, because none of their words had been read. They have been
+# now, so the list says the smaller and sharper thing: the base sub-heads the lettering proves are
+# missing, the one mapping that contradicts itself, the second ¶1.06(k) the pack prints and nobody
+# transcribed, the two clauses that extracted as fragments, and the three sub-heads that stop
+# mid-sentence. Shorter is not the same as finished, and none of these are things a reader should
+# have to infer from a tidy-looking checklist.
+# ONE ROW PER CLAUSE, NOT PER RULE. ¶1.28 governs two BQ items — the computer facilities and the
+# EDMS are billed apart and its sub-heads name both — so a row per rule listed the same missing base
+# sub-heads twice. This is a work-list, and a work-list that repeats an entry is one somebody does
+# twice or crosses off once. The rules it affects ride ON the row instead, which also makes the
+# shared clause visible rather than merely duplicated.
+_BILL_1_RULES_FOR: dict[str, list[str]] = {}
+for _key, _match, _clause, _title, _clauses in _BILL_1_MAPPING:
+    for _c in _clauses:
+        _BILL_1_RULES_FOR.setdefault(_c, []).append(_key)
+
 BILL_1_AWAITING_TEXT: list[dict] = [
-    {"rule": rule.key, "smm_clause": rule.smm_clause, "title": rule.title,
-     "needs": "the sub-heads of this clause, verbatim from SMM S01"}
-    for rule in _PRELIMINARIES_1
+    *({"rules": _BILL_1_RULES_FOR[clause], "smm_clause": f"SMM S01 ¶{clause}",
+       "titles": [t for k, _m, _s, t, cs in _BILL_1_MAPPING if clause in cs],
+       "needs": f"sub-head{'s' if len(gaps) > 1 else ''} ({'), ('.join(gaps)}) of ¶{clause}, "
+                f"which are in the base SMM 1992 — not in this pack, and not readable from it"}
+      for clause, gaps in smm_s01.BASE_SMM_GAPS.items() if clause in _BILL_1_RULES_FOR),
+    *({"rules": [rule.key], "smm_clause": rule.smm_clause, "titles": [rule.title],
+       "needs": "the BQ page for this item, to settle whether it is mitigation (¶1.40–1.42) or "
+                "monitoring (¶1.45–1.47). Both are transcribed; neither is attached"}
+      for rule in _PRELIMINARIES_1 if not rule.heads),
+    {"rules": _BILL_1_RULES_FOR["1.06"], "smm_clause": "SMM S01 ¶1.06(k)",
+     "titles": ["Project Manager's Site Office — maintain"],
+     "needs": smm_s01.SECOND_K["missing"]},
+    *({"rules": [], "smm_clause": f"SMM S01 ¶{row['clause']}", "titles": [],
+       "needs": f"the substituted text of this amendment: {row['reading']}"}
+      for row in smm_s01.FRAGMENTS),
+    *({"rules": [], "smm_clause": f"SMM S01 ¶{row['clause']}({row['letter']})", "titles": [],
+       "needs": f"the rest of this sub-head — it {row['breaks_at']}"}
+      for row in smm_s01.TRUNCATED),
 ]
 
 TITLE_COVERAGE: list[TitleRule] = [
@@ -962,11 +1043,20 @@ def _no_list_reason(item: BillItem) -> str:
     transcribe a thing that is already sitting in this file.
     """
     bill_no = section_of(item)
-    # A clause matched by title but carrying no heads: the governing clause is KNOWN and its words
-    # are outstanding. Saying "nothing is transcribed for this bill" would throw that away.
+    # A clause matched by title but carrying no heads: the governing clause is KNOWN and something
+    # about it is outstanding. Saying "nothing is transcribed for this bill" would throw that away.
+    #
+    # WHICH outstanding thing is not one answer. A clause's words may never have been read, or they
+    # may be sitting in the file while the MAPPING that would attach them is in doubt — see
+    # `_MAPPING_UNVERIFIED`. Those need different people to do different work, so a rule that knows
+    # its own reason gives it, and the general reading is the fallback rather than the assumption.
+    # This is the same lesson as the two branches below, applied one level further in.
     named = [rule for rule in title_rules_for(item) if not rule.heads]
     if named:
         clauses = " Â· ".join(f"{rule.smm_clause} ({rule.title})" for rule in named)
+        given = [rule.no_heads_reason for rule in named if rule.no_heads_reason]
+        if given:
+            return f"{clauses} governs this item. " + " ".join(given)
         return (f"{clauses} governs this item, and its sub-heads have not been transcribed. The "
                 f"clause is known; the words are outstanding. Nothing here invents them — a head "
                 f"with a made-up label is worse than a named gap.")

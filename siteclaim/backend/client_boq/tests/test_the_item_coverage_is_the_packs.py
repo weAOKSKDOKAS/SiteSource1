@@ -392,8 +392,18 @@ class TestWhatCouldNotBeMapped:
 class TestBillOneIsMappedByTitleAndItsTextIsAGap:
     """SMM 1 carries 42 item-coverage blocks, one per preliminaries item, and the BQ's numbers are
     NOT the clause numbers — BQ 1.12 is Contract Computer Facilities while SMM ¶1.12 is something
-    else. So the mapping is by title, and it is a MAPPING ONLY: the clause numbers were captured,
-    the sub-head text was not, and a head with an invented label is worse than a named gap."""
+    else. So the mapping is by title.
+
+    RE-ANCHORED IN THE OPEN. This class was written when the mapping was a MAPPING ONLY — clause
+    numbers captured, sub-head text not — and four of its tests used BQ 1.12 as the standing example
+    of "the clause is known and its words are outstanding". SMM S01 has since been transcribed
+    (`client_boq.boq.smm_s01`, 40 clauses, 264 heads) and BQ 1.12 now carries ¶1.28's two sub-heads,
+    so that example no longer demonstrates anything.
+
+    What is asserted has NOT been weakened. Every mechanism those tests defended is still tested
+    below, on an example that is still in that state: `smm1.45`, the one mapping the transcription
+    could not verify. The two that changed meaning rather than example say so on the line.
+    """
 
     def test_the_mapping_reaches_the_clause_the_title_names_not_the_matching_number(self):
         from client_boq.boq.coverage import title_rules_for
@@ -403,47 +413,115 @@ class TestBillOneIsMappedByTitleAndItsTextIsAGap:
         assert [rule.smm_clause for rule in rules] == ["SMM S01 ¶1.28"]
         assert "¶1.12" not in rules[0].smm_clause, "the BQ number is not the clause number"
 
-    def test_no_label_is_invented_for_a_clause_nobody_transcribed(self):
+    def test_the_transcription_reached_the_item_the_mapping_promised(self):
+        """The other half of the test above, and the reason the four below moved: the clause the
+        title resolves to now brings its words with it."""
+        heads = heads_for(_item("1.12", bill_no="1", description="Contract Computer Facilities"))
+        assert [h.key for h in heads] == ["smm.s01.1.28.s", "smm.s01.1.28.t"]
+        assert heads[0].label.startswith("Compliance with the requirements")
+
+    def test_no_label_is_invented_for_a_clause_whose_mapping_is_unsettled(self):
+        """RE-POINTED, not weakened. `smm1.45` names ¶1.45–1.47 and matches an item titled
+        mitigation, but those clauses are environmental MONITORING. Both sets of sub-heads are
+        transcribed and NEITHER is attached, because choosing between them needs the BQ page. A
+        plausible guess would arrive looking exactly like the twenty-five that were verified."""
         from client_boq.boq.coverage import title_rules_for
 
-        for rule in title_rules_for(_item("1.12", bill_no="1",
-                                          description="Contract Computer Facilities")):
-            assert rule.heads == []
+        rules = title_rules_for(_item("1.20", bill_no="1",
+                                      description="Environmental mitigation measures for noise"))
+        assert [rule.key for rule in rules] == ["smm1.45"]
+        assert rules[0].heads == []
 
-    def test_an_item_whose_clause_is_known_but_untranscribed_never_reads_as_covered(self):
-        """THE BUG THIS CLASS CAUGHT. A matched-but-empty rule made `has_list_for` true, which
-        cleared `no_list_for_section`, which let `settled()` return True on an item with nothing to
-        check. "All covered" for coverage nobody has read is the exact failure that field exists to
-        prevent — and it came back through the door marked "we know which clause it is"."""
-        coverage = coverage_for(_item("1.12", bill_no="1",
-                                      description="Contract Computer Facilities"))
+    def test_an_item_whose_clause_is_known_but_unattached_never_reads_as_covered(self):
+        """THE BUG THIS CLASS CAUGHT, still guarded on the example that still has no heads. A
+        matched-but-empty rule made `has_list_for` true, which cleared `no_list_for_section`, which
+        let `settled()` return True on an item with nothing to check. "All covered" for coverage
+        nobody has read is the exact failure that field exists to prevent — and it came back through
+        the door marked "we know which clause it is"."""
+        coverage = coverage_for(_item("1.20", bill_no="1",
+                                      description="Environmental mitigation measures for noise"))
         assert coverage.total() == 0
         assert not coverage.settled()
         assert coverage.no_list_for_section == "1"
 
-    def test_it_says_the_clause_is_known_and_the_words_are_outstanding(self):
-        """A different sentence from "nothing is transcribed for this bill", because it is a
-        different problem: somebody needs to read ONE named clause, not the whole Method."""
-        coverage = coverage_for(_item("1.12", bill_no="1",
-                                      description="Contract Computer Facilities"))
-        assert "SMM S01 ¶1.28 (Contract Computer Facilities) governs this item" \
-            in coverage.no_list_reason
-        assert "sub-heads have not been transcribed" in coverage.no_list_reason
-        assert "worse than a named gap" in coverage.no_list_reason
+    def test_it_names_the_clause_and_says_which_kind_of_outstanding_it_is(self):
+        """CHANGED IN MEANING, deliberately. There is more than one way a named clause can be
+        unusable: its words may never have been read, or they may be sitting in the file while the
+        MAPPING is in doubt. Those need different people to do different work, so the rule that
+        knows its own reason gives it — the same lesson as `_no_list_reason`'s two branches, one
+        level further in."""
+        coverage = coverage_for(_item("1.20", bill_no="1",
+                                      description="Environmental mitigation measures for noise"))
+        assert "SMM S01 ¶1.45–1.47" in coverage.no_list_reason
+        assert "governs this item" in coverage.no_list_reason
+        assert "needs the BQ page" in coverage.no_list_reason
+        assert "MONITORING" in coverage.no_list_reason
+
+    def test_the_general_never_transcribed_reading_is_still_what_a_silent_rule_gets(self):
+        """No SHIPPED rule is in that state any more, so this constructs one. The branch stays
+        because the next contract's mapping will land before its text again, exactly as this one
+        did — deleting a safety net because today's data happens not to trip it is how it is not
+        there the day it is needed."""
+        from client_boq.boq import coverage as module
+        from client_boq.boq.heads import TitleRule
+
+        silent = TitleRule(key="future.contract", bill_no="1", match=("something new",),
+                           smm_clause="SMM S01 ¶9.99", title="A clause read before its text")
+        original = module.TITLE_COVERAGE
+        module.TITLE_COVERAGE = [*original, silent]
+        try:
+            reason = coverage_for(_item("1.99", bill_no="1",
+                                        description="Something new")).no_list_reason
+        finally:
+            module.TITLE_COVERAGE = original
+
+        assert "SMM S01 ¶9.99 (A clause read before its text) governs this item" in reason
+        assert "sub-heads have not been transcribed" in reason
+        assert "worse than a named gap" in reason
 
     def test_a_bill_one_item_nothing_matched_says_the_other_thing(self):
         coverage = coverage_for(_item("1.62", bill_no="1",
                                       description="General site clearance of the Site"))
         assert "none of them matched this item by title" in coverage.no_list_reason
 
-    def test_the_outstanding_clauses_are_listed_by_name(self):
+    def test_the_outstanding_text_is_listed_by_name(self):
+        """RE-ANCHORED IN THE OPEN. This asserted 27 — every mapped clause needing every word.
+        Twenty-six of them have their words now, so the list says the smaller and sharper thing.
+        Smaller is not finished, which is why it is still asserted item by item rather than
+        allowed to go quiet."""
         from client_boq.boq.coverage import BILL_1_AWAITING_TEXT
 
-        assert len(BILL_1_AWAITING_TEXT) == 27, "every mapped clause still needs its words"
-        by_rule = {row["rule"]: row for row in BILL_1_AWAITING_TEXT}
-        assert by_rule["smm1.28"]["smm_clause"] == "SMM S01 ¶1.28"
-        assert by_rule["smm1.109"]["title"] == "Core and sample store"
-        assert all("verbatim from SMM S01" in row["needs"] for row in BILL_1_AWAITING_TEXT)
+        needs = {(row["smm_clause"], row["needs"]) for row in BILL_1_AWAITING_TEXT}
+        assert len(BILL_1_AWAITING_TEXT) == len(needs), (
+            "no row is listed twice — this is a work-list, and a repeated entry is one somebody "
+            "does twice or crosses off once. ¶1.28 governs two BQ items and caught exactly that")
+        shared = next(r for r in BILL_1_AWAITING_TEXT if r["smm_clause"] == "SMM S01 ¶1.28")
+        assert shared["rules"] == ["smm1.28", "smm1.28.edms"], "both items ride on the one row"
+
+        # The base SMM 1992 sub-heads the lettering proves are missing — ten clauses' worth.
+        clauses = {row["smm_clause"] for row in BILL_1_AWAITING_TEXT}
+        assert {"SMM S01 ¶1.06", "SMM S01 ¶1.28", "SMM S01 ¶1.37"} <= clauses
+        base = next(r for r in BILL_1_AWAITING_TEXT if r["smm_clause"] == "SMM S01 ¶1.06"
+                    and "base SMM" in r["needs"])
+        assert "(a), (b), (d), (e), (g)" in base["needs"], "named, so a reader can count them"
+
+        # The second ¶1.06(k) the pack prints and nobody transcribed.
+        assert any("office assistants" in row["needs"] for row in BILL_1_AWAITING_TEXT)
+        # The two clauses that extracted as fragments, and the three sub-heads that break.
+        assert {"SMM S01 ¶1.17", "SMM S01 ¶1.19"} <= clauses
+        assert {"SMM S01 ¶1.96(d)", "SMM S01 ¶1.112(s)", "SMM S01 ¶1.156(c)"} <= clauses
+        # And the one mapping the Method of Measurement contradicts.
+        unverified = next(r for r in BILL_1_AWAITING_TEXT if r["rules"] == ["smm1.45"])
+        assert "the BQ page for this item" in unverified["needs"]
+        assert "neither is attached" in unverified["needs"]
+
+    def test_every_mapped_clause_that_is_not_awaiting_its_text_actually_has_it(self):
+        """The claim the shortened list rests on. A clause dropping off `BILL_1_AWAITING_TEXT`
+        without gaining heads would be the list going quiet rather than the work being done."""
+        from client_boq.boq.coverage import _PRELIMINARIES_1
+
+        for rule in _PRELIMINARIES_1:
+            assert rule.heads or rule.no_heads_reason, rule.key
 
     def test_the_two_traffic_flow_items_are_told_apart(self):
         """BQ 1.5 and 1.6 are provision and maintenance of the SAME measures, one clause apart."""
