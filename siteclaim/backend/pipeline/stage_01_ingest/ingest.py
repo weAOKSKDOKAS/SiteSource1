@@ -715,13 +715,80 @@ def _ocr_item_inventory(doc_text: str) -> "dict[str, str]":
     return inv
 
 
+# A bill item reference standing alone as one word — the anchor of a positional row.
+_BQ_REF_TOKEN = re.compile(r"^\d{1,2}[.\-/]\d{1,3}[a-z]?$", re.I)
+
+
+def _y_rows(words: "list[tuple]") -> "list[list[str]]":
+    """Words regrouped into printed rows: clustered on y (3pt tolerance), sorted by x within a
+    row. ``words`` are pymupdf ``page.get_text("words")`` tuples — ``(x0, y0, x1, y1, text, …)``;
+    only the first two coordinates and the text are read, so any same-shaped source serves."""
+    rows: list[list] = []          # [y_sum, count, [(x, text)]]
+    for w in sorted(words, key=lambda w: (float(w[1]), float(w[0]))):
+        x, y, text = float(w[0]), float(w[1]), str(w[4])
+        if rows and abs(y - rows[-1][0] / rows[-1][1]) <= 3.0:
+            rows[-1][0] += y
+            rows[-1][1] += 1
+            rows[-1][2].append((x, text))
+        else:
+            rows.append([y, 1, [(x, text)]])
+    return [[text for _x, text in sorted(r[2])] for r in rows]
+
+
+def positional_bill_rows(pages: "list[list[tuple]]", bills: set) -> "dict[str, str]":
+    """``item_ref -> description`` rebuilt from WORD POSITIONS — the fallback for rows sequence
+    text cannot deliver at all.
+
+    THE SHAPE THIS EXISTS FOR, read off the real pack (I-ND_2025_04_BQ-0.pdf, Bill 1, page 6):
+    pymupdf linearises the page with items 1.45–1.50's refs and column tokens early and every
+    DESCRIPTION at the tail — and the tail itself is scrambled ("…wastewater" lines apart from
+    its own "collection system"), so no order-based pairing of tail lines to refs can be right.
+    On the page, same-row words share a y: grouping by y and sorting by x reconstructs every row
+    perfectly. This is the position-based reading the codebase already trusts for drawings and
+    the borehole logs, applied to the last sequence-based reader of a document this hostile to
+    sequence.
+
+    Per row: the first word must BE a ref (refs sit in their own left column — a section heading
+    row starts with a word, never a ref); the description is the words between the ref and the
+    first column token. A following row whose first word starts LOWERCASE is a wrapped
+    continuation and is appended — a heading in this pack always opens upper-case, and a
+    continuation that happens to open upper-case is left un-appended rather than risking a
+    heading in the description (the sequence collector learned that the hard way). Deterministic;
+    no model, no page cap; first occurrence of a ref wins, as everywhere in this module."""
+    inv: dict[str, str] = {}
+    if not bills:
+        return inv
+    for words in pages or []:
+        rows = _y_rows(words)
+        for idx, texts in enumerate(rows):
+            if not texts or not _BQ_REF_TOKEN.match(texts[0]):
+                continue
+            ref = re.sub(r"\s+", "", texts[0])
+            if bill_of(ref) not in bills:
+                continue
+            desc: list[str] = []
+            for token in texts[1:]:
+                if _BQ_COLUMN_TOKEN.match(token):
+                    break
+                desc.append(token)
+            for later in rows[idx + 1 : idx + 4]:
+                if not later or _BQ_REF_TOKEN.match(later[0]) or not later[0][:1].islower():
+                    break
+                desc.extend(t for t in later if not _BQ_COLUMN_TOKEN.match(t))
+            joined = " ".join(desc).strip()
+            if sum(c.isalpha() for c in joined) >= 2 and not _BQ_NOT_AN_ITEM.match(joined):
+                inv.setdefault(ref, joined[:80])
+    return inv
+
+
 def _norm_ref(ref: str) -> str:
     """Canonical form of an item_ref for matching OCR inventory against extracted items —
     upper-cased, whitespace removed (``g3 (d)(i)`` -> ``G3(D)(I)``)."""
     return re.sub(r"\s+", "", (ref or "")).upper()
 
 
-def recover_dropped_sor_items(scope: ScopePackages, doc_text: str) -> ScopePackages:
+def recover_dropped_sor_items(scope: ScopePackages, doc_text: str,
+                              page_words: "Optional[list[list[tuple]]]" = None) -> ScopePackages:
     """Deterministic completeness backstop (Layer 1): a scanned SoR is OCR'd row-for-row, but the
     LLM structuring step sometimes DROPS ruled rows (observed: whole items G7-G10, G17 and sub-items
     like G3(f) missing while the OCR clearly holds them). Any item code the OCR text carries that the
@@ -742,6 +809,12 @@ def recover_dropped_sor_items(scope: ScopePackages, doc_text: str) -> ScopePacka
                          for p in scope.packages for it in p.sor_items) if b}
     inv = _ocr_item_inventory(doc_text)
     bq_inv = _bq_item_inventory(doc_text, bills)
+    if page_words:
+        # The positional fallback fills only the holes: a ref the SEQUENCE text already
+        # describes keeps that description (first-occurrence-wins, one discipline throughout),
+        # and a ref only the page's geometry can pair — the fully detached 1.45–1.50 shape —
+        # arrives from here.
+        bq_inv = {**positional_bill_rows(page_words, bills), **bq_inv}
     if not inv and not bq_inv:
         return scope
     missing = [(code, desc) for code, desc in inv.items() if _norm_ref(code) not in have]
@@ -1312,6 +1385,7 @@ def ingest_tender(
     images: Optional[list[str]] = None,
     doc_text: str = "",
     context_text: str = "",
+    page_words: "Optional[list[list[tuple]]]" = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
     on_error: Optional[Callable[[str], None]] = None,
 ) -> ScopePackages:
@@ -1338,7 +1412,7 @@ def ingest_tender(
         print(f"[ingest] unmapped trades (kept for review): {unmapped}")
     # Completeness backstop: add back any SoR row the OCR captured but the LLM structuring dropped
     # (a scanned schedule's ruled rows — G7-G10, G17, G3(f) … — must never be silently lost).
-    recovered = recover_dropped_sor_items(normalised, doc_text)
+    recovered = recover_dropped_sor_items(normalised, doc_text, page_words=page_words)
     # An item's real description is the chain of headings above it, not the text in its own cell.
     # Deterministic, from the document's own indentation — see `heading_chains`.
     recovered = attach_heading_chains(recovered, doc_text, on_note=on_error)

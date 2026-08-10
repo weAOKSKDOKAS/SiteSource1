@@ -111,6 +111,32 @@ def _part_text(spec, pdf_path: str) -> str:
     return pdfops.page_text(data, 1, spec.page_count())
 
 
+def words_from_parts(parts: list, on_error: Optional[Callable[[str], None]] = None) -> list:
+    """Per-page word tuples for the confirmed bill parts — the positional read beside the text one.
+
+    ``page.get_text("words")`` per page, for `positional_bill_rows`: the real pack's Bill 1
+    page 6 linearises with six items' descriptions detached at the page tail (and the tail itself
+    scrambled), so those rows can only be paired by geometry. A part the positional read fails on
+    is NOTED and skipped — the sequence path still carries it, so the fallback degrades to
+    exactly the pre-fallback behaviour, never worse."""
+    import fitz  # lazy, like every pymupdf import on this path
+
+    pages: list = []
+    for spec, pdf_path, _context in parts:
+        data = _part_bytes(pdf_path)
+        if data is None:
+            continue                      # already noted by the text path
+        try:
+            with fitz.open(stream=data, filetype="pdf") as doc:
+                for page in doc:
+                    pages.append([tuple(w) for w in page.get_text("words")])
+        except Exception as exc:  # noqa: BLE001 — a supplementary read must not sink the split
+            _note(on_error, (
+                f"positional read failed for bill part {_label(spec)!r} ({exc}) — the "
+                f"wrapped-row fallback is off for it; the text read still applies"))
+    return pages
+
+
 def doc_text_from_parts(parts: list, on_error: Optional[Callable[[str], None]] = None) -> str:
     """The confirmed bill parts' text, joined in the ``=== label ===`` convention ``api.py`` uses.
 
@@ -461,6 +487,7 @@ def scope_from_set(
 
     _stage("splitting")
     doc_text = doc_text_from_parts(bill, on_error)
+    page_words = words_from_parts(bill, on_error)
     if not doc_text.strip() and not workbook_items:
         raise ValueError(
             "The confirmed bill part(s) produced no readable text, so there is nothing to "
@@ -473,6 +500,7 @@ def scope_from_set(
         demo_fixture=demo_fixture,
         client=client,
         doc_text=doc_text,
+        page_words=page_words,
         context_text=context_text,
         on_error=on_error,
         # THE 199 SECONDS. This is the long phase — the bill is chunked and each chunk extracted —

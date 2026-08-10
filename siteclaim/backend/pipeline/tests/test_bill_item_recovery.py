@@ -267,3 +267,150 @@ class TestTheWrappedDescriptionIsCollectedWhole:
                + "This prose belongs to another document entirely\n"
         inv = _bq_item_inventory(text, {"1"})
         assert inv["1.53"] == "Review, update and implement Implementation"
+
+
+# ---------------------------------------------------------------------------
+# The fully detached shape — BQ 1.45-1.50, where sequence CANNOT and position can
+# ---------------------------------------------------------------------------
+# Real page-6 extraction order, verbatim from the independent read of the pack: the six refs and
+# their column tokens come early, every description sits at the page tail — and the tail is
+# ITSELF scrambled ("…wastewater" at [65], its continuation "collection system" at [74];
+# "…fuel samples by" at [77], its "laboratory" at [73]). Any order-based pairing of tail lines
+# to refs mis-attaches, which is why this fixture must defeat a sequence-based "fix".
+PAGE6_SEQUENCE = """Bill No. 1
+1.45
+-
+item
+-
+1.46
+-
+item
+-
+1.47
+-
+item
+-
+1.48
+-
+item
+-
+1.49
+20
+nr.
+1.50
+20
+mth
+1.51
+Digital Works Supervision System (DWSS)
+20
+mth
+Provision, maintenance and removal of wastewater
+Noise Pollution Abatement
+Provision, maintenance and removal of acoustic screens
+or enclosures
+Adoption of other noise abatement practices
+Arrange and conduct on-site sorting of C&D materials
+laboratory
+collection system
+Arrange and conduct testing of fuel samples by
+Provide environmental management measures
+"""
+
+# The same page as pymupdf's words see it: refs at x=64.3, headings at x=93.2, descriptions
+# between the ref and the column tokens, same-row words sharing a y. Continuation lines
+# ("collection system", "laboratory", "or enclosures") sit on their own y directly under their
+# rows, opening lowercase — the pack's headings always open upper-case.
+def _row_words(y, tokens, x0=64.3, dx=38.0):
+    return [(x0 + i * dx, y, x0 + i * dx + 30.0, y + 9.0, tok) for i, tok in enumerate(tokens)]
+
+
+PAGE6_WORDS = [
+    *_row_words(311.0, ["1.45", "Provision,", "maintenance", "and", "removal", "of",
+                        "acoustic", "screens", "-", "item", "-"]),
+    *_row_words(325.0, ["or", "enclosures"], x0=93.2),
+    *_row_words(345.0, ["1.46", "Adoption", "of", "other", "noise", "abatement",
+                        "practices", "-", "item", "-"]),
+    *_row_words(362.0, ["Wastewater", "Pollution", "Abatement"], x0=93.2),   # a heading row
+    *_row_words(390.0, ["1.47", "Provision,", "maintenance", "and", "removal", "of",
+                        "wastewater", "-", "item", "-"]),
+    *_row_words(404.0, ["collection", "system"], x0=93.2),
+    *_row_words(420.0, ["Waste", "Management"], x0=93.2),                    # a heading row
+    *_row_words(445.0, ["1.48", "Arrange", "and", "conduct", "on-site", "sorting",
+                        "of", "C&D", "materials", "-", "item", "-"]),
+    *_row_words(488.0, ["1.49", "Arrange", "and", "conduct", "testing", "of", "fuel",
+                        "samples", "by", "20", "nr."]),
+    *_row_words(502.0, ["laboratory"], x0=93.2),
+    *_row_words(543.0, ["1.50", "Provide", "environmental", "management", "measures",
+                        "20", "mth"]),
+]
+
+
+class TestTheDetachedDescriptionsNeedThePage:
+    def test_sequence_reading_cannot_see_these_six_and_says_nothing_false(self):
+        """THE FIXTURE'S JOB: prove a sequence-based fix cannot pass. The forward collector sees
+        only column tokens between each bare ref and the next ref, finds no description, and the
+        rows honestly never inventory — absent, not mis-attached from the scrambled tail."""
+        from pipeline.stage_01_ingest.ingest import _bq_item_inventory
+
+        inv = _bq_item_inventory(PAGE6_SEQUENCE, {"1"})
+        for ref in ("1.45", "1.46", "1.47", "1.48", "1.49", "1.50"):
+            assert ref not in inv, f"{ref} paired from a scrambled tail — mis-attachment"
+        assert inv["1.51"].startswith("Digital Works Supervision System"), "adjacent still works"
+
+    def test_position_reconstructs_all_six_rows_perfectly(self):
+        from pipeline.stage_01_ingest.ingest import positional_bill_rows
+
+        inv = positional_bill_rows([PAGE6_WORDS], {"1"})
+        assert inv == {
+            "1.45": "Provision, maintenance and removal of acoustic screens or enclosures",
+            "1.46": "Adoption of other noise abatement practices",
+            "1.47": "Provision, maintenance and removal of wastewater collection system",
+            "1.48": "Arrange and conduct on-site sorting of C&D materials",
+            "1.49": "Arrange and conduct testing of fuel samples by laboratory",
+            "1.50": "Provide environmental management measures",
+        }
+
+    def test_a_heading_row_is_neither_an_item_nor_a_continuation(self):
+        """"Wastewater Pollution Abatement" sits between 1.46 and 1.47 as its own row. It opens
+        upper-case, so it is not appended to 1.46; it opens with a word, not a ref, so it is
+        never an item. Both failure modes are the mis-attachment the y/x reading exists to end."""
+        from pipeline.stage_01_ingest.ingest import positional_bill_rows
+
+        inv = positional_bill_rows([PAGE6_WORDS], {"1"})
+        assert "Wastewater" not in inv["1.46"] and "Waste Management" not in inv["1.47"]
+        assert len(inv) == 6, "exactly the six items — nothing promoted from a heading"
+
+    def test_recovery_fills_the_holes_from_position_and_sequence_still_wins_where_it_reads(self):
+        """The merge discipline: the positional read fills only the holes. 1.51 arrives from the
+        SEQUENCE text (adjacent description); the six arrive from the page's geometry; all seven
+        land in the package that owns Bill 1."""
+        from pipeline.stage_01_ingest.ingest import recover_dropped_sor_items
+
+        scope = ScopePackages(project_name="ND/2025/04", packages=[
+            TradeWorkPackage(trade="builders_work", scope_summary="Preliminaries", sor_items=[
+                SorItem(item_ref="1.44", description="Screens for smoky activities",
+                        unit="item", section="1"),
+            ]),
+        ])
+        out = recover_dropped_sor_items(scope, PAGE6_SEQUENCE, page_words=[PAGE6_WORDS])
+        by_ref = {it.item_ref: it for it in out.packages[0].sor_items}
+        assert set(by_ref) == {"1.44", "1.45", "1.46", "1.47", "1.48", "1.49", "1.50", "1.51"}
+        assert by_ref["1.47"].description == (
+            "Provision, maintenance and removal of wastewater collection system")
+        assert by_ref["1.51"].description.startswith("Digital Works Supervision System")
+
+    def test_without_page_words_behaviour_is_exactly_the_pre_fallback_one(self):
+        """The fallback is additive: no words, no change — the sequence path is byte-for-byte
+        what it was, so every caller that cannot supply positions (the procurement upload path)
+        is untouched."""
+        from pipeline.stage_01_ingest.ingest import recover_dropped_sor_items
+
+        scope = ScopePackages(project_name="x", packages=[
+            TradeWorkPackage(trade="builders_work", scope_summary="s", sor_items=[
+                SorItem(item_ref="1.44", description="d", unit="item", section="1"),
+            ]),
+        ])
+        out = recover_dropped_sor_items(scope, PAGE6_SEQUENCE)
+        refs = {it.item_ref for it in out.packages[0].sor_items}
+        assert not ({"1.45", "1.46", "1.47", "1.48", "1.49", "1.50"} & refs)
+        assert "1.51" in refs
