@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { BillPicker } from "../BillPicker";
+import { Conditions } from "../costing/Conditions";
 import { Outstanding } from "../Outstanding";
 import type { AssumptionRow, CostingCheck, CostingResponse, PricedRow } from "../types";
 import { SectionLabel, WaitingOn, cx, formatNorm, money } from "../ui";
@@ -223,6 +224,14 @@ export function Costing({
               <AssumptionLine
                 key={row.key}
                 row={row}
+                onValue={async (value) => {
+                  try {
+                    await api.setAssumptionValue(setId, row.key, value);
+                    await load();
+                  } catch (e) {
+                    onError(e instanceof Error ? e.message : String(e));
+                  }
+                }}
                 onVerdict={async (status) => {
                   try {
                     await api.setAssumptionVerdict(setId, row.key, status);
@@ -237,8 +246,12 @@ export function Costing({
           <p className="mt-1.5 max-w-[680px] font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
             The register warns; it does not block. But the workbook prints NOT CLEARED until every
             row has a verdict, so a model nobody has reviewed cannot pass for one that somebody has.
+            A row whose number is underlined can be typed over — it writes the model input the row
+            is about, and everything derived from it recomputes.
           </p>
         </section>
+
+        <Conditions setId={setId} onChanged={load} onError={onError} />
       </div>
     </div>
   );
@@ -405,11 +418,31 @@ function PriceRow({ row, onSubmit }: { row: PricedRow; onSubmit: (rate: number |
 function AssumptionLine({
   row,
   onVerdict,
+  onValue,
 }: {
   row: AssumptionRow;
   onVerdict: (status: string) => void;
+  /** Type over the NUMBER the row is about. Absent when the row names no model path. */
+  onValue: (value: number) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const numeric = draft.trim() !== "" && !Number.isNaN(Number(draft));
+
+  // What is typed is what is READ — a percentage row shows 22 and stores 0.22, and the conversion
+  // happens in one place so the box and the label can never disagree about which it is.
+  const commit = async () => {
+    if (!numeric) return;
+    setBusy(true);
+    try {
+      await onValue(row.edit_percent ? Number(draft) / 100 : Number(draft));
+      setEditing(false);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div className="border-b border-cb-divider px-3 py-2 last:border-0">
       <div className="flex flex-wrap items-baseline gap-2">
@@ -428,9 +461,48 @@ function AssumptionLine({
             </span>
           )}
         </button>
-        <span className="flex-none font-cb-mono text-[10px] font-semibold text-cb-ink-text">
-          {row.value}
-        </span>
+        {editing ? (
+          <span className="flex flex-none items-baseline gap-1">
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void commit();
+                if (e.key === "Escape") setEditing(false);
+              }}
+              className={cx(
+                "w-[84px] rounded-cb-chip border bg-cb-warm px-1.5 py-[1px] text-right font-cb-mono text-[10px] text-cb-ink-text",
+                numeric ? "border-cb-brass-line" : "border-cb-bad",
+              )}
+            />
+            {row.edit_percent && <span className="font-cb-mono text-[8px] text-cb-faint">%</span>}
+            <button
+              type="button"
+              disabled={busy || !numeric}
+              onClick={() => void commit()}
+              className="cb-press font-cb-mono text-[8px] font-semibold text-cb-brass-text disabled:text-cb-disabled"
+            >
+              SET
+            </button>
+          </span>
+        ) : row.edit_path ? (
+          <button
+            type="button"
+            title={`Type over this and the whole model recomputes — it writes ${row.edit_path}.`}
+            onClick={() => {
+              setDraft(String(row.edit_percent ? "" : ""));
+              setEditing(true);
+            }}
+            className="cb-press flex-none border-b border-dashed border-cb-brass-line font-cb-mono text-[10px] font-semibold text-cb-ink-text"
+          >
+            {row.value}
+          </button>
+        ) : (
+          <span className="flex-none font-cb-mono text-[10px] font-semibold text-cb-ink-text">
+            {row.value}
+          </span>
+        )}
         <span
           className={cx(
             "flex-none rounded-cb-chip px-1.5 py-[1px] font-cb-mono text-[7.5px] font-semibold tracking-cb-chip",
@@ -462,6 +534,11 @@ function AssumptionLine({
       {open && (
         <p className="mt-1 max-w-[760px] font-cb-serif text-[11px] leading-[1.55] text-cb-body">
           {row.basis}
+          {row.edit_path && (
+            <span className="ml-2 font-cb-mono text-[9px] text-cb-faint">
+              writes {row.edit_path} — the programme, the rig curve and every rate follow
+            </span>
+          )}
           {row.reviewed_by && (
             <span className="ml-2 font-cb-mono text-[9px] text-cb-faint">
               {row.status} · {row.reviewed_by}

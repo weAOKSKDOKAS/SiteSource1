@@ -53,6 +53,8 @@ import type {
   PartSpec,
   PartsResponse,
   AccessBoardResponse,
+  ConditionRow,
+  ConditionsResponse,
   CostingModelShape,
   CostingResponse,
   LibraryModelResponse,
@@ -300,6 +302,37 @@ export const api = {
       full_ref: fullRef,
       rate,
     }),
+  /** Type over the NUMBER a register row is about. Writes the model path the row names, so the
+   *  programme, the rig curve, the group durations and every rate recompute from it. Copy-on-write:
+   *  the first one makes this tender's model its own. */
+  setAssumptionValue: (setId: string, key: string, value: number) =>
+    post<{
+      key: string;
+      path: string;
+      was: string;
+      value: number;
+      now: string;
+      recomputed: { work_days: number; rigs_required: number; proposal_n: number | null; total: number };
+      problems: string[];
+    }>("/costing/assumption-value", { set_id: setId, key, value }),
+  conditions: (setId: string) => get<ConditionsResponse>(`/costing/${setId}/conditions`),
+  /** Record a condition AND ask the model which knob it moves. Recording is unconditional; the
+   *  mapping is a proposal and writes nothing. */
+  addCondition: (setId: string, text: string, note = "") =>
+    post<{ condition: ConditionRow; proposal: Record<string, unknown>; awaiting: string }>(
+      "/costing/conditions",
+      { set_id: setId, text, note },
+    ),
+  /** The ONLY call that writes the model from a condition. `value` overrides the proposal. */
+  decideCondition: (setId: string, conditionId: string, status: string, value?: number) =>
+    post<{ condition: ConditionRow; applied: number | null }>("/costing/conditions/decide", {
+      set_id: setId,
+      condition_id: conditionId,
+      status,
+      ...(value === undefined ? {} : { value }),
+    }),
+  deleteCondition: (setId: string, conditionId: string) =>
+    del<{ deleted: boolean; note: string }>(`/costing/${setId}/conditions/${conditionId}`),
   setAssumptionVerdict: (setId: string, key: string, status: string, comment = "") =>
     post<{ key: string; status: string; gate: string; outstanding: number }>(
       "/costing/assumption",

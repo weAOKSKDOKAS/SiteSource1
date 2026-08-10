@@ -1,0 +1,7 @@
+{
+  "path": "inputs.calendar_to_work_day",
+  "value": 1.35,
+  "basis": "The condition bars work at night and on Sundays through the village section. That does not change how fast a rig drills on a day it is working, so it does not belong in the production rate — it removes working days from the calendar. The calendar-to-work-day ratio is where the app already puts weather for the same reason. 1.35 is close to the slowest of the three as-built projects (1.36) and is a judgement about how much of the works falls in the restricted section, not a measurement.",
+  "confidence": "medium",
+  "cannot_map": ""
+}

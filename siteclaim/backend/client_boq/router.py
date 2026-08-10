@@ -33,6 +33,7 @@ from client_boq.boq import assumptions as boq_assumptions
 from client_boq.boq import buildup as boq_buildup
 from client_boq.boq import carry as boq_carry
 from client_boq.boq import checks as boq_checks
+from client_boq.boq import conditions as boq_conditions
 from client_boq.boq import costing as boq_costing
 from client_boq.boq import costing_workbook as boq_costing_workbook
 from client_boq.boq import coverage as boq_coverage
@@ -4355,6 +4356,63 @@ class AssumptionVerdictRequest(BaseModel):
     comment: str = ""
 
 
+class AssumptionValueRequest(BaseModel):
+    """Change the NUMBER a register row is about, not the verdict on it."""
+
+    set_id: str
+    rev: Optional[int] = None
+    key: str                        # the register row's key
+    value: float
+
+
+class ConditionRequest(BaseModel):
+    """A condition somebody wrote down. Free prose — the notepad and the form are one thing."""
+
+    set_id: str
+    text: str
+    note: str = ""
+    condition_id: str = ""          # blank mints one
+
+
+class ConditionDecisionRequest(BaseModel):
+    set_id: str
+    condition_id: str
+    status: str                     # confirmed | rejected | '' (back to undecided)
+    #: What to write when confirming. Defaults to the proposal's own number; a person may type a
+    #: different one, which is the point of confirming rather than accepting.
+    value: Optional[float] = None
+
+
+def _apply_model_path(model: boq_model.CostingModel, path: str, value: float) -> str:
+    """Write one dotted path into a model IN PLACE. Returns what it used to be, for the record.
+
+    Two shapes, both the workbook's own naming: ``inputs.<key>`` and ``spread.<key>.<field>``. A
+    path naming something the model does not have raises — a write that silently lands nowhere is
+    the exact failure `problems()` already guards the read side against.
+    """
+    parts = path.split(".")
+    if len(parts) == 2 and parts[0] == "inputs":
+        key = parts[1]
+        if key not in model.inputs:
+            raise HTTPException(
+                status_code=422,
+                detail=f"This model has no input {key!r}, so there is nothing to change. It may "
+                       f"have been retired — a retired input is inert and setting it changes "
+                       f"nothing, which is why writing to one is refused rather than accepted.")
+        was = f"{model.inputs[key]:g}"
+        model.inputs[key] = value
+        return was
+    if len(parts) == 3 and parts[0] == "spread" and parts[2] in {"rate", "multiplier"}:
+        line = model.spread_index().get(parts[1])
+        if line is None:
+            raise HTTPException(status_code=422,
+                                detail=f"This model has no spread line {parts[1]!r}.")
+        was = f"{getattr(line, parts[2]):g}"
+        setattr(line, parts[2], value)
+        return was
+    raise HTTPException(status_code=422, detail=f"{path!r} is not a path this model can be changed at.")
+
+
 def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
     """Run the whole engine for one tender. The single path everything else here goes through."""
     bill = _bill_or_404(conn, set_id, rev)
@@ -4581,6 +4639,230 @@ def post_assumption_verdict(req: AssumptionVerdictRequest, actor: str = Depends(
     return {"set_id": req.set_id, "rev": bill.rev, "key": req.key, "status": req.status,
             "reviewed_by": actor if req.status else "",
             "gate": register.gate(), "outstanding": len(register.outstanding())}
+
+
+@router.post("/costing/assumption-value")
+def post_assumption_value(req: AssumptionValueRequest, actor: str = Depends(_actor)) -> dict:
+    """Change the NUMBER a register row is about. The register becomes editable, not just signable.
+
+    A register that can only be confirmed is a page of agreements about numbers you have to go
+    somewhere else to change — so people change them somewhere else and the register goes stale,
+    which is the failure this whole surface was built against. Every judgement row names the model
+    path it is about (``Assumption.edit_path``), so typing here writes THAT and nothing else, and
+    the programme, the rig curve, the group durations and every rate recompute from it. There is no
+    second write path.
+
+    Copy-on-write, like every other model edit: the first one makes this tender's model its own and
+    the library is untouched. A DERIVED row has no path and is refused — its number is read from
+    the bill or worked out from it, and typing over it would be inventing a fact.
+    """
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        parts = _costing(conn, req.set_id, bill.rev)
+        row = next((r for r in parts["register"].rows if r.key == req.key), None)
+        if row is None:
+            raise HTTPException(status_code=404,
+                                detail=f"No assumption {req.key!r} on this register.")
+        if not row.edit_path:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"{row.label!r} is not a number anybody types. "
+                        + ("It is derived — read from the bill or worked out from it, so changing "
+                           "it here would be inventing a fact. Change what it is derived FROM."
+                           if row.derived else
+                           "It has no single input behind it, so there is nothing here to write.")))
+
+        model = parts["model"].model_copy(deep=True)
+        was = _apply_model_path(model, row.edit_path, req.value)
+        store.save_set_model(conn, req.set_id, model, actor=actor)
+        store.touch_set(conn, req.set_id, actor)
+        after = _costing(conn, req.set_id, bill.rev)
+    finally:
+        conn.close()
+    fresh = next((r for r in after["register"].rows if r.key == req.key), None)
+    return {
+        "set_id": req.set_id, "rev": bill.rev, "key": req.key, "path": row.edit_path,
+        "was": was, "value": req.value, "now": fresh.value if fresh else "",
+        "by": actor, "using_own_model": True,
+        # What moved, so the screen can say it rather than the reader hunting for it.
+        "recomputed": {
+            "work_days": after["programme"].work_days,
+            "rigs_required": after["programme"].rigs_required,
+            "proposal_n": boq_optimiser.optimise(after["programme"], after["model"]).proposal_n,
+            "total": after["priced"].total,
+        },
+        "problems": model.problems(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Conditions — a sentence somebody wrote down, mapped onto a knob by proposal
+# ---------------------------------------------------------------------------
+@router.get("/costing/{set_id}/conditions")
+def get_conditions(set_id: str) -> dict:
+    """Every condition on this tender. Nothing is filtered — an unmapped one has to stay visible."""
+    conn = store.get_conn()
+    try:
+        rows = store.load_conditions(conn, set_id)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "conditions": rows,
+            "unmapped": sum(1 for r in rows if not r["proposed_path"] and not r["status"]),
+            "undecided": sum(1 for r in rows if not r["status"])}
+
+
+@router.post("/costing/conditions")
+def post_condition(req: ConditionRequest, actor: str = Depends(_actor)) -> dict:
+    """Write a condition down, and ask the model which knob it moves.
+
+    ONE entry point for the form and the free notepad, because they are the same act: somebody has
+    a sentence about this job that the engine has no field for. Recording it is unconditional — the
+    row exists whether or not anything can be mapped. The mapping is a PROPOSAL and a person
+    confirms it; nothing here writes the model or a verdict.
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="A condition needs some words in it.")
+    condition_id = (req.condition_id or "").strip() or f"c-{abs(hash((req.set_id, text))) % 10**10}"
+
+    conn = store.get_conn()
+    try:
+        stored = store.save_condition(conn, req.set_id, condition_id, text=text,
+                                      note=req.note, actor=actor)
+        parts = _costing_or_library(conn, req.set_id)
+    finally:
+        conn.close()
+
+    proposal = _propose_condition_mapping(text, parts["model"], parts["context"])
+    conn = store.get_conn()
+    try:
+        store.save_condition_proposal(
+            conn, req.set_id, condition_id, path=proposal.path, value=proposal.value,
+            basis=proposal.basis or proposal.cannot_map,
+            source="; ".join(proposal.checked))
+        stored = store.load_condition(conn, req.set_id, condition_id) or stored
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "condition": stored,
+            "proposal": proposal.model_dump(),
+            "awaiting": ("your confirmation — nothing has been written to the model"
+                         if proposal.maps else
+                         "nothing to confirm: no single input carries this condition, so it stays "
+                         "on the register unmapped and visible")}
+
+
+@router.post("/costing/conditions/decide")
+def post_condition_decision(req: ConditionDecisionRequest, actor: str = Depends(_actor)) -> dict:
+    """Confirm or reject a proposed mapping. **The ONLY thing that writes the model from here.**
+
+    Confirming writes the proposed input (or a number the person typed instead, which is the point
+    of confirming rather than accepting) through the same copy-on-write path every model edit uses.
+    Rejecting records the refusal and leaves the condition on the register, unpriced and visible.
+    """
+    if req.status not in {"confirmed", "rejected", ""}:
+        raise HTTPException(status_code=422,
+                            detail=f"{req.status!r} is not a verdict — confirmed, rejected, or "
+                                   f"blank for back to undecided.")
+    conn = store.get_conn()
+    try:
+        condition = store.load_condition(conn, req.set_id, req.condition_id)
+        if condition is None:
+            raise HTTPException(status_code=404,
+                                detail=f"No condition {req.condition_id!r} on this tender.")
+        applied: Optional[float] = None
+        if req.status == "confirmed":
+            path = condition["proposed_path"]
+            value = req.value if req.value is not None else condition["proposed_value"]
+            if not path or value is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="There is no mapping to confirm on this condition. It stays recorded "
+                           "and unpriced, which is the honest state — a condition with no knob "
+                           "behind it is a real thing.")
+            bill = _bill_or_404(conn, req.set_id, None)
+            parts = _costing(conn, req.set_id, bill.rev)
+            model = parts["model"].model_copy(deep=True)
+            _apply_model_path(model, path, float(value))
+            store.save_set_model(conn, req.set_id, model, actor=actor)
+            applied = float(value)
+        store.decide_condition(conn, req.set_id, req.condition_id, status=req.status,
+                               actor=actor, applied_value=applied)
+        store.touch_set(conn, req.set_id, actor)
+        fresh = store.load_condition(conn, req.set_id, req.condition_id)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "condition": fresh, "applied": applied, "by": actor}
+
+
+@router.delete("/costing/{set_id}/conditions/{condition_id}")
+def delete_condition_row(set_id: str, condition_id: str, actor: str = Depends(_actor)) -> dict:
+    """Remove a condition. It does NOT unwind a confirmed mapping — that number is now the model's,
+    and silently reverting it would be an edit nobody made. Change it on the register instead."""
+    conn = store.get_conn()
+    try:
+        existing = store.load_condition(conn, set_id, condition_id)
+        store.delete_condition(conn, set_id, condition_id)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    applied = bool(existing and existing.get("applied_value") is not None)
+    return {"set_id": set_id, "condition_id": condition_id, "deleted": True,
+            "note": ("The condition is gone. The model value it set is NOT reverted — it is the "
+                     "model's number now, and undoing it silently would be an edit nobody made."
+                     if applied else "The condition is gone. It had written nothing.")}
+
+
+def _costing_or_library(conn, set_id: str) -> dict:
+    """The model in force for a tender, plus what is known about the tender, for a mapping call.
+
+    A condition can be written down before a bill is imported, so this falls back to the library's
+    model rather than 404ing — the knobs are the same either way, and refusing to record a
+    condition because a spreadsheet has not arrived would put it back in a notebook.
+    """
+    context_lines: list[str] = []
+    try:
+        bill = _bill_or_404(conn, set_id, None)
+        parts = _costing(conn, set_id, bill.rev)
+        model = parts["model"]
+        programme = parts["programme"]
+        context_lines.append(
+            f"Rock fraction {programme.rock_fraction:.1%}; {programme.work_days:,.0f} work-days "
+            f"at P50; {programme.rigs_required} rig(s) required.")
+    except HTTPException:
+        model = store.load_library_model(conn)
+        context_lines.append("No bill of quantities is imported yet, so nothing is derived from "
+                             "one. The inputs below are the company's defaults.")
+    meta = store.load_set_meta(conn, set_id)
+    if meta and meta.get("package"):
+        context_lines.append(f"Package: {meta['package']}")
+    return {"model": model, "context": "\n".join(context_lines)}
+
+
+def _propose_condition_mapping(text: str, model: boq_model.CostingModel, context: str):
+    """Ask the model which knob a condition moves. Always returns a proposal — never raises.
+
+    A mapping call that fails must not lose the condition. The row is already stored by the time
+    this runs, so an unreachable provider degrades to "unmapped, and here is why", which is a state
+    the register already knows how to show.
+    """
+    from client_boq import llm as llm_mod
+
+    client = llm_mod.make_client()
+    try:
+        raw = client.complete_json(
+            system=boq_conditions.SYSTEM,
+            user=boq_conditions.prompt_for(text, model, context=context),
+            target_model=boq_conditions.RawConditionMapping,
+            demo_fixture=boq_conditions.DEMO_FIXTURE, purpose="client_boq-condition-map",
+        )
+    except Exception as exc:                                    # provider, parse, budget
+        return boq_conditions.ConditionProposal(
+            cannot_map=f"the mapping call did not come back: {exc}",
+            checked=["the condition is recorded either way — it is on the register, unmapped"])
+    return boq_conditions.validate(
+        raw.model_dump() if isinstance(raw, boq_conditions.RawConditionMapping) else
+        (raw if isinstance(raw, dict) else {}), model)
 
 
 @router.get("/costing/{set_id}/workbook.xlsx")

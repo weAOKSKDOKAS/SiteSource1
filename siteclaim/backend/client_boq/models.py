@@ -1764,6 +1764,38 @@ _DDL = [
         PRIMARY KEY (set_id, rev)
     )
     """,
+    # A CONDITION SOMEBODY WROTE DOWN, and the knob it was mapped onto.
+    #
+    # The estimate's knobs are the ones the engine has. Real tenders arrive with conditions the
+    # engine has never heard of — "no night work in the village section", "the client will supply
+    # the platform at CH2+400". Before this there was nowhere to put one, so it lived in somebody's
+    # notebook and reached the price only if they remembered.
+    #
+    # The row is the record; the MAPPING is a proposal. The AI reads the sentence and proposes
+    # which existing input it moves and by how much, with its reasoning; a person confirms, and
+    # ONLY the confirmation writes the model. `status` is the human's and nothing else sets it —
+    # the same rule as every other verdict in this product. An unmapped or unconfirmed condition
+    # stays visible rather than being quietly dropped, because a condition nobody priced is
+    # exactly the thing that loses money after award.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_conditions (
+        set_id          TEXT NOT NULL,
+        condition_id    TEXT NOT NULL,
+        text            TEXT NOT NULL,               -- what somebody actually wrote
+        note            TEXT NOT NULL DEFAULT '',    -- their own extra words
+        created_by      TEXT NOT NULL DEFAULT '',
+        created_at      TEXT,
+        proposed_path   TEXT NOT NULL DEFAULT '',    -- e.g. inputs.calendar_to_work_day
+        proposed_value  REAL,
+        proposal_basis  TEXT NOT NULL DEFAULT '',    -- why the model thinks so, in its own words
+        proposal_source TEXT NOT NULL DEFAULT '',    -- what it read to get there
+        status          TEXT NOT NULL DEFAULT '',    -- '' | confirmed | rejected. A PERSON's.
+        decided_by      TEXT NOT NULL DEFAULT '',
+        decided_at      TEXT,
+        applied_value   REAL,                        -- what was actually written, if anything
+        PRIMARY KEY (set_id, condition_id)
+    )
+    """,
 ]
 
 

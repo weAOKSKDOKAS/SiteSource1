@@ -483,9 +483,44 @@ export interface AssumptionRow {
   confidence: "High" | "Medium" | "Low";
   /** Read from the bill or worked out from it — shown, not adjustable. */
   derived: boolean;
+  /** The model path this row is ABOUT, in the workbook's own naming ("inputs.gft_ratio",
+   *  "spread.gft.rate"). Empty on a derived fact and on a caveat with no single number. This is
+   *  what makes the register editable rather than a page of confirmations. */
+  edit_path: string;
+  /** Held as a fraction, said out loud as a percentage. Display only. */
+  edit_percent: boolean;
   status: string;
   reviewed_by: string;
   comment: string;
+}
+
+/** A condition somebody wrote down, and the knob it was proposed onto.
+ *
+ *  `status` is a PERSON's — no stage and no model call writes it — and `applied_value` is non-null
+ *  only after a confirmation. A row with no `proposed_path` is not a failure: many real conditions
+ *  have no single knob, and it stays listed and unpriced rather than disappearing. */
+export interface ConditionRow {
+  set_id: string;
+  condition_id: string;
+  text: string;
+  note: string;
+  created_by: string;
+  created_at: string | null;
+  proposed_path: string;
+  proposed_value: number | null;
+  proposal_basis: string;
+  proposal_source: string;
+  status: "" | "confirmed" | "rejected";
+  decided_by: string;
+  decided_at: string | null;
+  applied_value: number | null;
+}
+
+export interface ConditionsResponse {
+  set_id: string;
+  conditions: ConditionRow[];
+  unmapped: number;
+  undecided: number;
 }
 
 export interface CostingResponse extends ModelDeclarations {

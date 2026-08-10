@@ -70,6 +70,18 @@ class Assumption(BaseModel):
     confidence: str = CONFIDENCE_MEDIUM
     derived: bool = False           # cannot be typed — read from the bill or worked out from it
 
+    #: WHAT THIS ROW IS ACTUALLY ABOUT, when it is about one number in the model. A dotted path in
+    #: the workbook's own naming: ``inputs.gft_ratio``, ``spread.drill_rig.multiplier``. Empty on a
+    #: derived fact (there is nothing to type) and on a standing caveat (there is no one number).
+    #:
+    #: This is what makes the register EDITABLE rather than a page of confirmations. Everything in
+    #: this product flows through the model, so a row that names its path can be changed here and
+    #: the programme, the rig curve, the group durations and every rate follow — no second write
+    #: path, and no number that lives only on a register.
+    edit_path: str = ""
+    #: Held as a fraction, said out loud as a percentage. Display only; storage never changes.
+    edit_percent: bool = False
+
     status: str = ""                # a person's, or blank
     reviewed_by: str = ""
     reviewed_at: Optional[str] = None
@@ -78,6 +90,10 @@ class Assumption(BaseModel):
     @property
     def outstanding(self) -> bool:
         return not self.status
+
+    @property
+    def editable(self) -> bool:
+        return bool(self.edit_path)
 
 
 class Register(BaseModel):
@@ -198,7 +214,7 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
 
     rows.append(Assumption(
         key="site_team_per_site", label="Site teams per site",
-        value=f"{spread.site_team_per_site:g}",
+        value=f"{spread.site_team_per_site:g}", edit_path="inputs.site_team_per_site",
         source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
         basis="A coefficient, not a headcount: 1.0 is a team dedicated to this site, 0.5 is a team "
               "shared with another contract. It is deliberately not rounded up — rounding would "
@@ -206,7 +222,7 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
 
     rows.append(Assumption(
         key="site_count", label="Number of sites", value=f"{spread.site_count:g}",
-        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
+        edit_path="inputs.site_count", source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
         basis="How many separate sites this contract runs on. Defaults to 1. The site team is "
               "carried per site; a two-site contract carries two teams at the same rig count."))
 
@@ -219,7 +235,7 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
 
     rows.append(Assumption(
         key="supervision_ratio", label="Rigs per GFT", value=f"{spread.gft_ratio:g} rigs per GFT",
-        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
+        edit_path="inputs.gft_ratio", source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
         basis="The stated rule is 6 rigs per 1 GFT, carried as the default and adjustable per "
               "tender. RESOLVED: the site team is NOT the same resource as a GFT. The site team "
               "(engineer + foreman + geologist + PM) manages a site and is counted per site; the "
@@ -231,7 +247,7 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
     rows.append(Assumption(
         key="gft_rate", label="GFT day-rate",
         value=f"${gft_day:,.0f} per GFT-day" if gft_day > 0 else "not entered",
-        source=SOURCE_JUDGEMENT,
+        edit_path="spread.gft.rate", source=SOURCE_JUDGEMENT,
         confidence=CONFIDENCE_HIGH if gft_day > 0 else CONFIDENCE_LOW,
         basis=("Your own cost of one GFT for one day, from the rate library." if gft_day > 0 else
                "NOT YET ENTERED, so supervising the rigs currently prices at nothing. It is left "
@@ -242,14 +258,14 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
     residual = model.value("residual_site_factor", 1.0)
     rows.append(Assumption(
         key="residual_site_factor", label="Residual site factor", value=f"{residual:g}x",
-        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_LOW,
+        edit_path="inputs.residual_site_factor", source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_LOW,
         basis="What is left after the rock-fraction band. 1.00 means the band explains the site. "
               "Any value above 1.00 needs a named reason written in the comment."))
 
     rows.append(Assumption(
         key="calendar_ratio", label="Calendar to work-day ratio",
         value=f"{model.value('calendar_to_work_day'):g}x",
-        source=SOURCE_EMPIRICAL, confidence=CONFIDENCE_HIGH,
+        edit_path="inputs.calendar_to_work_day", source=SOURCE_EMPIRICAL, confidence=CONFIDENCE_HIGH,
         basis="Observed 1.18 / 1.18 / 1.36. Weather sits here, not in the production rate — the "
               "project that ran entirely inside typhoon season was the fastest of the three."))
 
@@ -262,11 +278,13 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
     rows.append(Assumption(
         key="standing_allowance", label="Standing / idle allowance",
         value=f"{model.value('standing_allowance'):.0%}",
-        source=SOURCE_EMPIRICAL, confidence=CONFIDENCE_MEDIUM, basis=standing_basis))
+        edit_path="inputs.standing_allowance", edit_percent=True, source=SOURCE_EMPIRICAL, confidence=CONFIDENCE_MEDIUM, basis=standing_basis))
 
+    plant_key = _first_key(model, "PLANT")
     rows.append(Assumption(
         key="plant_standby", label="Plant standby factor",
         value=_first_multiplier(model, "PLANT"),
+        edit_path=f"spread.{plant_key}.multiplier" if plant_key else "",
         source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
         basis="Plant is held on site for the full spread duration, including non-drilling days."))
 
@@ -285,17 +303,23 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
               "submission."))
 
     # --- the commercial chain, one row per step it actually has ---------------
+    components = {s.key: s.components for s in model.markup}
     for step in buildup.markup_steps:
+        # A step built from ONE input can be typed here; one that sums several cannot, because
+        # there is no honest way to decide which of them the new number belongs to.
+        named = components.get(step["key"], [])
         rows.append(Assumption(
             key=f"markup_{step['key']}", label=step["label"],
             value=f"{step['rate']:.0%} → ×{step['factor']:.4f}",
+            edit_path=f"inputs.{named[0]}" if len(named) == 1 else "",
+            edit_percent=True,
             source=SOURCE_COMMERCIAL, confidence=CONFIDENCE_HIGH,
             basis=("Taken on the selling price, not added to cost — 10% is ×1.111, not ×1.100."
                    if step["kind"] == "on_selling" else "A loading added to cost.")))
 
     rows.append(Assumption(
         key="nec_fee", label="NEC fee percentage", value=f"{model.value('nec_fee'):.0%}",
-        source=SOURCE_CONTRACT, confidence=CONFIDENCE_HIGH,
+        edit_path="inputs.nec_fee", edit_percent=True, source=SOURCE_CONTRACT, confidence=CONFIDENCE_HIGH,
         basis="Contract Data Part Two. Applies to compensation-event Defined Cost, not to the BQ "
               "rates."))
 
@@ -343,6 +367,14 @@ def _apply(register: Register, verdicts: dict[str, dict]) -> None:
         row.reviewed_by = mark.get("reviewed_by", "")
         row.reviewed_at = mark.get("reviewed_at")
         row.comment = mark.get("comment", "")
+
+
+def _first_key(model: CostingModel, block: str) -> str:
+    """The key of the first spread line in a block — so a register row can name what it edits."""
+    for line in model.spread:
+        if line.block == block:
+            return line.key
+    return ""
 
 
 def _first_multiplier(model: CostingModel, block: str) -> str:

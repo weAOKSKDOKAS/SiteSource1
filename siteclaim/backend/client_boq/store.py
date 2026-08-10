@@ -2071,3 +2071,92 @@ def load_letter(conn: sqlite3.Connection, set_id: str) -> Optional[LetterOfOffer
 
 def save_letter_artifact(ws: Workspace, tender_id: str, letter: LetterOfOffer) -> None:
     (_client_boq_dir(ws, tender_id) / "letter_of_offer.md").write_text(letter.markdown, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Conditions — a sentence somebody wrote down, and the knob it was mapped onto
+# ---------------------------------------------------------------------------
+# The row is the record; the mapping is a PROPOSAL. `status` is a person's and nothing else sets
+# it, and only a confirmation writes the model. See the table comment in `models.py`.
+_CONDITION_COLUMNS = (
+    "set_id, condition_id, text, note, created_by, created_at, proposed_path, proposed_value, "
+    "proposal_basis, proposal_source, status, decided_by, decided_at, applied_value"
+)
+
+
+def save_condition(conn: sqlite3.Connection, set_id: str, condition_id: str, *, text: str,
+                   note: str = "", actor: str = "") -> dict:
+    """Record a condition. Idempotent on ``(set_id, condition_id)``; never touches the verdict."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_conditions
+            (set_id, condition_id, text, note, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, condition_id) DO UPDATE SET
+            text = excluded.text, note = excluded.note
+        """,
+        (set_id, condition_id, text, note, actor, now),
+    )
+    conn.commit()
+    return load_condition(conn, set_id, condition_id) or {}
+
+
+def save_condition_proposal(conn: sqlite3.Connection, set_id: str, condition_id: str, *,
+                            path: str, value: Optional[float], basis: str,
+                            source: str = "") -> None:
+    """Attach the machine's proposed mapping. Writes NO verdict and NO model value."""
+    conn.execute(
+        """
+        UPDATE client_boq_conditions
+           SET proposed_path = ?, proposed_value = ?, proposal_basis = ?, proposal_source = ?
+         WHERE set_id = ? AND condition_id = ?
+        """,
+        (path, value, basis, source, set_id, condition_id),
+    )
+    conn.commit()
+
+
+def decide_condition(conn: sqlite3.Connection, set_id: str, condition_id: str, *, status: str,
+                     actor: str = "", applied_value: Optional[float] = None) -> None:
+    """The human's verdict. The SOLE writer of `status` — no stage and no model call reaches it."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        UPDATE client_boq_conditions
+           SET status = ?, decided_by = ?, decided_at = ?, applied_value = ?
+         WHERE set_id = ? AND condition_id = ?
+        """,
+        (status, actor, now, applied_value, set_id, condition_id),
+    )
+    conn.commit()
+
+
+def load_condition(conn: sqlite3.Connection, set_id: str, condition_id: str) -> Optional[dict]:
+    row = conn.execute(
+        f"SELECT {_CONDITION_COLUMNS} FROM client_boq_conditions "
+        f"WHERE set_id = ? AND condition_id = ?",
+        (set_id, condition_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def load_conditions(conn: sqlite3.Connection, set_id: str) -> list[dict]:
+    """Every condition on this tender, oldest first. Nothing is filtered out — an unmapped or
+    unconfirmed condition is exactly the thing that has to stay visible."""
+    rows = conn.execute(
+        f"SELECT {_CONDITION_COLUMNS} FROM client_boq_conditions "
+        f"WHERE set_id = ? ORDER BY created_at, condition_id",
+        (set_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_condition(conn: sqlite3.Connection, set_id: str, condition_id: str) -> None:
+    conn.execute(
+        "DELETE FROM client_boq_conditions WHERE set_id = ? AND condition_id = ?",
+        (set_id, condition_id),
+    )
+    conn.commit()
