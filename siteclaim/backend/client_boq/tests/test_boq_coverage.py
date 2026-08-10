@@ -65,14 +65,19 @@ def _item(ref="2.4", **kwargs):
 
 class TestTheList:
     def test_a_drilling_item_carries_the_sections_own_coverage(self):
+        # RE-ANCHORED IN THE OPEN. This asserted `smm.2.13.a` and `smm.2.13.h`, which were the keys
+        # the FIRST transcription used — and those letters are not the pack's. The pack substitutes
+        # 2.13(d) and adds (e)–(j), so what was lettered (a) is really (e). The test pinned the
+        # defect. What it is ABOUT — a drilling item inherits its bill's clause — is unchanged.
         keys = {h.key for h in heads_for(_item())}
-        assert "smm.2.13.a" in keys and "smm.2.13.h" in keys
+        assert "smm.s02.2.13.e" in keys, "stabilising the hole — 2.13(e) in this contract"
+        assert "smm.s02.2.13.j" in keys, "temporary traffic arrangement — 2.13(j)"
 
     def test_a_rig_move_carries_the_access_scaffolding_head_the_drilling_items_do_not(self):
         # SMM S02 ¶2.08(h) puts platforms in the item coverage for MOVING rigs, not for drilling —
         # which is why a Class B platform is loaded onto 2.2b and never onto the metre rate.
-        assert "smm.2.08.h" in {h.key for h in heads_for(_item("2.2b"))}
-        assert "smm.2.08.h" not in {h.key for h in heads_for(_item("2.4"))}
+        assert "smm.s02.2.08.h" in {h.key for h in heads_for(_item("2.2b"))}
+        assert "smm.s02.2.08.h" not in {h.key for h in heads_for(_item("2.4"))}
 
     def test_a_head_that_cites_a_clause_resolves_to_a_page(self, docmap):
         entry = next(e for e in coverage_for(_item(), docmap=docmap).entries
@@ -113,19 +118,28 @@ class TestNothingIsEverPreTicked:
         assert entry.authored_by == BY_MODEL and entry.ticked is False
 
     def test_a_tick_carries_a_name_and_a_date(self):
-        ticks = {"smm.2.13.a": {"ticked": True, "ticked_by": "SW", "ticked_at": "2026-08-03"}}
-        entry = next(e for e in coverage_for(_item(), ticks=ticks).entries if e.key == "smm.2.13.a")
+        # RE-ANCHORED to the pack's own key; the mechanism under test is unchanged.
+        ticks = {"smm.s02.2.13.e": {"ticked": True, "ticked_by": "SW", "ticked_at": "2026-08-03"}}
+        entry = next(e for e in coverage_for(_item(), ticks=ticks).entries
+                     if e.key == "smm.s02.2.13.e")
         assert entry.covered() and entry.ticked_by == "SW" and entry.ticked_at == "2026-08-03"
 
     def test_the_header_counts_what_is_left(self):
+        # RE-ANCHORED to the pack's own keys; the arithmetic under test is unchanged.
         ticks = {key: {"ticked": True, "ticked_by": "SW"}
-                 for key in ("smm.2.13.a", "smm.2.13.b", "smm.2.13.c")}
+                 for key in ("smm.s02.2.13.e", "smm.s02.2.13.f", "smm.s02.2.13.g")}
         coverage = coverage_for(_item(), ticks=ticks)
         assert coverage.summary() == f"{coverage.total()} heads · {coverage.total() - 3} not covered"
 
     def test_everything_ticked_says_so_rather_than_counting_zero(self):
+        # RE-ANCHORED IN THE OPEN, and the change is the point rather than an accommodation: every
+        # list in this module is the pack's AMENDMENTS to the SMM, whose base is not in the pack.
+        # So "all covered" can never stand alone — a tidy checklist is exactly how a partial list
+        # passes for a complete one. The count still reads "all covered"; the caveat rides with it.
         ticks = {h.key: {"ticked": True, "ticked_by": "SW"} for h in heads_for(_item())}
-        assert coverage_for(_item(), ticks=ticks).summary().endswith("all covered")
+        summary = coverage_for(_item(), ticks=ticks).summary()
+        assert "all covered" in summary
+        assert summary.endswith("LIST IS PARTIAL")
 
     def test_unticked_heads_are_a_decision_waiting_not_an_error(self):
         # Nothing in this module blocks. The sweep is the app's only hard stop.
@@ -133,7 +147,7 @@ class TestNothingIsEverPreTicked:
         assert "shall not be measured" in coverage.note
 
     def test_a_tick_survives_a_re_read_because_it_is_keyed_to_the_head(self):
-        ticks = {"smm.2.13.a": {"ticked": True, "ticked_by": "SW"}}
+        ticks = {"smm.s02.2.13.e": {"ticked": True, "ticked_by": "SW"}}
         first = coverage_for(_item(), ticks=ticks)
         again = coverage_for(_item(description="Drilling — reworded by an addendum"), ticks=ticks)
         assert [e.ticked for e in first.entries] == [e.ticked for e in again.entries]

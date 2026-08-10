@@ -56,16 +56,87 @@ BY_MODEL = "model"      # a model proposed that this clause bears on the item. S
 SCOPE_ITEM = "item"     # this bill item only
 SCOPE_BILL = "bill"     # every item in the contract — ticked once, not 27 times
 
+# ---------------------------------------------------------------------------
+# WHERE A HEAD'S WORDS CAME FROM — and the gap this pack cannot close
+# ---------------------------------------------------------------------------
+# The tender pack carries this contract's **amendments** to the Standard Method of Measurement for
+# Civil Engineering Works (1992): "Delete paragraph 2.13(d) and substitute…", "Add the following to
+# paragraph 2.35…". **The base SMM 1992 is not in the pack.** So for every clause below, the
+# sub-heads the base defines are real, are binding, and are INVISIBLE HERE.
+#
+# Every list in this module is therefore partial by construction, and that has to be said out loud.
+# An empty list reading as "fully covered" was a bug fixed a commit ago; a PARTIAL list reading as
+# complete is the same bug wearing a longer coat.
+FROM_AMENDMENT = "amendment"    # quoted verbatim from this contract's SMM Particular Preambles
+FROM_BASE_SMM = "base_smm"      # the clause exists; its text is in SMM 1992, which is NOT in the pack
+
+BASE_SMM_UNVERIFIABLE = (
+    "This head's wording comes from the base Standard Method of Measurement for Civil Engineering "
+    "Works (1992), which is NOT in this tender pack — the pack carries only this contract's "
+    "amendments to it. The head is real and binding; its exact words cannot be checked from here.")
+
+PARTIAL_BY_CONSTRUCTION = (
+    "This list is the pack's AMENDMENTS to the SMM, not the whole item coverage. The base SMM 1992 "
+    "is not in the pack, so its sub-heads under the same clause are binding and unlisted. Closing "
+    "the gap needs the base SMM document.")
+
 
 class CoverageHead(BaseModel):
     """One thing a rate is deemed to include, and the clause that says so."""
 
-    key: str                        # "smm.2.13.a" — stable, so a tick survives a re-read
+    key: str                        # "smm.s02.2.13.e" — stable, so a tick survives a re-read
     label: str
-    clause_ref: str = ""            # "SMM S02 ¶2.13(a)", "PS 7.30S"
+    clause_ref: str = ""            # "SMM S02 ¶2.13(e)", "PS 7.30S"
     cites: str = ""                 # a specification clause to resolve through the index
     authored_by: str = BY_RULE
     scope: str = SCOPE_ITEM
+    #: Whether these words were read from the pack or belong to the base SMM nobody here has.
+    provenance: str = FROM_AMENDMENT
+
+
+class CoverageList(BaseModel):
+    """One bill's transcribed coverage, the SMM clause it came from, and how complete it is.
+
+    A bare ``list[CoverageHead]`` could not say "these are the amendments only" — and a parallel
+    dict of caveats beside a dict of heads is the hand-maintained-copy trap this codebase keeps
+    warning about. So the caveat travels WITH the heads.
+    """
+
+    bill_no: str = ""
+    smm_clause: str = ""            # "SMM S02 ¶2.13" — the clause the whole list came from
+    title: str = ""                 # what the bill is, in the bill's own words
+    heads: list[CoverageHead] = Field(default_factory=list)
+    #: Why this list is not the whole coverage. Empty would mean complete — nothing is, yet.
+    partial: str = PARTIAL_BY_CONSTRUCTION
+
+
+class TitleRule(BaseModel):
+    """Coverage that attaches by what an item IS CALLED, not by its number.
+
+    THE RULE THIS EXISTS FOR. A BQ item number is not an SMM clause number: BQ 1.12 is *Contract
+    Computer Facilities* while SMM ¶1.12 is something else entirely. SMM 1 carries 42 item-coverage
+    blocks, one per preliminaries item, and the only thing that lines a block up with a BQ item is
+    the TITLE. The same is true of Bills 7, 8 and 9, whose clauses are named by what they govern.
+
+    So the mapping is resolved against the item's description at read time rather than hard-coded
+    to BQ references this transcription does not have. ``match`` requires EVERY phrase, and the
+    phrases are chosen to be distinctive — a loose matcher would attach the core-store heads to the
+    insurance item, which is exactly the failure a per-item list exists to prevent.
+    """
+
+    key: str                        # stable id for the rule itself, so a miss can be reported
+    bill_no: str = ""               # "" matches any bill; set it when a title could recur
+    match: tuple[str, ...] = ()     # every phrase must appear, case-insensitively
+    smm_clause: str = ""
+    title: str = ""                 # what the clause governs, in the pack's words
+    heads: list[CoverageHead] = Field(default_factory=list)
+    partial: str = PARTIAL_BY_CONSTRUCTION
+
+    def matches(self, item: BillItem) -> bool:
+        if self.bill_no and (item.bill_no or "").strip() != self.bill_no:
+            return False
+        text = f"{item.description}".lower()
+        return bool(self.match) and all(phrase.lower() in text for phrase in self.match)
 
 
 # ---------------------------------------------------------------------------
@@ -75,38 +146,83 @@ class CoverageHead(BaseModel):
 # organised — Section 2 is Ground Investigation Fieldworks, and every drilling item in it carries the
 # same coverage.
 # ---------------------------------------------------------------------------
-SECTION_COVERAGE: dict[str, list[CoverageHead]] = {
-    "2": [
-        CoverageHead(key="smm.2.13.a", label="Stabilising and supporting the hole",
-                     clause_ref="SMM S02 ¶2.13(a)"),
-        CoverageHead(key="smm.2.13.b", label="Casing, and reaming of casing",
-                     clause_ref="SMM S02 ¶2.13(b)"),
-        CoverageHead(key="smm.2.13.c", label="Disposal of surplus material",
-                     clause_ref="SMM S02 ¶2.13(c)"),
-        CoverageHead(key="smm.2.13.d", label="Routine small disturbed samples, taken and submitted",
-                     clause_ref="SMM S02 ¶2.13(d)"),
-        CoverageHead(key="smm.2.13.e", label="Taking readings",
-                     clause_ref="SMM S02 ¶2.13(e)"),
-        CoverageHead(key="smm.2.13.f", label="Logging the hole",
-                     clause_ref="SMM S02 ¶2.13(f)"),
-        CoverageHead(key="smm.2.13.g", label="Supplying the logs and records of the hole",
-                     clause_ref="SMM S02 ¶2.13(g)"),
-        CoverageHead(key="smm.2.13.h", label="Temporary traffic arrangements",
-                     clause_ref="SMM S02 ¶2.13(h)"),
-        CoverageHead(key="ps.7.30S", label="An inspection pit before drilling starts",
-                     clause_ref="PS 7.30S", cites="7.30S"),
-        CoverageHead(key="ps.7.45D", label="Over-drilling, which is at the Contractor's expense",
-                     clause_ref="PS 7.45D", cites="7.45D"),
-    ],
+#
+# ⚠ THE LETTERS ARE THIS CONTRACT'S, NOT THE BASE SMM's. The first transcription lettered these
+# (a)–(h) in reading order. The pack does not letter them that way: it SUBSTITUTES 2.13(d) and then
+# ADDS (e)–(j), so the content that was here as (a) is really (e), (b) is (f), and so on. The
+# content was right and the references were wrong — which matters exactly as much as this module's
+# own docstring says it does, because "a wrong transcription shows up the moment somebody clicks
+# through to the page" only works if the reference points at the right sub-clause.
+#
+# Verbatim from SMM_S02 Particular Preambles:
+#   Delete paragraph 2.13(d) and substitute: (d) taking readings, measurements and observations,
+#   and recording and supplying the logs and other records of each drillhole, borehole or probehole
+#   to the Project Manager.
+#   Add the following to paragraph 2.13: (e) stabilising the hole; (f) reaming of casing;
+#   (g) disposal of surplus material; (h) drilling using 4C-MLC core barrel as required;
+#   (i) taking and submitting small disturbed samples to the Project Manager; (j) providing,
+#   maintaining and removing temporary traffic arrangement in accordance with PS Clauses 1.14–1.15.
+#
+_DRILLING_2_13 = [
+    # 2.13(d) is ONE substituted clause covering four acts. It is carried as three heads rather
+    # than one because the estimator TICKS these — "have I priced the logging?" and "have I priced
+    # supplying the logs?" are two different questions with two different answers, and a single
+    # tick would settle both on the strength of whichever one they were thinking about. All three
+    # carry the same clause_ref, so clicking any of them lands on the right sub-clause.
+    CoverageHead(key="smm.s02.2.13.d.readings",
+                 label="Taking readings, measurements and observations",
+                 clause_ref="SMM S02 ¶2.13(d)"),
+    CoverageHead(key="smm.s02.2.13.d.recording",
+                 label="Recording the logs and other records of each hole",
+                 clause_ref="SMM S02 ¶2.13(d)"),
+    CoverageHead(key="smm.s02.2.13.d.supplying",
+                 label="Supplying the logs and other records to the Project Manager",
+                 clause_ref="SMM S02 ¶2.13(d)"),
+    CoverageHead(key="smm.s02.2.13.e", label="Stabilising the hole",
+                 clause_ref="SMM S02 ¶2.13(e)"),
+    CoverageHead(key="smm.s02.2.13.f", label="Reaming of casing",
+                 clause_ref="SMM S02 ¶2.13(f)"),
+    # CASING ITSELF is not in any amendment quoted in the pack — only "reaming of casing" is. The
+    # first transcription carried "Casing, and reaming of casing" as one head, so deleting the
+    # casing half would delete a real cost on the strength of a document nobody here has read.
+    # It is kept, marked base-SMM, and its words are declared unverifiable rather than quoted as
+    # though they came from the pack.
+    CoverageHead(key="smm.s02.2.13.base.casing", label="Casing",
+                 clause_ref="SMM S02 ¶2.13 (base SMM 1992 sub-head)",
+                 provenance=FROM_BASE_SMM),
+    CoverageHead(key="smm.s02.2.13.g", label="Disposal of surplus material",
+                 clause_ref="SMM S02 ¶2.13(g)"),
+    CoverageHead(key="smm.s02.2.13.h",
+                 label="Drilling using 4C-MLC core barrel as required",
+                 clause_ref="SMM S02 ¶2.13(h)"),
+    CoverageHead(key="smm.s02.2.13.i",
+                 label="Taking and submitting small disturbed samples to the Project Manager",
+                 clause_ref="SMM S02 ¶2.13(i)"),
+    CoverageHead(key="smm.s02.2.13.j",
+                 label="Providing, maintaining and removing temporary traffic arrangement",
+                 clause_ref="SMM S02 ¶2.13(j) · PS 1.14–1.15", cites="1.14"),
+    CoverageHead(key="ps.7.30S", label="An inspection pit before drilling starts",
+                 clause_ref="PS 7.30S", cites="7.30S"),
+    CoverageHead(key="ps.7.45D", label="Over-drilling, which is at the Contractor's expense",
+                 clause_ref="PS 7.45D", cites="7.45D"),
+]
+
+SECTION_COVERAGE: dict[str, CoverageList] = {
+    "2": CoverageList(bill_no="2", smm_clause="SMM S02 ¶2.13",
+                      title="Ground Investigation Fieldworks — drilling, boring, probing",
+                      heads=_DRILLING_2_13),
 }
 
-# Coverage that belongs to one item rather than to a whole section.
+# Coverage that belongs to one item rather than to a whole section, keyed on the BQ reference.
 ITEM_COVERAGE: dict[str, list[CoverageHead]] = {
-    "2.2a": [CoverageHead(key="smm.2.08.h", label="Access scaffolding and temporary platforms",
+    "2.2a": [CoverageHead(key="smm.s02.2.08.h", label="Access scaffolding",
                           clause_ref="SMM S02 ¶2.08(h)", cites="7.01A")],
-    "2.2b": [CoverageHead(key="smm.2.08.h", label="Access scaffolding and temporary platforms",
+    "2.2b": [CoverageHead(key="smm.s02.2.08.h", label="Access scaffolding",
                           clause_ref="SMM S02 ¶2.08(h)", cites="7.01A")],
 }
+
+# Coverage that attaches by TITLE. See `TitleRule` for why this exists at all.
+TITLE_COVERAGE: list[TitleRule] = []
 
 # The heads deemed included in EVERY rate in the contract: General Preambles ¶2 (i)–(xxii), twenty-two
 # of them, and Particular Preambles ¶¶7–10, nine more. Thirty-one.
@@ -141,6 +257,11 @@ class CoverageEntry(BaseModel):
     page: str = ""
     document_hint: str = ""
     unresolved: str = ""
+    #: Where the words came from. A base-SMM head is real and binding, and its exact wording cannot
+    #: be checked against this pack — which is a different statement from "the index could not find
+    #: the page", so it gets its own field rather than being crammed into `unresolved`.
+    provenance: str = FROM_AMENDMENT
+    unverifiable: str = ""
 
     ticked: bool = False
     ticked_by: str = ""
@@ -158,6 +279,12 @@ class ItemCoverage(BaseModel):
     entries: list[CoverageEntry] = Field(default_factory=list)
     bill_level: Optional[CoverageEntry] = None
     note: str = NO_LATER_CLAIM
+    #: Why this list is not the whole coverage — see `PARTIAL_BY_CONSTRUCTION`. A partial list that
+    #: reads as complete is the same failure as an empty one reading as "fully covered".
+    partial: list[str] = Field(default_factory=list)
+    #: Ticks recorded against head keys this item no longer has. NEVER applied — reported, so a
+    #: person can see the tick they gave has come back as a question rather than vanishing.
+    orphan_ticks: list[str] = Field(default_factory=list)
     #: WHY THIS FIELD EXISTS. `SECTION_COVERAGE` is a transcription of the printed item coverage,
     #: and only Bill No.2's has been transcribed. Every item in the other four bills therefore
     #: produced ZERO heads — and zero heads with zero uncovered read as "all covered", so four
@@ -173,11 +300,18 @@ class ItemCoverage(BaseModel):
         return [e for e in self.entries if not e.covered()]
 
     def summary(self) -> str:
-        """The header line: `12 heads · 3 not covered`, or `12 heads · all covered`."""
+        """The header line: `12 heads · 3 not covered`, or `12 heads · all covered`.
+
+        "all covered" never appears without the partial caveat beside it, because every list here
+        is the amendments only and a tidy-looking checklist is exactly how a partial list passes
+        for a complete one.
+        """
         if self.no_list_for_section:
             return f"no item-coverage list transcribed for Bill No.{self.no_list_for_section}"
         missing = len(self.uncovered())
-        return (f"{self.total()} heads · {missing} not covered" if missing
+        if missing:
+            return f"{self.total()} heads · {missing} not covered"
+        return (f"{self.total()} heads · all covered · LIST IS PARTIAL" if self.partial
                 else f"{self.total()} heads · all covered")
 
     def settled(self) -> bool:
@@ -195,25 +329,54 @@ def section_of(item: BillItem) -> str:
     return (item.bill_no or item.full_ref.split(".", 1)[0]).strip()
 
 
-def has_list_for(item: BillItem) -> bool:
-    """Whether the printed item coverage for this item's bill has been transcribed at all.
+def title_rules_for(item: BillItem) -> list[TitleRule]:
+    """Every title rule this item's description matches, in declaration order."""
+    return [rule for rule in TITLE_COVERAGE if rule.matches(item)]
 
-    The distinction `heads_for` cannot make on its own: an empty list means "this bill's coverage
-    was never written down here", not "this item's rate carries nothing".
+
+def has_list_for(item: BillItem) -> bool:
+    """Whether the printed item coverage for this item has been transcribed at all.
+
+    The distinction `heads_for` cannot make on its own: an empty list means "this coverage was
+    never written down here", not "this item's rate carries nothing".
     """
-    return section_of(item) in SECTION_COVERAGE or item.full_ref in ITEM_COVERAGE
+    return bool(section_of(item) in SECTION_COVERAGE
+                or item.full_ref in ITEM_COVERAGE
+                or title_rules_for(item))
 
 
 def heads_for(item: BillItem) -> list[CoverageHead]:
     """The heads that apply to one bill item, before any verdict.
 
-    Section coverage plus anything specific to the item. Deterministic: the same item always produces
-    the same list, which is what lets a tick be keyed to a head and survive a re-read.
+    Three sources, in the order a reader would expect them: the bill's own coverage clause, then
+    anything attaching by TITLE, then anything keyed to this exact BQ reference. Deterministic: the
+    same item always produces the same list, which is what lets a tick be keyed to a head and
+    survive a re-read.
 
     An empty return is AMBIGUOUS by itself — see `has_list_for`, which is what separates "nothing to
     check" from "nobody has said what to check".
     """
-    return [*SECTION_COVERAGE.get(section_of(item), []), *ITEM_COVERAGE.get(item.full_ref, [])]
+    section = SECTION_COVERAGE.get(section_of(item))
+    by_title = [head for rule in title_rules_for(item) for head in rule.heads]
+    return [*(section.heads if section else []), *by_title,
+            *ITEM_COVERAGE.get(item.full_ref, [])]
+
+
+def partial_reasons_for(item: BillItem) -> list[str]:
+    """Why this item's list is not the whole of its coverage. Empty would mean complete.
+
+    Nothing is complete yet and probably nothing will be until the base SMM 1992 is in the pack —
+    which is the point of surfacing it rather than leaving the reader to infer it from a list that
+    looks tidy.
+    """
+    out: list[str] = []
+    section = SECTION_COVERAGE.get(section_of(item))
+    if section and section.partial:
+        out.append(f"{section.smm_clause}: {section.partial}")
+    for rule in title_rules_for(item):
+        if rule.partial:
+            out.append(f"{rule.smm_clause}: {rule.partial}")
+    return out
 
 
 def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
@@ -228,9 +391,13 @@ def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
     recorded = ticks or {}
     entries: list[CoverageEntry] = []
 
-    for head in [*heads_for(item), *(proposed or [])]:
+    heads = [*heads_for(item), *(proposed or [])]
+    for head in heads:
         entry = CoverageEntry(key=head.key, label=head.label, clause_ref=head.clause_ref,
-                              authored_by=head.authored_by, scope=head.scope)
+                              authored_by=head.authored_by, scope=head.scope,
+                              provenance=head.provenance,
+                              unverifiable=(BASE_SMM_UNVERIFIABLE
+                                            if head.provenance == FROM_BASE_SMM else ""))
         if head.cites and docmap is not None:
             found = docmap.resolve(head.cites)
             if found is None:
@@ -256,8 +423,22 @@ def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
         ticked=bool(bill_mark.get("ticked")), ticked_by=bill_mark.get("ticked_by", ""),
         ticked_at=bill_mark.get("ticked_at"))
 
+    # A TICK AGAINST A HEAD THAT IS NO LONGER HERE. It is never applied — `recorded.get(head.key)`
+    # only reaches keys this item actually has — but silence would be wrong twice: the person who
+    # gave it would not know it had stopped counting, and a rename would look like a clean
+    # migration when it was really a quiet loss. So it is named.
+    live = {head.key for head in heads} | {DEEMED_INCLUDED.key}
+    orphans = sorted(key for key, mark in recorded.items()
+                     if key not in live and mark and mark.get("ticked"))
+
     return ItemCoverage(full_ref=item.full_ref, description=item.description,
                         entries=entries, bill_level=bill_level,
+                        partial=partial_reasons_for(item),
+                        orphan_ticks=[
+                            f"a tick recorded against {key!r} no longer matches any head on this "
+                            f"item — it has NOT been applied to anything. The clause letters were "
+                            f"corrected to the pack's own, so the tick is back to being a question"
+                            for key in orphans],
                         # A model's proposed heads DO make a list where there was none: somebody
                         # has now said what this rate must carry, and the heads arrive unticked
                         # like every other, so nothing is settled by their arrival.
@@ -278,7 +459,8 @@ def bill_summary(bill: ClientBill, ticks: dict[str, dict[str, dict]]) -> dict:
         coverage = coverage_for(item, ticks=ticks.get(item.full_ref, {}))
         rows.append({"full_ref": item.full_ref, "total": coverage.total(),
                      "uncovered": len(coverage.uncovered()), "settled": coverage.settled(),
-                     "no_list_for_section": coverage.no_list_for_section})
+                     "no_list_for_section": coverage.no_list_for_section,
+                     "partial": coverage.partial, "orphan_ticks": coverage.orphan_ticks})
     no_list = sorted({r["no_list_for_section"] for r in rows if r["no_list_for_section"]})
     return {
         "items": rows,
@@ -289,5 +471,9 @@ def bill_summary(bill: ClientBill, ticks: dict[str, dict[str, dict]]) -> dict:
         # adding them together would hide the second inside the first.
         "no_list": sum(1 for r in rows if r["no_list_for_section"]),
         "bills_without_a_list": no_list,
+        # Every list here is the amendments only. Counted, so "settled" can never be read as
+        # "complete" — see PARTIAL_BY_CONSTRUCTION.
+        "partial": sum(1 for r in rows if r["partial"]),
+        "orphan_ticks": sum(len(r["orphan_ticks"]) for r in rows),
         "note": NO_LATER_CLAIM,
     }
