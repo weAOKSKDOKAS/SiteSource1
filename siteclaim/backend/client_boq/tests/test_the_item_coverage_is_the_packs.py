@@ -47,6 +47,7 @@ from client_boq.boq.coverage import (
     PARTIAL_BY_CONSTRUCTION,
     SECTION_COVERAGE,
     coverage_for,
+    has_list_for,
     heads_for,
 )
 from client_boq.models import BillItem
@@ -222,3 +223,63 @@ class TestDefectBTheHeadsThatWereMissingEntirely:
         keys = [head.key for head in heads]
         assert len(keys) == len(set(keys))
         assert keys.count("smm.s02.2.08.h") == 1
+
+
+class TestOneSmmSectionSeveralCoverageClauses:
+    """★ THE STRUCTURAL RULE. Bills 2, 3, 4, 5 and 6 all map to SMM section 2 — and that does not
+    make their coverage the same. Within a section the clause follows the WORK TYPE."""
+
+    def test_a_laboratory_item_carries_no_drilling_head(self):
+        """THE TRAP. Giving Bill 4 a copy of Bill 2's heads because "they are all SMM 2" would
+        attach stabilising-the-hole and reaming-casing to a laboratory test."""
+        keys = _keys(_item("4.18", bill_no="4", description="Carbonate content test for soil"))
+        assert not any(key.startswith("smm.s02.2.13") for key in keys)
+        assert "smm.s02.2.13.e" not in keys and "smm.s02.2.13.f" not in keys
+
+    def test_a_laboratory_item_carries_the_clause_that_governs_it(self):
+        heads = _by_key(_item("4.18", bill_no="4", description="Carbonate content test"))
+        assert set(heads) == {"smm.s02.2.35.b", "smm.s02.2.35.g", "smm.s02.2.35.h"}
+        assert heads["smm.s02.2.35.h"].cites == "31", "PS Section 31"
+
+    def test_bill_five_is_governed_by_the_same_clause_as_bill_four(self):
+        assert _keys(_item("5.1", bill_no="5", description="Triaxial test")) == _keys(
+            _item("4.18", bill_no="4", description="Carbonate content test"))
+
+    def test_a_groundwater_item_carries_the_instrument_clause_and_nothing_from_drilling(self):
+        keys = _keys(_item("6.4", bill_no="6", description="Standpipe"))
+        assert "smm.s02.2.30.j" in keys and "smm.s02.2.30.p" in keys
+        assert not any(key.startswith("smm.s02.2.13") for key in keys)
+        assert not any(key.startswith("smm.s02.2.35") for key in keys)
+
+    def test_the_instrument_list_carries_every_clause_the_pack_adds(self):
+        keys = _keys(_item("6.5", bill_no="6", description="Piezometer"))
+        for letter in "hjklmnop":
+            assert f"smm.s02.2.30.{letter}" in keys, letter
+
+    def test_bill_three_shares_bill_twos_list_rather_than_copying_it(self):
+        """One literal, so a correction to ¶2.13 cannot land on one bill and miss the other.
+
+        Asserted against the module's own source list rather than by object identity: pydantic
+        deep-copies on construction, so `is` cannot see the sharing — but "neither bill carries a
+        transcription of its own" is exactly what equality against the single literal states."""
+        from client_boq.boq.coverage import _DRILLING_2_13, _LABORATORY_2_35
+
+        assert SECTION_COVERAGE["2"].heads == _DRILLING_2_13
+        assert SECTION_COVERAGE["3"].heads == _DRILLING_2_13
+        assert SECTION_COVERAGE["4"].heads == _LABORATORY_2_35
+        assert SECTION_COVERAGE["5"].heads == _LABORATORY_2_35
+
+    def test_every_transcribed_bill_now_has_a_list(self):
+        for bill_no in ("2", "3", "4", "5", "6"):
+            item = _item(f"{bill_no}.1", bill_no=bill_no, description="anything")
+            assert has_list_for(item), bill_no
+            assert coverage_for(item).no_list_for_section == ""
+
+    def test_every_bills_list_names_its_own_clause_and_declares_itself_partial(self):
+        for bill_no, expected in (("2", "2.13"), ("3", "2.13"), ("4", "2.35"), ("5", "2.35"),
+                                  ("6", "2.30")):
+            entry = SECTION_COVERAGE[bill_no]
+            assert expected in entry.smm_clause
+            assert entry.partial == PARTIAL_BY_CONSTRUCTION
+            reasons = coverage_for(_item(f"{bill_no}.1", bill_no=bill_no)).partial
+            assert reasons and expected in reasons[0]

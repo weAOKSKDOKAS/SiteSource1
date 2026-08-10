@@ -188,21 +188,29 @@ class TestTheFeePercentageTrigger:
 # 4. A bill whose item coverage was never transcribed
 # ---------------------------------------------------------------------------
 class TestCoverageForABillNobodyTranscribed:
-    def test_only_bill_two_has_a_list_which_is_the_whole_finding(self):
-        assert set(boq_coverage.SECTION_COVERAGE) == {"2"}
+    def test_a_bill_with_no_transcribed_list_is_the_case_this_guards(self):
+        # RE-ANCHORED IN THE OPEN. This asserted `set(SECTION_COVERAGE) == {"2"}` — which was TRUE
+        # when the finding was made and is the finding itself, not the guard. Bills 3-6 have since
+        # been transcribed, so the literal set moved. What the guard is ABOUT — an item whose
+        # coverage nobody has written down must not read as "all covered" — is unchanged, and is
+        # now stated against a bill that genuinely has no list rather than against a snapshot of
+        # how many did on the day.
+        transcribed = set(boq_coverage.SECTION_COVERAGE)
+        assert "2" in transcribed
+        assert "7" not in transcribed, "the case the rest of this class exercises"
 
     def test_an_item_with_no_list_does_not_read_as_all_covered(self):
-        covered = boq_coverage.coverage_for(_item("2.1", bill_no="2"))
-        bare = boq_coverage.coverage_for(_item("6.1", bill_no="6"))
+        covered = boq_coverage.coverage_for(_item("2.4", bill_no="2"))
+        bare = boq_coverage.coverage_for(_item("7.1", bill_no="7"))
 
         assert covered.total() > 0 and not covered.settled(), "unticked, so not settled"
         assert bare.total() == 0
         assert not bare.settled(), "zero heads must not mean zero left to do"
-        assert bare.no_list_for_section == "6"
+        assert bare.no_list_for_section == "7"
         assert "no item-coverage list transcribed" in bare.summary()
 
     def test_the_item_specific_table_is_enough_to_count_as_a_list(self):
-        """2.2a's access-platform head is keyed on the item, not the section."""
+        """2.2a's access-scaffolding head is keyed on the item, not the section."""
         assert boq_coverage.has_list_for(_item("2.2a", bill_no="2"))
 
     def test_a_model_proposing_heads_makes_a_list_where_there_was_none(self):
@@ -210,19 +218,19 @@ class TestCoverageForABillNobodyTranscribed:
         nothing is settled by their arrival."""
         proposed = [boq_coverage.CoverageHead(key="x", label="something",
                                               authored_by=boq_coverage.BY_MODEL)]
-        out = boq_coverage.coverage_for(_item("6.1", bill_no="6"), proposed=proposed)
+        out = boq_coverage.coverage_for(_item("7.1", bill_no="7"), proposed=proposed)
         assert out.no_list_for_section == ""
         assert not out.settled(), "proposed heads are unticked like every other"
 
     def test_the_bill_summary_counts_them_separately_from_untick_ed_heads(self):
         """Two different problems with two different owners. Adding them together would hide the
         second inside the first."""
-        bill = _bill(_item("2.1", bill_no="2"), _item("6.1", bill_no="6"))
+        bill = _bill(_item("2.4", bill_no="2"), _item("7.1", bill_no="7"))
         out = boq_coverage.bill_summary(bill, ticks={})
         assert out["no_list"] == 1
-        assert out["bills_without_a_list"] == ["6"]
+        assert out["bills_without_a_list"] == ["7"]
         assert out["settled"] == 0
-        assert out["outstanding"] > 0, "2.1's own heads are still counted"
+        assert out["outstanding"] > 0, "2.4's own heads are still counted"
 
 
 # ---------------------------------------------------------------------------

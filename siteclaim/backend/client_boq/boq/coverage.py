@@ -207,10 +207,98 @@ _DRILLING_2_13 = [
                  clause_ref="PS 7.45D", cites="7.45D"),
 ]
 
+# ---------------------------------------------------------------------------
+# Laboratory testing â Â¶2.35 (Bills 4 and 5)
+# ---------------------------------------------------------------------------
+# Verbatim from SMM_S02 Particular Preambles:
+#   2.35(b) (substituted) calibration of instruments and submission of calibration certificates;
+#   2.35(g) disposal of samples and cores or transporting samples and cores to Project Manager's
+#   store as directed by the Project Manager;
+#   2.35(h) complying with all the requirements as specified in PS Section 31 for laboratory
+#   testing.
+_LABORATORY_2_35 = [
+    CoverageHead(key="smm.s02.2.35.b",
+                 label="Calibration of instruments and submission of calibration certificates",
+                 clause_ref="SMM S02 ¶2.35(b)"),
+    CoverageHead(key="smm.s02.2.35.g",
+                 label="Disposal of samples and cores, or transporting them to the Project "
+                       "Manager's store as directed",
+                 clause_ref="SMM S02 ¶2.35(g)"),
+    CoverageHead(key="smm.s02.2.35.h",
+                 label="Complying with all the requirements of PS Section 31 for laboratory "
+                       "testing",
+                 clause_ref="SMM S02 ¶2.35(h) · PS Section 31", cites="31"),
+]
+
+# ---------------------------------------------------------------------------
+# Instrument installation / groundwater monitoring â ¶2.30 (Bill 6)
+# ---------------------------------------------------------------------------
+# Verbatim from SMM_S02 Particular Preambles.
+_INSTRUMENTS_2_30 = [
+    CoverageHead(key="smm.s02.2.30.h",
+                 label="Taking readings, measurements and observations, and recording and "
+                       "supplying records to the Project Manager in report format",
+                 clause_ref="SMM S02 ¶2.30(h)"),
+    CoverageHead(key="smm.s02.2.30.j", label="Removal of instruments",
+                 clause_ref="SMM S02 ¶2.30(j)"),
+    CoverageHead(key="smm.s02.2.30.k", label="Response test and other test as required",
+                 clause_ref="SMM S02 ¶2.30(k)"),
+    CoverageHead(key="smm.s02.2.30.l",
+                 label="UPVC pipes, cappings, G.I. pipes, couplers, grout infill, filter "
+                       "materials, twin tubing, piezometer tips, piezometer buckets, strings, "
+                       "lead weights, plugs and the like",
+                 clause_ref="SMM S02 ¶2.30(l)"),
+    CoverageHead(key="smm.s02.2.30.m",
+                 label="In the case of standpipe piezometer, tip, UPVC standpipe, filter medium, "
+                       "seals and cement/bentonite grout",
+                 clause_ref="SMM S02 ¶2.30(m)"),
+    CoverageHead(key="smm.s02.2.30.n",
+                 label="Instrumentation and taking of records/measurements and submissions to the "
+                       "Project Manager",
+                 clause_ref="SMM S02 ¶2.30(n)"),
+    CoverageHead(key="smm.s02.2.30.o",
+                 label="Interpretation of test results and readings and submission to the Project "
+                       "Manager in report format",
+                 clause_ref="SMM S02 ¶2.30(o)"),
+    CoverageHead(key="smm.s02.2.30.p",
+                 label="Operation and maintenance manual for instruments",
+                 clause_ref="SMM S02 ¶2.30(p)"),
+]
+
+# ---------------------------------------------------------------------------
+# ★ ONE SMM SECTION, SEVERAL COVERAGE CLAUSES
+# ---------------------------------------------------------------------------
+# Bills 2, 3, 4, 5 and 6 ALL map to SMM section 2. That does not make their coverage the same.
+# SMM 2 carries a different item-coverage clause per work type:
+#
+#     ¶2.07 / 2.08 / 2.09   setting up, moving rigs        Bills 2, 3
+#     ¶2.13                 drilling, boring, probing      Bills 2, 3
+#     ¶2.22                 samples                        Bills 2, 3   (not transcribed)
+#     ¶2.26                 in-situ tests                  Bills 2, 3   (not transcribed)
+#     ¶2.30                 instrument installation        Bill 6
+#     ¶2.35                 laboratory testing             Bills 4, 5
+#     ¶2.38                 report work                    reporting items (not transcribed)
+#
+# THE TRAP THIS AVOIDS: giving Bills 4/5/6 a copy of Bill 2's heads because "they are all SMM 2"
+# would attach *drilling* heads — stabilising the hole, reaming casing — to a *laboratory test*.
+# Same failure class as "bill number is not PS number": the bill-to-SMM map is right, but WITHIN a
+# section the clause follows the WORK TYPE.
 SECTION_COVERAGE: dict[str, CoverageList] = {
     "2": CoverageList(bill_no="2", smm_clause="SMM S02 ¶2.13",
                       title="Ground Investigation Fieldworks — drilling, boring, probing",
                       heads=_DRILLING_2_13),
+    # Bill 3 is measured under the SAME clause as Bill 2 and SHARES the list rather than copying
+    # it — one literal, so a correction to ¶2.13 cannot land on one bill and miss the other.
+    "3": CoverageList(bill_no="3", smm_clause="SMM S02 ¶2.13",
+                      title="GI Fieldworks (Environmental Boreholes) — drilling, boring, probing",
+                      heads=_DRILLING_2_13),
+    "4": CoverageList(bill_no="4", smm_clause="SMM S02 ¶2.35",
+                      title="Laboratory Testing", heads=_LABORATORY_2_35),
+    "5": CoverageList(bill_no="5", smm_clause="SMM S02 ¶2.35",
+                      title="Laboratory Testing", heads=_LABORATORY_2_35),
+    "6": CoverageList(bill_no="6", smm_clause="SMM S02 ¶2.30",
+                      title="Groundwater Monitoring — instrument installation",
+                      heads=_INSTRUMENTS_2_30),
 }
 
 # ---------------------------------------------------------------------------
