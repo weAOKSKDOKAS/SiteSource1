@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { BillPicker } from "../BillPicker";
+import { Ask } from "../costing/Ask";
 import { Conditions } from "../costing/Conditions";
 import { Outstanding } from "../Outstanding";
 import type { AssumptionRow, CostingCheck, CostingResponse, PricedRow } from "../types";
@@ -250,6 +251,8 @@ export function Costing({
             is about, and everything derived from it recomputes.
           </p>
         </section>
+
+        <Ask setId={setId} onError={onError} onRecorded={load} />
 
         <Conditions setId={setId} onChanged={load} onError={onError} />
       </div>

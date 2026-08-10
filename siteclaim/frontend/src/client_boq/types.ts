@@ -516,6 +516,62 @@ export interface ConditionRow {
   applied_value: number | null;
 }
 
+/** One site photograph. `caption` and `station` are the PHOTOGRAPHER's — neither is read off the
+ *  image, because a model guessing which hole a picture is of attaches real evidence to the wrong
+ *  location, which is worse than a picture with no location at all. */
+export interface PhotoRow {
+  set_id: string;
+  photo_id: string;
+  filename: string;
+  rel_path: string;
+  content_type: string;
+  caption: string;
+  station: string;
+  uploaded_by: string;
+  uploaded_at: string | null;
+}
+
+/** What is VISIBLE in a photograph, and why it might cost money. No access class, no cost, no
+ *  status — a machine looking at a hillside cannot classify it, and if it did it would be
+ *  believed. `as_condition` is the sentence it becomes if somebody keeps it. */
+export interface Observation {
+  topic: "access" | "ground" | "obstruction" | "space" | "hazard" | "other";
+  what_i_see: string;
+  why_it_might_matter: string;
+  photo_refs: string[];
+  corroboration: string;
+  confidence: "high" | "medium" | "low";
+  as_condition?: string;
+}
+
+export interface PhotoReadResponse {
+  set_id: string;
+  observations: Observation[];
+  photos_read: string[];
+  could_not_see: string;
+  problems: string[];
+  waiting_on?: string;
+}
+
+/** A grounded answer. Deliberately has no field for a rate, a duration, a class or a verdict —
+ *  there is nowhere to put the kind of answer a chat box would otherwise invent. */
+export interface AskResponse {
+  set_id: string;
+  question: string;
+  answer: string;
+  citations: { source: string; quote: string }[];
+  /** Keys of the engine's figures the prose quoted. */
+  figures_used: string[];
+  /** key → what it is, for the ones actually quoted. */
+  figures: Record<string, string>;
+  /** The one action it may suggest: record a condition. It writes nothing. */
+  proposes: string;
+  cannot_answer: string;
+  /** What was removed on the way through. A fabricated citation reads exactly like a real one. */
+  stripped: string[];
+  grounded_in: string[];
+}
+
 export interface ConditionsResponse {
   set_id: string;
   conditions: ConditionRow[];

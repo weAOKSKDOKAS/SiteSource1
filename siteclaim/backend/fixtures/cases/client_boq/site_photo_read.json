@@ -1,0 +1,29 @@
+{
+  "observations": [
+    {
+      "topic": "access",
+      "what_i_see": "A concrete farm track ends at a locked gate, and beyond it the ground rises steeply through scrub with no vehicle route visible in any of the frames.",
+      "why_it_might_matter": "If the holes above the gate are on that slope, plant and rods would have to be carried or a temporary platform built, either of which is a cost that does not appear anywhere in the bill's drilling rates.",
+      "photo_refs": ["site-01.jpg"],
+      "corroboration": "The station schedule places three holes above the 60 mPD contour on this sheet.",
+      "confidence": "medium"
+    },
+    {
+      "topic": "ground",
+      "what_i_see": "Weathered granite is exposed in the cut face beside the track, with open joints and loose blocks at the toe.",
+      "why_it_might_matter": "Rock at or near the surface here would mean coring starts early rather than after a soil run, which is a different mode of working from the one a low rock fraction implies.",
+      "photo_refs": ["site-01.jpg", "site-02.jpg"],
+      "corroboration": "",
+      "confidence": "low"
+    },
+    {
+      "topic": "obstruction",
+      "what_i_see": "The flat ground nearest the track is under cultivation, in raised beds with irrigation pipework running between them.",
+      "why_it_might_matter": "Standing a rig here would need the occupier's agreement and probably reinstatement, neither of which is a drilling cost.",
+      "photo_refs": ["site-02.jpg"],
+      "corroboration": "",
+      "confidence": "medium"
+    }
+  ],
+  "could_not_see": "No photograph shows the ground at the far end of the site, so nothing here says anything about the holes on the eastern sheet."
+}

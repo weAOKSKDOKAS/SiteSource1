@@ -1796,6 +1796,27 @@ _DDL = [
         PRIMARY KEY (set_id, condition_id)
     )
     """,
+    # A SITE PHOTOGRAPH. The tender package says where the holes are and how deep; it does not say
+    # the track stops 200 m short or that the only standing ground is somebody's vegetable plot.
+    # Those cost money, and the only record of them is what somebody saw on the site walk — which
+    # today lives in a phone camera roll.
+    #
+    # The bytes live in the workspace like every other upload; this row is the index and the
+    # provenance. `station` is optional and is the person's, not read off the image.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_site_photos (
+        set_id      TEXT NOT NULL,
+        photo_id    TEXT NOT NULL,
+        filename    TEXT NOT NULL,
+        rel_path    TEXT NOT NULL,               -- inside the tender's workspace
+        content_type TEXT NOT NULL DEFAULT '',
+        caption     TEXT NOT NULL DEFAULT '',    -- the photographer's words
+        station     TEXT NOT NULL DEFAULT '',    -- which hole, if they said
+        uploaded_by TEXT NOT NULL DEFAULT '',
+        uploaded_at TEXT,
+        PRIMARY KEY (set_id, photo_id)
+    )
+    """,
 ]
 
 

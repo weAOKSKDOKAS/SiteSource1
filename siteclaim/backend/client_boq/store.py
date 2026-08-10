@@ -2148,7 +2148,10 @@ def load_conditions(conn: sqlite3.Connection, set_id: str) -> list[dict]:
     unconfirmed condition is exactly the thing that has to stay visible."""
     rows = conn.execute(
         f"SELECT {_CONDITION_COLUMNS} FROM client_boq_conditions "
-        f"WHERE set_id = ? ORDER BY created_at, condition_id",
+        # ORDER BY rowid, not by timestamp: two rows written in the same SECOND tie, and the
+        # tiebreak was a hashed id — so arrival order was stable only by luck. rowid IS insertion
+        # order in SQLite, which is the order these were actually written down in.
+        f"WHERE set_id = ? ORDER BY rowid",
         (set_id,),
     ).fetchall()
     return [dict(row) for row in rows]
@@ -2158,5 +2161,58 @@ def delete_condition(conn: sqlite3.Connection, set_id: str, condition_id: str) -
     conn.execute(
         "DELETE FROM client_boq_conditions WHERE set_id = ? AND condition_id = ?",
         (set_id, condition_id),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Site photographs — the index and the provenance; the bytes are in the workspace
+# ---------------------------------------------------------------------------
+_PHOTO_COLUMNS = ("set_id, photo_id, filename, rel_path, content_type, caption, station, "
+                  "uploaded_by, uploaded_at")
+
+
+def save_site_photo(conn: sqlite3.Connection, set_id: str, photo_id: str, *, filename: str,
+                    rel_path: str, content_type: str = "", caption: str = "", station: str = "",
+                    actor: str = "") -> dict:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_site_photos
+            (set_id, photo_id, filename, rel_path, content_type, caption, station,
+             uploaded_by, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, photo_id) DO UPDATE SET
+            caption = excluded.caption, station = excluded.station
+        """,
+        (set_id, photo_id, filename, rel_path, content_type, caption, station, actor, now),
+    )
+    conn.commit()
+    return load_site_photo(conn, set_id, photo_id) or {}
+
+
+def load_site_photo(conn: sqlite3.Connection, set_id: str, photo_id: str) -> Optional[dict]:
+    row = conn.execute(
+        f"SELECT {_PHOTO_COLUMNS} FROM client_boq_site_photos WHERE set_id = ? AND photo_id = ?",
+        (set_id, photo_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def load_site_photos(conn: sqlite3.Connection, set_id: str) -> list[dict]:
+    rows = conn.execute(
+        # ORDER BY rowid — see the note on `load_conditions`. Two photographs uploaded in the same
+        # second tied and fell back to a hashed id, so "the order they were taken in" was arbitrary.
+        f"SELECT {_PHOTO_COLUMNS} FROM client_boq_site_photos WHERE set_id = ? ORDER BY rowid",
+        (set_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_site_photo(conn: sqlite3.Connection, set_id: str, photo_id: str) -> None:
+    conn.execute(
+        "DELETE FROM client_boq_site_photos WHERE set_id = ? AND photo_id = ?",
+        (set_id, photo_id),
     )
     conn.commit()

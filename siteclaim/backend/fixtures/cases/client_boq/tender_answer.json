@@ -1,0 +1,9 @@
+{
+  "answer": "The programme in force is 1,046 work-days at P50, which needs 3 rigs over the contract period. That figure comes from the rock-fraction band the bill selects, not from a rate anybody typed.",
+  "citations": [
+    {"source": "programme", "quote": "work_days P50, derived from the banded lookup"}
+  ],
+  "figures_used": ["work_days", "rigs_required"],
+  "proposes": "",
+  "cannot_answer": ""
+}

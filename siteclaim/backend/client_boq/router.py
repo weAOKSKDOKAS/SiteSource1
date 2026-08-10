@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time as _time
 
+import base64
 import io
 import os
 import re
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field
 from client_boq import criteria_loader, criteria_store, jobs, models, rates_store, store
 from client_boq.boq import access as boq_access
 from client_boq.boq import allocate as boq_allocate
+from client_boq.boq import ask as boq_ask
 from client_boq.boq import assumptions as boq_assumptions
 from client_boq.boq import buildup as boq_buildup
 from client_boq.boq import carry as boq_carry
@@ -47,6 +49,7 @@ from client_boq.boq import model as boq_model
 from client_boq.boq import georef as boq_georef
 from client_boq.boq import groups as boq_groups
 from client_boq.boq import outputs as boq_outputs
+from client_boq.boq import photos as boq_photos
 from client_boq.boq import pricing as boq_pricing
 from client_boq.boq import production as boq_production
 from client_boq.boq import programme as boq_programme
@@ -4863,6 +4866,279 @@ def _propose_condition_mapping(text: str, model: boq_model.CostingModel, context
     return boq_conditions.validate(
         raw.model_dump() if isinstance(raw, boq_conditions.RawConditionMapping) else
         (raw if isinstance(raw, dict) else {}), model)
+
+
+# ---------------------------------------------------------------------------
+# Site photographs, and asking a question about one tender
+# ---------------------------------------------------------------------------
+@router.get("/site/{set_id}/photos")
+def get_site_photos(set_id: str) -> dict:
+    """Every photograph on this tender. The index; the bytes come from the file route below."""
+    conn = store.get_conn()
+    try:
+        rows = store.load_site_photos(conn, set_id)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "photos": rows, "count": len(rows)}
+
+
+@router.post("/site/photos")
+async def post_site_photo(set_id: str = Form(...), caption: str = Form(""),
+                          station: str = Form(""), file: UploadFile = File(...),
+                          actor: str = Depends(_actor)) -> dict:
+    """Upload one site photograph.
+
+    The caption and the station are the PHOTOGRAPHER's — neither is read off the image. A model
+    guessing which hole a picture is of would attach real evidence to the wrong location, which is
+    worse than a picture with no location at all.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="That file is empty.")
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{file.filename!r} is {content_type or 'of unknown type'}, not an image. Site "
+                   f"photographs are read with vision; a document belongs on the Documents step.")
+
+    workspace = Workspace()
+    photo_id = f"p-{abs(hash((set_id, file.filename, len(data)))) % 10**10}"
+    # `safe_relative_path` is the guard the workspace already keeps against a filename that walks
+    # out of the tender's directory; the photo id in front of it also stops two files with the same
+    # name from overwriting each other.
+    relative = safe_relative_path(f"site_photos/{photo_id}-{file.filename or 'photo'}").as_posix()
+    workspace.save_upload_at(set_id, relative, data)
+    conn = store.get_conn()
+    try:
+        row = store.save_site_photo(conn, set_id, photo_id, filename=file.filename or photo_id,
+                                    rel_path=relative, content_type=content_type,
+                                    caption=caption, station=station, actor=actor)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "photo": row}
+
+
+@router.get("/site/{set_id}/photos/{photo_id}/file")
+def get_site_photo_file(set_id: str, photo_id: str) -> Response:
+    conn = store.get_conn()
+    try:
+        row = store.load_site_photo(conn, set_id, photo_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No photograph {photo_id!r} on this tender.")
+    path = Workspace().docs_dir(set_id) / row["rel_path"]
+    if not path.is_file():
+        raise HTTPException(
+            status_code=410,
+            detail="The row is here but the file is not. Uploads live on local disk; losing the "
+                   "disk loses the picture, and nothing else in this app knows that happened.")
+    return Response(content=path.read_bytes(),
+                    media_type=row["content_type"] or "image/jpeg")
+
+
+@router.delete("/site/{set_id}/photos/{photo_id}")
+def delete_site_photo_row(set_id: str, photo_id: str, actor: str = Depends(_actor)) -> dict:
+    conn = store.get_conn()
+    try:
+        store.delete_site_photo(conn, set_id, photo_id)
+        store.touch_set(conn, set_id, actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "photo_id": photo_id, "deleted": True,
+            "note": "Any condition already recorded from this photograph stays — it is a decision "
+                    "somebody made, not a property of the file."}
+
+
+@router.post("/site/{set_id}/photos/read")
+def post_read_site_photos(set_id: str) -> dict:
+    """Read the photographs with vision, alongside the schedule and the reports.
+
+    Produces OBSERVATIONS, each naming the photograph it came from. Never an access class, never a
+    cost — see `boq/photos.py`. A kept observation becomes a condition through the ordinary
+    propose-and-confirm path, so a human is in the loop twice before any number moves.
+
+    The images are counted and loaded FIRST, in every mode. `s02_interpret` was once burned by
+    returning its DEMO fixture before checking whether the input was readable, so a scanned page
+    came back with a confident summary of pages nobody had seen. No photographs means no
+    observations and a stated reason, fixture or not.
+    """
+    from client_boq import llm as llm_mod
+
+    conn = store.get_conn()
+    try:
+        rows = store.load_site_photos(conn, set_id)
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+    finally:
+        conn.close()
+
+    workspace = Workspace()
+    images: list[str] = []
+    names: list[str] = []
+    missing: list[str] = []
+    for row in rows:
+        path = workspace.docs_dir(set_id) / row["rel_path"]
+        if not path.is_file():
+            missing.append(row["filename"])
+            continue
+        images.append(base64.b64encode(path.read_bytes()).decode("ascii"))
+        names.append(row["filename"])
+
+    if not images:
+        return {"set_id": set_id, "observations": [], "photos_read": [],
+                "could_not_see": "", "problems": (
+                    [f"{len(missing)} photograph(s) are indexed but their files are gone: "
+                     f"{', '.join(missing)}"] if missing else []),
+                "waiting_on": "no photographs have been uploaded, so there is nothing to look at"}
+
+    stations = ""
+    if schedule is not None:
+        stations = "\n".join(
+            f"{s.station}: soil {s.soil_m:g} m + rock {s.rock_m:g} m"
+            + (f", sheet {s.sheet}" if s.sheet else "")
+            for s in schedule.stations[:120])
+    captions = "\n".join(f"{row['filename']}: {row['caption']}"
+                         + (f" (station {row['station']})" if row["station"] else "")
+                         for row in rows if row["caption"] or row["station"])
+
+    client = llm_mod.make_client()
+    try:
+        raw = client.complete_json(
+            system=boq_photos.SYSTEM,
+            user=boq_photos.prompt_for(stations=stations, reports=captions, photos=names),
+            images=images, target_model=_RawPhotoRead,
+            demo_fixture=boq_photos.DEMO_FIXTURE, purpose="client_boq-site-photos",
+        )
+    except Exception as exc:
+        return {"set_id": set_id, "observations": [], "photos_read": names, "could_not_see": "",
+                "problems": [f"the reading call did not come back: {exc}"]}
+
+    read = boq_photos.validate(raw.model_dump() if hasattr(raw, "model_dump") else (raw or {}),
+                              available=names)
+    if missing:
+        read.problems.append(
+            f"{len(missing)} photograph(s) are indexed but their files are gone and were NOT read: "
+            f"{', '.join(missing)}")
+    payload = read.model_dump()
+    # What each observation would say if somebody keeps it — computed here so the screen does not
+    # have to reconstruct the sentence, and so the same words reach the register every time.
+    payload["observations"] = [
+        {**o, "as_condition": boq_photos.as_condition_text(boq_photos.Observation(**o))}
+        for o in payload["observations"]]
+    return {"set_id": set_id, **payload}
+
+
+class _RawPhotoRead(BaseModel):
+    """Exactly what the vision call is asked for. It does not get to write `problems`."""
+
+    observations: list[dict] = Field(default_factory=list)
+    could_not_see: str = ""
+
+
+class AskRequest(BaseModel):
+    set_id: str
+    question: str
+
+
+@router.post("/costing/ask")
+def post_ask(req: AskRequest) -> dict:
+    """Ask a question about one tender, grounded in its own documents and its own numbers.
+
+    The answer is constrained BY ITS SHAPE (see `boq/ask.py`): it may quote a figure the engine
+    computed, it may not invent one, every claim carries a citation validated against the ground
+    actually supplied, and a citation to something that was not supplied is stripped and reported.
+    The only thing it may suggest doing is recording a condition — which then goes through the
+    ordinary propose-and-confirm path like any other.
+    """
+    from client_boq import llm as llm_mod
+
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="Ask something.")
+
+    conn = store.get_conn()
+    try:
+        ground = _ground_for(conn, req.set_id)
+    finally:
+        conn.close()
+    if not ground.sources:
+        return {"set_id": req.set_id, "question": question, "answer": "",
+                "cannot_answer": "nothing has been read for this tender yet — no documents, no "
+                                 "bill, no schedule — so there is nothing to ground an answer in",
+                "citations": [], "figures_used": [], "proposes": "", "stripped": [],
+                "grounded_in": []}
+
+    client = llm_mod.make_client()
+    try:
+        raw = client.complete_json(
+            system=boq_ask.SYSTEM,
+            user=f"{ground.as_prompt()}\n\nTHE QUESTION:\n{question}",
+            target_model=boq_ask.RawAnswer,
+            demo_fixture=boq_ask.DEMO_FIXTURE, purpose="client_boq-ask",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502,
+                            detail=f"the answer did not come back: {exc}") from exc
+
+    answer = boq_ask.validate(raw.model_dump() if hasattr(raw, "model_dump") else (raw or {}),
+                              ground)
+    return {"set_id": req.set_id, "question": question, **answer.model_dump(),
+            "grounded_in": sorted(ground.sources),
+            "figures": {k: ground.figures[k] for k in answer.figures_used}}
+
+
+def _ground_for(conn, set_id: str) -> "boq_ask.Ground":
+    """Assemble what an answer is allowed to rest on. Deterministic — no model call anywhere here.
+
+    Four kinds of ground, in the order they became available to this product: the review's clauses
+    and their citations, the costing model in force and what it derived, the access board's
+    location evidence, and the captions on any site photographs.
+    """
+    ground = boq_ask.Ground()
+
+    register = store.load_register(conn, set_id)
+    if register is not None and register.items:
+        for item in register.items[:60]:
+            label = f"register:{item.criterion_id or item.clause_ref or item.id}"
+            ground.sources[label] = f"{item.title}. {item.finding}"[:1200]
+
+    try:
+        bill = _bill_or_404(conn, set_id, None)
+        parts = _costing(conn, set_id, bill.rev)
+        programme = parts["programme"]
+        ground.figures.update({
+            "rock_fraction": f"rock fraction of the works: {programme.rock_fraction:.1%}",
+            "work_days": f"work-days at P50: {programme.work_days:,.0f}",
+            "rigs_required": f"rigs required: {programme.rigs_required}",
+            "standing_hours": f"standing time: {programme.standing_hours:,.0f} hours",
+            "total": f"the priced bill total: {parts['priced'].total:,.2f}",
+        })
+        ground.sources["programme"] = (
+            f"Derived from the bill: {programme.work_days:,.0f} work-days at P50 over "
+            f"{programme.rigs_required} rig(s); band "
+            f"{programme.band.label if programme.band else 'none selected'}.")
+    except HTTPException:
+        pass
+
+    schedule, _meta = store.load_station_schedule(conn, set_id)
+    if schedule is not None and schedule.stations:
+        board = boq_access.board(schedule, set_id=set_id,
+                                 classes={n: (r.get("access_class") or "")
+                                          for n, r in store.load_station_classes(conn,
+                                                                                 set_id).items()})
+        for item in board.clusters[:20]:
+            ground.sources[f"location:{item.label}"] = (
+                f"{item.holes} hole(s) at {item.lat:.5f}, {item.lon:.5f}, spread "
+                f"{item.spread_m:,.0f} m; {item.undecided} still unclassed. "
+                + " ".join(item.notes))
+
+    for photo in store.load_site_photos(conn, set_id)[:40]:
+        if photo["caption"] or photo["station"]:
+            ground.sources[f"photo:{photo['filename']}"] = (
+                f"{photo['caption']}" + (f" (station {photo['station']})" if photo["station"] else ""))
+    return ground
 
 
 @router.get("/costing/{set_id}/workbook.xlsx")

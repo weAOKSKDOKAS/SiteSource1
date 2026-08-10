@@ -53,10 +53,13 @@ import type {
   PartSpec,
   PartsResponse,
   AccessBoardResponse,
+  AskResponse,
   ConditionRow,
   ConditionsResponse,
   CostingModelShape,
   CostingResponse,
+  PhotoReadResponse,
+  PhotoRow,
   LibraryModelResponse,
   DerivedResponse,
   GroupPreview,
@@ -316,6 +319,10 @@ export const api = {
       problems: string[];
     }>("/costing/assumption-value", { set_id: setId, key, value }),
   conditions: (setId: string) => get<ConditionsResponse>(`/costing/${setId}/conditions`),
+  /** Ask about ONE tender, answered only from its own ground. See `boq/ask.py` for what the
+   *  answer's shape refuses to let it say. */
+  ask: (setId: string, question: string) =>
+    post<AskResponse>("/costing/ask", { set_id: setId, question }),
   /** Record a condition AND ask the model which knob it moves. Recording is unconditional; the
    *  mapping is a proposal and writes nothing. */
   addCondition: (setId: string, text: string, note = "") =>
@@ -357,6 +364,29 @@ export const api = {
   stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),
   derived: (setId: string) => get<DerivedResponse>(`/site/${setId}/derived`),
   holeGroups: (setId: string) => get<GroupsResponse>(`/site/${setId}/groups`),
+  // --- site photographs -----------------------------------------------------
+  sitePhotos: (setId: string) =>
+    get<{ set_id: string; photos: PhotoRow[]; count: number }>(`/site/${setId}/photos`),
+  sitePhotoUrl: (setId: string, photoId: string) =>
+    `${ROOT}/site/${setId}/photos/${photoId}/file`,
+  uploadSitePhoto(setId: string, file: File, caption = "", station = ""): Promise<{ photo: PhotoRow }> {
+    const form = new FormData();
+    form.append("set_id", setId);
+    form.append("caption", caption);
+    form.append("station", station);
+    form.append("file", file);
+    return fetch(`${ROOT}/site/photos`, {
+      method: "POST",
+      body: form,
+      headers: actorHeaders(),
+    }).then((r) => handle<{ photo: PhotoRow }>(r));
+  },
+  /** Vision over the photographs, alongside the schedule and the captions. Produces observations
+   *  that name their photograph — never a class and never a cost. */
+  readSitePhotos: (setId: string) =>
+    post<PhotoReadResponse>(`/site/${setId}/photos/read`, {}),
+  deleteSitePhoto: (setId: string, photoId: string) =>
+    del<{ deleted: boolean; note: string }>(`/site/${setId}/photos/${photoId}`),
   /** The access board: proximity clusters over the map, and the evidence for reaching each. It
    *  assembles and never concludes — `proposed_class` comes back "" on every cluster. */
   accessBoard: (setId: string, radiusM?: number) =>

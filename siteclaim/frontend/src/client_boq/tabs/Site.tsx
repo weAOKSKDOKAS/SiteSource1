@@ -2,6 +2,7 @@
 //
 //   Schedule  what the borehole details drawing said, checked against what the client billed
 //   Map       where the holes actually are, clustered, with the evidence for reaching each
+//   Photos    what somebody saw on the walk — read with vision, kept as conditions
 //   Holes     the class of every hole — the judgement no document in the set contains
 //   Groups    which holes drill alike, and the arithmetic that follows
 //
@@ -15,6 +16,7 @@ import { api } from "../api";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
 import { PageView } from "../PageView";
 import { AccessMap } from "../site/AccessMap";
+import { Photos } from "../site/Photos";
 import type {
   DerivedResponse,
   GroupPreview,
@@ -34,7 +36,7 @@ import {
   formatNorm,
 } from "../ui";
 
-type View = "schedule" | "map" | "holes" | "groups";
+type View = "schedule" | "map" | "photos" | "holes" | "groups";
 
 const CLASS_OPTIONS = [
   { value: "A", label: "A", title: "Reachable by road, or by hand without a temporary platform." },
@@ -165,6 +167,7 @@ export function SiteTab({
             options={[
               { value: "schedule" as View, label: "SCHEDULE" },
               { value: "map" as View, label: "MAP" },
+              { value: "photos" as View, label: "PHOTOS" },
               { value: "holes" as View, label: "HOLES" },
               { value: "groups" as View, label: "GROUPS" },
             ]}
@@ -178,7 +181,9 @@ export function SiteTab({
           </span>
         </header>
 
-        {view === "map" ? (
+        {view === "photos" ? (
+          <Photos setId={data.setId} onError={onError} />
+        ) : view === "map" ? (
           <AccessMap
             setId={data.setId}
             onError={onError}
