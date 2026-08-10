@@ -142,7 +142,7 @@ def test_a_decision_for_an_unproposed_package_is_rejected(proposed):
     # package_routes has no UNIQUE and silently updates zero rows for an unknown key. This table
     # would happily INSERT one, so it validates instead.
     set_id = proposed()
-    with pytest.raises(ValueError, match="Unknown package_key"):
+    with pytest.raises(ValueError, match="this proposal does not have"):
         decisions.confirm_routes(set_id, {"plumbing": "sublet"})
 
     conn = bridge_conn()
@@ -161,7 +161,7 @@ def test_an_empty_confirmation_is_refused(proposed):
 def test_confirming_before_any_proposal_says_so(make_set, part_spec):
     make_set("ge-2026-14", "GE/2026/14", [part_spec(1, "SR", "Schedule of Rates", "pricing")],
              review_approved=True)
-    with pytest.raises(LookupError, match="No route proposal"):
+    with pytest.raises(LookupError, match="No routing has been proposed"):
         decisions.confirm_routes("ge-2026-14", {"electrical": "sublet"})
 
 
@@ -226,7 +226,8 @@ def test_the_confirm_endpoint_maps_its_errors(client, proposed):
 
     bad_key = client.post(f"/bridge/{set_id}/route/confirm", json={"decisions": [
         {"package_key": "plumbing", "chosen_route": "sublet"}]})
-    assert bad_key.status_code == 400 and "Unknown package_key" in bad_key.json()["detail"]
+    assert bad_key.status_code == 400
+    assert "this proposal does not have" in bad_key.json()["detail"]
 
     no_proposal = client.post("/bridge/never-analysed/route/confirm", json={"decisions": [
         {"package_key": "electrical", "chosen_route": "sublet"}]})

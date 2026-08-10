@@ -22,8 +22,8 @@ from typing import Callable, Optional
 
 REVIEW_GATE_HINT = (
     "routing sits behind the review gate: you cannot decide self-perform vs sublet without knowing "
-    "the contract terms, and you should not send an RFQ on terms nobody has read. Approve the "
-    "review register (POST /client-boq/review/approve) first."
+    "the contract terms, and you should not send an RFQ on terms nobody has read. Close the review "
+    "register first — on the Register tab, 'Close register & unlock scope'."
 )
 
 
@@ -119,8 +119,9 @@ def require_bid_to_proceed(conn: sqlite3.Connection, set_id: str) -> Optional[st
     if bid_gate_is_soft():
         return warning
     raise BidNotDecided(
-        f"{warning.replace(' (BID_GATE=soft)', '')} Record a bid decision at "
-        f"POST /bridge/{set_id}/bid/confirm, or set BID_GATE=soft to proceed with a warning."
+        f"{warning.replace(' (BID_GATE=soft)', '')} Record a bid decision on the Bid tab, then "
+        f"try this again. (An operator can soften this gate with BID_GATE=soft; it then warns "
+        f"instead of blocking.)"
     )
 
 
@@ -186,7 +187,8 @@ def propose_routes(set_id: str, *, on_error: Optional[Callable[[str], None]] = N
         scope = scope_mod.load_scope_on(conn, ref)
         if scope is None:
             raise LookupError(
-                f"No scope split stored for set {ref!r} — POST /bridge/{ref}/scope first."
+                "The bill has not been split into trade packages yet — run the split on the "
+                "Route tab first."
             )
         open_queries = cb_store.open_rfi_count(conn, ref)
         register_set_on(conn, ref)
@@ -499,13 +501,13 @@ def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = 
         proposed = {p["package_key"] for p in routing.read_proposal(conn, ref)}
         if not proposed:
             raise LookupError(
-                f"No route proposal for set {ref!r} — POST /bridge/{ref}/route/analyze first."
+                "No routing has been proposed yet — propose routing on the Route tab first."
             )
         unknown = sorted(set(decisions) - proposed)
         if unknown:
             raise ValueError(
-                f"Unknown package_key(s) for set {ref!r}: {', '.join(unknown)}. "
-                f"Proposed: {', '.join(sorted(proposed))}."
+                f"The decision names package(s) this proposal does not have: {', '.join(unknown)}. "
+                f"The proposal has: {', '.join(sorted(proposed))}."
             )
         # ...AND the proposal itself may be stale. `proposed` is the LAST ANALYSIS's keys, so
         # validating against it alone let a decision be recorded for a package the current split no
@@ -514,9 +516,9 @@ def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = 
         stale = sorted(set(decisions) - _current_unit_keys(conn, ref, proposed))
         if stale:
             raise ValueError(
-                f"Package(s) {', '.join(stale)} are in the stored proposal but not in the current "
-                f"scope split for set {ref!r} — the split has been re-run since the routing was "
-                f"analysed. POST /bridge/{ref}/route/analyze again, then confirm."
+                f"The packages changed when the split was re-run: {', '.join(stale)} are in the "
+                f"stored routing proposal but not in the current split. Re-propose the routing, "
+                f"then confirm."
             )
 
         stamp = _now()

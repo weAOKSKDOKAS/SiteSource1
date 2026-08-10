@@ -78,7 +78,10 @@ def test_an_unapproved_review_refuses_and_names_the_gate(routable):
 
     message = str(exc.value)
     assert "not approved" in message
-    assert "/client-boq/review/approve" in message          # says exactly how to clear it
+    # RE-ANCHORED IN THE OPEN: this used to pin "/client-boq/review/approve" — an endpoint on an
+    # estimator's screen, which is the defect, not the contract. The contract is that the refusal
+    # says exactly how to clear itself IN THE USER'S TERMS: the tab and the button.
+    assert "Register tab" in message and "Close register" in message
     assert "should not send an RFQ on terms nobody has read" in message  # and why the gate exists
 
 
@@ -155,7 +158,9 @@ def test_open_queries_are_visible_but_never_refuse(routable, seeded_firms):
 def test_without_a_scope_split_it_says_so(make_set, part_spec):
     make_set("ge-2026-14", "GE/2026/14", [part_spec(1, "SR", "Schedule of Rates", "pricing")],
              review_approved=True)
-    with pytest.raises(LookupError, match="No scope split stored"):
+    # RE-ANCHORED: the refusal now speaks the user's terms ("run the split on the Route tab"),
+    # not the store's ("No scope split stored").
+    with pytest.raises(LookupError, match="has not been split into trade packages"):
         decisions.propose_routes("ge-2026-14")
 
 
@@ -165,7 +170,8 @@ def test_the_analyze_endpoint_409s_until_the_review_is_approved(client, routable
     resp = client.post(f"/bridge/{set_id}/route/analyze")
 
     assert resp.status_code == 409
-    assert "/client-boq/review/approve" in resp.json()["detail"]
+    # Same re-anchor as above: the detail names the Register tab's own action, not an endpoint.
+    assert "Close register" in resp.json()["detail"]
 
 
 def test_the_analyze_endpoint_returns_the_proposal_once_approved(client, routable, seeded_firms):
@@ -184,7 +190,7 @@ def test_the_analyze_endpoint_404s_without_a_scope(client, make_set, part_spec):
     make_set("ge-2026-14", "GE/2026/14", [part_spec(1, "SR", "Schedule of Rates", "pricing")],
              review_approved=True)
     resp = client.post("/bridge/ge-2026-14/route/analyze")
-    assert resp.status_code == 404 and "scope" in resp.json()["detail"]
+    assert resp.status_code == 404 and "run the split on the Route tab" in resp.json()["detail"]
 
 
 def test_the_existing_procurement_analyze_is_untouched(client):

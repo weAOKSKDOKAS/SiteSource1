@@ -88,7 +88,7 @@ def record_award(set_id: str, package_key: str, firm_id: str, firm_name: str = "
     if key not in state.get("sublet_packages", []):
         raise ValueError(
             f"package {key!r} has no confirmed sublet route — the award follows the routing "
-            f"decision. Confirm the routing first (POST /bridge/{ref}/route/confirm).")
+            f"decision. Confirm the routing on the Route tab first.")
 
     conn = bridge_conn()
     try:

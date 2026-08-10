@@ -438,8 +438,8 @@ def scope_from_set(
         bill_ids = set(parts_mod.confirmed_bill_parts(conn, ref))
         if not bill_ids:
             raise ValueError(
-                f"No bill part confirmed for set {ref!r} — POST /bridge/{ref}/bq-part first. "
-                "The priced bill is a human decision; this will not guess it."
+                "No document has been confirmed as the priced bill yet — choose it on the Route "
+                "tab first. The priced bill is a human decision; this will not guess it."
             )
         name = _project_name(conn, ref)
         register_set_on(conn, ref, name=name)

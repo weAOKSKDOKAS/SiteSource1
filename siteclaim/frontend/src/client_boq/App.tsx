@@ -512,7 +512,9 @@ export default function ClientBoqApp() {
         railEnabled={isSet}
         onSearch={() => setSearchOpen(true)}
         title={barTitle}
-        meta={isSet ? `set_id · ${surface.setId}` : undefined}
+        // The folder's slug, bare. It used to read `set_id · belvidere` — an internal key name in
+        // the one strip of chrome the user never escapes, answering a question nobody asked.
+        meta={isSet ? surface.setId : undefined}
         demoMode={demoMode}
         right={
           <>

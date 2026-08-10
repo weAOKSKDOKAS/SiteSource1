@@ -92,7 +92,9 @@ class TestImport:
 
     def test_a_missing_bill_404s_with_what_to_do_about_it(self, client):
         response = client.get(f"{BASE}/boq/nobody")
-        assert response.status_code == 404 and "boq/import" in response.json()["detail"]
+        # RE-ANCHORED: pinned the endpoint name; the message now names the Price tab instead.
+        assert response.status_code == 404
+        assert "Import the client's workbook on the Price tab" in response.json()["detail"]
 
 
 class TestDiff:

@@ -185,7 +185,8 @@ def get_scope(set_id: str) -> dict:
     if scope is None:
         raise HTTPException(
             status_code=404,
-            detail=f"No scope split stored for set {set_id!r} — POST /bridge/{set_id}/scope first.",
+            detail="The bill has not been split into trade packages yet — run the split on "
+                   "the Route tab first.",
         )
     return {"set_id": set_id, "scope": scope.model_dump()}
 

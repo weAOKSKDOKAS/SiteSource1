@@ -686,7 +686,7 @@ function PackageDrawer({
       accent="bg-cb-brass"
       title={pkg ? tradeLabel(pkg.trade) : ""}
       subtitle={pkg && <span className="font-cb-mono">{pkg.package_key}</span>}
-      footer="The recommendation is advisory — the human decision (decided-by, decided-at) is the record of truth."
+      footer="The recommendation is advisory — the record of truth is the human decision, who made it and when."
     >
       {pkg && (
         <div className="space-y-2">

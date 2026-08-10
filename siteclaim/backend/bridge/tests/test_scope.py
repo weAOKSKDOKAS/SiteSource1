@@ -100,7 +100,8 @@ def piling_set(make_set, part_spec, make_pdf):
 def test_without_a_confirmation_it_raises_rather_than_guessing(piling_set):
     # The bill is the Phase-3 human gate. Guessing it here — even from an obvious single pricing
     # part — would quietly defeat that gate.
-    with pytest.raises(ValueError, match="No bill part confirmed"):
+    # RE-ANCHORED with the plain-language pass; the gate and its refusal are unchanged in force.
+    with pytest.raises(ValueError, match="No document has been confirmed as the priced bill"):
         scope_mod.scope_from_set(piling_set, client=RecordingClient())
 
 
@@ -319,7 +320,9 @@ def test_the_scope_endpoints_run_persist_and_read_back(client, piling_set, monke
 def test_the_scope_endpoint_409s_without_a_confirmed_bill(client, piling_set):
     resp = client.post(f"/bridge/{piling_set}/scope")
     assert resp.status_code == 409
-    assert "bq-part" in resp.json()["detail"]                      # names how to clear it
+    # RE-ANCHORED IN THE OPEN: pinned "bq-part" — an endpoint fragment. The refusal still names
+    # how to clear itself, now in the user's terms: the tab where the bill is chosen.
+    assert "Route tab" in resp.json()["detail"]                    # names how to clear it
 
 
 def test_the_scope_endpoints_404_for_an_unknown_set(client):

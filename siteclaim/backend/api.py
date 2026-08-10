@@ -185,6 +185,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request, exc):  # noqa: ANN001 — Starlette's handler signature
+    """A crash must reach the screen as a sentence, not as "Failed to fetch".
+
+    Starlette routes a bare ``Exception`` to the OUTERMOST middleware — outside CORS — so an
+    unhandled error's 500 carried no CORS headers, the browser refused to show it to the page,
+    and every server crash surfaced as the no-noun network error. Observed live on the Route tab.
+    The header is set by hand here because this response never passes through the CORS middleware;
+    it mirrors the ``allow_origins=["*"]`` policy above and must change with it.
+
+    The traceback goes to the server log, where it belongs — the person at the screen gets what
+    they can act on. Under TestClient the exception still propagates (Starlette re-raises after
+    the handler), so tests that assert on raises are unaffected.
+    """
+    _log.exception("unhandled error on %s %s", request.method, request.url.path)
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=500,
+        content={"detail": (
+            "Something went wrong on the server while handling this. The app is still up and "
+            "nothing you entered was lost. Try the action once more; if it fails again, the "
+            "server log has the full trace under this time stamp.")},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
 # The client→BOQ capability (REVIEW then ESTIMATE). Self-contained under /client-boq; this single
 # include is the module's only footprint in the app entrypoint. See backend/client_boq/CONTEXT.md.
 app.include_router(client_boq_router)

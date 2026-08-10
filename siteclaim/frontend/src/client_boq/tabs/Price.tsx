@@ -103,7 +103,7 @@ export function PriceTab(props: {
           value={view}
           options={[
             { value: "costing" as PriceView, label: "COSTING" },
-            { value: "estimate" as PriceView, label: "ESTIMATE (OLD)" },
+            { value: "estimate" as PriceView, label: "EARLIER ESTIMATE" },
           ]}
           onChange={setView}
         />

@@ -185,7 +185,9 @@ class TestUnknownSaysUnknown:
         deadline = bid.signals_for(SET)["deadline"]
         assert deadline["days_remaining"] == "unknown"
         assert deadline["close_date"] == "unknown"
-        assert "'not_found'" in deadline["why_unknown"]
+        # RE-ANCHORED IN THE OPEN: this pinned the raw enum ("'not_found'") in a sentence shown to
+        # the estimator. The claim is unchanged — the reason is stated — but stated in words:
+        assert "no close date was found in the pack" in deadline["why_unknown"]
         assert "A date nobody read is not a deadline" in deadline["why_unknown"]
 
     def test_a_confirmed_close_date_gives_a_real_count(self, conn):
@@ -193,7 +195,7 @@ class TestUnknownSaysUnknown:
         _meta(conn, close_date=due, close_date_status="confirmed")
         deadline = bid.signals_for(SET)["deadline"]
         assert deadline["days_remaining"] == 21
-        assert "found/confirmed" in deadline["source"]
+        assert "found in the pack or confirmed" in deadline["source"]
 
     def test_a_found_close_date_is_trusted_too(self, conn):
         due = (_dt.date.today() + _dt.timedelta(days=5)).isoformat()

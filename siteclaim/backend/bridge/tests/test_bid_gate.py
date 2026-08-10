@@ -118,7 +118,9 @@ class TestHardRefuses:
         with pytest.raises(decisions.BidNotDecided) as raised:
             decisions.require_bid_to_proceed(conn, run_ref_for(SET))
         message = str(raised.value)
-        assert "/bid/confirm" in message
+        # RE-ANCHORED: pinned "/bid/confirm" — an endpoint. The refusal now names the Bid tab;
+        # the operator escape (BID_GATE=soft) stays, labelled as the operator's.
+        assert "Bid tab" in message
         assert "BID_GATE=soft" in message
         assert "(BID_GATE=soft)" not in message.split("Record a bid")[0], (
             "the soft-mode suffix does not belong in a hard-mode refusal")

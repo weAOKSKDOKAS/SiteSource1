@@ -747,7 +747,8 @@ def post_ingest_manifest_approve(req: ManifestApproval, actor: str = Depends(_ac
         if manifest is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"No split manifest for set {req.set_id!r}; run /ingest/upload first.",
+                detail=f"No split manifest for set {req.set_id!r}; upload the tender "
+                       f"documents first.",
             )
         if req.parts is not None:
             if not req.parts:
@@ -2624,7 +2625,8 @@ def post_estimate_scope_approve(req: ScopeApproval, actor: str = Depends(_actor)
     try:
         scope = store.load_scope(conn, req.set_id)
         if scope is None:
-            raise HTTPException(status_code=404, detail=f"No scope draft for set {req.set_id!r}; run /estimate/scope first.")
+            raise HTTPException(status_code=404, detail=f"No scope draft for set "
+                                f"{req.set_id!r}; draft the scope on the Scope tab first.")
         if req.approved:
             pending = store.unaccepted_fallbacks(conn, req.set_id)
             if pending:
@@ -3144,8 +3146,8 @@ def _bill_or_404(conn, set_id: str, rev: Optional[int] = None) -> models.ClientB
         where = "" if rev is None else f" at revision {rev}"
         raise HTTPException(
             status_code=404,
-            detail=f"No bill of quantities for set {set_id!r}{where}. Import the client's workbook "
-                   f"with POST /client-boq/boq/import first.")
+            detail=f"No bill of quantities for set {set_id!r}{where}. Import the client's "
+                   f"workbook on the Price tab first.")
     return bill
 
 
@@ -3339,8 +3341,8 @@ def import_bill_from_set(set_id: str, req: ImportFromSetRequest,
     if not path.is_file():
         raise HTTPException(
             status_code=404,
-            detail=f"No file {req.relative_path!r} in this set's upload. "
-                   f"GET /client-boq/boq/{set_id}/candidates lists what is here.")
+            detail=f"No file {req.relative_path!r} in this set's upload. The Price tab's "
+                   f"import list shows every workbook that is here.")
     return _import_workbook(set_id, path.name, path.read_bytes(),
                             doc_id=req.doc_id, rev=req.rev, actor=actor)
 

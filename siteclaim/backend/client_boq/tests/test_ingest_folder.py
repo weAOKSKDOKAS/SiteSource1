@@ -487,7 +487,9 @@ class TestPickingTheBill:
         resp = client.post(f"{BASE}/boq/{set_id}/import-from-set",
                            json={"relative_path": "ND202504/BQ/nope.xlsx"})
         assert resp.status_code == 404
-        assert "candidates" in resp.json()["detail"], "say where the list is"
+        # RE-ANCHORED: pinned the endpoint fragment "candidates"; the message now points at the
+        # Price tab's own import list.
+        assert "import list" in resp.json()["detail"], "say where the list is"
 
     def test_the_manifest_still_carries_them_after_a_reload(self, client, tmp_path):
         """The list used to live only on the upload response — one refresh and the bills you were

@@ -166,9 +166,12 @@ def test_confirming_a_package_the_split_no_longer_produces_is_refused(re_split, 
 
     assert resp.status_code == 400
     detail = resp.json()["detail"]
+    # RE-ANCHORED: this pinned "route/analyze" — the exact defect the brief opens with, an API
+    # call on an estimator's screen. The refusal still names the package and still says what to
+    # do; it now says it in the user's words.
     assert "ground_investigation:1" in detail
-    assert "not in the current scope split" in detail
-    assert "route/analyze" in detail
+    assert "not in the current split" in detail
+    assert "Re-propose the routing" in detail
 
 
 def test_confirming_a_surviving_package_still_works(re_split, client):
@@ -197,7 +200,9 @@ def test_an_unknown_package_is_still_refused_with_its_own_message(re_split, clie
         "decisions": [{"package_key": "not_a_trade:9", "chosen_route": "sublet"}]})
 
     assert resp.status_code == 400
-    assert "Unknown package_key" in resp.json()["detail"]
+    assert "this proposal does not have" in resp.json()["detail"]
+    assert "Re-propose" not in resp.json()["detail"], (
+        "a wrong payload must not send the operator to re-analyse")
 
 
 def test_a_set_with_no_split_can_still_confirm(make_set, part_spec, client):

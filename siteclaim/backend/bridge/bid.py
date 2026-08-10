@@ -191,20 +191,26 @@ def _deadline_signal(conn: sqlite3.Connection, set_id: str) -> dict:
         from client_boq import store as cb_store
 
         status = (cb_store.load_set_meta(conn, set_id).get("close_date_status") or "").strip()
+        # One sentence per way of not knowing — an estimator cannot act on an enum value.
+        why = {
+            "reading": "the Conditions of Tender are still being read for a close date",
+            "not_found": "no close date was found in the pack",
+        }.get(status, "no close date has been read for this tender")
         return {"close_date": UNKNOWN, "days_remaining": UNKNOWN,
-                "source": "client_boq_set_meta.close_date",
-                "why_unknown": (f"the close date's status is {status or 'unset'!r}; only 'found' "
-                                f"or 'confirmed' is trusted. A date nobody read is not a deadline.")}
+                "source": "the close date on the tender desk",
+                "why_unknown": (f"{why}, and nobody has confirmed one on the desk. "
+                                f"A date nobody read is not a deadline.")}
     try:
         days = (_dt.date.fromisoformat(date[:10]) - _dt.date.fromisoformat(_now()[:10])).days
     except ValueError:
         # A stored date that will not parse is a read failure, not a deadline. Same posture as
         # `_on_time`: degrade to unknown rather than to a plausible number.
         return {"close_date": date, "days_remaining": UNKNOWN,
-                "source": "client_boq_set_meta.close_date",
+                "source": "the close date on the tender desk",
                 "why_unknown": f"the stored close date {date!r} is not a date this can read"}
     return {"close_date": date, "days_remaining": days,
-            "source": "client_boq_set_meta.close_date (status found/confirmed)"}
+            "source": "the close date on the tender desk — found in the pack or confirmed "
+                      "by a person (status found/confirmed)"}
 
 
 def _register_signals(conn: sqlite3.Connection, set_id: str) -> tuple[dict, dict]:
@@ -234,12 +240,12 @@ def _register_signals(conn: sqlite3.Connection, set_id: str) -> tuple[dict, dict
         # criterion no clause answered, a citation that failed. `confirmed` and `dismissed` are the
         # two a person HAS ruled on, and only the approve endpoint writes them.
         "unresolved": sum(1 for d in items if d.status in still_open),
-        "source": "client_boq review register (s07), status vocabulary in client_boq/models.py",
+        "source": "the review register's lines and the verdicts recorded on them",
     }
     gaps = {
         "gaps": len(scope),
         "inputs_missing": sum(1 for d in scope if d.kind == "input_missing"),
-        "source": "review register lines tagged source='scope_alignment' (s04)",
+        "source": "the register's scope-alignment findings",
     }
     return departures, gaps
 
@@ -260,7 +266,7 @@ def _coverage_signal(conn: sqlite3.Connection, set_id: str) -> dict:
     bill = cb_store.load_bill(conn, set_id)
     if bill is None or not bill.items:
         return {"bills_without_list": UNKNOWN, "waiting": UNKNOWN,
-                "source": "client_boq/boq/coverage.py::bill_summary",
+                "source": "the item-coverage summary of the imported bill",
                 "why_unknown": "no bill of quantities is imported yet, so there is nothing to "
                                "have item coverage of"}
     summary = boq_coverage.bill_summary(bill, cb_store.load_coverage_ticks(conn, set_id, bill.rev))
@@ -269,7 +275,7 @@ def _coverage_signal(conn: sqlite3.Connection, set_id: str) -> dict:
         "waiting": summary["no_list"],
         "partial": summary["partial"],
         "unmatched_clauses": len(summary["unmatched_rules"]),
-        "source": "client_boq/boq/coverage.py::bill_summary",
+        "source": "the item-coverage summary of the imported bill",
     }
 
 
@@ -289,11 +295,11 @@ def signals_for(set_id: str) -> dict:
             "deadline": _deadline_signal(conn, ref),
             "open_clarifications": {
                 "count": cb_store.open_rfi_count(conn, ref),
-                "source": "client_boq_rfi_items with an open status (store.open_rfi_count)",
+                "source": "queries raised to the client that are still open",
             },
             "review_approved": {
                 "value": cb_store.review_is_approved(conn, ref),
-                "source": "client_boq_review_registers.approved (store.review_is_approved)",
+                "source": "the register's own sign-off flag",
             },
             "departures": departures,
             "scope_gaps": scope_gaps,
