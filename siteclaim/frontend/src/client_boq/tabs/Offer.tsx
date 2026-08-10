@@ -528,7 +528,8 @@ function SubmitPanel({
           </div>
           <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.5] text-cb-muted">
             Submitting snapshots the letter above and its price as the record of what went out. A
-            later estimate edit never changes a recorded submission.
+            later estimate edit never changes a recorded submission — recording again overwrites
+            this record with a new snapshot, so what is on screen when you press is what is kept.
           </p>
           <input
             value={proof}

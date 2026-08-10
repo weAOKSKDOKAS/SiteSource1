@@ -45,11 +45,26 @@ const CATEGORY_LABEL: Record<string, string> = {
   other: "other",
 };
 
-const TIER_LABEL: Record<number, { text: string; cls: string }> = {
-  1: { text: "TIER 1 · BOOKMARKS VERIFIED", cls: "bg-cb-ok-tint text-cb-ok-dark" },
-  2: { text: "TIER 2 · PRINTED CONTENTS, OFFSET VERIFIED", cls: "bg-cb-ok-tint text-cb-ok-dark" },
-  3: { text: "TIER 3 · DIVIDERS DETECTED", cls: "bg-cb-brass-tint text-cb-brass-text" },
-  4: { text: "TIER 4 · NO STRUCTURE FOUND — SPLIT BY HAND", cls: "bg-cb-bad-tint text-cb-bad-dark" },
+// `why` is the hover sentence — the chip's words are a verdict, and a verdict an estimator
+// cannot interrogate is jargon (the walkthrough scored TIER 4 exactly that way).
+const TIER_LABEL: Record<number, { text: string; cls: string; why: string }> = {
+  1: { text: "TIER 1 · BOOKMARKS VERIFIED",
+       cls: "bg-cb-ok-tint text-cb-ok-dark",
+       why: "The binder carries its own bookmarks and they matched the pages — the most reliable "
+            + "structure a PDF can offer, so the proposed split follows them." },
+  2: { text: "TIER 2 · PRINTED CONTENTS, OFFSET VERIFIED",
+       cls: "bg-cb-ok-tint text-cb-ok-dark",
+       why: "No bookmarks, but a printed contents page was found and its page numbers lined up "
+            + "with the document, so the proposed split follows it." },
+  3: { text: "TIER 3 · DIVIDERS DETECTED",
+       cls: "bg-cb-brass-tint text-cb-brass-text",
+       why: "No bookmarks or usable contents page — the split follows divider pages detected in "
+            + "the binder. Worth a closer look before approving." },
+  4: { text: "TIER 4 · NO STRUCTURE FOUND — SPLIT BY HAND",
+       cls: "bg-cb-bad-tint text-cb-bad-dark",
+       why: "Nothing in the binder says where one document ends and the next begins — no "
+            + "bookmarks, no readable contents, no dividers. The proposal is one single part; "
+            + "use Edit page bounds to cut it where you know the boundaries are." },
 };
 
 /** How a part was read. A scan that vision managed to read is a different state from one nothing
@@ -378,6 +393,8 @@ export function DocumentsTab({
   const tier = TIER_LABEL[manifest.tier] ?? {
     text: "ORGANISED FOLDER",
     cls: "bg-cb-info text-cb-navy border border-cb-disabled",
+    why: "This set arrived as a folder already organised into files — each file became its own "
+         + "part, nothing was split, and there was no binder structure to detect.",
   };
 
   return (
@@ -395,7 +412,7 @@ export function DocumentsTab({
                   `${manifest.file_count ?? manifest.parts.length} files · ${manifest.file_pages ?? 0} pages`
                 : `${manifest.pages} pages · one file in, ${manifest.parts.length} parts out`}
             </div>
-            <Chip className={tier.cls} title={manifest.tier_reason}>
+            <Chip className={tier.cls} title={manifest.tier_reason || tier.why}>
               {tier.text}
             </Chip>
             {isFolder && manifest.auto_approved && (
@@ -413,7 +430,7 @@ export function DocumentsTab({
                 !parts.length && "pointer-events-none opacity-40",
               )}
             >
-              Download split ZIP
+              Download parts as ZIP
             </a>
           </div>
 
@@ -619,7 +636,8 @@ export function DocumentsTab({
                   Edit page bounds
                 </Button>
                 <Consequence>
-                  Locking freezes the parts. Every later step cites these page numbers.
+                  Locking freezes the parts. Every later step cites these page numbers. Approving
+                  is reversible — Reopen sits here afterwards to correct a boundary.
                 </Consequence>
               </>
             )}

@@ -548,26 +548,48 @@ export function RegisterTab({
                     <div className="py-0.5 font-cb-mono text-[8.5px] tracking-cb-chip text-cb-faint">
                       FROM:
                     </div>
-                    {[...authors.entries()].map(([author, n]) => (
-                      <button
-                        key={author}
-                        type="button"
-                        onClick={() => setFilterAuthor(filterAuthor === author ? null : author)}
-                        title={AUTHOR[author].long}
-                        className={cx(
-                          "cb-row flex w-full items-center gap-2 rounded-cb-btn px-1.5 py-1 text-left",
-                          filterAuthor === author && "bg-cb-info",
-                        )}
-                      >
-                        <AuthorSwatch author={author} />
-                        <span className="flex-1 truncate font-cb-sans text-[10.5px] font-medium text-cb-body">
-                          {AUTHOR[author].label.toLowerCase()}
-                        </span>
-                        <span className="flex-none font-cb-mono text-[9.5px] text-cb-muted">
-                          {n}
-                        </span>
-                      </button>
-                    ))}
+                    {/* AUTHORS AND FAILURES ARE DIFFERENT AXES (F12). `authorOf` folds two
+                        kinds of key into one map — who wrote a line (rule / model / code) and
+                        what failed on it (citation failed / uncovered) — and rendering them as
+                        one list made counts of different kinds read as one column. The split
+                        below is display-only: same map, same filters, but a failed check sits
+                        under its own small red label rather than posing as an author. */}
+                    {(() => {
+                      const rows = [...authors.entries()];
+                      const wrote = rows.filter(([a]) => a === "rule" || a === "model" || a === "code");
+                      const flagged = rows.filter(([a]) => a !== "rule" && a !== "model" && a !== "code");
+                      const row = ([author, n]: (typeof rows)[number]) => (
+                        <button
+                          key={author}
+                          type="button"
+                          onClick={() => setFilterAuthor(filterAuthor === author ? null : author)}
+                          title={AUTHOR[author].long}
+                          className={cx(
+                            "cb-row flex w-full items-center gap-2 rounded-cb-btn px-1.5 py-1 text-left",
+                            filterAuthor === author && "bg-cb-info",
+                          )}
+                        >
+                          <AuthorSwatch author={author} />
+                          <span className="flex-1 truncate font-cb-sans text-[10.5px] font-medium text-cb-body">
+                            {AUTHOR[author].label.toLowerCase()}
+                          </span>
+                          <span className="flex-none font-cb-mono text-[9.5px] text-cb-muted">
+                            {n}
+                          </span>
+                        </button>
+                      );
+                      return (
+                        <>
+                          {wrote.map(row)}
+                          {flagged.length > 0 && (
+                            <div className="mt-0.5 py-0.5 font-cb-mono text-[8.5px] tracking-cb-chip text-cb-bad-dark">
+                              FLAGGED:
+                            </div>
+                          )}
+                          {flagged.map(row)}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               );
@@ -926,7 +948,8 @@ export function RegisterTab({
                   the client has not replied — the freeze gate is the forcing function. */}
               <p className="max-w-[230px] text-right font-cb-sans text-[10px] leading-[1.4] text-cb-dim">
                 Closing injects the {confirmed.length} confirmed position
-                {confirmed.length === 1 ? "" : "s"} into the scope and Appendix A.
+                {confirmed.length === 1 ? "" : "s"} into the scope and Appendix A. Verdicts can
+                still be changed here afterwards — closing is what lets scope and routing proceed.
                 {open.length > 0 && ` ${open.length} line${open.length === 1 ? "" : "s"} still without a verdict will close as-is.`}
               </p>
               <Button variant="brass" onClick={closeRegister} disabled={busy}>

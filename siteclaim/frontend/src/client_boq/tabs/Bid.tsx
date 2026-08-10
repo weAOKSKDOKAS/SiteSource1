@@ -286,7 +286,9 @@ export function BidTab({
                 <Consequence>
                   {verdict === "bid"
                     ? "Route and Sourcing proceed without a warning once this is recorded."
-                    : "Route and Sourcing will warn that they are running against this decision — and refuse outright where the bid gate is set to hard."}
+                    : "Route and Sourcing will warn that they are running against this decision — and refuse outright where the bid gate is set to hard."}{" "}
+                  Re-deciding later replaces the verdict; the rule's own suggestion stays visible
+                  beside whatever is decided.
                 </Consequence>
               </div>
             </div>

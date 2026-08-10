@@ -560,11 +560,12 @@ export function RouteTab({
                       // person's own, not the machine's — and the sentence must not confuse the
                       // two: brass is only brass the first time round.
                       const rest = decided ? "as already recorded" : "still on the machine's recommendation";
-                      return defaulted === 0
+                      const sentence = defaulted === 0
                         ? `Records ${packages.length} route${packages.length === 1 ? "" : "s"} — every one set by you this visit.`
                         : pressed === 0
                           ? `Records ${packages.length} route${packages.length === 1 ? "" : "s"} — ${rest}, none changed this visit.`
                           : `Records ${packages.length} routes — ${pressed} changed by you this visit, ${defaulted} ${rest}.`;
+                      return `${sentence} Re-confirming later replaces these in place.`;
                     })()}
                   </p>
                 )}
