@@ -213,16 +213,82 @@ SECTION_COVERAGE: dict[str, CoverageList] = {
                       heads=_DRILLING_2_13),
 }
 
+# ---------------------------------------------------------------------------
+# Setting up, moving rigs, standing time — ¶2.07 / ¶2.08 / ¶2.09
+# ---------------------------------------------------------------------------
+# These are PER ITEM, not bill-wide, and the difference is money: "application for road excavation
+# permits" is a cost of establishing a rig, not a cost of every metre drilled. Attaching them to
+# the drilling items would put a permit application inside the metre rate and then again on the
+# establishment item. ¶2.08(h) was already keyed to 2.2a/2.2b for exactly this reason.
+#
+# Verbatim from SMM_S02 Particular Preambles:
+#   Add to paragraph 2.07: (d) application for necessary road excavation permits; (e) application
+#   for acceptance for ground investigation works on Government land; (f) providing, maintaining
+#   and removing temporary traffic arrangement in accordance with PS Clause 1.14 to 1.15.
+#   Add to paragraph 2.08: (f) setting out by survey for positioning of investigation station;
+#   (g) providing, maintaining and removing temporary traffic arrangement in accordance with
+#   PS Clause 1.14 to 1.15; (h) access scaffolding.
+#   Add to paragraph 2.09: (c) providing, maintaining and removing temporary traffic arrangement
+#   in accordance with PS Clause 1.14 to 1.15.
+_SETTING_UP_2_07 = [
+    CoverageHead(key="smm.s02.2.07.d",
+                 label="Application for necessary road excavation permits",
+                 clause_ref="SMM S02 ¶2.07(d)"),
+    CoverageHead(key="smm.s02.2.07.e",
+                 label="Application for acceptance for ground investigation works on Government "
+                       "land",
+                 clause_ref="SMM S02 ¶2.07(e)"),
+    CoverageHead(key="smm.s02.2.07.f",
+                 label="Providing, maintaining and removing temporary traffic arrangement",
+                 clause_ref="SMM S02 ¶2.07(f) · PS 1.14–1.15", cites="1.14"),
+]
+
+_MOVING_RIGS_2_08 = [
+    CoverageHead(key="smm.s02.2.08.f",
+                 label="Setting out by survey for positioning of investigation station",
+                 clause_ref="SMM S02 ¶2.08(f)"),
+    CoverageHead(key="smm.s02.2.08.g",
+                 label="Providing, maintaining and removing temporary traffic arrangement",
+                 clause_ref="SMM S02 ¶2.08(g) · PS 1.14–1.15", cites="1.14"),
+    CoverageHead(key="smm.s02.2.08.h", label="Access scaffolding",
+                 clause_ref="SMM S02 ¶2.08(h)", cites="7.01A"),
+]
+
+_STANDING_TIME_2_09 = [
+    CoverageHead(key="smm.s02.2.09.c",
+                 label="Providing, maintaining and removing temporary traffic arrangement",
+                 clause_ref="SMM S02 ¶2.09(c) · PS 1.14–1.15", cites="1.14"),
+]
+
 # Coverage that belongs to one item rather than to a whole section, keyed on the BQ reference.
+# Bill 2's references are known from the bill itself; Bill 3's are not, so it is reached by title
+# instead (see TITLE_COVERAGE) rather than by references invented here.
 ITEM_COVERAGE: dict[str, list[CoverageHead]] = {
-    "2.2a": [CoverageHead(key="smm.s02.2.08.h", label="Access scaffolding",
-                          clause_ref="SMM S02 ¶2.08(h)", cites="7.01A")],
-    "2.2b": [CoverageHead(key="smm.s02.2.08.h", label="Access scaffolding",
-                          clause_ref="SMM S02 ¶2.08(h)", cites="7.01A")],
+    "2.1": list(_SETTING_UP_2_07),
+    "2.2": list(_MOVING_RIGS_2_08),
+    # The addendum split 2.2 into Class A and Class B rig moves. Both are moves.
+    "2.2a": list(_MOVING_RIGS_2_08),
+    "2.2b": list(_MOVING_RIGS_2_08),
+    "2.3": list(_STANDING_TIME_2_09),
 }
 
+# ---------------------------------------------------------------------------
 # Coverage that attaches by TITLE. See `TitleRule` for why this exists at all.
-TITLE_COVERAGE: list[TitleRule] = []
+# ---------------------------------------------------------------------------
+# The setting-up family is reached BOTH ways on purpose: by reference for Bill 2, whose refs are
+# known, and by title for Bill 3, whose are not. `heads_for` de-duplicates on the head key, so an
+# item reached by both routes carries each head once.
+TITLE_COVERAGE: list[TitleRule] = [
+    TitleRule(key="rig.establish", match=("establishment of rigs",),
+              smm_clause="SMM S02 ¶2.07", title="Setting up rigs",
+              heads=list(_SETTING_UP_2_07)),
+    TitleRule(key="rig.move", match=("moving rigs",),
+              smm_clause="SMM S02 ¶2.08", title="Moving rigs",
+              heads=list(_MOVING_RIGS_2_08)),
+    TitleRule(key="rig.standing", match=("standing time",),
+              smm_clause="SMM S02 ¶2.09", title="Standing time for rigs",
+              heads=list(_STANDING_TIME_2_09)),
+]
 
 # The heads deemed included in EVERY rate in the contract: General Preambles ¶2 (i)–(xxii), twenty-two
 # of them, and Particular Preambles ¶¶7–10, nine more. Thirty-one.
@@ -358,8 +424,19 @@ def heads_for(item: BillItem) -> list[CoverageHead]:
     """
     section = SECTION_COVERAGE.get(section_of(item))
     by_title = [head for rule in title_rules_for(item) for head in rule.heads]
-    return [*(section.heads if section else []), *by_title,
-            *ITEM_COVERAGE.get(item.full_ref, [])]
+    found = [*(section.heads if section else []), *by_title,
+             *ITEM_COVERAGE.get(item.full_ref, [])]
+    # DE-DUPLICATED ON THE KEY, because an item can legitimately be reached by more than one route
+    # — Bill 2's rig moves arrive by reference AND by title. Two entries with one key would render
+    # the same head twice and let one tick appear to settle both.
+    seen: set[str] = set()
+    out: list[CoverageHead] = []
+    for head in found:
+        if head.key in seen:
+            continue
+        seen.add(head.key)
+        out.append(head)
+    return out
 
 
 def partial_reasons_for(item: BillItem) -> list[str]:

@@ -177,3 +177,48 @@ class TestATickNeverLandsWhereItWasNotGiven:
         out = bill_summary(bill, ticks={"2.4": {"smm.2.13.a": {"ticked": True}}})
         assert out["orphan_ticks"] == 1
         assert out["partial"] == 2, "both items' lists are the amendments only"
+
+
+class TestDefectBTheHeadsThatWereMissingEntirely:
+    def test_the_4c_mlc_core_barrel_is_on_the_drilling_checklist(self):
+        """A real cost inside the drilling rate that was on no checklist at all — and Particular
+        Preamble ¶12/¶4A means it cannot be claimed later."""
+        head = _by_key(_item("2.4"))["smm.s02.2.13.h"]
+        assert head.label == "Drilling using 4C-MLC core barrel as required"
+        assert head.clause_ref == "SMM S02 ¶2.13(h)"
+
+    def test_establishing_a_rig_carries_the_permits_and_the_government_land_application(self):
+        keys = _keys(_item("2.1", description="Establishment of rigs"))
+        assert "smm.s02.2.07.d" in keys, "road excavation permits"
+        assert "smm.s02.2.07.e" in keys, "acceptance for GI works on Government land"
+        assert "smm.s02.2.07.f" in keys, "temporary traffic arrangement"
+
+    def test_moving_a_rig_carries_the_setting_out_and_the_scaffolding(self):
+        keys = _keys(_item("2.2", description="Moving rigs"))
+        assert "smm.s02.2.08.f" in keys and "smm.s02.2.08.h" in keys
+
+    def test_standing_time_carries_its_own_traffic_head(self):
+        assert "smm.s02.2.09.c" in _keys(_item("2.3", description="Standing time for rigs"))
+
+    def test_the_setting_up_family_never_reaches_a_drilling_metre(self):
+        """The reason these are per item: a permit application is a cost of establishing a rig, not
+        a cost of every metre drilled. Attaching them bill-wide would charge it inside the metre
+        rate AND again on the establishment item."""
+        keys = _keys(_item("2.4", description="Drilling, vertically downwards"))
+        for stray in ("smm.s02.2.07.d", "smm.s02.2.07.e", "smm.s02.2.08.f", "smm.s02.2.08.h",
+                      "smm.s02.2.09.c"):
+            assert stray not in keys
+
+    def test_a_bill_three_rig_move_is_reached_by_title_since_its_refs_are_unknown(self):
+        """Bill 3's BQ references were not transcribed, so it is reached by what its items are
+        CALLED rather than by references invented here."""
+        keys = _keys(_item("3.2", bill_no="3", description="Moving rigs between stations"))
+        assert "smm.s02.2.08.h" in keys
+
+    def test_an_item_reached_by_both_routes_carries_each_head_once(self):
+        """2.2 arrives by reference AND by title. Two entries with one key would render the head
+        twice and let a single tick appear to settle both."""
+        heads = heads_for(_item("2.2", description="Moving rigs"))
+        keys = [head.key for head in heads]
+        assert len(keys) == len(set(keys))
+        assert keys.count("smm.s02.2.08.h") == 1
