@@ -56,3 +56,46 @@ def review_gate_mode() -> str:
 def review_gate_is_soft() -> bool:
     """Convenience for the call sites, which all ask the same yes/no question."""
     return review_gate_mode() == _SOFT
+
+
+# ---------------------------------------------------------------------------
+# The BID gate — the same switch, one decision earlier
+# ---------------------------------------------------------------------------
+# The review gate asks "has anybody read the terms?". This one asks the question before it: "has
+# anybody decided we are pursuing this at all?" — because routing and sourcing used to begin on the
+# assumption that every tender was being chased, and a shortlist assembled for a tender nobody
+# meant to bid is work spent on nothing.
+#
+# Same semantics as REVIEW_GATE, deliberately: soft by default, an unreadable value reads as soft,
+# and soft never means silent. A gate that stops being a gate and says nothing is worse than no
+# gate at all, because the absence of a warning reads as approval.
+#
+# What it does NOT gate: the review itself. Deciding whether to bid comes AFTER reading the
+# contract — gating the Register on a bid decision would invert the order the estimator works in
+# and make the decision unmakeable.
+BID_GATE_UNDECIDED = (
+    "No bid/no-bid decision has been recorded for this tender — routing/sourcing is proceeding on "
+    "a tender nobody has decided to pursue (BID_GATE=soft)."
+)
+BID_GATE_NO_BID = (
+    "This tender was marked NO-BID; sourcing is proceeding anyway (BID_GATE=soft)."
+)
+BID_GATE_CLARIFY = (
+    "The bid decision is CLARIFY — open questions are unresolved, and routing/sourcing is "
+    "proceeding anyway (BID_GATE=soft)."
+)
+
+
+def bid_gate_mode() -> str:
+    """``'soft'`` (default) or ``'hard'``.
+
+    Read dynamically from ``BID_GATE`` so tests can toggle it, exactly as ``review_gate_mode``
+    reads ``REVIEW_GATE``. Anything unrecognised is ``'soft'``, for the same reason: a deployment
+    that 409s for a reason nobody typed is the harder failure to diagnose, and the warning fires
+    either way so the unrecognised case is loud rather than quiet.
+    """
+    return _HARD if os.getenv("BID_GATE", "").strip().lower() == _HARD else _SOFT
+
+
+def bid_gate_is_soft() -> bool:
+    return bid_gate_mode() == _SOFT

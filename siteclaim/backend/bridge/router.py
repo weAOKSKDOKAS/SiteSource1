@@ -42,6 +42,15 @@ class FinalApprovalRequest(BaseModel):
     approved_by: str = "operator"
 
 
+class BidConfirmRequest(BaseModel):
+    verdict: str                              # 'bid' | 'no_bid' | 'clarify'
+    rationale: str = ""                       # required for 'no_bid' and 'clarify' — why
+    #: The operator's OWN strategic judgement (fit, capacity, win probability, notes). Stored
+    #: verbatim; nothing on the server computes, checks or fills any of it — see `bridge/bid.py`.
+    factors: dict = Field(default_factory=dict)
+    decided_by: str = "operator"
+
+
 class SubmitRequest(BaseModel):
     proof: str = ""                           # portal ref / filename — stored verbatim, never invented
     submitted_by: str = "operator"
@@ -233,7 +242,7 @@ def post_route_analyze(set_id: str) -> dict:
     notes: list[str] = []
     try:
         body = decisions.propose_routes(set_id, on_error=notes.append)
-    except decisions.ReviewNotApproved as exc:
+    except (decisions.ReviewNotApproved, decisions.BidNotDecided) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -318,10 +327,38 @@ def post_route_confirm(set_id: str, req: ConfirmBridgeRoutesRequest) -> dict:
             {d.package_key: d.chosen_route for d in req.decisions},
             decided_by=req.decided_by,
         )
-    except decisions.ReviewNotApproved as exc:
+    except (decisions.ReviewNotApproved, decisions.BidNotDecided) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# The FRONT of the funnel — bid / no-bid, the tender's first decision
+# ---------------------------------------------------------------------------
+@router.get("/{set_id}/bid")
+def get_bid(set_id: str) -> dict:
+    """The bid brief: hard signals with their sources, a proposed verdict with its reasons, and
+    the human's decision if one has been recorded. A pure read — opening it decides nothing."""
+    from bridge import bid
+
+    try:
+        return bid.bid_brief(set_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{set_id}/bid/confirm")
+def post_bid_confirm(set_id: str, req: BidConfirmRequest) -> dict:
+    """Record the human's bid/no-bid verdict. Mirrors ``/route/confirm`` and ``/final-approval``:
+    the verdict is the human's, recorded and nothing else. ``no_bid`` and ``clarify`` must say why."""
+    from bridge import bid
+
+    try:
+        return bid.confirm_bid(set_id, req.verdict, req.rationale, req.factors,
+                               decided_by=req.decided_by)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

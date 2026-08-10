@@ -79,6 +79,21 @@ _NEUTRALISED = {
     # It also belongs here on this file's own principle: a developer with REVIEW_GATE=soft in
     # their .env would otherwise flip six tests without touching a line of code.
     "REVIEW_GATE": "hard",
+    # The bid gate, pinned the OTHER way — and the asymmetry is deliberate, not an oversight.
+    #
+    # REVIEW_GATE pins `hard` so the locked decision stays exercised by the whole suite. BID_GATE
+    # pins `soft` because its hard mode is a NEW precondition on a seam that already has hundreds
+    # of tests: every one of them was written before a bid decision existed, so pinning hard here
+    # would 409 them all for failing to record something that did not exist when they were
+    # written. That is not the gate being tested, it is the gate being imposed retroactively.
+    #
+    # Hard mode is tested where it is the subject (`bridge/tests/test_bid_gate.py`), by
+    # monkeypatching this back — the same shape as the review gate's soft tests, mirrored.
+    #
+    # It is pinned rather than left unset for this file's own reason: a developer with
+    # BID_GATE=hard in their .env would otherwise fail a large part of the suite without touching
+    # a line of code.
+    "BID_GATE": "soft",
 }
 
 for _var, _neutral in _NEUTRALISED.items():

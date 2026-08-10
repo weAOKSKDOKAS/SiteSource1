@@ -73,6 +73,57 @@ def require_approved_review(conn: sqlite3.Connection, set_id: str) -> Optional[s
     )
 
 
+class BidNotDecided(RuntimeError):
+    """No decision to pursue this tender, or a decision NOT to — the gate both forks inherit.
+
+    Distinct from :class:`ReviewNotApproved`, which asks whether anybody has READ the terms. This
+    one asks the question before it: whether anybody decided to chase the job at all.
+    """
+
+
+def require_bid_to_proceed(conn: sqlite3.Connection, set_id: str) -> Optional[str]:
+    """The bid gate. Returns a warning string in soft mode, ``None`` when there is nothing to say.
+
+    Read-only: it asks ``bridge.bid.load_bid_decision`` — the authoritative row — and never writes
+    it. Only ``/bridge/{set_id}/bid/confirm`` may.
+
+    Sits beside :func:`require_approved_review` and is called from the same place, because they are
+    the same kind of question one step apart: *has anybody read the terms* and *has anybody decided
+    to pursue this*. Scattering the second one across the call sites is how the first one would
+    eventually be forgotten at one of them.
+
+    Three non-bid states, three sentences — an undecided tender and one deliberately declined are
+    not the same situation and must not read as though they were. In hard mode each raises. The
+    return value is not optional to handle: a caller that drops it turns a warned bypass into a
+    silent one.
+
+    ``conn`` is accepted for symmetry with ``require_approved_review`` and is deliberately unused —
+    the bid decision is keyed on ``run_ref`` and read through the bridge's own connection, so
+    threading this one through would open a second handle on the same database for no gain.
+    """
+    from bridge import bid as bid_mod
+    from client_boq.gates import (
+        BID_GATE_CLARIFY,
+        BID_GATE_NO_BID,
+        BID_GATE_UNDECIDED,
+        bid_gate_is_soft,
+    )
+
+    decision = bid_mod.load_bid_decision(set_id)
+    verdict = (decision or {}).get("verdict", "")
+    if verdict == bid_mod.BID:
+        return None
+
+    warning = {bid_mod.NO_BID: BID_GATE_NO_BID,
+               bid_mod.CLARIFY: BID_GATE_CLARIFY}.get(verdict, BID_GATE_UNDECIDED)
+    if bid_gate_is_soft():
+        return warning
+    raise BidNotDecided(
+        f"{warning.replace(' (BID_GATE=soft)', '')} Record a bid decision at "
+        f"POST /bridge/{set_id}/bid/confirm, or set BID_GATE=soft to proceed with a warning."
+    )
+
+
 def _signals_for(units: list[dict], on_error: Optional[Callable[[str], None]] = None) -> dict[str, dict]:
     """The Layer-1 coverage signal per package, read from the FIRM database.
 
@@ -129,6 +180,9 @@ def propose_routes(set_id: str, *, on_error: Optional[Callable[[str], None]] = N
         # Soft mode returns a warning instead of raising; it goes onto the response through the
         # channel this function already has, so an unread-terms bypass is never silent.
         _note(on_error, require_approved_review(conn, ref))
+        # The bid gate sits beside the review gate at the same seam, one decision earlier: a route
+        # proposal for a tender nobody has decided to pursue is work spent on nothing.
+        _note(on_error, require_bid_to_proceed(conn, ref))
         scope = scope_mod.load_scope_on(conn, ref)
         if scope is None:
             raise LookupError(
@@ -437,6 +491,10 @@ def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = 
         # symmetry is what matters most — the bypass is recorded on the act, not just the advice.
         gate_note = require_approved_review(conn, ref)
         _note(on_error, gate_note)
+        # Same symmetry the review gate has: confirming a route IS routing, so a gate that only
+        # covered the advisory step would be bypassed by posting straight here.
+        bid_note = require_bid_to_proceed(conn, ref)
+        _note(on_error, bid_note)
         ensure_tables(conn)
         proposed = {p["package_key"] for p in routing.read_proposal(conn, ref)}
         if not proposed:
