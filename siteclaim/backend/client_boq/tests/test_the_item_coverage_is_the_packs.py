@@ -283,3 +283,107 @@ class TestOneSmmSectionSeveralCoverageClauses:
             assert entry.partial == PARTIAL_BY_CONSTRUCTION
             reasons = coverage_for(_item(f"{bill_no}.1", bill_no=bill_no)).partial
             assert reasons and expected in reasons[0]
+
+
+class TestBillsSevenEightAndNineAttachByTitle:
+    """SMM 24, 28 and 29 give each ITEM its own coverage clause — nothing about a safety officer
+    belongs on a safety walk. Most of their BQ references were not transcribed, and a reference
+    guessed here would attach a real clause to the wrong item, so they attach by TITLE, which the
+    pack does give."""
+
+    def test_the_safety_officer_item_carries_its_own_clause_and_no_other(self):
+        keys = _keys(_item("9.1", bill_no="9", description="Provide Safety Officer"))
+        assert keys == {"smm.s28.28.07.a", "smm.s28.28.07.b", "smm.s28.28.07.c",
+                        "smm.s28.28.07.d"}
+
+    def test_a_safety_walk_carries_nothing_from_the_safety_officer_clause(self):
+        keys = _keys(_item("9.4", bill_no="9",
+                           description="Arrange and attend weekly safety walk"))
+        assert all(key.startswith("smm.s28.28.18.") for key in keys)
+        assert not any(key.startswith("smm.s28.28.07.") for key in keys)
+
+    def test_the_two_safety_committees_do_not_collide(self):
+        """The near-miss worth pinning. ¶28.12 governs the Site Safety MANAGEMENT Committee and
+        ¶28.13 the Site Safety Committee — two meetings, two clauses, titles one word apart. The
+        phrases are distinctive in BOTH directions ("management" sits between "safety" and
+        "committee"), so neither rule reaches the other's item. A looser matcher here would have
+        put the establishment of one committee onto the attendance of the other."""
+        management = _keys(_item("9.2", bill_no="9",
+                                 description="Attend Site Safety Management Committee"))
+        plain = _keys(_item("9.3", bill_no="9", description="Attend Site Safety Committee"))
+
+        assert all(key.startswith("smm.s28.28.12.") for key in management) and management
+        assert all(key.startswith("smm.s28.28.13.") for key in plain) and plain
+        assert not (management & plain)
+
+    def test_a_ps_clause_named_in_a_safety_head_is_cited_so_it_can_resolve(self):
+        heads = _by_key(_item("9.1", bill_no="9", description="Provide Safety Officer"))
+        assert heads["smm.s28.28.07.b"].cites == "27.05"
+        assert heads["smm.s28.28.07.a"].cites == "", "no PS clause named, so none claimed"
+
+    def test_a_tree_item_carries_the_tree_clause(self):
+        keys = _keys(_item("7.2", bill_no="7", description="Tree survey record and photographs"))
+        assert {"smm.s24.24.24.a", "smm.s24.24.24.b", "smm.s24.24.24.c"} == keys
+
+    def test_a_wages_item_carries_the_wages_clause(self):
+        keys = _keys(_item("8.1", bill_no="8",
+                           description="Establish the monitoring system for payment of wages"))
+        assert "smm.s29.29.06.a" in keys and "smm.s29.29.06.f" in keys
+
+    def test_the_clause_number_nobody_captured_says_so_in_its_reference(self):
+        """The pack's 'implementing the monitoring system' block was transcribed without its clause
+        number. A plausible number invented here would be worse than a named gap."""
+        heads = _by_key(_item("8.2", bill_no="8",
+                              description="Implement the monitoring system for payment of wages"))
+        head = heads["smm.s29.implement.a"]
+        assert "not captured" in head.clause_ref
+
+    def test_a_title_rule_never_reaches_another_bill(self):
+        assert not _keys(_item("2.4", bill_no="2", description="Provide Safety Officer"))\
+            & {"smm.s28.28.07.a"}
+
+
+class TestWhatCouldNotBeMapped:
+    def test_an_item_no_clause_matched_says_which_problem_it_is(self):
+        """Two different problems with two different fixes. 'No list transcribed for Bill No.9'
+        would be a lie once nine of Bill 9's clauses ARE transcribed — and it would send somebody
+        off to write a thing that is already in the file."""
+        coverage = coverage_for(_item("9.9", bill_no="9",
+                                      description="Participate in Safety promotional campaign"))
+        assert coverage.no_list_for_section == "9"
+        assert "9 transcribed coverage clause(s)" in coverage.no_list_reason
+        assert "mapping to check, not a clause to write" in coverage.no_list_reason
+
+    def test_a_bill_with_nothing_transcribed_says_the_other_thing(self):
+        coverage = coverage_for(_item("99.1", bill_no="99", description="anything"))
+        assert "No item-coverage list has been transcribed" in coverage.no_list_reason
+
+    def test_a_transcribed_clause_that_matched_nothing_is_reported(self):
+        """The other half of the same honesty: a clause read off the pack and attached to nothing
+        is a head nobody will ever be asked about, and it looks identical to one that simply does
+        not apply."""
+        from client_boq.boq.coverage import unmatched_rules
+        from client_boq.models import ClientBill
+
+        bill = ClientBill(items=[_item("9.1", bill_no="9", description="Provide Safety Officer")])
+        unmatched = {row["rule"] for row in unmatched_rules(bill)}
+        assert "smm28.07" not in unmatched, "it matched"
+        assert "smm28.18" in unmatched, "no safety walk item in this bill"
+        why = next(r["why"] for r in unmatched_rules(bill) if r["rule"] == "smm28.18")
+        assert "no item in Bill No.9 is titled with" in why
+
+    def test_a_rule_for_a_bill_that_is_not_here_at_all_is_not_reported_as_a_gap(self):
+        """A tree clause is not missing from a bill that has no Bill No.7 — it is irrelevant, and
+        reporting it would bury the real gaps."""
+        from client_boq.boq.coverage import unmatched_rules
+        from client_boq.models import ClientBill
+
+        bill = ClientBill(items=[_item("9.1", bill_no="9", description="Provide Safety Officer")])
+        assert not any(row["rule"].startswith("smm24.") for row in unmatched_rules(bill))
+
+    def test_the_bill_summary_carries_the_unmatched_report(self):
+        from client_boq.boq.coverage import bill_summary
+        from client_boq.models import ClientBill
+
+        bill = ClientBill(items=[_item("9.1", bill_no="9", description="Provide Safety Officer")])
+        assert bill_summary(bill, {})["unmatched_rules"]

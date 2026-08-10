@@ -363,9 +363,353 @@ ITEM_COVERAGE: dict[str, list[CoverageHead]] = {
 # ---------------------------------------------------------------------------
 # Coverage that attaches by TITLE. See `TitleRule` for why this exists at all.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Bills 7, 8 and 9 â a clause per ITEM, reached by title
+# ---------------------------------------------------------------------------
+# SMM 24 (trees), SMM 28 (site safety) and SMM 29 (monitoring payment of wages) do not carry one
+# coverage clause per bill. Each ITEM has its own â "Provide Safety Officer" is Â¶28.07 and "Attend
+# Site Safety Committee" is Â¶28.13, and nothing about a safety officer belongs on a safety walk.
+#
+# The BQ references for most of these were not transcribed, and a reference guessed here would
+# attach a real clause to the wrong item. So they attach by TITLE, which the pack DOES give â the
+# same rule the Bill 1 mapping runs on. Every phrase in `match` must appear, and the phrases are
+# chosen to be distinctive.
+_SAFETY_28 = [
+    TitleRule(key="smm28.07", bill_no="9", match=("safety officer",),
+              smm_clause="SMM S28 ¶28.07", title="Provide Safety Officer",
+              heads=[
+                  CoverageHead(key="smm.s28.28.07.a",
+                               label="Submission of the qualifications and experience of the "
+                                     "proposed Safety Officer to the Project Manager for acceptance",
+                               clause_ref="SMM S28 ¶28.07(a)"),
+                  CoverageHead(key="smm.s28.28.07.b",
+                               label="Provision of sufficient number of Safety Officers and "
+                                     "supporting staff to the Safety Officers",
+                               clause_ref="SMM S28 ¶28.07(b) · PS 27.05", cites="27.05"),
+                  CoverageHead(key="smm.s28.28.07.c",
+                               label="Ensuring the fulfillment of the duties by the Safety "
+                                     "Officer(s)",
+                               clause_ref="SMM S28 ¶28.07(c) · PS 27.05", cites="27.05"),
+                  CoverageHead(key="smm.s28.28.07.d",
+                               label="Maintenance of the safety diary",
+                               clause_ref="SMM S28 ¶28.07(d)"),
+              ]),
+    TitleRule(key="smm28.12", bill_no="9",
+              match=("site safety management committee",),
+              smm_clause="SMM S28 ¶28.12", title="Attend Site Safety Management Committee",
+              heads=[
+                  CoverageHead(key="smm.s28.28.12.a",
+                               label="Attendance of the Site Safety Management Committee meetings "
+                                     "and completing the agenda of the meeting for the month",
+                               clause_ref="SMM S28 ¶28.12(a)"),
+                  CoverageHead(key="smm.s28.28.12.b",
+                               label="Arranging inspection of the Site by members of the Committee "
+                                     "before the meeting for the month",
+                               clause_ref="SMM S28 ¶28.12(b)"),
+                  CoverageHead(key="smm.s28.28.12.c",
+                               label="Providing necessary assistance for the proper functioning of "
+                                     "the Committee",
+                               clause_ref="SMM S28 ¶28.12(c)"),
+                  CoverageHead(key="smm.s28.28.12.d",
+                               label="Submission of monthly safety report for consideration at the "
+                                     "meeting",
+                               clause_ref="SMM S28 ¶28.12(d)"),
+              ]),
+    TitleRule(key="smm28.13", bill_no="9",
+              match=("site safety committee",),
+              smm_clause="SMM S28 ¶28.13", title="Attend Site Safety Committee",
+              heads=[
+                  CoverageHead(key="smm.s28.28.13.a",
+                               label="Establishment of the Site Safety Committee",
+                               clause_ref="SMM S28 ¶28.13(a)"),
+                  CoverageHead(key="smm.s28.28.13.b",
+                               label="Arranging and giving adequate notice to relevant parties of "
+                                     "the meeting to be held for the month",
+                               clause_ref="SMM S28 ¶28.13(b)"),
+                  CoverageHead(key="smm.s28.28.13.c",
+                               label="Attendance of the Site Safety Committee meetings",
+                               clause_ref="SMM S28 ¶28.13(c)"),
+                  CoverageHead(key="smm.s28.28.13.d",
+                               label="Completion and distribution of minutes of meetings",
+                               clause_ref="SMM S28 ¶28.13(d)"),
+              ]),
+    TitleRule(key="smm28.18", bill_no="9", match=("safety walk",),
+              smm_clause="SMM S28 ¶28.18", title="Arrange and attend weekly safety walk",
+              heads=[
+                  CoverageHead(key="smm.s28.28.18.a",
+                               label="Arranging and giving adequate notice to relevant parties of "
+                                     "the weekly safety walk",
+                               clause_ref="SMM S28 ¶28.18(a)"),
+                  CoverageHead(key="smm.s28.28.18.b",
+                               label="Using a comprehensive checklist during the walk to identify "
+                                     "deficiencies, recording them in the summary table, and "
+                                     "rectifying them within the agreed time",
+                               clause_ref="SMM S28 ¶28.18(b)"),
+                  CoverageHead(key="smm.s28.28.18.c",
+                               label="Preparation of reports on safety walks and safety "
+                                     "inspections conducted",
+                               clause_ref="SMM S28 ¶28.18(c)"),
+                  CoverageHead(key="smm.s28.28.18.d",
+                               label="Implementation and upkeeping of all measures",
+                               clause_ref="SMM S28 ¶28.18(d)"),
+              ]),
+    TitleRule(key="smm28.25", bill_no="9", match=("specified trade",),
+              smm_clause="SMM S28 ¶28.25",
+              title="Safety training — skilled workers of a specified trade",
+              heads=[
+                  CoverageHead(key="smm.s28.28.25.a",
+                               label="Arrangement of skilled workers to attend the Safety Training "
+                                     "Course for Construction Workers of Specified Trade organized "
+                                     "by the Construction Industry Council",
+                               clause_ref="SMM S28 ¶28.25(a)"),
+                  CoverageHead(key="smm.s28.28.25.b",
+                               label="Payment of the token allowance to skilled workers",
+                               clause_ref="SMM S28 ¶28.25(b)"),
+                  CoverageHead(key="smm.s28.28.25.c",
+                               label="Preparation of training programme records, and submission of "
+                                     "certified monthly statements to the Project Manager",
+                               clause_ref="SMM S28 ¶28.25(c)"),
+                  CoverageHead(key="smm.s28.28.25.d",
+                               label="Administration in connection with (a), (b) and (c) above",
+                               clause_ref="SMM S28 ¶28.25(d)"),
+              ]),
+    TitleRule(key="smm28.26", bill_no="9", match=("induction",),
+              smm_clause="SMM S28 ¶28.26",
+              title="Safety training — site-specific induction",
+              heads=[
+                  CoverageHead(key="smm.s28.28.26.a",
+                               label="Site specific induction training",
+                               clause_ref="SMM S28 ¶28.26(a) · PS 27.08", cites="27.08"),
+                  CoverageHead(key="smm.s28.28.26.b",
+                               label="The necessary facilities, trainers and demonstration "
+                                     "equipment for complying with (a)",
+                               clause_ref="SMM S28 ¶28.26(b)"),
+                  CoverageHead(key="smm.s28.28.26.c",
+                               label="Preparation of the training programme and records, and "
+                                     "submission of certified monthly statements",
+                               clause_ref="SMM S28 ¶28.26(c)"),
+                  CoverageHead(key="smm.s28.28.26.d",
+                               label="Administration in connection with (a), (b) and (c)",
+                               clause_ref="SMM S28 ¶28.26(d)"),
+              ]),
+    TitleRule(key="smm28.27", bill_no="9", match=("toolbox",),
+              smm_clause="SMM S28 ¶28.27", title="Safety training — toolbox talks",
+              heads=[
+                  CoverageHead(key="smm.s28.28.27.a", label="Toolbox talks conducted",
+                               clause_ref="SMM S28 ¶28.27(a) · PS 27.08", cites="27.08"),
+                  CoverageHead(key="smm.s28.28.27.b",
+                               label="Providing necessary training to Safety Supervisors, foremen "
+                                     "or gangers to conduct such talks",
+                               clause_ref="SMM S28 ¶28.27(b)"),
+                  CoverageHead(key="smm.s28.28.27.c",
+                               label="Basing such talks on kits published by the Hong Kong "
+                                     "Construction Association Ltd., the Occupational Safety and "
+                                     "Health Council, or kits of comparable standard accepted or "
+                                     "advised by the Project Manager",
+                               clause_ref="SMM S28 ¶28.27(c)"),
+                  CoverageHead(key="smm.s28.28.27.d",
+                               label="Preparation of training programme and records",
+                               clause_ref="SMM S28 ¶28.27(d)"),
+              ]),
+    TitleRule(key="smm28.33", bill_no="9", match=("pre-work",),
+              smm_clause="SMM S28 ¶28.33",
+              title="PES / HIA meetings and Pre-work Safety Checks",
+              heads=[
+                  CoverageHead(key="smm.s28.28.33.a",
+                               label="Arranging and holding PES meetings, HIA meetings and "
+                                     "Pre-work Safety Checks",
+                               clause_ref="SMM S28 ¶28.33(a) · PS 27.18", cites="27.18"),
+                  CoverageHead(key="smm.s28.28.33.b",
+                               label="Providing training to leaders of the PES or HIA meetings",
+                               clause_ref="SMM S28 ¶28.33(b) · PS 27.18", cites="27.18"),
+                  CoverageHead(key="smm.s28.28.33.c", label="Attendance by workers",
+                               clause_ref="SMM S28 ¶28.33(c)"),
+              ]),
+    TitleRule(key="smm28.38", bill_no="9", match=("heat stroke",),
+              smm_clause="SMM S28 ¶28.38", title="Prevention of heat stroke",
+              heads=[
+                  CoverageHead(key="smm.s28.28.38.a",
+                               label="Providing measures for working in hot summer months to the "
+                                     "satisfaction of the Project Manager",
+                               clause_ref="SMM S28 ¶28.38(a) · PS 27.21", cites="27.21"),
+              ]),
+]
+
 # The setting-up family is reached BOTH ways on purpose: by reference for Bill 2, whose refs are
 # known, and by title for Bill 3, whose are not. `heads_for` de-duplicates on the head key, so an
 # item reached by both routes carries each head once.
+
+# SMM 24 â preservation and protection of trees (Bill 7). A clause per item, reached by title.
+_TREES_24 = [
+    TitleRule(key="smm24.19", bill_no="7", match=("protection of tree",),
+              smm_clause="SMM S24 ¶24.19", title="Protection of trees to be preserved",
+              heads=[
+                  CoverageHead(key="smm.s24.24.19.a",
+                               label="Provision, installation, securing, maintenance, "
+                                     "reinstatement and removal of identification labelling or "
+                                     "marking systems",
+                               clause_ref="SMM S24 ¶24.19(a) · GS · PS 26.04", cites="26.04"),
+                  CoverageHead(key="smm.s24.24.19.b",
+                               label="Temporary protective fencing, armouring and mulching",
+                               clause_ref="SMM S24 ¶24.19(b) · GS · PS 26.09", cites="26.09"),
+                  CoverageHead(key="smm.s24.24.19.c",
+                               label="Physical support measures to protect the trees from "
+                                     "instability",
+                               clause_ref="SMM S24 ¶24.19(c)"),
+              ]),
+    TitleRule(key="smm24.24", bill_no="7", match=("tree survey",),
+              smm_clause="SMM S24 ¶24.24", title="Tree survey record",
+              heads=[
+                  CoverageHead(key="smm.s24.24.24.a",
+                               label="Preparing, amending and submitting the tree survey record to "
+                                     "the Project Manager",
+                               clause_ref="SMM S24 ¶24.24(a) · GS · PS 26.03", cites="26.03"),
+                  CoverageHead(key="smm.s24.24.24.b",
+                               label="Provision and installation of an identification labelling or "
+                                     "marking system for all existing trees to be felled",
+                               clause_ref="SMM S24 ¶24.24(b) · GS · PS 26.04", cites="26.04"),
+                  CoverageHead(key="smm.s24.24.24.c",
+                               label="Taking photographs of existing trees",
+                               clause_ref="SMM S24 ¶24.24(c)"),
+              ]),
+    TitleRule(key="smm24.25", bill_no="7", match=("photographic record",),
+              smm_clause="SMM S24 ¶24.25", title="Updated photographic record of preserved trees",
+              heads=[
+                  CoverageHead(key="smm.s24.24.25.a",
+                               label="Taking updated photographs of the trees",
+                               clause_ref="SMM S24 ¶24.25(a)"),
+                  CoverageHead(key="smm.s24.24.25.b",
+                               label="Preparing, amending and submitting a report on the updated "
+                                     "photographic record of the preserved trees",
+                               clause_ref="SMM S24 ¶24.25(b) · PS 26.08S", cites="26.08S"),
+              ]),
+    TitleRule(key="smm24.31", bill_no="7", match=("area basis assessment",),
+              smm_clause="SMM S24 ¶24.31", title="Area basis assessment",
+              heads=[
+                  CoverageHead(key="smm.s24.24.31.a", label="Carrying out area basis assessment",
+                               clause_ref="SMM S24 ¶24.31(a)"),
+                  CoverageHead(key="smm.s24.24.31.b",
+                               label="Providing all necessary assistance, temporary traffic "
+                                     "arrangements, tools, equipment and transportation",
+                               clause_ref="SMM S24 ¶24.31(b)"),
+                  CoverageHead(key="smm.s24.24.31.c", label="Complying with PS Clause 26.18",
+                               clause_ref="SMM S24 ¶24.31(c) · PS 26.18", cites="26.18"),
+              ]),
+    TitleRule(key="smm24.32", bill_no="7", match=("tree group inspection",),
+              smm_clause="SMM S24 ¶24.32", title="Tree group inspection",
+              heads=[
+                  CoverageHead(key="smm.s24.24.32.a", label="Carrying out tree group inspection",
+                               clause_ref="SMM S24 ¶24.32(a)"),
+                  CoverageHead(key="smm.s24.24.32.b",
+                               label="Providing all necessary assistance, temporary traffic "
+                                     "arrangements, tools, equipment and transportation",
+                               clause_ref="SMM S24 ¶24.32(b)"),
+                  CoverageHead(key="smm.s24.24.32.c", label="Complying with PS Clause 26.19",
+                               clause_ref="SMM S24 ¶24.32(c) · PS 26.19", cites="26.19"),
+              ]),
+    TitleRule(key="smm24.33", bill_no="7", match=("detailed tree risk assessment",),
+              smm_clause="SMM S24 ¶24.33", title="Detailed tree risk assessment",
+              heads=[
+                  CoverageHead(key="smm.s24.24.33.a",
+                               label="Carrying out detailed tree risk assessment",
+                               clause_ref="SMM S24 ¶24.33(a)"),
+                  CoverageHead(key="smm.s24.24.33.b",
+                               label="Providing all necessary assistance, temporary traffic "
+                                     "arrangements, tools, equipment and transportation",
+                               clause_ref="SMM S24 ¶24.33(b)"),
+                  CoverageHead(key="smm.s24.24.33.c", label="Complying with PS Clause 26.20",
+                               clause_ref="SMM S24 ¶24.33(c) · PS 26.20", cites="26.20"),
+              ]),
+    TitleRule(key="smm24.34", bill_no="7", match=("follow-up action",),
+              smm_clause="SMM S24 ¶24.34", title="Follow-up actions after tree risk assessment",
+              heads=[
+                  CoverageHead(key="smm.s24.24.34.a",
+                               label="Carrying out follow-up actions after tree risk assessment",
+                               clause_ref="SMM S24 ¶24.34(a) · PS 26.21", cites="26.21"),
+              ]),
+    TitleRule(key="smm24.35", bill_no="7", match=("audit", "tree risk assessment"),
+              smm_clause="SMM S24 ¶24.35", title="Audit on tree risk assessment",
+              heads=[
+                  CoverageHead(key="smm.s24.24.35.a", label="Audit on tree risk assessment",
+                               clause_ref="SMM S24 ¶24.35(a) · PS 26.22", cites="26.22"),
+              ]),
+    TitleRule(key="smm24.39", bill_no="7", match=("vegetation survey",),
+              smm_clause="SMM S24 ¶24.39", title="Vegetation survey record and report",
+              heads=[
+                  CoverageHead(key="smm.s24.24.39.a",
+                               label="Preparing, amending and submitting the vegetation survey "
+                                     "record and report",
+                               clause_ref="SMM S24 ¶24.39(a) · PS 25.37", cites="25.37"),
+                  CoverageHead(key="smm.s24.24.39.b",
+                               label="Taking photographs of existing vegetation",
+                               clause_ref="SMM S24 ¶24.39(b)"),
+              ]),
+]
+
+# SMM 29 â monitoring payment of wages (Bill 8). A clause per item, reached by title.
+_WAGES_29 = [
+    TitleRule(key="smm29.06", bill_no="8", match=("establish", "monitoring system"),
+              smm_clause="SMM S29 ¶29.06", title="Establishing the monitoring system",
+              heads=[
+                  CoverageHead(key="smm.s29.29.06.a",
+                               label="Preparation of the monitoring system for payment of wages to "
+                                     "the acceptance of the Project Manager",
+                               clause_ref="SMM S29 ¶29.06(a)"),
+                  CoverageHead(key="smm.s29.29.06.b",
+                               label="Setting up the monitoring system and any modifications "
+                                     "thereof",
+                               clause_ref="SMM S29 ¶29.06(b)"),
+                  CoverageHead(key="smm.s29.29.06.c",
+                               label="Provision for collection and maintenance of records of "
+                                     "payment of wages to Site Workers",
+                               clause_ref="SMM S29 ¶29.06(c)"),
+                  CoverageHead(key="smm.s29.29.06.d",
+                               label="Opening of accounts in a designated bank for relevant "
+                                     "parties",
+                               clause_ref="SMM S29 ¶29.06(d) · PS 29.05(1)–(2)", cites="29.05"),
+                  CoverageHead(key="smm.s29.29.06.e",
+                               label="Nomination of a Contractor's Labour Officer",
+                               clause_ref="SMM S29 ¶29.06(e) · PS 29.09", cites="29.09"),
+                  CoverageHead(key="smm.s29.29.06.f",
+                               label="Setting up the attendance recording system",
+                               clause_ref="SMM S29 ¶29.06(f)"),
+              ]),
+    TitleRule(key="smm29.implement", bill_no="8", match=("implement", "monitoring system"),
+              smm_clause="SMM S29 — clause number NOT CAPTURED",
+              title="Implementing the monitoring system",
+              heads=[
+                  CoverageHead(key="smm.s29.implement.a",
+                               label="Operating and maintaining the attendance recording system of "
+                                     "the CWRS to obtain accurate attendance records of Site Workers",
+                               clause_ref="SMM S29 (clause number not captured) (a)"),
+                  CoverageHead(key="smm.s29.implement.c",
+                               label="Reviewing, updating and revising the monitoring system taking "
+                                     "into account the comments made by the Project Manager or any "
+                                     "other parties",
+                               clause_ref="SMM S29 (clause number not captured) (c)"),
+                  CoverageHead(key="smm.s29.implement.d",
+                               label="Implementing measures to ensure that payments of wages to "
+                                     "Site Workers are made against the attendance records",
+                               clause_ref="SMM S29 (clause number not captured) (d)"),
+                  CoverageHead(key="smm.s29.implement.e",
+                               label="Compiling, submitting and maintaining records of payment of "
+                                     "wages",
+                               clause_ref="SMM S29 (clause number not captured) (e)"),
+              ]),
+    TitleRule(key="smm29.08", bill_no="8", match=("labour officer",),
+              smm_clause="SMM S29 ¶29.08", title="Providing the Contractor's Labour Officer",
+              heads=[
+                  CoverageHead(key="smm.s29.29.08.employment",
+                               label="Basic salary, gratuity, overtime payment, sundry allowance, "
+                                     "housing allowance, travel allowance, leave allowance, "
+                                     "education allowance, medical allowance, dental allowance, "
+                                     "bonus, contribution to a registered mandatory provident fund "
+                                     "scheme, all necessary levies (e.g. Construction Industry "
+                                     "Council), insurances and fringe benefits",
+                               clause_ref="SMM S29 ¶29.08(a)–(o)"),
+              ]),
+]
+
 TITLE_COVERAGE: list[TitleRule] = [
     TitleRule(key="rig.establish", match=("establishment of rigs",),
               smm_clause="SMM S02 ¶2.07", title="Setting up rigs",
@@ -376,6 +720,9 @@ TITLE_COVERAGE: list[TitleRule] = [
     TitleRule(key="rig.standing", match=("standing time",),
               smm_clause="SMM S02 ¶2.09", title="Standing time for rigs",
               heads=list(_STANDING_TIME_2_09)),
+    *_TREES_24,
+    *_SAFETY_28,
+    *_WAGES_29,
 ]
 
 # The heads deemed included in EVERY rate in the contract: General Preambles ¶2 (i)–(xxii), twenty-two
@@ -446,6 +793,11 @@ class ItemCoverage(BaseModel):
     #: down. Absence looked exactly like completeness, which is the failure this whole package is
     #: built against. An item with no list now says so and cannot settle.
     no_list_for_section: str = ""
+    #: WHY this item has no list, in words. "No list transcribed for Bill No.9" would be a lie once
+    #: nine of Bill 9's clauses ARE transcribed and none of them matched this item's title — those
+    #: are different problems with different fixes, and saying the wrong one sends somebody to
+    #: transcribe a thing that is already there.
+    no_list_reason: str = ""
 
     def total(self) -> int:
         return len(self.entries)
@@ -544,6 +896,49 @@ def partial_reasons_for(item: BillItem) -> list[str]:
     return out
 
 
+def _no_list_reason(item: BillItem) -> str:
+    """Why this item has no checklist â and the two cases are not the same problem.
+
+    A bill whose coverage was never transcribed needs somebody to read the Method of Measurement.
+    A bill whose clauses ARE transcribed but none of which matched THIS item's title needs somebody
+    to look at the title. Reporting the first when it is really the second sends a reader off to
+    transcribe a thing that is already sitting in this file.
+    """
+    bill_no = section_of(item)
+    for_this_bill = [rule for rule in TITLE_COVERAGE if rule.bill_no == bill_no]
+    if not for_this_bill:
+        return (f"No item-coverage list has been transcribed for Bill No.{bill_no}. Until one is, "
+                f"nothing here can say what this rate must carry.")
+    return (f"Bill No.{bill_no} has {len(for_this_bill)} transcribed coverage clause(s), and none "
+            f"of them matched this item by title ({item.description[:60]!r}). Either this item is "
+            f"governed by a clause nobody has transcribed yet, or its title does not read the way "
+            f"the clause names it — which is a mapping to check, not a clause to write.")
+
+
+def unmatched_rules(bill: ClientBill) -> list[dict]:
+    """Transcribed clauses that matched NO item in this bill.
+
+    The other half of the same honesty. A clause read off the pack and attached to nothing is a
+    coverage head nobody will ever be asked about, and it looks identical to a clause that simply
+    does not apply. Reported so a person can tell those apart — the usual cause is that the BQ
+    calls the item something the clause does not.
+    """
+    matched = {rule.key for item in bill.items for rule in title_rules_for(item)}
+    bills_present = {(item.bill_no or "").strip() for item in bill.items}
+    return [
+        {"rule": rule.key, "smm_clause": rule.smm_clause, "title": rule.title,
+         "matched_on": list(rule.match),
+         # A rule with no `bill_no` applies wherever its title appears, so "this bill has no
+         # Bill No." would be nonsense for it. Three cases, three sentences.
+         "why": (f"no item in this bill of quantities is titled with "
+                 f"{' and '.join(repr(m) for m in rule.match)}" if not rule.bill_no else
+                 f"no item in Bill No.{rule.bill_no} is titled with "
+                 f"{' and '.join(repr(m) for m in rule.match)}")}
+        for rule in TITLE_COVERAGE
+        if rule.key not in matched and (not rule.bill_no or rule.bill_no in bills_present)
+    ]
+
+
 def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
                  ticks: Optional[dict[str, dict]] = None,
                  proposed: Optional[list[CoverageHead]] = None) -> ItemCoverage:
@@ -608,7 +1003,9 @@ def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
                         # has now said what this rate must carry, and the heads arrive unticked
                         # like every other, so nothing is settled by their arrival.
                         no_list_for_section=("" if (has_list_for(item) or proposed)
-                                             else section_of(item)))
+                                             else section_of(item)),
+                        no_list_reason=("" if (has_list_for(item) or proposed)
+                                        else _no_list_reason(item)))
 
 
 def bill_summary(bill: ClientBill, ticks: dict[str, dict[str, dict]]) -> dict:
@@ -625,6 +1022,7 @@ def bill_summary(bill: ClientBill, ticks: dict[str, dict[str, dict]]) -> dict:
         rows.append({"full_ref": item.full_ref, "total": coverage.total(),
                      "uncovered": len(coverage.uncovered()), "settled": coverage.settled(),
                      "no_list_for_section": coverage.no_list_for_section,
+                     "no_list_reason": coverage.no_list_reason,
                      "partial": coverage.partial, "orphan_ticks": coverage.orphan_ticks})
     no_list = sorted({r["no_list_for_section"] for r in rows if r["no_list_for_section"]})
     return {
@@ -640,5 +1038,8 @@ def bill_summary(bill: ClientBill, ticks: dict[str, dict[str, dict]]) -> dict:
         # "complete" — see PARTIAL_BY_CONSTRUCTION.
         "partial": sum(1 for r in rows if r["partial"]),
         "orphan_ticks": sum(len(r["orphan_ticks"]) for r in rows),
+        # Clauses transcribed off the pack that matched NO item here. A head nobody will be asked
+        # about looks exactly like one that does not apply.
+        "unmatched_rules": unmatched_rules(bill),
         "note": NO_LATER_CLAIM,
     }
