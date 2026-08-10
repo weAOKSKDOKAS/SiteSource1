@@ -166,3 +166,204 @@ def load_bid_decision(set_id: str) -> Optional[dict]:
         return _decision_row(row) if row else None
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# The brief — navy signals, and a brass recommendation over them
+# ---------------------------------------------------------------------------
+# READ-ONLY, and no model call anywhere. Every signal is a deterministic read of an artifact that
+# already exists; the recommendation is a rule over those reads. Nothing is written.
+UNKNOWN = "unknown"
+
+
+def _deadline_signal(conn: sqlite3.Connection, set_id: str) -> dict:
+    """Days remaining, or ``"unknown"`` — the SAME honesty rule ``submission.deadline_for`` applies.
+
+    A close date is only KNOWN when the reader found it or a human confirmed it. ``reading`` and
+    ``not_found`` both mean "we do not have one", and a deadline we do not have must never become a
+    number somebody plans around. That rule already governs whether a submission counts as on time;
+    it governs the bid brief for the identical reason.
+    """
+    from bridge import submission
+
+    date, known = submission.deadline_for(conn, set_id)
+    if not known:
+        from client_boq import store as cb_store
+
+        status = (cb_store.load_set_meta(conn, set_id).get("close_date_status") or "").strip()
+        return {"close_date": UNKNOWN, "days_remaining": UNKNOWN,
+                "source": "client_boq_set_meta.close_date",
+                "why_unknown": (f"the close date's status is {status or 'unset'!r}; only 'found' "
+                                f"or 'confirmed' is trusted. A date nobody read is not a deadline.")}
+    try:
+        days = (_dt.date.fromisoformat(date[:10]) - _dt.date.fromisoformat(_now()[:10])).days
+    except ValueError:
+        # A stored date that will not parse is a read failure, not a deadline. Same posture as
+        # `_on_time`: degrade to unknown rather than to a plausible number.
+        return {"close_date": date, "days_remaining": UNKNOWN,
+                "source": "client_boq_set_meta.close_date",
+                "why_unknown": f"the stored close date {date!r} is not a date this can read"}
+    return {"close_date": date, "days_remaining": days,
+            "source": "client_boq_set_meta.close_date (status found/confirmed)"}
+
+
+def _register_signals(conn: sqlite3.Connection, set_id: str) -> tuple[dict, dict]:
+    """``(departures, scope_gaps)`` from the review register — the one place both actually live.
+
+    Scope alignment has no store of its own: s04's findings are assembled INTO the register as
+    ``DepartureItem`` rows tagged ``source="scope_alignment"``, with ``kind="input_missing"`` for
+    the case where the contract did not give us something we need to price. So both signals are one
+    read of one artifact, which is also why neither can drift from what the Register tab shows.
+    """
+    from client_boq import models as cb_models
+    from client_boq import store as cb_store
+
+    register = cb_store.load_register(conn, set_id)
+    if register is None:
+        return ({"total": 0, "unresolved": 0, "source": "no review register yet"},
+                {"gaps": 0, "inputs_missing": 0, "source": "no review register yet"})
+
+    items = register.items
+    still_open = {cb_models.STATUS_CANDIDATE, cb_models.STATUS_UNRESOLVED,
+                  cb_models.STATUS_UNCOVERED, cb_models.STATUS_CITATION_FAILED,
+                  cb_models.STATUS_RULE_FLAGGED}
+    scope = [d for d in items if d.source == cb_models.SOURCE_SCOPE_ALIGNMENT]
+    departures = {
+        "total": len(items),
+        # UNRESOLVED means nobody has ruled on it yet — a candidate the human has not judged, a
+        # criterion no clause answered, a citation that failed. `confirmed` and `dismissed` are the
+        # two a person HAS ruled on, and only the approve endpoint writes them.
+        "unresolved": sum(1 for d in items if d.status in still_open),
+        "source": "client_boq review register (s07), status vocabulary in client_boq/models.py",
+    }
+    gaps = {
+        "gaps": len(scope),
+        "inputs_missing": sum(1 for d in scope if d.kind == "input_missing"),
+        "source": "review register lines tagged source='scope_alignment' (s04)",
+    }
+    return departures, gaps
+
+
+def _coverage_signal(conn: sqlite3.Connection, set_id: str) -> dict:
+    """Which bills have no item-coverage list, and how many items are waiting on one.
+
+    A tender whose coverage lists are missing is a tender whose rates cannot be checked for
+    completeness — and under Particular Preamble ¶12/¶4A a head missed out of the item coverage
+    cannot be claimed later. That is a bid-brief signal, not a pricing detail.
+
+    ``"unknown"`` until a bill is imported: coverage is per bill item, so with no bill there is
+    nothing to have coverage OF. Saying "0 bills without a list" then would be true and useless.
+    """
+    from client_boq import store as cb_store
+    from client_boq.boq import coverage as boq_coverage
+
+    bill = cb_store.load_bill(conn, set_id)
+    if bill is None or not bill.items:
+        return {"bills_without_list": UNKNOWN, "waiting": UNKNOWN,
+                "source": "client_boq/boq/coverage.py::bill_summary",
+                "why_unknown": "no bill of quantities is imported yet, so there is nothing to "
+                               "have item coverage of"}
+    summary = boq_coverage.bill_summary(bill, cb_store.load_coverage_ticks(conn, set_id, bill.rev))
+    return {
+        "bills_without_list": summary["bills_without_a_list"],
+        "waiting": summary["no_list"],
+        "partial": summary["partial"],
+        "unmatched_clauses": len(summary["unmatched_rules"]),
+        "source": "client_boq/boq/coverage.py::bill_summary",
+    }
+
+
+def signals_for(set_id: str) -> dict:
+    """Every hard signal behind a bid decision, each naming where it came from. NAVY.
+
+    Deterministic reads of artifacts that already exist. Nothing here is computed for this screen,
+    nothing is a score, and anything that cannot be read honestly is the string ``"unknown"``.
+    """
+    from client_boq import store as cb_store
+
+    ref = run_ref_for(set_id)
+    conn = bridge_conn()
+    try:
+        departures, scope_gaps = _register_signals(conn, ref)
+        return {
+            "deadline": _deadline_signal(conn, ref),
+            "open_clarifications": {
+                "count": cb_store.open_rfi_count(conn, ref),
+                "source": "client_boq_rfi_items with an open status (store.open_rfi_count)",
+            },
+            "review_approved": {
+                "value": cb_store.review_is_approved(conn, ref),
+                "source": "client_boq_review_registers.approved (store.review_is_approved)",
+            },
+            "departures": departures,
+            "scope_gaps": scope_gaps,
+            "coverage": _coverage_signal(conn, ref),
+        }
+    finally:
+        conn.close()
+
+
+def recommend(signals: dict) -> dict:
+    """A DETERMINISTIC rule over the signals, with the reasons that drove it. BRASS — a proposal.
+
+    THE RULE, in full, and deliberately small enough to hold in your head:
+
+        any open clarification, scope gap, or missing input  -> clarify   (we cannot price it yet)
+        else if the review register is not approved          -> clarify   (never bid on unread terms)
+        else                                                 -> bid      (nothing is in the way)
+
+    It NEVER recommends ``no_bid``. Declining a tender is a judgement about workload, relationship,
+    risk appetite and what else is in the office that month; none of that is in this database, and
+    a machine that proposed it would be guessing at the one decision that is most obviously a
+    person's. The rule can say "we cannot price this yet" and it can say "nothing is in the way".
+    It cannot say "do not chase this".
+
+    Every reason names the navy signal that produced it, so the UI shows the recommendation's
+    evidence beside it rather than asking to be believed. A recommendation with no visible reasons
+    is an opinion; one that lists its inputs is an argument somebody can disagree with.
+
+    Coverage and the deadline are reported as signals but do NOT drive the verdict: a missing
+    coverage list is a completeness risk to weigh, and a tight deadline is a capacity question —
+    both are the estimator's to judge, and neither is a reason a machine should propose pausing.
+    """
+    reasons: list[str] = []
+
+    clarifications = signals.get("open_clarifications", {}).get("count", 0)
+    if clarifications:
+        reasons.append(f"{clarifications} clarification(s) still with the client")
+
+    gaps = signals.get("scope_gaps", {})
+    if gaps.get("inputs_missing"):
+        reasons.append(f"{gaps['inputs_missing']} input(s) the contract did not give us")
+    if gaps.get("gaps"):
+        reasons.append(f"{gaps['gaps']} scope-alignment finding(s) on the register")
+
+    if reasons:
+        return {"verdict": CLARIFY, "reasons": reasons,
+                "basis": "open questions or scope gaps — this cannot be priced yet"}
+
+    if not signals.get("review_approved", {}).get("value"):
+        return {"verdict": CLARIFY,
+                "reasons": ["the review register is not approved"],
+                "basis": "never recommend bidding on terms nobody has read — the same posture as "
+                         "the review gate"}
+
+    return {"verdict": BID, "reasons": ["nothing on the register is unresolved and the review is "
+                                        "approved"],
+            "basis": "nothing found that stops this being priced. Whether to pursue it is still "
+                     "yours — this rule never proposes no-bid."}
+
+
+def bid_brief(set_id: str) -> dict:
+    """The whole brief: navy signals, a brass recommendation, and the human's decision if any.
+
+    A pure read. Opening this screen records nothing — the machine assembles and proposes, and the
+    verdict arrives only through :func:`confirm_bid`.
+    """
+    signals = signals_for(set_id)
+    return {
+        "set_id": run_ref_for(set_id),
+        "signals": signals,
+        "recommendation": recommend(signals),
+        "decision": load_bid_decision(set_id),
+    }
