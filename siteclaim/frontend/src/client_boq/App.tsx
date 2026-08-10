@@ -33,6 +33,7 @@ import { Settings } from "./screens/Settings";
 import { Subcontractors } from "./screens/Subcontractors";
 import { Team } from "./screens/Team";
 import { DocumentsTab } from "./tabs/Documents";
+import { BidTab } from "./tabs/Bid";
 import { CloseoutTab } from "./tabs/Closeout";
 import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
@@ -88,6 +89,9 @@ export interface SetData {
   /** The feedback edge — outcome, lessons, change-control — read from the bridge for the same
    *  reason: the Closeout chip and tab show the recorded outcome after a reload. */
   closeout: BridgeCloseoutState | null;
+  /** The recorded bid verdict, or "" when nobody has decided. Read back like the rest so a reload
+   *  does not reset the Bid chip to a state the tender is already past. */
+  bidVerdict: string;
 }
 
 const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false };
@@ -779,6 +783,9 @@ function SetView({
         optional(api.bridge.submission(setId)),
       ]);
     const closeout = await optional(api.bridge.closeout(setId));
+    // The tender's first decision, for the step strip and the tab chip. A pure read: asking for
+    // the brief never records anything.
+    const bidBrief = await optional(api.bridge.bid(setId));
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
     const citations = register ? await optional(api.citations(setId)) : null;
@@ -801,6 +808,7 @@ function SetView({
       },
       submission,
       closeout,
+      bidVerdict: bidBrief?.decision?.verdict ?? "",
     });
   }, [setId]);
 
@@ -903,6 +911,7 @@ function SetView({
         unassignedHoles: (data?.site?.stations ?? []).filter(
           (s: Station) => !data?.site?.classes[s.station]?.access_class,
         ).length,
+        bidVerdict: data?.bidVerdict ?? "",
         submitted: Boolean(data?.submission?.submission),
         outcomeRecorded: Boolean(
           data?.closeout?.outcome && data.closeout.outcome.status !== "submitted"),
@@ -943,6 +952,8 @@ function SetView({
             onProgress={onJob}
             onOpenPanel={setPanel}
           />
+        ) : tab === "bid" ? (
+          <BidTab data={data} onError={onError} onRefresh={refresh} />
         ) : tab === "scope" ? (
           <ScopeTab
             data={data}

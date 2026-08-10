@@ -572,6 +572,68 @@ export interface AskResponse {
   grounded_in: string[];
 }
 
+// --- the bid / no-bid decision (the tender's FIRST decision) ----------------
+// navy = the aggregated hard signals, each a deterministic read of an artifact that already
+// exists. brass = a DETERMINISTIC rule over them, shown with its reasons and freely overridable.
+// The verdict is the human's: nothing on the server records one.
+//
+// Nothing here is a computed score. Win probability, capacity and strategic fit are the operator's
+// own words in `factors`, and a signal that cannot be read honestly is the string "unknown".
+export interface BidSignal {
+  /** Where this number came from. Every signal carries one. */
+  source: string;
+  /** Present only when the signal could not be read — and then it says which state made it so. */
+  why_unknown?: string;
+}
+
+export interface BidSignals {
+  deadline: BidSignal & {
+    close_date: string | "unknown";
+    /** "unknown" whenever the close date's status is not `found` or `confirmed` — the same rule
+     *  `on_time` already applies. A date nobody read is not a deadline. */
+    days_remaining: number | "unknown";
+  };
+  open_clarifications: BidSignal & { count: number };
+  review_approved: BidSignal & { value: boolean };
+  departures: BidSignal & { total: number; unresolved: number };
+  scope_gaps: BidSignal & { gaps: number; inputs_missing: number };
+  coverage: BidSignal & {
+    /** "unknown" until a bill is imported — coverage is per bill item, so with no bill there is
+     *  nothing to have coverage OF. */
+    bills_without_list: string[] | "unknown";
+    waiting: number | "unknown";
+    partial?: number;
+    unmatched_clauses?: number;
+  };
+}
+
+export interface BidRecommendation {
+  /** Only ever `bid` or `clarify`. The rule NEVER proposes no-bid — declining a tender is a
+   *  judgement about workload, relationship and risk appetite, none of which the machine has. */
+  verdict: "bid" | "clarify";
+  /** Each names the signal that produced it, so the proposal shows its evidence. */
+  reasons: string[];
+  basis: string;
+}
+
+export interface BidDecision {
+  set_id: string;
+  verdict: "bid" | "no_bid" | "clarify";
+  rationale: string;
+  /** The operator's OWN strategic judgement. Stored verbatim; nothing computes any of it. */
+  factors: Record<string, string>;
+  decided_by: string;
+  decided_at: string;
+}
+
+export interface BidBrief {
+  set_id: string;
+  signals: BidSignals;
+  recommendation: BidRecommendation;
+  /** `null` until somebody decides — which is a state, not an error. */
+  decision: BidDecision | null;
+}
+
 export interface ConditionsResponse {
   set_id: string;
   conditions: ConditionRow[];

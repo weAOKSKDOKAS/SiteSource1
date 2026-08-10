@@ -11,6 +11,7 @@ import { Chip, cx } from "./ui";
 export type TabId =
   | "documents"
   | "register"
+  | "bid"
   | "scope"
   | "site"
   | "route"
@@ -22,12 +23,17 @@ export type TabId =
 // The order IS the reading order of a tender: what arrived, what we found in it, what we are
 // pricing, who builds each package, who quotes the ones we sublet, the price, the offer.
 //
+// `bid` sits between them because that is where the decision actually falls: read the pack, review
+// the terms, THEN decide whether to pursue it. Everything after it assumed that decision had been
+// made; nothing recorded it.
+//
 // `route` and `sourcing` split at the routing decision. `sourcing` holds shortlist → dispatch →
 // level → recommend as internal steps rather than four more tabs, because they are already a
 // wizard with a stepper of their own.
 export const TABS: { id: TabId; label: string }[] = [
   { id: "documents", label: "Documents" },
   { id: "register", label: "Register" },
+  { id: "bid", label: "Bid" },
   { id: "scope", label: "Scope" },
   { id: "site", label: "Site" },
   { id: "route", label: "Route" },
@@ -69,6 +75,9 @@ export function stepStates(
      *  (priced → not yet approved → approved → submitted) lives inside the Offer tab, which is
      *  where the approve and submit actions are; the chip only needs the terminal fact. */
     submitted?: boolean;
+    /** The recorded bid verdict, or "" when nobody has decided yet. `clarify` deliberately does
+     *  NOT read as done — it is a position with an open question behind it. */
+    bidVerdict?: string;
     /** A won/lost/withdrawn outcome has been recorded — the closeout step's terminal `done`. Before
      *  submission the step waits; after it, it opens to record the outcome; once recorded, done. */
     outcomeRecorded?: boolean;
@@ -110,6 +119,16 @@ export function stepStates(
         : gates.manifest
           ? { kind: "waiting", label: "NOT YET RUN" }
           : { kind: "waiting", label: "WAITS ON THE MANIFEST" },
+    // The tender's first real decision. It waits on the review because you decide whether to
+    // pursue a job AFTER reading its terms — and it never says "done" on a `clarify`, because a
+    // clarify is a position with an open question behind it, not a step somebody finished.
+    bid: has.bidVerdict
+      ? has.bidVerdict === "clarify"
+        ? { kind: "open" }
+        : { kind: "done" }
+      : has.register || gates.review
+        ? { kind: "open", shown: true }
+        : { kind: "waiting", label: "WAITS ON THE REGISTER" },
     scope: gates.scope
       ? { kind: "done" }
       : has.scope

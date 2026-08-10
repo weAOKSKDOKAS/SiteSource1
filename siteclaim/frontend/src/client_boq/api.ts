@@ -54,6 +54,8 @@ import type {
   PartsResponse,
   AccessBoardResponse,
   AskResponse,
+  BidBrief,
+  BidDecision,
   ConditionRow,
   ConditionsResponse,
   CostingModelShape,
@@ -797,6 +799,17 @@ export const api = {
     /** One tender total from both engines — a pure read; nothing rewrites the offer. */
     combinedPricing: (setId: string) =>
       bget<BridgeCombinedPricing>(`${setPath(setId)}/combined-pricing`),
+
+    // --- the FIRST decision: bid / no-bid ---------------------------------
+    /** The bid brief — navy signals with their sources, a brass recommendation with its reasons,
+     *  and the human's decision if one exists. A pure read; opening it decides nothing. */
+    bid: (setId: string) => bget<BidBrief>(`${setPath(setId)}/bid`),
+
+    /** Record the verdict. `no_bid` and `clarify` must say why (400 otherwise). `factors` are the
+     *  operator's own strategic judgement, stored verbatim — nothing computes any of it. */
+    confirmBid: (setId: string, verdict: string, rationale = "",
+                 factors: Record<string, string> = {}) =>
+      bpost<BidDecision>(`${setPath(setId)}/bid/confirm`, { verdict, rationale, factors }),
 
     // --- closeout: outcome, lessons, change-control, handover (nodes 49–53) ---
     /** Outcome + lessons + events + whether a handover is meaningful. A pure read; nothing 404s. */
