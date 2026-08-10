@@ -55,12 +55,14 @@ reading as "fully covered", just slower to notice:
   reaches the reader through :attr:`ItemCoverage.partial` and the summary line;
 * :data:`FROM_BASE_SMM` marks an individual head whose words came from the base document, so a
   reader can see which ones cannot be checked against anything in their possession;
-* :data:`BILL_1_AWAITING_TEXT` names what is STILL missing from SMM S01 now that the pack's Section 1
-  has been transcribed into :mod:`client_boq.boq.smm_s01` — the base sub-heads the lettering proves
-  are absent, the second ¶1.06(k) the pack prints and nobody read, the two clauses that extracted
-  only as fragments, the three sub-heads that stop mid-sentence, and the one BQ mapping that
-  contradicts the Method of Measurement. It is much shorter than it was, and shorter is not the same
-  as finished — **a head with an invented label is still worse than a named gap.**
+* :data:`BILL_1_AWAITING_TEXT` names what is STILL missing around Bill 1 now that the pack's
+  Section 1 is transcribed (:mod:`client_boq.boq.smm_s01`) and the real bill has been read item by
+  item — the base sub-heads the lettering proves are absent, the second ¶1.06(k) the pack prints and
+  nobody read, the two clauses that extracted only as fragments, the three sub-heads that stop
+  mid-sentence, the SMM 3 site-clearance block Bill 1's own banner demands, and the
+  removal-of-traffic-measures clause the amendments never transcribe. It is much shorter than it
+  was, and shorter is not the same as finished — **a head with an invented label is still worse
+  than a named gap.**
 
 WHERE A HEAD COMES FROM — three routes, one list
 ------------------------------------------------
@@ -501,6 +503,20 @@ _SAFETY_28 = [
 # item reached by both routes carries each head once.
 
 # SMM 24 â preservation and protection of trees (Bill 7). A clause per item, reached by title.
+# ¶24.39's heads, extracted from the Bill 7 rule so Bill 1 can carry them too: the real BQ
+# puts "Vegetation Survey in Conservation Area" (BQ 1.63) in BILL 1, under its own printed
+# `SECTION 24` banner. One literal, two rules — a correction cannot land on one bill and
+# miss the other, the same sharing discipline as `_DRILLING_2_13`.
+_VEGETATION_SURVEY_24_39 = [
+    CoverageHead(key="smm.s24.24.39.a",
+                 label="Preparing, amending and submitting the vegetation survey record and "
+                       "report",
+                 clause_ref="SMM S24 ¶24.39(a) · PS 25.37", cites="25.37"),
+    CoverageHead(key="smm.s24.24.39.b",
+                 label="Taking photographs of existing vegetation",
+                 clause_ref="SMM S24 ¶24.39(b)"),
+]
+
 _TREES_24 = [
     TitleRule(key="smm24.19", bill_no="7", match=("protection of tree",),
               smm_clause="SMM S24 ¶24.19", title="Protection of trees to be preserved",
@@ -596,15 +612,7 @@ _TREES_24 = [
               ]),
     TitleRule(key="smm24.39", bill_no="7", match=("vegetation survey",),
               smm_clause="SMM S24 ¶24.39", title="Vegetation survey record and report",
-              heads=[
-                  CoverageHead(key="smm.s24.24.39.a",
-                               label="Preparing, amending and submitting the vegetation survey "
-                                     "record and report",
-                               clause_ref="SMM S24 ¶24.39(a) · PS 25.37", cites="25.37"),
-                  CoverageHead(key="smm.s24.24.39.b",
-                               label="Taking photographs of existing vegetation",
-                               clause_ref="SMM S24 ¶24.39(b)"),
-              ]),
+              heads=list(_VEGETATION_SURVEY_24_39)),
 ]
 
 # SMM 29 â monitoring payment of wages (Bill 8). A clause per item, reached by title.
@@ -673,107 +681,148 @@ _WAGES_29 = [
 
 
 # ---------------------------------------------------------------------------
-# Bill 1 â General & Preliminaries. THE CLAUSE NUMBERS ARE KNOWN; MOST OF THE TEXT IS NOT.
+# Bill 1 — General & Preliminaries. MAPPED FROM THE REAL BILL, ITEM BY ITEM.
 # ---------------------------------------------------------------------------
 # SMM 1 carries 42 item-coverage blocks, one per preliminaries item, and the BQ's item numbers are
 # NOT those clause numbers: BQ 1.12 is *Contract Computer Facilities* while SMM ¶1.12 is something
 # else entirely. The mapping is by TITLE — the same lesson as "bill number is not PS number".
 #
-# THE SHAPE: per item, not a Bill-1-wide list. A preliminaries item's coverage has nothing in common
-# with its neighbour's, so a `SECTION_COVERAGE['1']` would attach the core-store heads to the
-# insurance item. There is no genuinely universal subset to put beside these — the one thing every
-# rate in the contract is deemed to include is already `DEEMED_INCLUDED`, ticked once at bill level.
+# THE MAPPING BELOW IS THE REAL BILL's (BQ Bill No.1, pages BQ 3–7, 63 items, read item by item),
+# and reading it taught this block four things:
 #
-# WHAT IS HERE NOW. The title → clause mapping below was read from the real BQ pages. The clauses'
-# SUB-HEADS have since been read off the pack too and live in `client_boq.boq.smm_s01` — 40 clauses,
-# 264 heads — so all but one of these rules now carries the words its rate must actually cover.
+# 1. THE LINE BESIDE THE NUMBER IS NOT THE TITLE. BQ 1.23–1.40 print as bare "Provision" /
+#    "Maintenance" / "Removal" — eighteen items, six distinct words, nine collisions. What
+#    separates environmental MITIGATION (¶1.40–1.42) from environmental MONITORING (¶1.45–1.47)
+#    is the heading two levels up, which is why `TitleRule.matches` runs on `full_description()`
+#    — chain plus line — and why these rules match on a chain word plus an action word.
+# 2. ONE CLAUSE, THREE MEDIA. ¶1.40 covers mitigation "not separately measured" for air, noise
+#    and water alike — the air/noise/water grouping is a BQ sub-heading, not a clause
+#    distinction. So each action rule matches all three media deliberately.
+# 3. THE BQ'S OWN WORDS DIFFER FROM THE CLAUSE TITLES. The bill says "Servicing" and
+#    "Dismantling" where ¶1.06/¶1.07 say maintenance and handing back; "Covering for dusty
+#    materials" where ¶1.76's transcription said dust; "smoky activities" not "smoke screens".
+#    Matching runs on the BILL's words, because that is the text the matcher will be shown.
+# 4. BILL 1 IS NOT ONLY SMM 1. Its last two items sit under their own printed banners:
+#    BQ 1.62 under `SECTION 3 - SITE CLEARANCE` (SMM 3 — not transcribed, a named gap) and
+#    BQ 1.63 under `SECTION 24` (vegetation survey → ¶24.39, already transcribed for Bill 7
+#    and shared from the same literal).
 #
-# ⚠ THE TRANSCRIPTION CORRECTED THREE OF THESE CLAUSE NUMBERS. The mapping's TITLES came from the
-# BQ and are right; three of its SMM references were off by one clause, and attaching the text
-# proved it:
+# THE SHAPE: per item, not a Bill-1-wide list. A preliminaries item's coverage has nothing in
+# common with its neighbour's, so a `SECTION_COVERAGE['1']` would attach the core-store heads to
+# the insurance item. Where the BQ bills one activity as several items (erection / servicing /
+# handing over of the core store), the rules split the same way, so a servicing obligation is
+# never a tick on the erection item. Two ranges stay deliberately bundled — the land transport
+# (¶1.22–1.23) and the telephone line (¶1.116–1.117) — because their two items share every
+# distinguishing phrase this side of the vehicle specification, and a false split that guesses
+# wrong words would silently miss one of them.
 #
-#     an item titled …  used to name …               and is really …
-#     "dust covering"   ¶1.76–1.77                   ¶1.76 alone (1.77 is the smoke screens)
-#     "smoke screen"    ¶1.85 (acoustic screens)     ¶1.77
-#     "acoustic screen" ¶1.86 (other noise practices) ¶1.85 — and it is NOISE abatement, not air
-#
-# Left alone, transcribing would have hung the acoustic-screen heads on an item about smoke screens
-# — precisely the mis-attachment `TitleRule`'s docstring says a per-item list exists to prevent, and
-# it would have arrived wearing the authority of a verbatim quotation. The rule keys move with the
-# clauses (`smm1.85` → `smm1.77`, `smm1.86` → `smm1.85`); a rule key is an id for the rule, never
-# what a tick is stored against, so nothing migrates and no verdict is disturbed.
-#
-# ⚠ ONE RULE IS DELIBERATELY LEFT WITHOUT ITS TEXT. `smm1.45` matches an item titled "…noise…
-# mitigation…" and names ¶1.45–1.47 — but those three clauses are environmental MONITORING, and
-# mitigation is ¶1.40–1.42. Either the BQ item is really monitoring, or it is mitigation and shares
-# ¶1.40–1.42 with the air item. Which one cannot be settled from the Method of Measurement; it needs
-# the BQ page. So the text stays transcribed and unattached, and the rule says why — a plausible
-# guess here would read exactly like the twenty-five that were actually verified.
+# TWO RECONCILIATIONS STILL NEED THE REAL WORKBOOK IN HAND (noted from the BQ read, not
+# reproducible from this repo): BQ 1.53's description wraps across three printed lines and
+# dropped from one earlier extraction, and one routing card reported 64 Bill 1 items where the
+# bill prints 63 (1.1–1.63; a letter-suffixed insert would explain it). Both are about reading
+# the bill, not about this mapping.
 _BILL_1_MAPPING: tuple[tuple[str, tuple[str, ...], str, str, tuple[str, ...]], ...] = (
-    # (rule key, title phrases, SMM clause, what the BQ calls it, the clauses its heads come from)
-    ("smm1.05", ("project manager", "take over"), "SMM S01 ¶1.05",
-     "Project Manager's Site Office — take over", ("1.05",)),
-    ("smm1.06", ("project manager", "maintain"), "SMM S01 ¶1.06",
-     "Project Manager's Site Office — maintain", ("1.06",)),
-    ("smm1.07", ("project manager", "hand back"), "SMM S01 ¶1.07",
-     "Project Manager's Site Office — hand back", ("1.07",)),
+    # (rule key, title phrases — matched over heading chain + line, SMM clause, what the BQ
+    #  calls it, the transcribed clauses its heads come from)
+    #
+    # The Site Office trio: the BQ's action words, not the clause titles' (see note 3 above).
+    ("smm1.05", ("site office", "taking over"), "SMM S01 ¶1.05",
+     "Project Manager's Site Office — taking over", ("1.05",)),
+    ("smm1.06", ("site office", "servicing"), "SMM S01 ¶1.06",
+     "Project Manager's Site Office — servicing", ("1.06",)),
+    ("smm1.07", ("site office", "dismantling"), "SMM S01 ¶1.07",
+     "Project Manager's Site Office — dismantling", ("1.07",)),
     ("smm1.11", ("temporary accommodation",), "SMM S01 ¶1.11",
      "Temporary accommodation for the Contractor", ("1.11",)),
+    # BQ 1.5/1.6 — provision and maintenance of the maintain-traffic-flow measures. The third of
+    # the trio, BQ 1.7 "Removal of measures", has NO transcribed clause: see the explicit
+    # named-gap rule below the mapping.
     ("smm1.14", ("provision of measures",), "SMM S01 ¶1.14",
      "Maintenance of traffic flow — provision of measures", ("1.14",)),
     ("smm1.15", ("maintenance of measures",), "SMM S01 ¶1.15",
      "Maintenance of traffic flow — maintenance of measures", ("1.15",)),
-    ("smm1.18", ("insurance",), "SMM S01 ¶1.18", "Insurance", ("1.18",)),
-    # Provision (¶1.22) and running (¶1.23) of the vehicles, billed as one item.
-    ("smm1.22", ("vehicle", "project manager"), "SMM S01 ¶1.22–1.23",
-     "Vehicles for the Project Manager", ("1.22", "1.23")),
-    # ONE clause, TWO bill items: ¶1.28's sub-heads name both systems, and the BQ bills them apart.
+    # BQ 1.10/1.11 — the bill titles these "Land transport for the use of the Project Manager",
+    # not "vehicles". Bundled: both items share the transport heading and every phrase that
+    # could split provision (¶1.22) from running (¶1.23) is vehicle-specification wording this
+    # mapping has not verified. A bundle over-lists; a wrong split silently misses.
+    ("smm1.22", ("transport", "project manager"), "SMM S01 ¶1.22–1.23",
+     "Land transport for the Project Manager — provision, operation and maintenance",
+     ("1.22", "1.23")),
+    # ONE clause, TWO bill items (BQ 1.12/1.13): ¶1.28's sub-heads name both systems.
     ("smm1.28", ("computer facilities",), "SMM S01 ¶1.28",
      "Contract Computer Facilities", ("1.28",)),
     ("smm1.28.edms", ("electronic document management",), "SMM S01 ¶1.28",
      "Electronic Document Management System", ("1.28",)),
+    # BQ 1.14/1.15/1.16 — progress / additional / record photographs, all under the Photographs
+    # heading and all governed by ¶1.32. "8R size print" means nothing without its chain.
     ("smm1.32", ("photograph",), "SMM S01 ¶1.32",
      "Photographs — progress set, additional, record", ("1.32",)),
     ("smm1.37", ("hoarding",), "SMM S01 ¶1.37", "Hoardings", ("1.37",)),
-    # Provision / maintenance / removal of the mitigation measures, billed as one item.
-    ("smm1.40", ("air", "mitigation"), "SMM S01 ¶1.40–1.42",
-     "Environmental mitigation measures — air", ("1.40", "1.41", "1.42")),
-    # No clauses: the mapping contradicts the Method of Measurement. See the note above.
-    ("smm1.45", ("noise", "mitigation"), "SMM S01 ¶1.45–1.47",
-     "Environmental mitigation measures — noise", ()),
+    # The two environmental families (see notes 1 and 2): eighteen bare-titled items told apart
+    # only by their chains. One rule per ACTION; each covers air, noise and water alike because
+    # the clause does.
+    ("smm1.40", ("mitigation", "provision"), "SMM S01 ¶1.40",
+     "Environmental mitigation measures — provision (air / noise / water alike)", ("1.40",)),
+    ("smm1.41", ("mitigation", "maintenance"), "SMM S01 ¶1.41",
+     "Environmental mitigation measures — maintenance (air / noise / water alike)", ("1.41",)),
+    ("smm1.42", ("mitigation", "removal"), "SMM S01 ¶1.42",
+     "Environmental mitigation measures — removal (air / noise / water alike)", ("1.42",)),
+    ("smm1.45", ("monitoring", "provision"), "SMM S01 ¶1.45",
+     "Environmental monitoring measures — provision (air / noise / water alike)", ("1.45",)),
+    ("smm1.46", ("monitoring", "maintenance"), "SMM S01 ¶1.46",
+     "Environmental monitoring measures — maintenance (air / noise / water alike)", ("1.46",)),
+    ("smm1.47", ("monitoring", "removal"), "SMM S01 ¶1.47",
+     "Environmental monitoring measures — removal (air / noise / water alike)", ("1.47",)),
     ("smm1.66", ("trip ticket", "complete"), "SMM S01 ¶1.66",
      "Site management plan for trip ticket system — complete", ("1.66",)),
     ("smm1.67", ("trip ticket", "implement"), "SMM S01 ¶1.67",
      "Site management plan for trip ticket system — implement", ("1.67",)),
-    ("smm1.76", ("dust covering",), "SMM S01 ¶1.76",
-     "Air pollution abatement — dust covering", ("1.76",)),
-    ("smm1.77", ("smoke screen",), "SMM S01 ¶1.77",
-     "Air pollution abatement — smoke screens", ("1.77",)),
+    # The bill says "Covering for dusty materials", not "dust covering".
+    ("smm1.76", ("dusty materials",), "SMM S01 ¶1.76",
+     "Air pollution abatement — covering for dusty materials", ("1.76",)),
+    # The bill says "smoky activities"; "smoke screen" appears nowhere on the page.
+    ("smm1.77", ("smoky",), "SMM S01 ¶1.77",
+     "Air pollution abatement — screens or enclosures for smoky activities", ("1.77",)),
     ("smm1.85", ("acoustic screen",), "SMM S01 ¶1.85",
      "Noise pollution abatement — acoustic screens", ("1.85",)),
+    ("smm1.86", ("other noise abatement",), "SMM S01 ¶1.86",
+     "Adoption of other noise abatement practices", ("1.86",)),
+    ("smm1.91", ("wastewater collection",), "SMM S01 ¶1.91",
+     "Wastewater collection system", ("1.91",)),
+    ("smm1.96", ("sorting of c&d",), "SMM S01 ¶1.96",
+     "On-site sorting of C&D materials", ("1.96",)),
     ("smm1.100", ("fuel sample",), "SMM S01 ¶1.100", "Fuel sample", ("1.100",)),
     ("smm1.104", ("survey of the site",), "SMM S01 ¶1.104", "Survey of the Site", ("1.104",)),
-    # Erection (¶1.109), servicing (¶1.110) and handing back (¶1.111), billed as one item.
-    ("smm1.109", ("core and sample store",), "SMM S01 ¶1.109–1.111",
-     "Core and sample store", ("1.109", "1.110", "1.111")),
+    # BQ 1.18/1.19/1.20 — the bill splits the core store into erection / servicing / handing
+    # over, so the rules do too: a servicing obligation must not be a tick on the erection item.
+    ("smm1.109", ("core and sample store", "erection"), "SMM S01 ¶1.109",
+     "Core and sample store — erection", ("1.109",)),
+    ("smm1.110", ("core and sample store", "servicing"), "SMM S01 ¶1.110",
+     "Core and sample store — servicing", ("1.110",)),
+    ("smm1.111", ("core and sample store", "handing"), "SMM S01 ¶1.111",
+     "Core and sample store — handing over", ("1.111",)),
+    ("smm1.112", ("environmental management",), "SMM S01 ¶1.112",
+     "Provide environmental management measures", ("1.112",)),
+    # BQ 1.21/1.22 — bundled for the same reason as the land transport above.
     ("smm1.116", ("telephone line",), "SMM S01 ¶1.116–1.117",
      "24-hour telephone line", ("1.116", "1.117")),
-    ("smm1.140", ("smart site safety", "plan"), "SMM S01 ¶1.140",
-     "Smart Site Safety System — plan", ("1.140",)),
+    ("smm1.133", ("digital works supervision",), "SMM S01 ¶1.133",
+     "Digital Works Supervision System (DWSS)", ("1.133",)),
+    # The SSSS family: "complete" and "review" separate BQ 1.52 from 1.53, whose line contains
+    # the word "plan" too — a rule matching on "plan" put ¶1.140's heads on both.
+    ("smm1.140", ("smart site safety", "complete"), "SMM S01 ¶1.140",
+     "Smart Site Safety System — complete Implementation Plan", ("1.140",)),
     ("smm1.141", ("smart site safety", "review"), "SMM S01 ¶1.141",
-     "Smart Site Safety System — review", ("1.141",)),
-    ("smm1.146", ("smart site safety", "network"), "SMM S01 ¶1.146",
-     "Smart Site Safety System — network", ("1.146",)),
+     "Smart Site Safety System — review, update and implement", ("1.141",)),
+    # BQ 1.54's own line is "Provide site communication network"; its section banner is SITE
+    # COMMUNICATION NETWORK, not SSSS, so the rule must not depend on the SSSS phrase.
+    ("smm1.146", ("site communication network",), "SMM S01 ¶1.146",
+     "Site communication network", ("1.146",)),
     ("smm1.151", ("smart site safety", "component"), "SMM S01 ¶1.151",
      "Smart Site Safety System — components", ("1.151",)),
+    ("smm1.156", ("virtual reality",), "SMM S01 ¶1.156",
+     "Safety training with Virtual Reality technology", ("1.156",)),
 )
-
-_MAPPING_UNVERIFIED = (
-    "This rule's clause range is environmental MONITORING (¶1.45–1.47); the item it matches is "
-    "titled mitigation, which is ¶1.40–1.42. The sub-heads of both ARE transcribed — see "
-    "`client_boq.boq.smm_s01` — and neither set is attached here, because settling which one "
-    "governs this item needs the BQ page and not the Method of Measurement. A guess would read "
-    "exactly like the twenty-five mappings that were verified.")
 
 
 def _bill_1_partial(clauses: tuple[str, ...]) -> str:
@@ -794,45 +843,103 @@ def _bill_1_partial(clauses: tuple[str, ...]) -> str:
             f"sub-heads are in the base SMM 1992 and are binding and unlisted.")
 
 
+def _s01_letters(clause: str, *letters: str) -> list[CoverageHead]:
+    """A clause's heads filtered to named letters — for a clause the BQ bills as SEPARATE items
+    per sub-head. Raises on a letter that is not there: a typo that silently produced a shorter
+    checklist is the failure this whole package is built against."""
+    picked = {h.key.rsplit(".", 1)[-1]: h for h in smm_s01.CLAUSES[clause]}
+    missing = [letter for letter in letters if letter not in picked]
+    if missing:
+        raise KeyError(f"¶{clause} has no sub-head(s) {missing} — check the letters")
+    return [picked[letter] for letter in letters]
+
+
+_TRAFFIC_REMOVAL_GAP = (
+    "BQ 1.7 is the third of the maintain-traffic-flow trio — provision is ¶1.14, maintenance is "
+    "¶1.15, and the pack's SMM S01 amendments transcribe NO removal clause. Whether the base SMM "
+    "defines one was not established, so the gap is named rather than papered over with either "
+    "neighbour's heads.")
+
+_SITE_CLEARANCE_GAP = (
+    "This item sits under Bill 1's own printed `SECTION 3 - SITE CLEARANCE` banner, so it is "
+    "governed by SMM Section 3 — whose item-coverage blocks are not in the transcription at all. "
+    "Reading the pack's SMM S03 document is the fix; nothing here invents its words.")
+
 _PRELIMINARIES_1 = [
     TitleRule(key=key, bill_no="1", match=match, smm_clause=clause, title=title,
               heads=smm_s01.heads_for_clauses(*clauses),
-              partial=_bill_1_partial(clauses) if clauses else _MAPPING_UNVERIFIED,
-              no_heads_reason="" if clauses else _MAPPING_UNVERIFIED)
+              partial=_bill_1_partial(clauses))
     for key, match, clause, title, clauses in _BILL_1_MAPPING
+] + [
+    # BQ 1.8/1.9 — the bill splits ¶1.18 by INSURANCE: third party gets (a), professional
+    # indemnity gets (b), and the fees-and-premiums head (c) belongs to both. One rule would put
+    # a professional-indemnity obligation on the third-party item's checklist.
+    TitleRule(key="smm1.18.third_party", bill_no="1", match=("third party insurance",),
+              smm_clause="SMM S01 ¶1.18(a)", title="Third party insurance",
+              heads=_s01_letters("1.18", "a", "c"),
+              partial=_bill_1_partial(("1.18",))),
+    TitleRule(key="smm1.18.indemnity", bill_no="1", match=("professional indemnity",),
+              smm_clause="SMM S01 ¶1.18(b)", title="Professional indemnity insurance",
+              heads=_s01_letters("1.18", "b", "c"),
+              partial=_bill_1_partial(("1.18",))),
+    # BQ 1.63 — a Bill 1 item governed by SMM 24 (see note 4). The heads are the SAME literal
+    # the Bill 7 rule carries, so a correction lands on both.
+    TitleRule(key="smm24.39.bill1", bill_no="1", match=("vegetation survey",),
+              smm_clause="SMM S24 ¶24.39", title="Vegetation Survey in Conservation Area",
+              heads=list(_VEGETATION_SURVEY_24_39)),
+    # BQ 1.62 — governed by SMM 3, which nobody has transcribed. The clause family is known;
+    # the words are not; heads are not invented.
+    TitleRule(key="smm3.clearance", bill_no="1", match=("site clearance",),
+              smm_clause="SMM S03 (site clearance)", title="General site clearance of the Site",
+              heads=[], partial=_SITE_CLEARANCE_GAP, no_heads_reason=_SITE_CLEARANCE_GAP),
+    # BQ 1.7 — the removal leg of the traffic-flow trio. No transcribed clause to attach.
+    TitleRule(key="smm1.traffic.removal", bill_no="1", match=("removal of measures",),
+              smm_clause="SMM S01 (removal of traffic measures — no clause in the pack's "
+                         "amendments)",
+              title="Maintenance of traffic flow — removal of measures",
+              heads=[], partial=_TRAFFIC_REMOVAL_GAP, no_heads_reason=_TRAFFIC_REMOVAL_GAP),
 ]
 
-# WHAT IS STILL OUTSTANDING IN SMM S01, assembled from the transcription's own records rather than
-# maintained by hand beside them — a second copy of a list is a list that drifts.
-#
-# This used to name all 27 mapped clauses, because none of their words had been read. They have been
-# now, so the list says the smaller and sharper thing: the base sub-heads the lettering proves are
-# missing, the one mapping that contradicts itself, the second ¶1.06(k) the pack prints and nobody
-# transcribed, the two clauses that extracted as fragments, and the three sub-heads that stop
-# mid-sentence. Shorter is not the same as finished, and none of these are things a reader should
-# have to infer from a tidy-looking checklist.
-# ONE ROW PER CLAUSE, NOT PER RULE. ¶1.28 governs two BQ items — the computer facilities and the
-# EDMS are billed apart and its sub-heads name both — so a row per rule listed the same missing base
-# sub-heads twice. This is a work-list, and a work-list that repeats an entry is one somebody does
-# twice or crosses off once. The rules it affects ride ON the row instead, which also makes the
-# shared clause visible rather than merely duplicated.
+# Which rules draw on which SMM S01 clause — DERIVED from the rules' own heads rather than
+# maintained beside them, so it cannot drift. Used for the awaiting-text list below and by the
+# test that proves every transcribed clause is actually reachable from Bill 1.
 _BILL_1_RULES_FOR: dict[str, list[str]] = {}
-for _key, _match, _clause, _title, _clauses in _BILL_1_MAPPING:
-    for _c in _clauses:
-        _BILL_1_RULES_FOR.setdefault(_c, []).append(_key)
+for _rule in _PRELIMINARIES_1:
+    for _head in _rule.heads:
+        _parts = _head.key.split(".")
+        if _parts[:2] != ["smm", "s01"]:
+            continue  # the vegetation-survey rule's heads are SMM 24's
+        _clause = f"{_parts[2]}.{_parts[3]}"
+        _keys = _BILL_1_RULES_FOR.setdefault(_clause, [])
+        if _rule.key not in _keys:
+            _keys.append(_rule.key)
 
+# WHAT IS STILL OUTSTANDING around Bill 1, assembled from the transcription's own records rather
+# than maintained by hand beside them — a second copy of a list is a list that drifts.
+#
+# This has shrunk twice, honestly each time: it named all 27 mapped clauses when none of their
+# words had been read, then the base-SMM letter gaps once the pack's amendments were transcribed,
+# and now — with the real bill read item by item — the mitigation/monitoring contradiction is
+# RESOLVED and replaced by the two gaps the bill itself exposed: the SMM 3 site-clearance block
+# and the removal-of-traffic-measures clause, neither of which is in the transcription. Shorter
+# is not the same as finished, and none of these are things a reader should have to infer from a
+# tidy-looking checklist.
 BILL_1_AWAITING_TEXT: list[dict] = [
+    # ONE ROW PER CLAUSE, NOT PER RULE. ¶1.28 governs two BQ items — a row per rule listed the
+    # same missing base sub-heads twice, and a work-list that repeats an entry is one somebody
+    # does twice or crosses off once.
     *({"rules": _BILL_1_RULES_FOR[clause], "smm_clause": f"SMM S01 ¶{clause}",
-       "titles": [t for k, _m, _s, t, cs in _BILL_1_MAPPING if clause in cs],
+       "titles": [rule.title for rule in _PRELIMINARIES_1
+                  if rule.key in _BILL_1_RULES_FOR[clause]],
        "needs": f"sub-head{'s' if len(gaps) > 1 else ''} ({'), ('.join(gaps)}) of ¶{clause}, "
                 f"which are in the base SMM 1992 — not in this pack, and not readable from it"}
       for clause, gaps in smm_s01.BASE_SMM_GAPS.items() if clause in _BILL_1_RULES_FOR),
+    # The rules that match a real bill item and can hand it no heads — each says why itself.
     *({"rules": [rule.key], "smm_clause": rule.smm_clause, "titles": [rule.title],
-       "needs": "the BQ page for this item, to settle whether it is mitigation (¶1.40–1.42) or "
-                "monitoring (¶1.45–1.47). Both are transcribed; neither is attached"}
+       "needs": rule.no_heads_reason}
       for rule in _PRELIMINARIES_1 if not rule.heads),
     {"rules": _BILL_1_RULES_FOR["1.06"], "smm_clause": "SMM S01 ¶1.06(k)",
-     "titles": ["Project Manager's Site Office — maintain"],
+     "titles": ["Project Manager's Site Office — servicing"],
      "needs": smm_s01.SECOND_K["missing"]},
     *({"rules": [], "smm_clause": f"SMM S01 ¶{row['clause']}", "titles": [],
        "needs": f"the substituted text of this amendment: {row['reading']}"}

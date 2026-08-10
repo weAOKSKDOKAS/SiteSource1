@@ -97,6 +97,15 @@ class TitleRule(BaseModel):
     to BQ references this transcription does not have. ``match`` requires EVERY phrase, and the
     phrases are chosen to be distinctive — a loose matcher would attach the core-store heads to the
     insurance item, which is exactly the failure a per-item list exists to prevent.
+
+    IT MATCHES THE FULL DESCRIPTION — the ancestor heading chain and the item's own line together —
+    because on the real bill the line alone is not an identity. BQ items 1.23–1.40 print as bare
+    "Provision" / "Maintenance" / "Removal": eighteen items, six distinct titles, and the only
+    thing separating environmental *mitigation* from environmental *monitoring* is the heading two
+    levels up. This is the codebase's own rule — "an item's full description is its ancestor
+    heading chain, not the line beside its number" (General Preambles ¶2 makes the sub-heading part
+    of the item) — and matching on ``item.description`` alone silently missed every item whose
+    meaning lives in its chain: "8R size print" under *Photographs* carried no photograph heads.
     """
 
     key: str                        # stable id for the rule itself, so a miss can be reported
@@ -117,5 +126,5 @@ class TitleRule(BaseModel):
     def matches(self, item: BillItem) -> bool:
         if self.bill_no and (item.bill_no or "").strip() != self.bill_no:
             return False
-        text = f"{item.description}".lower()
+        text = item.full_description().lower()
         return bool(self.match) and all(phrase.lower() in text for phrase in self.match)

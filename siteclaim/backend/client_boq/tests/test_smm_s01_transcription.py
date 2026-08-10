@@ -244,15 +244,15 @@ class TestWhatTheModuleWillNotDo:
         assert len(heads) == 9 + 7 + 4
         assert heads[0].key == "smm.s01.1.109.a" and heads[-1].key == "smm.s01.1.111.d"
 
-    def test_the_clauses_no_bill_item_claims_are_named_not_attached(self):
-        """Six clauses this pack amends have no BQ item in the Bill 1 mapping. Hanging them on a
-        plausible-looking item would be worse than leaving them unasked — the mapping was read off
-        the real BQ pages and this list was not."""
-        assert set(smm_s01.UNMAPPED) == {"1.86", "1.91", "1.96", "1.112", "1.133", "1.156"}
-        for clause in smm_s01.UNMAPPED:
-            assert smm_s01.CLAUSES[clause], "transcribed and available, just not attached"
-
-    def test_the_monitoring_clauses_declare_that_their_mapping_is_unsettled(self):
-        assert set(smm_s01.MAPPING_UNVERIFIED) == {"1.45", "1.46", "1.47"}
-        for reason in smm_s01.MAPPING_UNVERIFIED.values():
-            assert "MONITORING" in reason
+    def test_the_module_still_does_not_map_clauses_to_items(self):
+        """RE-ANCHORED IN THE OPEN. `UNMAPPED` and `MAPPING_UNVERIFIED` are gone because the full
+        Bill 1 read (BQ 3–7, 63 items) resolved both: the six "unmapped" clauses were absent from
+        the MAPPING, not from the bill, and the mitigation/monitoring question fell the way the
+        bill said. The invariant that replaced them lives with the mapping —
+        `test_every_transcribed_clause_is_claimed_by_the_bill_one_mapping` — and this module's own
+        contract is unchanged: it transcribes, and it does not decide which BQ item a clause
+        governs."""
+        assert not hasattr(smm_s01, "UNMAPPED")
+        assert not hasattr(smm_s01, "MAPPING_UNVERIFIED")
+        from client_boq.boq import coverage
+        assert set(coverage._BILL_1_RULES_FOR) == set(smm_s01.CLAUSES)

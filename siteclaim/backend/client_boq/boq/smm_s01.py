@@ -57,8 +57,9 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO
 -----------------------------------------
 It does not map clauses to BQ items. A BQ item number is not an SMM clause number (BQ 1.12 is
 *Contract Computer Facilities*; SMM ¶1.12 is something else), so the mapping is by TITLE and lives in
-:mod:`client_boq.boq.coverage`, read off the real BQ pages. Six clauses here have no BQ item in that
-mapping and are listed in :data:`UNMAPPED` rather than being attached to a plausible-looking one.
+:mod:`client_boq.boq.coverage`, read off the real BQ pages — where, since the full Bill 1 read
+(BQ 3–7, 63 items), every one of the 40 transcribed clauses is claimed by at least one rule. The
+test that proves that lives with the mapping, not here.
 """
 
 from __future__ import annotations
@@ -1166,21 +1167,6 @@ BASE_SMM_GAPS: dict[str, list[str]] = {
     clause: gaps for clause in CLAUSES
     if (gaps := _interior_gaps(_printed_letters(clause)))
 }
-
-#: The clauses this pack amends whose text is here and which no BQ item in the Bill 1 mapping
-#: claims. Named rather than attached to a plausible-looking item: a coverage head hung on the wrong
-#: rate is worse than one nobody was asked about, and the Bill 1 mapping was read off the real BQ
-#: pages while this list was not.
-UNMAPPED: tuple[str, ...] = ("1.86", "1.91", "1.96", "1.112", "1.133", "1.156")
-
-#: Clauses whose transcription is complete but whose BQ mapping contradicts itself, so the text is
-#: deliberately NOT attached. See `coverage._BILL_1_MAPPING`'s `smm1.45`.
-MAPPING_UNVERIFIED: dict[str, str] = {
-    "1.45": "environmental MONITORING measures",
-    "1.46": "environmental MONITORING measures",
-    "1.47": "environmental MONITORING measures",
-}
-
 
 def heads_for_clauses(*clauses: str) -> list[CoverageHead]:
     """The heads of one or more clauses, in the order the pack prints them.

@@ -129,19 +129,18 @@ class TestWhatARateMustCover:
 
     def test_an_item_with_no_list_says_so_instead_of_showing_an_empty_checklist(
             self, client, priced):
-        # RE-ANCHORED IN THE OPEN, TWICE, AND THE SUBJECT HAS NEVER MOVED: an empty list must read
-        # as "nobody has said what this rate must carry", never as "this rate carries no
-        # obligations". Those look identical on screen and mean opposite things to somebody about
-        # to price the item, and `settled is False` is the invariant that separates them.
+        # RE-ANCHORED IN THE OPEN — three times now — AND THE SUBJECT HAS NEVER MOVED: an empty
+        # list must read as "nobody has said what this rate must carry", never as "this rate
+        # carries no obligations". Those look identical on screen and mean opposite things to
+        # somebody about to price the item, and `settled is False` is the invariant separating
+        # them.
         #
-        # First re-anchor: the sentence became SPECIFIC, because there are three reasons a list can
-        # be empty and saying the wrong one sends somebody to do the wrong work.
-        #
-        # Second re-anchor (SMM S01 transcribed): this used to take the first non-Bill-2 item and
-        # assert "not been transcribed". The fixture's first Bill 1 item is "Provision of measures",
-        # which now carries ¶1.14's sixteen sub-heads — so that item stopped being an example of an
-        # empty list at all. It is re-pointed at one that still is, and asserts the sentence that is
-        # actually true of it rather than the one that used to be true of a different item.
+        # First: the sentence became SPECIFIC (three reasons a list can be empty, three fixes).
+        # Second: SMM S01 was transcribed, so the first Bill 1 item stopped being an example.
+        # Third: the full bill read gave 1.16/1.2/1.20 their rules through the heading chain and
+        # 1.62 a matched-but-empty SMM 3 rule — so the first headless item now demonstrates the
+        # "clause known, words outstanding" sentence rather than "nothing matched". The invariant
+        # asserted is identical; the sentence asserted is the one that is actually true of it.
         listed = {r for r in _refs(client, "1")
                   if client.get(f"{BASE}/price/{SET}/coverage/{r}").json()["entries"]}
         assert listed, "Bill 1's transcribed items should carry their heads"
@@ -150,9 +149,9 @@ class TestWhatARateMustCover:
         body = client.get(f"{BASE}/price/{SET}/coverage/{other}").json()
         assert body["entries"] == []
         assert body["waiting_on"], "an empty list never travels without its reason"
-        assert "matched this item by title" in body["waiting_on"], (
-            "Bill 1 HAS transcribed clauses now — none of them fits this item, which is a mapping "
-            "to check and not a Method of Measurement to go and read")
+        assert "governs this item" in body["waiting_on"], (
+            "the clause family is known (SMM 3 site clearance); the words are outstanding")
+        assert "SMM S03" in body["waiting_on"]
         assert body["settled"] is False, "nothing to check is not the same as checked"
 
 

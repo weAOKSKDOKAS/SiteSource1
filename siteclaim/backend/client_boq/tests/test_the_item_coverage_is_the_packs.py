@@ -392,17 +392,18 @@ class TestWhatCouldNotBeMapped:
 class TestBillOneIsMappedByTitleAndItsTextIsAGap:
     """SMM 1 carries 42 item-coverage blocks, one per preliminaries item, and the BQ's numbers are
     NOT the clause numbers — BQ 1.12 is Contract Computer Facilities while SMM ¶1.12 is something
-    else. So the mapping is by title.
+    else. So the mapping is by title, over the FULL description: heading chain plus line, because
+    on the real bill eighteen items print as bare "Provision" / "Maintenance" / "Removal" and only
+    their chains say which family they belong to.
 
-    RE-ANCHORED IN THE OPEN. This class was written when the mapping was a MAPPING ONLY — clause
-    numbers captured, sub-head text not — and four of its tests used BQ 1.12 as the standing example
-    of "the clause is known and its words are outstanding". SMM S01 has since been transcribed
-    (`client_boq.boq.smm_s01`, 40 clauses, 264 heads) and BQ 1.12 now carries ¶1.28's two sub-heads,
-    so that example no longer demonstrates anything.
-
-    What is asserted has NOT been weakened. Every mechanism those tests defended is still tested
-    below, on an example that is still in that state: `smm1.45`, the one mapping the transcription
-    could not verify. The two that changed meaning rather than example say so on the line.
+    RE-ANCHORED IN THE OPEN, TWICE. First when SMM S01 was transcribed and BQ 1.12 — the standing
+    example of "clause known, words outstanding" — gained its words. Then again when the real
+    Bill 1 was read item by item (BQ 3–7, 63 items), which RESOLVED the `smm1.45` question those
+    re-anchors leaned on: the BQ carries BOTH families, mitigation → ¶1.40–1.42 and monitoring →
+    ¶1.45–1.47, so the rule that matched "noise mitigation" onto ¶1.45–1.47 was simply pointing
+    at the wrong family. Nothing asserted was weakened either time: every mechanism is still
+    tested below, on the two examples that are STILL in the named-gap state — BQ 1.62 (governed
+    by SMM 3, which nobody transcribed) and BQ 1.7 (a removal clause the amendments never carry).
     """
 
     def test_the_mapping_reaches_the_clause_the_title_names_not_the_matching_number(self):
@@ -414,54 +415,55 @@ class TestBillOneIsMappedByTitleAndItsTextIsAGap:
         assert "¶1.12" not in rules[0].smm_clause, "the BQ number is not the clause number"
 
     def test_the_transcription_reached_the_item_the_mapping_promised(self):
-        """The other half of the test above, and the reason the four below moved: the clause the
-        title resolves to now brings its words with it."""
         heads = heads_for(_item("1.12", bill_no="1", description="Contract Computer Facilities"))
         assert [h.key for h in heads] == ["smm.s01.1.28.s", "smm.s01.1.28.t"]
         assert heads[0].label.startswith("Compliance with the requirements")
 
-    def test_no_label_is_invented_for_a_clause_whose_mapping_is_unsettled(self):
-        """RE-POINTED, not weakened. `smm1.45` names ¶1.45–1.47 and matches an item titled
-        mitigation, but those clauses are environmental MONITORING. Both sets of sub-heads are
-        transcribed and NEITHER is attached, because choosing between them needs the BQ page. A
-        plausible guess would arrive looking exactly like the twenty-five that were verified."""
+    def test_no_label_is_invented_for_a_clause_nobody_transcribed(self):
+        """RE-POINTED onto the two REAL named gaps the full bill read left standing. BQ 1.62 is
+        governed by SMM 3 and BQ 1.7 by a removal clause the pack's amendments never transcribe —
+        both rules match their items and hand them no heads, because a head with an invented label
+        is worse than a named gap."""
         from client_boq.boq.coverage import title_rules_for
 
-        rules = title_rules_for(_item("1.20", bill_no="1",
-                                      description="Environmental mitigation measures for noise"))
-        assert [rule.key for rule in rules] == ["smm1.45"]
-        assert rules[0].heads == []
+        clearance = title_rules_for(_item("1.62", bill_no="1",
+                                          description="General site clearance of the Site"))
+        assert [rule.key for rule in clearance] == ["smm3.clearance"]
+        assert clearance[0].heads == []
+
+        removal = title_rules_for(_item("1.7", bill_no="1", description="Removal of measures"))
+        assert [rule.key for rule in removal] == ["smm1.traffic.removal"]
+        assert removal[0].heads == []
 
     def test_an_item_whose_clause_is_known_but_unattached_never_reads_as_covered(self):
-        """THE BUG THIS CLASS CAUGHT, still guarded on the example that still has no heads. A
+        """THE BUG THIS CLASS CAUGHT, still guarded on an example that still has no heads. A
         matched-but-empty rule made `has_list_for` true, which cleared `no_list_for_section`, which
         let `settled()` return True on an item with nothing to check. "All covered" for coverage
-        nobody has read is the exact failure that field exists to prevent — and it came back through
-        the door marked "we know which clause it is"."""
-        coverage = coverage_for(_item("1.20", bill_no="1",
-                                      description="Environmental mitigation measures for noise"))
+        nobody has read is the exact failure that field exists to prevent."""
+        coverage = coverage_for(_item("1.62", bill_no="1",
+                                      description="General site clearance of the Site"))
         assert coverage.total() == 0
         assert not coverage.settled()
         assert coverage.no_list_for_section == "1"
 
-    def test_it_names_the_clause_and_says_which_kind_of_outstanding_it_is(self):
-        """CHANGED IN MEANING, deliberately. There is more than one way a named clause can be
-        unusable: its words may never have been read, or they may be sitting in the file while the
-        MAPPING is in doubt. Those need different people to do different work, so the rule that
-        knows its own reason gives it — the same lesson as `_no_list_reason`'s two branches, one
-        level further in."""
-        coverage = coverage_for(_item("1.20", bill_no="1",
-                                      description="Environmental mitigation measures for noise"))
-        assert "SMM S01 ¶1.45–1.47" in coverage.no_list_reason
-        assert "governs this item" in coverage.no_list_reason
-        assert "needs the BQ page" in coverage.no_list_reason
-        assert "MONITORING" in coverage.no_list_reason
+    def test_it_names_the_clause_family_and_says_what_work_is_outstanding(self):
+        """A named clause can be unusable for more than one reason, and the rule that knows its
+        own reason gives it — the same lesson as `_no_list_reason`'s two branches, one level in."""
+        clearance = coverage_for(_item("1.62", bill_no="1",
+                                       description="General site clearance of the Site"))
+        assert "SMM S03 (site clearance)" in clearance.no_list_reason
+        assert "governs this item" in clearance.no_list_reason
+        assert "not in the transcription" in clearance.no_list_reason
+
+        removal = coverage_for(_item("1.7", bill_no="1", description="Removal of measures"))
+        assert "provision is ¶1.14, maintenance is ¶1.15" in removal.no_list_reason
+        assert "NO removal clause" in removal.no_list_reason
+        assert "named rather than papered over" in removal.no_list_reason
 
     def test_the_general_never_transcribed_reading_is_still_what_a_silent_rule_gets(self):
-        """No SHIPPED rule is in that state any more, so this constructs one. The branch stays
-        because the next contract's mapping will land before its text again, exactly as this one
-        did — deleting a safety net because today's data happens not to trip it is how it is not
-        there the day it is needed."""
+        """A rule with no heads and no reason of its own — the state every next contract's
+        mapping will pass through again — still gets the general sentence. Constructed, because
+        no shipped rule is silent about itself any more."""
         from client_boq.boq import coverage as module
         from client_boq.boq.heads import TitleRule
 
@@ -480,15 +482,16 @@ class TestBillOneIsMappedByTitleAndItsTextIsAGap:
         assert "worse than a named gap" in reason
 
     def test_a_bill_one_item_nothing_matched_says_the_other_thing(self):
-        coverage = coverage_for(_item("1.62", bill_no="1",
-                                      description="General site clearance of the Site"))
+        """RE-POINTED: 1.62 stopped being a no-match example when the bill read gave it a rule.
+        An item genuinely outside every rule still gets the mapping-to-check sentence."""
+        coverage = coverage_for(_item("1.64", bill_no="1",
+                                      description="Progress meetings with the Client"))
         assert "none of them matched this item by title" in coverage.no_list_reason
 
     def test_the_outstanding_text_is_listed_by_name(self):
-        """RE-ANCHORED IN THE OPEN. This asserted 27 — every mapped clause needing every word.
-        Twenty-six of them have their words now, so the list says the smaller and sharper thing.
-        Smaller is not finished, which is why it is still asserted item by item rather than
-        allowed to go quiet."""
+        """RE-ANCHORED IN THE OPEN, twice — 27 clauses awaiting all their words, then the letter
+        gaps plus one contradicted mapping, now the letter gaps plus the two gaps the real bill
+        exposed. Smaller is not finished, which is why it is still asserted item by item."""
         from client_boq.boq.coverage import BILL_1_AWAITING_TEXT
 
         needs = {(row["smm_clause"], row["needs"]) for row in BILL_1_AWAITING_TEXT}
@@ -510,18 +513,29 @@ class TestBillOneIsMappedByTitleAndItsTextIsAGap:
         # The two clauses that extracted as fragments, and the three sub-heads that break.
         assert {"SMM S01 ¶1.17", "SMM S01 ¶1.19"} <= clauses
         assert {"SMM S01 ¶1.96(d)", "SMM S01 ¶1.112(s)", "SMM S01 ¶1.156(c)"} <= clauses
-        # And the one mapping the Method of Measurement contradicts.
-        unverified = next(r for r in BILL_1_AWAITING_TEXT if r["rules"] == ["smm1.45"])
-        assert "the BQ page for this item" in unverified["needs"]
-        assert "neither is attached" in unverified["needs"]
+        # The two gaps the real bill exposed — in place of the resolved smm1.45 row.
+        assert not any(row["rules"] == ["smm1.45"] for row in BILL_1_AWAITING_TEXT), (
+            "the mitigation/monitoring question is RESOLVED — its row must not linger")
+        clearance = next(r for r in BILL_1_AWAITING_TEXT if r["rules"] == ["smm3.clearance"])
+        assert "SMM S03" in clearance["needs"]
+        removal = next(r for r in BILL_1_AWAITING_TEXT
+                       if r["rules"] == ["smm1.traffic.removal"])
+        assert "NO removal clause" in removal["needs"]
 
     def test_every_mapped_clause_that_is_not_awaiting_its_text_actually_has_it(self):
-        """The claim the shortened list rests on. A clause dropping off `BILL_1_AWAITING_TEXT`
-        without gaining heads would be the list going quiet rather than the work being done."""
         from client_boq.boq.coverage import _PRELIMINARIES_1
 
         for rule in _PRELIMINARIES_1:
             assert rule.heads or rule.no_heads_reason, rule.key
+
+    def test_every_transcribed_clause_is_claimed_by_the_bill_one_mapping(self):
+        """The closing of the loop the full bill read allows: all 40 transcribed clauses now
+        reach at least one rule, so nothing sits read-but-unaskable. Derived from the rules' own
+        heads, so a rule quietly losing its heads fails here."""
+        from client_boq.boq import smm_s01
+        from client_boq.boq.coverage import _BILL_1_RULES_FOR
+
+        assert set(_BILL_1_RULES_FOR) == set(smm_s01.CLAUSES)
 
     def test_the_two_traffic_flow_items_are_told_apart(self):
         """BQ 1.5 and 1.6 are provision and maintenance of the SAME measures, one clause apart."""
@@ -533,19 +547,147 @@ class TestBillOneIsMappedByTitleAndItsTextIsAGap:
         assert [r.smm_clause for r in title_rules_for(maintenance)] == ["SMM S01 ¶1.15"]
 
     def test_the_four_smart_site_safety_items_are_told_apart(self):
+        """RE-ANCHORED to the bill's real titles. The old probe titles ("Smart Site Safety
+        System — plan") were invented; the real BQ 1.53 line contains the word "plan" TOO, so a
+        rule anchored on "plan" put ¶1.140's heads on both items. "complete" and "review" are the
+        words that actually separate them, and the network item does not carry the SSSS phrase at
+        all — its own line is the anchor."""
         from client_boq.boq.coverage import title_rules_for
 
-        for word, clause in (("plan", "¶1.140"), ("review", "¶1.141"),
-                             ("network", "¶1.146"), ("components", "¶1.151")):
-            item = _item("1.52", bill_no="1",
-                         description=f"Smart Site Safety System — {word}")
+        for title, clause in (
+            ("Complete Implementation Plan for Smart Site Safety System", "¶1.140"),
+            ("Review, update and implement Implementation Plan for Smart Site Safety System",
+             "¶1.141"),
+            ("Provide site communication network", "¶1.146"),
+        ):
+            item = _item("1.52", bill_no="1", description=title)
             refs = [r.smm_clause for r in title_rules_for(item)]
-            assert refs == [f"SMM S01 {clause}"], (word, refs)
+            assert refs == [f"SMM S01 {clause}"], (title, refs)
+
+        component = _item("1.55", bill_no="1", description="Site safety monitoring platform")
+        component.heading_path = ["Components of Smart Site Safety System"]
+        assert [r.smm_clause for r in title_rules_for(component)] == ["SMM S01 ¶1.151"]
 
     def test_bill_one_has_no_bill_wide_list(self):
         """A preliminaries item's coverage has nothing in common with its neighbour's — a bill-wide
         list would attach the core-store heads to the insurance item."""
         assert "1" not in SECTION_COVERAGE
+
+
+class TestTheChainIsTheTitle:
+    """BQ items 1.23–1.40 print as bare "Provision" / "Maintenance" / "Removal" — eighteen items,
+    six distinct words, nine collisions. The only thing separating environmental MITIGATION
+    (¶1.40–1.42) from environmental MONITORING (¶1.45–1.47) is the heading two levels up, which is
+    the codebase's own rule surfacing in the matcher: an item's full description is its ancestor
+    heading chain, not the line beside its number. `TitleRule.matches` therefore runs on
+    `full_description()`, and these tests are the eighteen-item families exercising it."""
+
+    MITIGATION = ["Environment Mitigation Measures",
+                  "Environmental mitigation measures which are not separately measured under any "
+                  "other items of work",
+                  "Noise related measures"]
+    MONITORING = ["Environmental Monitoring Measures",
+                  "Environmental monitoring measures which are not separately measured under any "
+                  "other items of work",
+                  "Noise related measures"]
+
+    def _bare(self, ref: str, line: str, chain: list[str]) -> BillItem:
+        item = _item(ref, bill_no="1", description=line)
+        item.heading_path = chain
+        return item
+
+    def test_a_bare_provision_line_is_told_apart_by_its_chain(self):
+        from client_boq.boq.coverage import title_rules_for
+
+        mitigation = title_rules_for(self._bare("1.26", "Provision", self.MITIGATION))
+        monitoring = title_rules_for(self._bare("1.35", "Provision", self.MONITORING))
+        assert [r.smm_clause for r in mitigation] == ["SMM S01 ¶1.40"]
+        assert [r.smm_clause for r in monitoring] == ["SMM S01 ¶1.45"]
+
+    def test_the_two_families_never_cross_attach(self):
+        """The whole point: a monitoring obligation on a mitigation item's checklist would be a
+        head the estimator is asked about and should never price there."""
+        for line, mit_clause, mon_clause in (("Provision", "1.40", "1.45"),
+                                             ("Maintenance", "1.41", "1.46"),
+                                             ("Removal", "1.42", "1.47")):
+            mit = heads_for(self._bare("1.2x", line, self.MITIGATION))
+            mon = heads_for(self._bare("1.3x", line, self.MONITORING))
+            assert mit and all(f"¶{mit_clause}" in h.clause_ref for h in mit), line
+            assert mon and all(f"¶{mon_clause}" in h.clause_ref for h in mon), line
+
+    def test_one_clause_covers_all_three_media(self):
+        """¶1.40 covers mitigation "not separately measured" for air, noise and water alike — the
+        media are BQ sub-headings, not clause distinctions, so the air and water items carry the
+        same heads the noise item does."""
+        noise = heads_for(self._bare("1.26", "Provision", self.MITIGATION))
+        air = heads_for(self._bare("1.23", "Provision",
+                                   [*self.MITIGATION[:2], "Air related measures"]))
+        assert [h.key for h in air] == [h.key for h in noise]
+
+    def test_an_item_whose_line_means_nothing_without_its_chain_is_reached(self):
+        """The fixture bill's own example: "8R size print" under Photographs. Before the matcher
+        read the chain, this item carried no photograph heads and reported "nothing matched"."""
+        item = self._bare("1.16", "8R size print", ["Photographs", "Record photographs "])
+        assert [h.key for h in heads_for(item)] == ["smm.s01.1.32.g", "smm.s01.1.32.h"]
+
+    def test_servicing_under_two_different_roofs_reaches_two_different_clauses(self):
+        """"Servicing" appears under the Site Office AND the core store. The chain anchors keep
+        them apart — the same one-word line, two different obligations."""
+        office = heads_for(self._bare("1.2", "Servicing",
+                                      ["Project Manager's Site Office"]))
+        store = heads_for(self._bare("1.19", "Servicing",
+                                     ["Core and Sample Store for the Project Manager"]))
+        assert all(h.key.startswith("smm.s01.1.06.") for h in office) and office
+        assert all(h.key.startswith("smm.s01.1.110.") for h in store) and store
+
+    def test_the_insurance_split_puts_each_policy_on_its_own_item(self):
+        """BQ 1.8/1.9: third party gets ¶1.18(a), professional indemnity gets ¶1.18(b), and the
+        fees head (c) rides on both — one rule would have put a professional-indemnity obligation
+        on the third-party checklist."""
+        third = heads_for(_item("1.8", bill_no="1", description="Third party insurance"))
+        indemnity = heads_for(_item("1.9", bill_no="1",
+                                    description="Professional indemnity insurance"))
+        assert [h.key for h in third] == ["smm.s01.1.18.a", "smm.s01.1.18.c"]
+        assert [h.key for h in indemnity] == ["smm.s01.1.18.b", "smm.s01.1.18.c"]
+
+    def test_the_core_store_actions_do_not_share_their_heads(self):
+        """BQ bills erection / servicing / handing over as three items; a servicing obligation
+        must not be a tick on the erection item."""
+        chain = ["Core and Sample Store for the Project Manager"]
+        erection = heads_for(self._bare("1.18", "Erection", chain))
+        handing = heads_for(self._bare("1.20", "Handing over", chain))
+        assert erection and all(h.key.startswith("smm.s01.1.109.") for h in erection)
+        assert handing and all(h.key.startswith("smm.s01.1.111.") for h in handing)
+
+    def test_the_six_clauses_the_first_mapping_left_unclaimed_now_reach_their_items(self):
+        """The bill read showed they were absent from the MAPPING, not from the bill."""
+        for ref, title, clause in (
+            ("1.46", "Adoption of other noise abatement practices", "1.86"),
+            ("1.47", "Wastewater collection system", "1.91"),
+            ("1.48", "On-site sorting of C&D materials", "1.96"),
+            ("1.50", "Provide environmental management measures", "1.112"),
+            ("1.51", "Digital Works Supervision System (DWSS)", "1.133"),
+            ("1.61", "Safety training with Virtual Reality technology", "1.156"),
+        ):
+            heads = heads_for(_item(ref, bill_no="1", description=title))
+            assert heads and all(h.key.startswith(f"smm.s01.{clause}.") for h in heads), title
+
+    def test_bill_one_reaches_smm_24_for_the_vegetation_survey(self):
+        """BQ 1.63 sits in Bill 1 under its own printed SECTION 24 banner. It carries the SAME
+        head literal as Bill 7's rule, so a correction lands on both bills at once."""
+        heads = heads_for(_item("1.63", bill_no="1",
+                                description="Vegetation Survey in Conservation Area"))
+        assert [h.key for h in heads] == ["smm.s24.24.39.a", "smm.s24.24.39.b"]
+
+    def test_the_bill_words_that_differ_from_the_clause_titles_are_matched_as_billed(self):
+        """The bill says "Covering for dusty materials" and "smoky activities" — the matcher must
+        speak the bill's language, not the clause titles'."""
+        dusty = heads_for(_item("1.43", bill_no="1",
+                                description="Covering for dusty materials"))
+        smoky = heads_for(_item("1.44", bill_no="1",
+                                description="Screens or enclosures for smoky activities"))
+        assert dusty and all(h.key.startswith("smm.s01.1.76.") for h in dusty)
+        assert smoky and all(h.key.startswith("smm.s01.1.77.") for h in smoky)
 
 
 class TestCitationsResolveOrSayNothing:
