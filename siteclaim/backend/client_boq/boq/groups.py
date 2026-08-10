@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 from client_boq.estimate import money
 from client_boq.boq.allocate import RateBreakdown, RateRecipe, price_item
 from client_boq.boq.duration import DrillDuration, simulate
+from client_boq.boq.empirical import Band, BandTable, DEFAULT_BANDS
 from client_boq.boq.resources import ResourceSheet
 from client_boq.boq.schedule import Station, StationSchedule
 
@@ -54,6 +55,14 @@ CLASS_MEANING = {
 }
 
 
+class HoleShape(BaseModel):
+    """One hole's measured soil and rock lengths. Measured, never judged."""
+
+    station: str = ""
+    soil_m: float = 0.0
+    rock_m: float = 0.0
+
+
 class HoleGroup(BaseModel):
     """A set of holes one spread works, and the conditions that make it different from the others."""
 
@@ -66,22 +75,31 @@ class HoleGroup(BaseModel):
     rock_m: float = 0.0
     deepest_m: float = 0.0
     holes_past_20m: int = 0
+    #: The real shapes, one entry per station, filled by :func:`summarise` from the schedule. The
+    #: group's totals are their sum — this is the same measurement, unpooled, and it exists because
+    #: a programme over holes is not the same arithmetic as a programme over one long hole.
+    shapes: list[HoleShape] = Field(default_factory=list)
 
     # The estimator's, and nobody else's.
     rigs: int = 1
-    soil_output: float = 0.0                # m/day before decay
+    soil_output: float = 0.0                # m/day, at any depth
     rock_output: float = 0.0
-    decay: float = 0.05
+    #: Efficiency lost per 20 m of depth, DOWN ONE HOLE. Defaults to 0.0 because that is what was
+    #: measured: over 205 real drilling-days the rate does not fall with depth (0–20 m 4.42, 20–40 m
+    #: 5.32, 40 m+ 3.41 m/day, and the deep-band dip is rock, not depth). Rock fraction is the
+    #: driver and the band table already carries it. A non-zero value here is the estimator's
+    #: deliberate padding, and it resets at every hole.
+    decay: float = 0.0
     access_build_cost: float = 0.0          # a Class B platform; belongs on the rig-move item
 
     badge: str = "user"
     basis: str = ""                         # why he believes it
 
     # Which of the fields above the estimator actually typed, rather than inherited from the output
-    # book. Recorded as an act, not inferred from the value: `decay` defaults to 0.05, so a group
-    # that nobody has touched holds the same 0.05 as one where somebody decided on 0.05 — and the
-    # difference between an inherited number and a chosen one is exactly what the ⟨BOOK⟩/⟨YOURS⟩
-    # chip exists to show. See :mod:`client_boq.boq.outputs`.
+    # book. Recorded as an act, not inferred from the value: `decay` defaults to 0.0, so a group
+    # that nobody has touched holds the same 0.0 as one where somebody decided drilling does not
+    # slow down — and the difference between an inherited number and a chosen one is exactly what
+    # the ⟨BOOK⟩/⟨YOURS⟩ chip exists to show. See :mod:`client_boq.boq.outputs`.
     overrides: list[str] = Field(default_factory=list)
 
     @property
@@ -101,11 +119,67 @@ class HoleGroup(BaseModel):
             missing.append("at least one rig")
         return missing
 
+    def hole_shapes(self) -> list[HoleShape]:
+        """The holes to simulate: the measured ones, or ``hole_count`` even shares of the totals.
+
+        The fallback is not a guess about the ground — the totals are the totals either way — it is
+        a statement that the metres are spread over this many holes, which is a fact the group
+        already carries in ``stations``. A group with neither shapes nor stations is one hole,
+        which is the only thing left to say about it.
+        """
+        if self.shapes:
+            return self.shapes
+        holes = max(1, self.hole_count)
+        return [HoleShape(station=f"hole {n + 1}", soil_m=self.soil_m / holes,
+                          rock_m=self.rock_m / holes) for n in range(holes)]
+
     def duration(self) -> DrillDuration:
-        """The programme for this group. More rigs, proportionally fewer days on the critical path."""
+        """The programme for this group: every hole simulated, then shared across the rigs.
+
+        THE SCOPE FIX. This used to call ``simulate(soil_m / rigs, rock_m / rigs, …)`` — one
+        continuous hole as deep as the group's whole share. ``simulate`` bands depth *down a hole*,
+        so a 600 m group was drilled as if the rig were 600 m below ground by the end: at the old
+        default 5% per 20 m that is ``0.95^30 ≈ 21%`` of the surface rate, and the group took 69
+        days where it should take 30. The depth was never the group's; it was each hole's.
+
+        So each hole is simulated on its own, decay resetting when the rig moves, and the
+        fractional day-counts are summed and divided by the rigs. At ``decay = 0`` — the default —
+        this is algebraically identical to the pooled form, because constant rates make the sum of
+        ``m_i / output`` the same as ``Σm_i / output``; the two only part company when somebody
+        deliberately asks for padding, and then this one is the correct reading of what they asked.
+
+        The ceiling stays at group level rather than per hole: ``total_days`` rounds the critical
+        path up once, exactly as before. Rounding every hole up would charge a part-day for each of
+        91 of them and is a separate question from this one.
+        """
         rigs = max(1, self.rigs)
-        return simulate(self.soil_m / rigs, self.rock_m / rigs,
-                        soil_output=self.soil_output, rock_output=self.rock_output, decay=self.decay)
+        result = DrillDuration(soil_m=self.soil_m, rock_m=self.rock_m)
+        soil_days = rock_days = 0.0
+        day_no = 0
+
+        for shape in self.hole_shapes():
+            one = simulate(shape.soil_m, shape.rock_m, soil_output=self.soil_output,
+                           rock_output=self.rock_output, decay=self.decay)
+            soil_days += one.soil_days
+            rock_days += one.rock_days_actual
+            result.unfinished = result.unfinished or one.unfinished
+            for day in one.days:
+                day_no += 1
+                result.days.append(day.model_copy(update={"day": day_no}))
+
+        # Shared across the rigs: the metres are the same, the calendar is not.
+        result.soil_days = soil_days / rigs
+        result.rock_days_actual = rock_days / rigs
+        spent = result.soil_days + result.rock_days_actual
+        result.total_days = math.ceil(spent) if spent > 0 else 0
+        result.rock_days_charged = max(0.0, result.total_days - result.soil_days)
+        result.soil_complete_day = math.ceil(result.soil_days) if self.soil_m > 0 else None
+        result.rock_complete_day = result.total_days if self.rock_m > 0 else None
+        return result
+
+    def rock_fraction(self) -> float:
+        total = self.soil_m + self.rock_m
+        return self.rock_m / total if total > 0 else 0.0
 
 
 def summarise(group: HoleGroup, schedule: StationSchedule) -> HoleGroup:
@@ -117,7 +191,83 @@ def summarise(group: HoleGroup, schedule: StationSchedule) -> HoleGroup:
         "rock_m": round(sum(s.rock_m for s in picked), 3),
         "deepest_m": max((s.total_m for s in picked), default=0.0),
         "holes_past_20m": sum(1 for s in picked if s.total_m > 20.0),
+        # The unpooled measurement, so the programme can be run over holes rather than over one
+        # imaginary hole as deep as the group. Same numbers, kept in the shape they were measured.
+        "shapes": [HoleShape(station=s.station, soil_m=s.soil_m, rock_m=s.rock_m) for s in picked],
     })
+
+
+class BandCalibration(BaseModel):
+    """What the as-built band table expects of this group, beside what the group's own outputs give.
+
+    THE BAND TABLE IS THE PRODUCTION DRIVER, and this is where it reaches the group path. Before
+    this, a group's speed came from two flat norms (soil 20 m/day, rock 10) plus a depth-decay
+    curve, and its rock fraction — the one thing the corpus says predicts production — changed
+    nothing. Now the group's own rock fraction selects a band, and the band's all-in rate says how
+    many work-days a group of this shape has historically taken.
+
+    It is a CHECK, not an override: the band rate is all-in and blended (metres ÷ work-days,
+    per-hole set-up included) while the group's outputs are per-material drilling rates with set-up
+    outside them, so substituting one for the other would quietly move set-up into the drilling
+    rate. Set-up is therefore added explicitly here, at the model's own ``setup_days_per_hole``, so
+    the two sides are on the same definition before they are compared.
+    """
+
+    rock_fraction: float = 0.0
+    band_label: str = ""
+    band_rate: float = 0.0                  # m per work-day, all-in
+    band_holes: int = 0                     # the n behind it
+    indicative_only: bool = False
+    expected_work_days: float = 0.0         # what the band says a group this shape takes
+    simulated_work_days: float = 0.0        # drilling days from the outputs, plus set-up
+    divergence: Optional[float] = None      # simulated ÷ expected − 1
+    note: str = ""
+    problems: list[str] = Field(default_factory=list)
+
+
+def band_calibration(group: HoleGroup, *, bands: Optional[BandTable] = None,
+                     setup_days_per_hole: float = 0.0) -> BandCalibration:
+    """Select the band from the group's OWN rock fraction and compare it with the group's outputs.
+
+    Both sides are stated per rig-set, not per calendar: the band was measured on rigs, and dividing
+    either side by the rig count would cancel out of the comparison anyway.
+    """
+    table = bands or DEFAULT_BANDS
+    metres = group.soil_m + group.rock_m
+    out = BandCalibration(rock_fraction=group.rock_fraction())
+    if metres <= 0:
+        out.problems.append("the group has no metres, so there is nothing to calibrate")
+        return out
+
+    band: Optional[Band] = table.select(out.rock_fraction)
+    if band is None or band.rate <= 0:
+        lowest = table.sorted_bands()[0].lower if table.bands else 0.0
+        out.problems.append(
+            f"{out.rock_fraction:.0%} rock falls below the lowest band ({lowest:.0%}), so the "
+            f"as-built corpus has nothing to say about a group this shape — the outputs stand "
+            f"alone and nothing is checking them")
+        return out
+
+    out.band_label, out.band_rate, out.band_holes = band.label, band.rate, band.holes
+    out.indicative_only = band.indicative_only
+    out.expected_work_days = metres / band.rate
+
+    drilling = group.duration()
+    rigs = max(1, group.rigs)
+    setup = len(group.hole_shapes()) * setup_days_per_hole / rigs
+    out.simulated_work_days = drilling.soil_days + drilling.rock_days_actual + setup
+    if out.expected_work_days > 0:
+        # The band is measured per rig-set; the simulation was divided by the rigs, so put it back.
+        out.divergence = (out.simulated_work_days * rigs) / out.expected_work_days - 1.0
+        out.note = (
+            f"{out.rock_fraction:.0%} rock selects {band.label!r} at {band.rate:g} m/work-day "
+            f"(n={band.holes}). {metres:,.0f} m at that rate is {out.expected_work_days:,.1f} "
+            f"work-days; these outputs give {out.simulated_work_days * rigs:,.1f} including "
+            f"{len(group.hole_shapes()) * setup_days_per_hole:,.1f} days of set-up "
+            f"({out.divergence:+.0%}).")
+    if out.indicative_only:
+        out.problems.append(band.confidence())
+    return out
 
 
 def cluster(schedule: StationSchedule, *, radius_m: float = 250.0) -> list[HoleGroup]:

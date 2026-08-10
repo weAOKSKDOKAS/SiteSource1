@@ -35,6 +35,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from client_boq.boq import empirical
 from client_boq.boq.buildup import Buildup, Spread
 from client_boq.boq.model import CostingModel
 from client_boq.boq.programme import Programme
@@ -135,6 +136,38 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
             source=SOURCE_EMPIRICAL,
             confidence=CONFIDENCE_LOW if band.indicative_only else CONFIDENCE_MEDIUM,
             basis=band.confidence()))
+
+    # THE CALIBRATION, BOTH READINGS. A second measurement of the same four bands over the same
+    # corpus reads higher throughout. It is on the register rather than in the defaults because the
+    # two are not on the same definition — and the register is where a person chooses, so both
+    # tables and the arithmetic that separates them are put in front of them.
+    recon = empirical.reconciliation()
+    for table in recon["tables"]:
+        rows.append(Assumption(
+            key=f"bands_{table['name'].replace(' ', '_')}",
+            label=f"Production bands — {table['name']}",
+            value=" · ".join(f"{b['label'].replace(' rock', '')} {b['rate']:g}"
+                             for b in table["bands"]),
+            source=SOURCE_EMPIRICAL,
+            confidence=(CONFIDENCE_HIGH if abs(table["error_against_actual"] or 0) < 0.10
+                        else CONFIDENCE_LOW),
+            basis=(f"{table['source']} (n={table['holes']}). Weighted {table['weighted_rate']:g} "
+                   f"m/work-day, which turns the corpus's {recon['corpus_metres']:,.0f} m into "
+                   f"{table['implied_work_days']:,.0f} work-days against the "
+                   f"{recon['corpus_work_days']:,.0f} actually worked "
+                   f"({table['error_against_actual']:+.1%}). A band rate is a DIVISOR here, so the "
+                   f"table that reproduces the real day count is the one that belongs in a "
+                   f"duration. {'IN FORCE.' if table['name'] == 'current default' else 'RECORDED, not in force.'}")))
+
+    rows.append(Assumption(
+        key="depth_decay", label="Efficiency lost per 20 m of depth", value="0% (default)",
+        source=SOURCE_EMPIRICAL, confidence=CONFIDENCE_HIGH,
+        basis="Measured at zero. Over 205 real drilling-days the 20-40 m band came out 4.42 -> "
+              "5.32 m/day, 20% FASTER than the surface, and within a hole the depth-to-rate "
+              "correlation averages +0.11 across 21 holes. The 40 m+ slowdown is rock, not depth "
+              "(corr with rock -0.428 against +0.196 with depth). Rock fraction is the driver and "
+              "the bands above carry it; a decay curve on top counts it twice. Raise it per group "
+              "only as deliberate padding — it then applies down each hole and resets at the next."))
 
     for check in programme.checks:
         if check.key == "depth":

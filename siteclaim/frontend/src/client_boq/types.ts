@@ -448,6 +448,24 @@ export interface GroupPreview {
   rigs?: number;
   blended_m_per_day?: number;
   unfinished?: boolean;
+  /** What the as-built corpus expects of a group with THIS rock fraction, beside what the typed
+   *  outputs give. The production driver — depth decay is measured at zero and defaults to it. */
+  band?: BandCalibration;
+}
+
+/** The rock-fraction band a group falls in, and how its own outputs compare with it. */
+export interface BandCalibration {
+  rock_fraction: number;
+  band_label: string;
+  band_rate: number;
+  band_holes: number;
+  indicative_only: boolean;
+  expected_work_days: number;
+  simulated_work_days: number;
+  /** simulated ÷ expected − 1. `null` when no band applies. */
+  divergence: number | null;
+  note: string;
+  problems: string[];
 }
 
 // --- app-wide settings (the AI model) --------------------------------------

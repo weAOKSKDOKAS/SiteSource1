@@ -215,13 +215,38 @@ class TestThePreviewUnderTheGroupsScreen:
         assert body["blended_m_per_day"] > 0
         assert "rate" not in body, "the rate needs the whole bill; this screen never prices"
 
-    def test_depth_decay_makes_the_blend_slower_than_the_output_typed(self, client):
-        # 60 m of soil at a nominal 20 m/day is not three days: the third twenty metres is drilled
-        # 5% slower than the first. If these were equal the simulation would not be running.
+    def test_by_default_the_blend_is_the_output_typed_because_nothing_decays(self, client):
+        # RE-ANCHORED IN THE OPEN. This used to assert the blend came back BELOW the typed output,
+        # because the default decay was 5% per 20 m. The data ruled that to zero — over 205 real
+        # drilling-days the 20-40 m band is 20% faster, not slower — so with no decay asked for,
+        # 60 m of soil at 20 m/day IS three days and the blend IS 20. Depth-independence is the
+        # claim now, and it is asserted rather than assumed.
         _save(client)
         body = client.post(f"{BASE}/site/preview",
                            json={"set_id": SET, "group": self._ready_group()}).json()
+        assert body["blended_m_per_day"] == 20.0
+
+    def test_a_deliberate_decay_still_slows_the_blend_so_the_simulation_is_running(self, client):
+        # The mechanism the old test pinned, kept: ask for decay and the blend drops. If these were
+        # equal the simulation would not be running and this screen would be a division.
+        _save(client)
+        padded = {**self._ready_group(), "decay": 0.05, "overrides": ["decay"]}
+        body = client.post(f"{BASE}/site/preview",
+                           json={"set_id": SET, "group": padded}).json()
         assert body["blended_m_per_day"] < 20.0
+
+    def test_the_preview_carries_the_band_the_rock_fraction_selects(self, client):
+        # The production driver reaching the group path. Before this the group's speed came from
+        # two flat norms and a depth curve, and its rock fraction changed nothing.
+        _save(client)
+        body = client.post(f"{BASE}/site/preview",
+                           json={"set_id": SET, "group": self._ready_group()}).json()
+        band = body["band"]
+        assert band["rock_fraction"] >= 0.0
+        assert band["band_label"] or band["problems"], "a band, or a stated reason there is none"
+        if band["band_label"]:
+            assert band["band_rate"] > 0 and band["expected_work_days"] > 0
+            assert band["divergence"] is not None
 
     def test_more_rigs_shorten_the_programme(self, client):
         _save(client)

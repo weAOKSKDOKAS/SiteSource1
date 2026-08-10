@@ -21,6 +21,20 @@ dominates a short hole. Under 25 m: 1.45 m/work-day. Over 45 m: 3.23. This is wh
 apply a depth-decay curve — an earlier version of this engine did, on one estimator's assumption, and
 the data says the opposite.
 
+    Confirmed a second way, at day level, which is the reading that settles it: 205 individual
+    drilling-days banded by the depth the rig was at when the day was worked come out 4.42 /
+    **5.32** / 3.41 m per day for 0–20 m / 20–40 m / 40 m+. The middle band is 20% FASTER than the
+    surface. Per hole, over the 21 holes with five or more drilling days, the depth-to-log-rate
+    correlation averages **+0.11** and is positive in 13 of them. The 40 m+ dip is rock: across all
+    95 holes ``corr(rate, rock %) = −0.428`` against ``corr(rate, depth) = +0.196``, and holding
+    rock constant leaves depth with a *positive* coefficient. Banding on rock AND decaying on depth
+    would count the same effect twice. See :data:`DAILY_RATE_BY_DEPTH` and :data:`RATE_DRIVERS`.
+
+**The band table is a divisor, so its rates must be pooled.** A second measurement of the same four
+bands over all 95 holes reads higher throughout (:data:`AS_BUILT_BANDS`). It is recorded, not
+substituted: ``metres / rate`` has to come back to a real day count, and only the days-weighted
+basis does. :func:`reconciliation` shows the arithmetic on the corpus itself.
+
 **Weather is not a production driver.** The project that ran entirely inside typhoon season was the
 fastest of the three; the relationship is inverse. Work-days already exclude non-working days by
 construction, so weather cannot move the production rate — it moves the calendar. That is why the
@@ -124,6 +138,76 @@ DEFAULT_BANDS = BandTable(bands=[
     Band(label="over 60% rock", lower=0.60, rate=1.82, holes=23, calibration_depth_m=31.8),
 ])
 
+# ---------------------------------------------------------------------------
+# A SECOND MEASUREMENT OF THE SAME BANDS — recorded, NOT substituted
+# ---------------------------------------------------------------------------
+# A later pass over the same corpus reported the overall rate in each band across all 95 holes.
+# Same boundaries, same corpus, higher numbers throughout — and the reason is a definition, not new
+# ground. `RECONCILIATION` below shows the arithmetic. The short version:
+#
+#   * the corpus really drilled 3,490.84 m in 1,260 work-days: a POOLED rate of 2.77 m/work-day;
+#   * `DEFAULT_BANDS` weighted by n comes to 2.91, which turns those metres back into 1,201 days —
+#     4.7% under what was worked;
+#   * this table weighted by n comes to 3.69, which turns them into 947 days — 24.9% under.
+#
+# A band rate in this engine is a DIVISOR: `metres / rate` has to reproduce a real day count. A mean
+# of per-hole rates cannot, because it weights a slow hole and a fast hole equally while the days
+# do not — the pooled figure is dragged down by exactly the holes that took longest. So the two are
+# on different definitions, `DEFAULT_BANDS` is the one that belongs in a duration calculation, and
+# these figures are kept beside it as evidence a person can weigh rather than swapped in for it.
+#
+# Both tables reach the assumptions register, each with its source, and the estimator chooses.
+AS_BUILT_BANDS = BandTable(bands=[
+    Band(label="under 15% rock", lower=0.00, rate=4.22, holes=12),
+    Band(label="15% to 35% rock", lower=0.15, rate=4.32, holes=37),
+    Band(label="35% to 60% rock", lower=0.35, rate=3.85, holes=23),
+    Band(label="over 60% rock", lower=0.60, rate=2.23, holes=23),
+])
+
+AS_BUILT_SOURCE = ("95 holes across Lok Ma Chau (YL/2018/02), Water Service Reservoirs "
+                   "(ND/2021/03) and Kwun Tong North — overall rate by rock fraction")
+
+
+def weighted_rate(table: BandTable) -> float:
+    """The table's n-weighted mean rate. What it implies if you priced the whole corpus with it."""
+    holes = sum(b.holes for b in table.bands)
+    return sum(b.rate * b.holes for b in table.bands) / holes if holes else 0.0
+
+
+def reconciliation() -> dict:
+    """The two tables against what the corpus actually worked. Computed, never typed.
+
+    This is the answer to "should the defaults be replaced?" and it is recomputed from the corpus
+    every time it is asked, so it cannot go stale against a table somebody edits.
+    """
+    totals = corpus_totals()
+    metres, worked = totals["total_m"], totals["work_days"]
+    rows = []
+    for name, table, source in (
+            ("current default", DEFAULT_BANDS, "Roadmap default, calibrated on 89 holes"),
+            ("as-built measurement", AS_BUILT_BANDS, AS_BUILT_SOURCE)):
+        rate = weighted_rate(table)
+        implied = metres / rate if rate else 0.0
+        rows.append({
+            "name": name, "source": source, "holes": sum(b.holes for b in table.bands),
+            "weighted_rate": round(rate, 3), "implied_work_days": round(implied, 0),
+            "error_against_actual": round(implied / worked - 1.0, 4) if worked else None,
+            "bands": [{"label": b.label, "lower": b.lower, "rate": b.rate, "holes": b.holes}
+                      for b in table.sorted_bands()],
+        })
+    return {
+        "corpus_metres": metres, "corpus_work_days": worked,
+        "pooled_rate": round(metres / worked, 3) if worked else 0.0,
+        "tables": rows,
+        "verdict": (
+            "The two tables are not on the same definition. A band rate is used here as a divisor — "
+            "`metres / rate` must come back to a real day count — and only the pooled, "
+            "days-weighted basis does that. The as-built figures read as a mean of per-hole rates, "
+            "which weights a slow hole the same as a fast one and therefore overstates production "
+            "by about a third. The defaults stand; the measurement is recorded beside them so the "
+            "estimator can weigh it, and either table can be edited on this tender."),
+    }
+
 
 class SourceContract(BaseModel):
     """One completed contract in the corpus."""
@@ -211,6 +295,34 @@ DEPTH_BANDS = [
     {"band": "35 to 45 m", "holes": 22, "mean_work_days": 11.5, "m_per_work_day": 3.47},
     {"band": "over 45 m", "holes": 22, "mean_work_days": 17.7, "m_per_work_day": 3.23},
 ]
+
+# The same finding read a second way, and the one that settles it: 205 individual drilling-days
+# from 30 holes' daily logs in the Water Reservoirs records, banded by how deep the rig was WHEN
+# THE DAY WAS WORKED. Hole-level rates (above) can be argued away as set-up dominating a short
+# hole; these cannot — they are the same hole, deeper.
+DAILY_RATE_BY_DEPTH = [
+    {"band": "0 to 20 m", "m_per_day": 4.42},
+    {"band": "20 to 40 m", "m_per_day": 5.32},      # 20% FASTER than the first band, not slower
+    {"band": "over 40 m", "m_per_day": 3.41},       # rock-socket drilling in a 74%-rock project
+]
+
+# Per-hole, over the 21 holes with five or more drilling days: the correlation between depth and
+# log-rate. Positive means faster as it gets deeper.
+DEPTH_RATE_CORRELATION = {
+    "holes": 21, "mean": 0.11, "positive": 13,
+    "note": "flat to slightly faster within a hole; never a consistent slowdown",
+}
+
+# What actually predicts the rate, across all 95 holes. This is the argument for banding on rock
+# fraction rather than decaying on depth — and for not doing both, which double-counts.
+RATE_DRIVERS = {
+    "rock_fraction": -0.428,
+    "depth": 0.196,
+    "note": ("Holding rock constant, the regression's depth coefficient is POSITIVE. The 40 m+ "
+             "slowdown in DAILY_RATE_BY_DEPTH is a rock effect wearing a depth costume: the deep "
+             "records come from a 74%-rock project."),
+    "drilling_days_measured": 205,
+}
 
 FINDINGS = [
     "Rock fraction measures mode of working, not hardness. A 20% rock hole is washboring with a "

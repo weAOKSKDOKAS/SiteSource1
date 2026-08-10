@@ -81,8 +81,11 @@ NORMS: tuple[Norm, ...] = (
     Norm(key="rock_output", label="Drilling, rock", unit="m/day", block=BLOCK_PRODUCTIVITY,
          default=10.0),
     Norm(key="decay_pct", label=f"Efficiency loss per {DEPTH_BAND_M:g} m of depth", unit="%",
-         block=BLOCK_PRODUCTIVITY, default=5.0,
-         note="a deeper hole is a slower hole: more rods to trip, more spoil to lift"),
+         block=BLOCK_PRODUCTIVITY, default=0.0,
+         note="measured at zero: over 205 real drilling-days the 20-40 m band came out 20% FASTER "
+              "than the first 20 m, and the deep-band slowdown is rock, not depth. Rock fraction "
+              "drives production and the band table already carries it. Raise this only as "
+              "deliberate padding — it applies down each hole and resets at the next"),
     Norm(key="shift_hours", label="Shift length", unit="hours", block=BLOCK_PRODUCTIVITY,
          default=8.0),
 
@@ -217,10 +220,10 @@ def apply_to_group(group: HoleGroup, book: OutputBook) -> tuple[HoleGroup, dict[
     """Fill a group's un-overridden outputs from the book, and say for each where it came from.
 
     Reads :attr:`HoleGroup.overrides` — the fields the estimator actually typed — rather than
-    inferring intent from the values. A group nobody has touched carries ``decay = 0.05`` because
-    that is the field's default, and one where somebody deliberately chose 5% carries the identical
-    number; only the recorded act separates them, and that distinction is the whole point of the
-    ⟨BOOK⟩/⟨YOURS⟩ chip.
+    inferring intent from the values. A group nobody has touched carries ``decay = 0.0`` because
+    that is the field's default, and one where somebody deliberately decided holes do not slow with
+    depth carries the identical number; only the recorded act separates them, and that distinction
+    is the whole point of the ⟨BOOK⟩/⟨YOURS⟩ chip.
 
     Returns the filled group and a map keyed by **group field name**, so a screen can put a chip
     beside the input it belongs to without knowing the book's key for it.

@@ -36,6 +36,7 @@ from client_boq.boq import costing_workbook as boq_costing_workbook
 from client_boq.boq import coverage as boq_coverage
 from client_boq.boq import derive as boq_derive
 from client_boq.boq import diff as boq_diff
+from client_boq.boq import empirical as boq_empirical
 from client_boq.boq import hk1980 as boq_hk1980
 from client_boq.boq import optimiser as boq_optimiser
 from client_boq.boq import docmap as boq_docmap
@@ -3892,9 +3893,15 @@ def post_group_preview(req: GroupPreviewRequest) -> dict:
 
     duration = group.duration()
     metres = group.soil_m + group.rock_m
+    # What the as-built corpus says a group of this ROCK FRACTION takes, beside what these outputs
+    # give. The band table is the production driver; before this it never reached the group path at
+    # all, and a group's speed came from two flat norms and a depth curve the data does not support.
+    calibration = boq_groups.band_calibration(
+        group, setup_days_per_hole=boq_empirical.FITTED.setup_days_per_hole)
     return {
         "ready": True,
         "sources": source_dump,
+        "band": calibration.model_dump(),
         "soil_m": group.soil_m, "rock_m": group.rock_m,
         "soil_days": duration.soil_days,
         "rock_days_charged": duration.rock_days_charged,

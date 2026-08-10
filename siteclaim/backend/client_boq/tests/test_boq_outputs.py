@@ -121,21 +121,30 @@ class TestResolve:
 
 
 class TestInheritingIntoAGroup:
-    """The group's defaults are a trap: ``decay`` is 0.05 whether or not anybody chose it."""
+    """The group's defaults are a trap: ``decay`` holds the book's number whether or not anybody
+    chose it — which is exactly why the source chip reads the recorded ACT and never the value."""
 
     def test_a_group_nobody_touched_inherits_everything_and_says_so(self):
+        # RE-ANCHORED IN THE OPEN: the decay default moved 0.05 -> 0.0 when the daily-log data
+        # showed no depth decay. The assertion is now written against the NORM'S OWN DECLARATION
+        # rather than a repeated literal, so the two can never drift apart again — the subject was
+        # always "the group inherits the book", not "the book says five percent".
         group = HoleGroup(label="Roadside", stations=["a"])
         filled, sources = apply_to_group(group, default_book())
         assert filled.soil_output == 20.0 and filled.rock_output == 10.0
-        assert filled.decay == 0.05
+        assert filled.decay == NORM_INDEX["decay_pct"].default / 100.0
+        assert filled.decay == 0.0, "measured at zero; a decay curve double-counts the rock band"
         assert {s.source for s in sources.values()} == {SOURCE_BOOK}
 
     def test_decay_is_book_even_though_the_field_already_held_the_same_number(self):
-        # The value cannot distinguish these two, so the recorded act has to.
+        # The value cannot distinguish these two, so the recorded act has to. Exercised at a
+        # NON-default value so the test cannot pass by both sides happening to be zero.
         untouched = HoleGroup(label="g", decay=0.05)
         chosen = HoleGroup(label="g", decay=0.05, overrides=["decay"])
         assert apply_to_group(untouched, default_book())[1]["decay"].source == SOURCE_BOOK
+        assert apply_to_group(untouched, default_book())[0].decay == 0.0, "the book overwrote it"
         assert apply_to_group(chosen, default_book())[1]["decay"].source == SOURCE_YOURS
+        assert apply_to_group(chosen, default_book())[0].decay == 0.05, "the choice survived"
 
     def test_an_overridden_output_wins_and_is_marked_yours(self):
         group = HoleGroup(label="Hillside", soil_output=9.0, overrides=["soil_output"])

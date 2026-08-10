@@ -7,12 +7,37 @@ WHY A SIMULATION AND NOT A DIVISION
 -----------------------------------
 ``2,300 m ÷ 20 m per day`` is wrong twice over, and a real estimator's workbook models both:
 
-1. **Drilling slows with depth.** Output decays a fixed percentage every 20 m band. The bands are 20 m
-   because that is how the Method of Measurement stages drilling (SMM S02 ¶2.12 Group V, measured from
-   existing ground level per ¶2.11A) — the rule and the reality agree for once.
-2. **A day does not end when the soil does.** When soil finishes at 11am the rig starts rock after
+1. **A day does not end when the soil does.** When soil finishes at 11am the rig starts rock after
    lunch, and that part-day belongs to rock. Losing it overstates the programme and understates every
    rate that divides by it.
+2. **Whole days are paid for.** ``total_days`` rounds up; the rounding is charged to rock.
+
+DEPTH DECAY DEFAULTS TO ZERO, AND THE MEASUREMENT IS WHY
+--------------------------------------------------------
+The knob below stays — an estimator may deliberately pad a hole he expects to fight — but it defaults
+to **0.0**, because the data says the assumption it encoded has the wrong sign. Across **205 real
+drilling-days** from 30 holes' daily logs, the rate does not fall as a hole gets deeper:
+
+    0–20 m   4.42 m/day
+    20–40 m  5.32 m/day   ← 20% FASTER, not slower
+    40 m+    3.41 m/day
+
+and per-hole, over the 21 holes with five or more drilling days, the correlation between depth and
+log-rate is **+0.11 on average and positive in 13 of 21**. The 40 m+ slowdown is a *rock* effect: the
+deep records are rock-socket drilling in a 74%-rock project, and across all 95 holes
+``corr(rate, rock %) = −0.428`` against ``corr(rate, depth) = +0.196`` — a regression holding rock
+constant gives a *positive* depth coefficient. Rock fraction is the driver, the band table already
+captures it (:mod:`client_boq.boq.empirical`), and a decay curve on top double-counts it.
+
+The old default of 5% per 20 m was not a small error. Compounded over a 600 m group it left the rig
+at ``0.95^30 ≈ 21%`` of its surface rate: a 600 m single-rig group in pure soil at 20 m/day took
+**69 days instead of 30**. Every rate divided by those days.
+
+A NON-ZERO DECAY IS PER HOLE
+----------------------------
+``simulate`` models ONE hole: ``cumulative`` is depth down *that* hole, so the decay resets when the
+rig moves. It never meant "metres this group has drilled". Feeding it a group's pooled total was the
+second half of the error — see :meth:`client_boq.boq.groups.HoleGroup.duration`.
 
 THE TWO DIFFERENT "ROCK DAYS", WHICH ARE NOT THE SAME NUMBER
 ------------------------------------------------------------
@@ -28,7 +53,9 @@ splitting it is the workbook's convention and it is reproduced exactly, because 
 with the estimator's own spreadsheet is a rate he will not use.
 
 On the reference figures — 60 m soil, 72 m rock, 20 and 10 m/day, 5% per 20 m — that is
-``soil 3.1108 d``, ``rock actual 7.5958 d``, ``total 11 d``, ``rock charged 7.8892 d``.
+``soil 3.1108 d``, ``rock actual 7.5958 d``, ``total 11 d``, ``rock charged 7.8892 d``. Those
+figures are the workbook's, and the 5% in them is the workbook's; they are kept as the arithmetic
+check on the decay path, not as a recommendation of it.
 """
 
 from __future__ import annotations
@@ -86,10 +113,12 @@ class DrillDuration(BaseModel):
 
 def output_at(initial: float, cumulative: float, decay: float,
               band: float = DEPTH_BAND_M) -> float:
-    """Output per day once ``cumulative`` metres are already down.
+    """Output per day once ``cumulative`` metres are already down **this hole**.
 
     ``initial × (1 − decay) ^ floor(cumulative / band)`` — a step, not a curve, because the workbook
     steps it and because the measurement rules band depth the same way.
+
+    At ``decay = 0`` this is the identity, which is the default and what the data supports.
     """
     if initial <= 0:
         return 0.0
@@ -97,11 +126,15 @@ def output_at(initial: float, cumulative: float, decay: float,
 
 
 def simulate(soil_m: float, rock_m: float, *, soil_output: float, rock_output: float,
-             decay: float = 0.05, band: float = DEPTH_BAND_M) -> DrillDuration:
-    """Drill ``soil_m`` then ``rock_m``, a day at a time.
+             decay: float = 0.0, band: float = DEPTH_BAND_M) -> DrillDuration:
+    """Drill ONE hole — ``soil_m`` then ``rock_m`` — a day at a time.
 
     Soil is taken first each day and rock gets whatever is left of that day — which is what actually
     happens down a hole, and what the reference workbook models.
+
+    ``decay`` defaults to 0.0: measured ≈ 0 across 205 real drilling-days, and rock fraction is the
+    driver the band table already carries. See the module docstring. A caller that wants padding
+    passes it deliberately, and gets it applied down THIS hole — the depth is this hole's depth.
     """
     if soil_m < 0 or rock_m < 0:
         raise ValueError("depths cannot be negative")
