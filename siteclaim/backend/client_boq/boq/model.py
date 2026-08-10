@@ -49,7 +49,14 @@ from client_boq.boq.empirical import DEFAULT_BANDS, FITTED, BandTable
 # number of rigs and the other does not. Merging them prices supervision per rig, which is wrong in
 # the direction that loses money on a multi-rig job.
 CHARGE_RIG_DAY = "rig_day"              # A — plant, labour, consumables. Scales with rigs.
-CHARGE_CONTRACT_DAY = "contract_day"    # B — the site team. Runs for the contract regardless.
+CHARGE_CONTRACT_DAY = "contract_day"    # B — the SITE team. Manages ONE SITE, not the rigs.
+# B2 — the GFT (ground/field technician team). A DIFFERENT resource from the site team, and the
+# distinction is the whole of this block: the site team (engineer + foreman + geologist + PM)
+# manages a SITE and its count follows the number of sites, not the rig count; the GFT manages
+# RIGS at one per `gft_ratio` of them. Charging one resource for both jobs priced site management
+# per rig — which over-recovers on a one-rig job and under-recovers on a seven-rig one, in the
+# direction nobody notices until the job is finished.
+CHARGE_GFT = "gft"                      # B2 — scales with the RIG count, at 1 per gft_ratio rigs
 CHARGE_NONE = "none"                    # priced elsewhere; kept on the sheet for visibility
 # C — a preliminary standing on site that is billed as its OWN item: the office, a vehicle, the
 # telephone, the core store. It prices those Bill 1 lines directly and must never reach
@@ -162,12 +169,13 @@ DRIVER_SOIL_DAYS = "soil_days"          # spread cost over the soil-drilling sha
 DRIVER_ROCK_DAYS = "rock_days"
 DRIVER_SETUP_DAYS = "setup_days"        # the fixed per-hole set-up share
 DRIVER_STANDING_DAYS = "standing_days"  # idle time, charged at the spread day-cost
-DRIVER_SITE_TEAM = "site_team"          # the contract-day team, recovered in Bill 1
+DRIVER_SITE_TEAM = "site_team"          # the per-SITE team, recovered in Bill 1
+DRIVER_GFT = "gft"                      # the per-RIG-GROUP technician team, recovered in Bill 1
 DRIVER_FIXED = "fixed"                  # a one-off: mobilisation
 DRIVER_PER_HOLE = "per_hole"            # a rate applied once per hole: setting out
 DRIVER_MATERIAL = "material"            # a derived quantity times a unit cost
 DRIVERS = (DRIVER_SOIL_DAYS, DRIVER_ROCK_DAYS, DRIVER_SETUP_DAYS, DRIVER_STANDING_DAYS,
-           DRIVER_SITE_TEAM, DRIVER_FIXED, DRIVER_PER_HOLE, DRIVER_MATERIAL)
+           DRIVER_SITE_TEAM, DRIVER_GFT, DRIVER_FIXED, DRIVER_PER_HOLE, DRIVER_MATERIAL)
 
 DIVISOR_SOIL_M = "soil_m"
 DIVISOR_ROCK_M = "rock_m"               # rock + artificial hard material
@@ -305,6 +313,15 @@ class CostingModel(BaseModel):
     def value(self, key: str, default: float = 0.0) -> float:
         return float(self.inputs.get(key, default))
 
+    def retired(self) -> list[tuple[str, float, str]]:
+        """Inputs this model still carries that nothing reads any more. ``(key, value, why)``.
+
+        Not repaired here — see ``RETIRED_INPUTS``. Reporting one is the whole job: the value is
+        already inert, and deleting it would be an edit of somebody's model that they never made.
+        """
+        return [(key, float(self.inputs[key]), why)
+                for key, why in RETIRED_INPUTS.items() if key in self.inputs]
+
     def spread_index(self) -> dict[str, SpreadLine]:
         return {line.key: line for line in self.spread}
 
@@ -363,8 +380,12 @@ class CostingModel(BaseModel):
         return sum(l.cost_per_day() for l in self.spread if l.charge == CHARGE_RIG_DAY)
 
     def cost_per_contract_day(self) -> float:
-        """B — the site team. Runs for the whole contract however many rigs are working."""
+        """B — ONE site team, per day. Its COUNT follows the number of sites, never the rigs."""
         return sum(l.cost_per_day() for l in self.spread if l.charge == CHARGE_CONTRACT_DAY)
+
+    def cost_per_gft_day(self) -> float:
+        """B2 — ONE GFT, per day. Its COUNT follows the rig count, at 1 per ``gft_ratio`` rigs."""
+        return sum(l.cost_per_day() for l in self.spread if l.charge == CHARGE_GFT)
 
     def selling_factor(self) -> float:
         """The chain, multiplied out in the order the model lists it."""
@@ -489,6 +510,25 @@ def effective(library: CostingModel, tender: Optional[CostingModel]) -> CostingM
 
 
 # ---------------------------------------------------------------------------
+# Inputs that no longer control anything
+# ---------------------------------------------------------------------------
+# A tender model saved before a split or a rename keeps whatever keys it was saved with. Deleting
+# the key on load would be a silent edit of somebody's model; leaving it unmentioned would let them
+# keep tuning a number that stopped being read. So: nothing reads these — a stale value cannot move
+# a single figure, which is the whole of "harmless" — and the register carries a row per stale key
+# saying what replaced it. The row starts blank like every other, so the register reads NOT CLEARED
+# until a person has actually looked at it.
+RETIRED_INPUTS: dict[str, str] = {
+    "site_team_supervises_rigs": (
+        "It scaled the SITE team by ceil(rigs / this), which treated the site team and the GFT as "
+        "one resource. They are two: the site team manages a site (`site_count` x "
+        "`site_team_per_site`, independent of rigs) and the GFT manages rigs (`gft_ratio`, "
+        "default 6). Nothing reads this key any more, so the value here changes nothing — set "
+        "`gft_ratio` if you meant the 6:1 supervision rule."),
+}
+
+
+# ---------------------------------------------------------------------------
 # The defaults — GI_Costing_Template.xlsx, reproduced
 # ---------------------------------------------------------------------------
 DEFAULT_INPUTS: dict[str, float] = {
@@ -533,17 +573,16 @@ DEFAULT_INPUTS: dict[str, float] = {
     "truck_rate": 1500.0,
     "truck_days": 2.0,
     "survey_per_location": 1000.0,
-    # ORGANISATION
+    # ORGANISATION — two DIFFERENT supervision resources, and the difference is the point.
     #
-    # THE STATED RULE IS 6 RIGS PER 1 SITE TEAM (GFT), and 6.0 is that rule as the default. The
-    # template carried 3.0; moving to the stated 6:1 HALVES the team count for any job between
-    # 3 and 6 exact rigs and shifts every figure computed from it — a deliberate, documented
-    # behaviour change, not a drift. OPEN QUESTION for the estimator (recorded on the assumptions
-    # register): is "site team" the same resource as a GFT? The SITE TEAM spread block is
-    # engineer + foreman + geologist + PM; if the 6:1 rule counts GFTs only, the ratio and the
-    # block's membership are two different judgements. The value is an ordinary model input —
-    # change it per tender like anything else.
-    "site_team_supervises_rigs": 6.0,
+    # The open question a previous version left on the register ("is the site team the same
+    # resource as a GFT?") is ANSWERED: they are not. The site team (engineer + foreman +
+    # geologist + PM) manages a SITE, so its count follows the number of sites and does not move
+    # when a rig is added. The GFT manages RIGS, at one per `gft_ratio` of them. Every number here
+    # is an ordinary input — several of them are assumptions, so all of them are adjustable.
+    "site_count": 1.0,              # how many sites this contract runs on
+    "site_team_per_site": 1.0,      # teams per site — a coefficient, so 0.5 = shared with another job
+    "gft_ratio": 6.0,               # rigs per GFT — the stated rule
     "hours_per_day": 8.0,
 }
 
@@ -629,6 +668,19 @@ def default_model() -> CostingModel:
                    note="Split across three concurrent contracts. If this one runs alone the "
                         "allocation goes to 1.00 and the rate rises materially."),
 
+        # THE GFT — a different resource from the site team above, on its own charge class because
+        # its COUNT follows the rigs rather than the sites. Rated at ZERO on purpose, the same rule
+        # the preliminaries follow: this is a number that is genuinely yours, and a plausible
+        # invented figure would price a tender without anybody deciding anything. It is reported
+        # loudly in three places until it is entered — the build-up row, the priced bill's
+        # problems, and the assumptions register — because unlike a preliminary it is recovered
+        # through a build-up rather than matched to a bill line, so a zero here would otherwise be
+        # silently free.
+        SpreadLine(key="gft", label="Ground/field technician team (GFT)", block="GFT",
+                   multiplier=1.0, rate=0.0, charge=CHARGE_GFT,
+                   note="Your cost per GFT-day — not yet entered. One GFT supervises `gft_ratio` "
+                        "rigs (stated rule: 6). Nothing using this prices until it is entered."),
+
         # PRELIMINARIES — the resources the client bills as their own items rather than expecting
         # inside a drilling rate. Rated at ZERO on purpose: these are the numbers that are genuinely
         # yours, nobody else in the market has them, and a plausible invented figure here would be
@@ -655,7 +707,12 @@ def default_model() -> CostingModel:
                   note="Idle days x spread day-cost, divided by standing hours."),
         ItemBasis(key="site_team", label="Site team — whole contract", driver=DRIVER_SITE_TEAM,
                   divisor=DIVISOR_CONTRACT_MONTHS,
-                  note="Recovered in Bill 1 time-related items, never inside a drilling rate."),
+                  note="One team per site (site_count x site_team_per_site). Recovered in Bill 1 "
+                       "time-related items, never inside a drilling rate."),
+        ItemBasis(key="gft", label="GFT — whole contract", driver=DRIVER_GFT,
+                  divisor=DIVISOR_CONTRACT_MONTHS,
+                  note="ceil(rigs / gft_ratio) technician teams. A different resource from the "
+                       "site team: this one follows the RIGS."),
         ItemBasis(key="mobilise", label="Mobilise on land", driver=DRIVER_FIXED,
                   divisor=DIVISOR_NONE, note="Crane lorry + truck, in and out.",
                   components=[

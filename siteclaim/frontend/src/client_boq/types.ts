@@ -398,10 +398,20 @@ export interface CostingResponse {
   checks: CostingCheck[];
   spread: {
     cost_per_rig_day: number;
+    /** ONE site team, per day. The site team manages a site — its count never moves with rigs. */
     cost_per_contract_day: number;
-    site_teams_required: number;
+    /** ONE GFT, per day. A different resource: the GFT manages rigs, at one per `gft_ratio`. */
+    cost_per_gft_day: number;
+    site_count: number;
+    site_team_per_site: number;
+    /** sites × coefficient. Fractional on purpose — half a team is a team shared with another job. */
+    site_teams: number;
+    gft_ratio: number;
+    gfts_required: number;
     rig_cost_programme: number;
     rig_cost_programme_p90: number;
+    site_team_cost_programme: number;
+    gft_cost_programme: number;
   };
   buildup: {
     rows: { key: string; label: string; quantity: number; total_cost: number; cost_per_unit: number | null; derivation: string; problem: string }[];

@@ -10,12 +10,17 @@ Two day-costs, and they behave differently:
 * **A — cost per rig-day.** Plant (held for the whole spread duration, hence a standby factor),
   labour, consumables. **Scales with the number of rigs.**
 * **B — cost per contract-day.** The site engineer, foreman, geologist and project manager.
-  **Does not.** One site team supervises several rigs, and it runs for the contract period however
-  much drilling is happening.
+  **Does not.** The site team manages a SITE: one team per site (times a coefficient), running for
+  the contract period however much drilling is happening. Add a rig and this does not move.
+* **B2 — cost per GFT-day.** The ground/field technician team, which manages RIGS at one per
+  ``gft_ratio`` of them. This is the resource the 6:1 rule is about, and it is *not* the site team —
+  an earlier version had one resource doing both jobs, which multiplied site management by the rig
+  count and over-priced supervision on every multi-rig job.
 
-Merge them and supervision gets priced per rig, which over-recovers on a one-rig job and
-under-recovers on a three-rig one. B is recovered in Bill 1's time-related items and never inside a
-drilling rate — which is why it leaves this module as a **monthly** figure.
+Merge A and B and supervision gets priced per rig, which over-recovers on a one-rig job and
+under-recovers on a three-rig one. Merge B and B2 and site management scales with plant. B and B2
+are both recovered in Bill 1's time-related items and never inside a drilling rate — which is why
+they leave this module as **monthly** figures.
 
 HOW A DAY BECOMES A RATE
 ------------------------
@@ -61,6 +66,7 @@ from client_boq.boq.model import (
     DRIVER_PER_HOLE,
     DRIVER_ROCK_DAYS,
     DRIVER_SETUP_DAYS,
+    DRIVER_GFT,
     DRIVER_SITE_TEAM,
     DRIVER_SOIL_DAYS,
     DRIVER_STANDING_DAYS,
@@ -91,15 +97,23 @@ class Spread(BaseModel):
 
     rows: list[SpreadRow] = Field(default_factory=list)
     cost_per_rig_day: float = 0.0
-    cost_per_contract_day: float = 0.0
-    # The fallback mirrors the stated 6:1 rule (see model.DEFAULT_INPUTS) — a spread built
-    # without a model input in reach must not resurrect the template's old 3:1.
-    site_team_supervises: float = 6.0
-    site_teams_required: int = 0
+    cost_per_contract_day: float = 0.0      # ONE site team, per day
+    cost_per_gft_day: float = 0.0           # ONE GFT, per day
+
+    # TWO SUPERVISION RESOURCES, COUNTED DIFFERENTLY. The site team manages a SITE — its count is
+    # sites x a coefficient and does not move when a rig is added. The GFT manages RIGS, at one per
+    # `gft_ratio`. A previous version had one resource doing both jobs, which multiplied site
+    # management by the rig count.
+    site_count: float = 1.0
+    site_team_per_site: float = 1.0
+    site_teams: float = 0.0                 # fractional on purpose: a coefficient, like any allocation
+    gft_ratio: float = 6.0
+    gfts_required: int = 0
 
     rig_cost_programme: float = 0.0         # P50
     rig_cost_programme_p90: float = 0.0     # the exposure if productivity lands slow
     site_team_cost_programme: float = 0.0
+    gft_cost_programme: float = 0.0
 
     def by_block(self) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -116,22 +130,33 @@ def build_spread(programme: Programme, model: CostingModel) -> Spread:
                   note=line.note)
         for line in model.spread
     ]
-    supervises = model.value("site_team_supervises_rigs", 6.0) or 6.0
-    # Teams follow the UNROUNDED rig count, as the template does: 1.56 rigs still needs one team,
-    # and rounding the rigs first would occasionally buy a second team nobody needs.
-    teams = math.ceil(programme.rigs_exact / supervises) if programme.rigs_exact > 0 else 0
+    # THE SITE TEAM IS PER SITE. Not per rig, and not rounded up: `site_team_per_site` is a
+    # coefficient exactly like the geologist's 0.5 — half a team means a team shared with another
+    # contract, which is a real and chargeable arrangement, and rounding it up would invent a
+    # second team nobody employs.
+    sites = model.value("site_count", 1.0)
+    per_site = model.value("site_team_per_site", 1.0)
+    site_teams = sites * per_site
+
+    # THE GFT IS PER RIG-GROUP. Counted off the UNROUNDED rig count, as the template counted
+    # supervision: 6.1 rigs genuinely needs a second GFT, and rounding the rigs first would hide it.
+    gft_ratio = model.value("gft_ratio", 6.0) or 6.0
+    gfts = math.ceil(programme.rigs_exact / gft_ratio) if programme.rigs_exact > 0 else 0
 
     spread = Spread(
         rows=rows,
         cost_per_rig_day=model.cost_per_rig_day(),
         cost_per_contract_day=model.cost_per_contract_day(),
-        site_team_supervises=supervises,
-        site_teams_required=teams,
+        cost_per_gft_day=model.cost_per_gft_day(),
+        site_count=sites, site_team_per_site=per_site, site_teams=site_teams,
+        gft_ratio=gft_ratio, gfts_required=gfts,
     )
     spread.rig_cost_programme = spread.cost_per_rig_day * programme.work_days
     spread.rig_cost_programme_p90 = spread.cost_per_rig_day * programme.work_days_p90
     spread.site_team_cost_programme = (
-        spread.cost_per_contract_day * teams * programme.work_days_available_per_rig)
+        spread.cost_per_contract_day * site_teams * programme.work_days_available_per_rig)
+    spread.gft_cost_programme = (
+        spread.cost_per_gft_day * gfts * programme.work_days_available_per_rig)
     return spread
 
 
@@ -222,13 +247,31 @@ def _row(basis: ItemBasis, programme: Programme, model: CostingModel,
                           f"= {row.quantity:,.1f} days × {rig_day:,.2f} per rig-day")
 
     elif basis.driver == DRIVER_SITE_TEAM:
-        row.quantity = spread.site_teams_required * programme.work_days_available_per_rig
+        row.quantity = spread.site_teams * programme.work_days_available_per_rig
         row.unit_cost = spread.cost_per_contract_day
         row.total_cost = spread.site_team_cost_programme
-        row.derivation = (f"{spread.site_teams_required} team(s) × "
+        row.derivation = (f"{spread.site_count:g} site(s) × {spread.site_team_per_site:g} team(s) "
+                          f"per site = {spread.site_teams:g} × "
                           f"{programme.work_days_available_per_rig:,.0f} contract-days × "
-                          f"{spread.cost_per_contract_day:,.2f} per day. Recovered in Bill 1, "
+                          f"{spread.cost_per_contract_day:,.2f} per day. The site team manages a "
+                          f"SITE — it does not move with the rig count. Recovered in Bill 1, "
                           f"never inside a drilling rate.")
+
+    elif basis.driver == DRIVER_GFT:
+        row.quantity = spread.gfts_required * programme.work_days_available_per_rig
+        row.unit_cost = spread.cost_per_gft_day
+        row.total_cost = spread.gft_cost_programme
+        row.derivation = (f"ceil({programme.rigs_exact:.2f} rigs ÷ {spread.gft_ratio:g}) = "
+                          f"{spread.gfts_required} GFT(s) × "
+                          f"{programme.work_days_available_per_rig:,.0f} contract-days × "
+                          f"{spread.cost_per_gft_day:,.2f} per day. The GFT manages RIGS — a "
+                          f"different resource from the site team.")
+        if spread.gfts_required and spread.cost_per_gft_day <= 0:
+            # Loud, because unlike a preliminary this is recovered through a build-up rather than
+            # matched to a bill line: a zero here would be supervision of the rigs, free.
+            row.problem = (f"{spread.gfts_required} GFT(s) are required and the GFT has no rate, "
+                           f"so supervising the rigs prices at nothing. Enter the GFT day-rate in "
+                           f"the rate library and every estimate picks it up.")
 
     elif basis.driver == DRIVER_FIXED:
         parts = []

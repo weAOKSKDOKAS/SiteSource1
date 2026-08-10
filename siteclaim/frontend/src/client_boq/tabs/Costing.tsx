@@ -121,7 +121,12 @@ export function Costing({
             <Figure
               label="rigs"
               value={String(programme.rigs_required)}
-              note={`${programme.rigs_exact.toFixed(2)} exact · ${spread.site_teams_required} site team(s)`}
+              note={`${programme.rigs_exact.toFixed(2)} exact · ${spread.gfts_required} GFT(s) at 1 per ${spread.gft_ratio}`}
+            />
+            <Figure
+              label="site teams"
+              value={String(spread.site_teams)}
+              note={`${spread.site_count} site(s) × ${spread.site_team_per_site} — not per rig`}
             />
             <Figure
               label="standing time"
@@ -131,7 +136,7 @@ export function Costing({
             <Figure
               label="cost per rig-day"
               value={money(spread.cost_per_rig_day)}
-              note={`contract-day ${money(spread.cost_per_contract_day)}`}
+              note={`site team ${money(spread.cost_per_contract_day)} · GFT ${money(spread.cost_per_gft_day)}`}
             />
             <Figure
               label="selling factor"

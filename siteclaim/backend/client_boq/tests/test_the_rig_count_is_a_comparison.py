@@ -1,8 +1,13 @@
 """The rig count is computed as a curve over n, and the machine PROPOSES the cheapest feasible one.
 
 The identity that makes the curve honest: total rig-days do not move with n (n × work_days/n), so
-"more rigs cost more" is wrong on its face. What moves is supervision (steps of one team per
-`supervises` rigs), mobilisations (one per rig), and how long the time-related preliminaries run.
+"more rigs cost more" is wrong on its face. What moves is supervision, mobilisations (one per rig),
+and how long the time-related preliminaries run.
+
+RE-ANCHORED IN THE OPEN alongside the site-team/GFT split: supervision is two terms now, and they
+pull in opposite directions. The GFT steps UP with n (one per `gft_ratio` rigs) but runs for a
+shorter duration; the SITE team's count is fixed and only its duration falls. Both are still on the
+curve; the mechanism each test pinned is unchanged, only the resource it names.
 Deterministic throughout — no model call.
 """
 
@@ -46,11 +51,12 @@ def test_duration_halves_when_rigs_double():
     assert by_n[8].duration_work_days == pytest.approx(by_n[4].duration_work_days / 2)
 
 
-def test_teams_step_at_the_stated_ratio():
+def test_gfts_step_at_the_stated_ratio_and_site_teams_do_not():
     programme, model = _programme()
     curve = opt.optimise(programme, model)
     by_n = {o.n: o for o in curve.options}
-    assert by_n[6].teams == 1 and by_n[7].teams == 2, "6:1 — the seventh rig buys the second team"
+    assert by_n[6].gfts == 1 and by_n[7].gfts == 2, "6:1 — the seventh rig buys the second GFT"
+    assert {o.site_teams for o in curve.options} == {1.0}, "the site team is per SITE, not per rig"
 
 
 def test_mobilisation_rises_one_spread_at_a_time():
@@ -171,4 +177,5 @@ def test_the_costing_payload_carries_the_curve(tmp_path, monkeypatch):
     assert "optimiser" in body
     assert [o["n"] for o in body["optimiser"]["options"]] == list(range(1, 13))
     assert body["optimiser"]["proposal_n"] is not None
-    assert body["optimiser"]["supervises"] == 6.0
+    assert body["optimiser"]["gft_ratio"] == 6.0
+    assert body["optimiser"]["site_teams"] == 1.0

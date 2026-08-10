@@ -121,10 +121,19 @@ class TestItStillCalculates:
         assert "DIVERGENT" in formulas and "converged" in formulas
         assert str(model.method.divergent_threshold) in formulas
 
-    def test_the_two_day_costs_are_sums_of_their_own_lines(self, book):
+    def test_each_day_cost_is_a_sum_of_its_own_lines(self, book):
+        # RE-ANCHORED IN THE OPEN, from two subtotals to three. The count was never the subject:
+        # this test is about each day-cost being a live SUM over its OWN block rather than a typed
+        # figure or a shared range. The site-team/GFT split made supervision two resources, so
+        # there are now three blocks — A per rig-day, B per contract-day (the site team), B2 per
+        # GFT-day. It is written against the model's own charge classes so a fourth would be
+        # counted rather than break it.
+        from client_boq.boq.model import CHARGE_GFT, CHARGE_RIG_DAY, CHARGE_CONTRACT_DAY
+
         formulas = list(_formulas(book["03 Resource Rates"]).values())
-        assert sum(1 for f in formulas if f.startswith("=SUM(E")) == 2, \
-            "one subtotal for the rig-day, one for the contract-day"
+        expected = len({CHARGE_RIG_DAY, CHARGE_CONTRACT_DAY, CHARGE_GFT})
+        assert sum(1 for f in formulas if f.startswith("=SUM(E")) == expected, \
+            "one subtotal per day-cost block, each summing only its own rows"
 
     def test_a_resource_line_reads_its_rate_from_the_inputs_sheet(self, book):
         formulas = " ".join(_formulas(book["03 Resource Rates"]).values())

@@ -48,7 +48,13 @@ from client_boq.boq import empirical
 from client_boq.boq.assumptions import Register
 from client_boq.boq.buildup import Buildup, Spread
 from client_boq.boq.costing import PricedBQ
-from client_boq.boq.model import CHARGE_CONTRACT_DAY, CHARGE_RIG_DAY, CostingModel
+from client_boq.boq.model import (
+    CHARGE_CONTRACT_DAY,
+    CHARGE_GFT,
+    CHARGE_PRELIM,
+    CHARGE_RIG_DAY,
+    CostingModel,
+)
 from client_boq.boq.programme import Programme
 
 # The convention, as fonts. Blue is yours to change; black is arithmetic; green points elsewhere.
@@ -65,6 +71,15 @@ HEADER_FILL = PatternFill("solid", fgColor="FFEFEFEF")
 MONEY = "#,##0.00"
 NUMBER = "#,##0.00"
 PERCENT = "0.0%"
+
+# What the "Charged to" column says. Three day-costs, and a fourth thing that is not a day-cost at
+# all: a preliminary is billed as its own item and must never be folded into either total.
+CHARGE_LABELS = {
+    CHARGE_RIG_DAY: "per rig-day",
+    CHARGE_CONTRACT_DAY: "per contract-day",
+    CHARGE_GFT: "per GFT-day",
+    CHARGE_PRELIM: "billed as its own item",
+}
 
 SHEETS = ("00 README", "01 Inputs", "02 Production", "03 Resource Rates", "04 Item Buildup",
           "05 BQ Priced", "06 Assumptions Register", "07 Empirical Basis")
@@ -240,7 +255,12 @@ def _inputs(ws, model: CostingModel, where: _Ref, contract_reference: str) -> No
         scalar(key, label, "", note, fmt=PERCENT, key_assumption=key == "margin")
 
     block("ORGANISATION")
-    scalar("site_team_supervises_rigs", "One site team supervises", "rigs")
+    scalar("site_count", "Number of sites", "nr",
+           "The site team is carried per site, not per rig.")
+    scalar("site_team_per_site", "Site teams per site", "nr",
+           "A coefficient: 1.0 dedicated, 0.5 shared with another contract. Not rounded up.")
+    scalar("gft_ratio", "One GFT supervises", "rigs",
+           "The GFT manages RIGS. A different resource from the site team, which manages a site.")
 
     block("SPREAD  (per day — the resources standing on site)")
     for n, head in enumerate(["Resource", "Multiplier", "Rate ($/day)", "Charged to"], start=2):
@@ -252,8 +272,7 @@ def _inputs(ws, model: CostingModel, where: _Ref, contract_reference: str) -> No
         rate = ws.cell(row=row, column=4, value=line.rate)
         rate.font = INPUT
         rate.number_format = MONEY
-        ws.cell(row=row, column=5,
-                value="per rig-day" if line.charge == CHARGE_RIG_DAY else "per contract-day")
+        ws.cell(row=row, column=5, value=CHARGE_LABELS.get(line.charge, "per contract-day"))
         ws.cell(row=row, column=6, value=line.note).font = NOTE
         where.put(f"spread.{line.key}.multiplier", ws.title, f"$C${row}")
         where.put(f"spread.{line.key}.rate", ws.title, f"$D${row}")
@@ -529,10 +548,15 @@ def _resource_rates(ws, model: CostingModel, spread: Spread, where: _Ref) -> Non
     row = 5
     rig_rows: list[int] = []
     team_rows: list[int] = []
+    gft_rows: list[int] = []
 
     for charge, title, bucket in ((CHARGE_RIG_DAY, "A — PER RIG-DAY  (scales with rigs)", rig_rows),
                                   (CHARGE_CONTRACT_DAY,
-                                   "B — PER CONTRACT-DAY  (does not scale with rigs)", team_rows)):
+                                   "B — PER CONTRACT-DAY  (the SITE team: per site, not per rig)",
+                                   team_rows),
+                                  (CHARGE_GFT,
+                                   "B2 — PER GFT-DAY  (the GFT: one per gft_ratio RIGS)",
+                                   gft_rows)):
         ws.cell(row=row, column=2, value=title).font = LABEL
         row += 1
         for line in model.spread:
@@ -548,14 +572,17 @@ def _resource_rates(ws, model: CostingModel, spread: Spread, where: _Ref) -> Non
             bucket.append(row)
             row += 1
 
-        total = ws.cell(row=row, column=2,
-                        value="A — COST PER RIG-DAY" if charge == CHARGE_RIG_DAY
-                        else "B — COST PER CONTRACT-DAY")
+        total = ws.cell(row=row, column=2, value={
+            CHARGE_RIG_DAY: "A — COST PER RIG-DAY",
+            CHARGE_CONTRACT_DAY: "B — COST PER CONTRACT-DAY",
+            CHARGE_GFT: "B2 — COST PER GFT-DAY",
+        }[charge])
         total.font = HEADING
         cell = ws.cell(row=row, column=5, value=_sum_of(bucket))
         cell.font = HEADING
         cell.number_format = MONEY
-        where.put("rig_day" if charge == CHARGE_RIG_DAY else "contract_day", ws.title, f"$E${row}")
+        where.put({CHARGE_RIG_DAY: "rig_day", CHARGE_CONTRACT_DAY: "contract_day",
+                   CHARGE_GFT: "gft_day"}[charge], ws.title, f"$E${row}")
         row += 2
 
     # C — the preliminaries. Deliberately below the two totals and outside both, because these are
@@ -582,15 +609,35 @@ def _resource_rates(ws, model: CostingModel, spread: Spread, where: _Ref) -> Non
             row += 1
         row += 1
 
-    ws.cell(row=row, column=2, value="One site team supervises this many rigs")
-    ws.cell(row=row, column=5, value=where.formula("inputs.site_team_supervises_rigs")).font = LINK
-    where.put("supervises", ws.title, f"$E${row}")
+    # THE TWO COUNTS, ARRIVED AT DIFFERENTLY. Sites x a coefficient for the site team — no ROUNDUP,
+    # because half a team is a team shared with another contract and rounding invents one nobody
+    # employs. ROUNDUP for the GFT, because it is a whole team per group of rigs.
+    ws.cell(row=row, column=2, value="Number of sites")
+    ws.cell(row=row, column=5, value=where.formula("inputs.site_count")).font = LINK
+    where.put("site_count", ws.title, f"$E${row}")
     row += 1
 
-    ws.cell(row=row, column=2, value="Site teams required")
-    ws.cell(row=row, column=5,
-            value=f"=ROUNDUP({where.get('rigs')}/{where.get('supervises')},0)")
+    ws.cell(row=row, column=2, value="Site teams per site")
+    ws.cell(row=row, column=5, value=where.formula("inputs.site_team_per_site")).font = LINK
+    where.put("per_site", ws.title, f"$E${row}")
+    row += 1
+
+    ws.cell(row=row, column=2, value="Site teams carried")
+    ws.cell(row=row, column=5, value=f"={where.get('site_count')}*{where.get('per_site')}")
+    ws.cell(row=row, column=6,
+            value="Independent of the rig count — the site team manages a site.").font = NOTE
     where.put("teams", ws.title, f"$E${row}")
+    row += 1
+
+    ws.cell(row=row, column=2, value="One GFT supervises this many rigs")
+    ws.cell(row=row, column=5, value=where.formula("inputs.gft_ratio")).font = LINK
+    where.put("gft_ratio", ws.title, f"$E${row}")
+    row += 1
+
+    ws.cell(row=row, column=2, value="GFTs required")
+    ws.cell(row=row, column=5,
+            value=f"=ROUNDUP({where.get('rigs')}/{where.get('gft_ratio')},0)")
+    where.put("gfts", ws.title, f"$E${row}")
     row += 1
 
     ws.cell(row=row, column=2, value="Rig cost — full programme (P50)")
@@ -610,6 +657,16 @@ def _resource_rates(ws, model: CostingModel, spread: Spread, where: _Ref) -> Non
             value=(f"={where.get('contract_day')}*{where.get('teams')}"
                    f"*{where.get('days_available')}")).number_format = MONEY
     where.put("team_cost", ws.title, f"$E${row}")
+    row += 1
+
+    ws.cell(row=row, column=2, value="GFT cost — full programme")
+    ws.cell(row=row, column=5,
+            value=(f"={where.get('gft_day')}*{where.get('gfts')}"
+                   f"*{where.get('days_available')}")).number_format = MONEY
+    ws.cell(row=row, column=6,
+            value="Zero until the GFT day-rate is entered — supervising the rigs is not free."
+            ).font = NOTE
+    where.put("gft_cost", ws.title, f"$E${row}")
 
     _widths(ws, {"B": 44, "C": 13, "D": 15, "E": 16, "F": 62})
 

@@ -69,19 +69,23 @@ class TestTheDailyCost:
         assert pm.multiplier == 0.33 and pm.cost_per_day == pytest.approx(990.0)
 
     def test_one_site_team_covers_this_job(self, spread):
-        assert spread.site_teams_required == 1, "1.56 rigs, one team supervises six"
+        assert spread.site_teams == 1.0, "one site, one team — not a function of the rig count"
 
-    def test_a_fourth_rig_buys_a_second_team(self, programme, model):
-        # RE-ANCHORED when the default ratio moved 3.0 → 6.0 (the stated 6-rigs-per-GFT rule).
-        # This test is about the MECHANISM — teams follow the unrounded rig count over the ratio —
-        # and it used to encode the template's 3:1 default as if that were the rule. It now states
-        # the ratio it exercises; the 6:1 default has its own tests in
-        # test_the_supervision_ratio_is_the_stated_rule.py.
-        model.inputs["site_team_supervises_rigs"] = 3.0
+    def test_a_fourth_rig_buys_a_second_gft_and_leaves_the_site_team_alone(self, programme, model):
+        # RE-ANCHORED TWICE, both in the open. First when the default ratio moved 3.0 → 6.0 (the
+        # stated 6-rigs-per-GFT rule). Now again, because the human ruled that the resource the
+        # ratio counts is the GFT, not the site team: the site team manages a SITE and does not
+        # move with rigs at all. The MECHANISM this test is about — a supervision count following
+        # the unrounded rig count over an editable ratio — is unchanged and still pinned here; it
+        # has moved to the resource it was always describing, and the site team's independence is
+        # asserted alongside it so the old behaviour cannot come back unnoticed.
+        model.inputs["gft_ratio"] = 3.0
         model.inputs["contract_period_months"] = 8          # squeeze the programme
         tighter = derive(TECHNOPOLE, model)
         assert tighter.rigs_exact == pytest.approx(3.909, abs=0.01)
-        assert build_spread(tighter, model).site_teams_required == 2
+        tighter_spread = build_spread(tighter, model)
+        assert tighter_spread.gfts_required == 2
+        assert tighter_spread.site_teams == 1.0, "the site team did NOT follow the rigs"
 
     def test_the_p90_exposure_is_carried_beside_the_p50(self, spread, programme):
         assert spread.rig_cost_programme_p90 > spread.rig_cost_programme

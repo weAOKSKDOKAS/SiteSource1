@@ -156,21 +156,54 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
               f"({programme.rigs_exact:.2f}, rounded up)."))
 
     rows.append(Assumption(
-        key="site_teams", label="Site teams required", value=f"{spread.site_teams_required}",
+        key="site_teams", label="Site teams carried", value=f"{spread.site_teams:g}",
         derived=True, source=SOURCE_DERIVED, confidence=CONFIDENCE_HIGH,
-        basis=f"One team supervises {spread.site_team_supervises:g} rigs. The team runs for the "
-              f"contract period regardless of how much drilling is happening, and is recovered in "
-              f"Bill 1 rather than inside a drilling rate."))
+        basis=f"{spread.site_count:g} site(s) x {spread.site_team_per_site:g} team per site. The "
+              f"site team manages a SITE, so its count does not move when a rig is added or taken "
+              f"away. It runs for the contract period regardless of how much drilling is "
+              f"happening, and is recovered in Bill 1 rather than inside a drilling rate."))
 
     rows.append(Assumption(
-        key="supervision_ratio", label="Supervision ratio",
-        value=f"{spread.site_team_supervises:g} rigs per team",
-        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_LOW,
-        basis="The stated rule is 6 rigs per 1 GFT, carried as the default. OPEN QUESTION to "
-              "confirm here: is 'site team' the same resource as a GFT? The SITE TEAM block is "
-              "engineer + foreman + geologist + PM — if the 6:1 rule counts GFTs only, the ratio "
-              "and the block's membership are two different judgements. The template previously "
-              "carried 3:1; at 6:1 the team count halves for any job between 3 and 6 exact rigs."))
+        key="site_team_per_site", label="Site teams per site",
+        value=f"{spread.site_team_per_site:g}",
+        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
+        basis="A coefficient, not a headcount: 1.0 is a team dedicated to this site, 0.5 is a team "
+              "shared with another contract. It is deliberately not rounded up — rounding would "
+              "invent a second team nobody employs. Adjustable per tender."))
+
+    rows.append(Assumption(
+        key="site_count", label="Number of sites", value=f"{spread.site_count:g}",
+        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
+        basis="How many separate sites this contract runs on. Defaults to 1. The site team is "
+              "carried per site; a two-site contract carries two teams at the same rig count."))
+
+    rows.append(Assumption(
+        key="gfts", label="GFTs required", value=f"{spread.gfts_required}",
+        derived=True, source=SOURCE_DERIVED, confidence=CONFIDENCE_HIGH,
+        basis=f"ceil({programme.rigs_exact:.2f} rigs / {spread.gft_ratio:g} per GFT). Counted off "
+              f"the UNROUNDED rig count, because 6.1 rigs genuinely needs a second GFT and "
+              f"rounding the rigs first would hide it."))
+
+    rows.append(Assumption(
+        key="supervision_ratio", label="Rigs per GFT", value=f"{spread.gft_ratio:g} rigs per GFT",
+        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_MEDIUM,
+        basis="The stated rule is 6 rigs per 1 GFT, carried as the default and adjustable per "
+              "tender. RESOLVED: the site team is NOT the same resource as a GFT. The site team "
+              "(engineer + foreman + geologist + PM) manages a site and is counted per site; the "
+              "GFT manages rigs and is the only resource the 6:1 rule applies to. An earlier "
+              "version applied 6:1 to the site team, which multiplied site management by the rig "
+              "count — it is now two rows because they are two judgements."))
+
+    gft_day = spread.cost_per_gft_day
+    rows.append(Assumption(
+        key="gft_rate", label="GFT day-rate",
+        value=f"${gft_day:,.0f} per GFT-day" if gft_day > 0 else "not entered",
+        source=SOURCE_JUDGEMENT,
+        confidence=CONFIDENCE_HIGH if gft_day > 0 else CONFIDENCE_LOW,
+        basis=("Your own cost of one GFT for one day, from the rate library." if gft_day > 0 else
+               "NOT YET ENTERED, so supervising the rigs currently prices at nothing. It is left "
+               "at zero rather than guessed because it is your cost, not a market figure — enter "
+               "it in the rate library and every estimate picks it up.")))
 
     # --- the judgements ------------------------------------------------------
     residual = model.value("residual_site_factor", 1.0)
@@ -232,6 +265,14 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
         source=SOURCE_CONTRACT, confidence=CONFIDENCE_HIGH,
         basis="Contract Data Part Two. Applies to compensation-event Defined Cost, not to the BQ "
               "rates."))
+
+    # --- inputs the model carries that nothing reads -------------------------
+    # A row rather than a silent deletion: the value is already inert, and a person should be told
+    # their knob stopped being connected rather than discover it from a number that never moves.
+    for key, value, why in model.retired():
+        rows.append(Assumption(
+            key=f"retired_{key}", label=f"Retired input: {key}", value=f"{value:g} (not read)",
+            source=SOURCE_DERIVED, confidence=CONFIDENCE_LOW, basis=why))
 
     # --- the standing caveats ------------------------------------------------
     rows.append(Assumption(

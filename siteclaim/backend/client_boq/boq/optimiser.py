@@ -5,7 +5,8 @@ the contract period" — a floor, not a choice. This module prices every rig cou
 curve, because the count is a commercial decision with a real trade-off in it:
 
     cost(n) = n·rig_rate·duration(n)                    ← CONSTANT: n × (work_days/n) = work_days
-            + ceil(n / supervises)·team_cost·duration(n)  ← falls with n, in steps of one team
+            + ceil(n / gft_ratio)·gft_cost·duration(n)   ← the GFT: steps UP with n, runs shorter
+            + site_teams·team_cost·duration(n)           ← the SITE team: count fixed, falls with n
             + mob·n                                       ← rises with n, one mobilisation per rig
             + prelims_per_day·calendar(n)                 ← falls with n: the office closes sooner
 
@@ -44,9 +45,11 @@ class RigOption(BaseModel):
     n: int
     duration_work_days: float = 0.0
     duration_calendar_days: float = 0.0
-    teams: int = 0
+    gfts: int = 0
+    site_teams: float = 0.0
     rig_cost: float = 0.0               # constant across n — shown so totals are real money
-    team_cost: float = 0.0
+    gft_cost: float = 0.0
+    site_team_cost: float = 0.0
     mob_cost: float = 0.0
     prelim_cost: float = 0.0
     total_cost: float = 0.0
@@ -61,7 +64,8 @@ class RigCurve(BaseModel):
     options: list[RigOption] = Field(default_factory=list)
     proposal_n: Optional[int] = None
     floor_n: int = 0                    # what derive() already answered: the fewest that FIT
-    supervises: float = 6.0
+    gft_ratio: float = 6.0
+    site_teams: float = 0.0
     mob_per_rig: float = 0.0
     prelims_per_day: float = 0.0
     notes: list[str] = Field(default_factory=list)
@@ -125,15 +129,22 @@ def optimise(programme: Programme, model: CostingModel, *, n_max: int = N_MAX) -
         curve.notes.append("no programme work-days, so there is nothing to compare")
         return curve
 
-    supervises = model.value("site_team_supervises_rigs", 6.0) or 6.0
+    gft_ratio = model.value("gft_ratio", 6.0) or 6.0
+    site_teams = model.value("site_count", 1.0) * model.value("site_team_per_site", 1.0)
     rig_day = model.cost_per_rig_day()
     team_day = model.cost_per_contract_day()
+    gft_day = model.cost_per_gft_day()
     calendar_ratio = model.value("calendar_to_work_day", 1.0) or 1.0
     available = programme.work_days_available_per_rig
 
     mob, mob_note = mob_cost_per_rig(model)
     prelim_day, prelim_note = prelims_per_day(model)
-    curve.supervises, curve.mob_per_rig, curve.prelims_per_day = supervises, mob, prelim_day
+    curve.gft_ratio, curve.site_teams = gft_ratio, site_teams
+    curve.mob_per_rig, curve.prelims_per_day = mob, prelim_day
+    if gft_day <= 0:
+        curve.notes.append(
+            "the GFT has no rate, so the term that actually steps with the rig count contributes "
+            "nothing to this comparison — enter the GFT day-rate before reading the curve")
     for note in (mob_note, prelim_note):
         if note:
             curve.notes.append(note)
@@ -141,19 +152,21 @@ def optimise(programme: Programme, model: CostingModel, *, n_max: int = N_MAX) -
     for n in range(1, n_max + 1):
         duration = programme.work_days / n
         calendar = duration * calendar_ratio
-        teams = math.ceil(n / supervises)
+        gfts = math.ceil(n / gft_ratio)
         option = RigOption(
             n=n,
             duration_work_days=duration,
             duration_calendar_days=calendar,
-            teams=teams,
+            gfts=gfts,
+            site_teams=site_teams,
             rig_cost=rig_day * programme.work_days,          # n × rig_day × (work_days/n)
-            team_cost=teams * team_day * duration,
+            gft_cost=gfts * gft_day * duration,
+            site_team_cost=site_teams * team_day * duration,
             mob_cost=mob * n,
             prelim_cost=prelim_day * calendar,
             feasible=(available > 0 and duration <= available),
         )
-        option.total_cost = (option.rig_cost + option.team_cost
+        option.total_cost = (option.rig_cost + option.gft_cost + option.site_team_cost
                              + option.mob_cost + option.prelim_cost)
         if not option.feasible:
             option.note = (f"{duration:,.0f} work-days per rig does not fit the "
@@ -168,8 +181,8 @@ def optimise(programme: Programme, model: CostingModel, *, n_max: int = N_MAX) -
         if curve.proposal_n != curve.floor_n:
             curve.notes.append(
                 f"the cheapest feasible count is {curve.proposal_n} rig(s), not the floor of "
-                f"{curve.floor_n} that merely fits — the difference is supervision steps, "
-                f"mobilisations and how long the preliminaries run")
+                f"{curve.floor_n} that merely fits — the difference is GFT steps, the site "
+                f"team's duration, mobilisations and how long the preliminaries run")
     else:
         curve.notes.append(
             f"no rig count up to {n_max} fits the contract period — the programme does not fit "
