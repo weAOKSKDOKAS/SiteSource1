@@ -387,3 +387,84 @@ class TestWhatCouldNotBeMapped:
 
         bill = ClientBill(items=[_item("9.1", bill_no="9", description="Provide Safety Officer")])
         assert bill_summary(bill, {})["unmatched_rules"]
+
+
+class TestBillOneIsMappedByTitleAndItsTextIsAGap:
+    """SMM 1 carries 42 item-coverage blocks, one per preliminaries item, and the BQ's numbers are
+    NOT the clause numbers — BQ 1.12 is Contract Computer Facilities while SMM ¶1.12 is something
+    else. So the mapping is by title, and it is a MAPPING ONLY: the clause numbers were captured,
+    the sub-head text was not, and a head with an invented label is worse than a named gap."""
+
+    def test_the_mapping_reaches_the_clause_the_title_names_not_the_matching_number(self):
+        from client_boq.boq.coverage import title_rules_for
+
+        item = _item("1.12", bill_no="1", description="Contract Computer Facilities")
+        rules = title_rules_for(item)
+        assert [rule.smm_clause for rule in rules] == ["SMM S01 ¶1.28"]
+        assert "¶1.12" not in rules[0].smm_clause, "the BQ number is not the clause number"
+
+    def test_no_label_is_invented_for_a_clause_nobody_transcribed(self):
+        from client_boq.boq.coverage import title_rules_for
+
+        for rule in title_rules_for(_item("1.12", bill_no="1",
+                                          description="Contract Computer Facilities")):
+            assert rule.heads == []
+
+    def test_an_item_whose_clause_is_known_but_untranscribed_never_reads_as_covered(self):
+        """THE BUG THIS CLASS CAUGHT. A matched-but-empty rule made `has_list_for` true, which
+        cleared `no_list_for_section`, which let `settled()` return True on an item with nothing to
+        check. "All covered" for coverage nobody has read is the exact failure that field exists to
+        prevent — and it came back through the door marked "we know which clause it is"."""
+        coverage = coverage_for(_item("1.12", bill_no="1",
+                                      description="Contract Computer Facilities"))
+        assert coverage.total() == 0
+        assert not coverage.settled()
+        assert coverage.no_list_for_section == "1"
+
+    def test_it_says_the_clause_is_known_and_the_words_are_outstanding(self):
+        """A different sentence from "nothing is transcribed for this bill", because it is a
+        different problem: somebody needs to read ONE named clause, not the whole Method."""
+        coverage = coverage_for(_item("1.12", bill_no="1",
+                                      description="Contract Computer Facilities"))
+        assert "SMM S01 ¶1.28 (Contract Computer Facilities) governs this item" \
+            in coverage.no_list_reason
+        assert "sub-heads have not been transcribed" in coverage.no_list_reason
+        assert "worse than a named gap" in coverage.no_list_reason
+
+    def test_a_bill_one_item_nothing_matched_says_the_other_thing(self):
+        coverage = coverage_for(_item("1.62", bill_no="1",
+                                      description="General site clearance of the Site"))
+        assert "none of them matched this item by title" in coverage.no_list_reason
+
+    def test_the_outstanding_clauses_are_listed_by_name(self):
+        from client_boq.boq.coverage import BILL_1_AWAITING_TEXT
+
+        assert len(BILL_1_AWAITING_TEXT) == 27, "every mapped clause still needs its words"
+        by_rule = {row["rule"]: row for row in BILL_1_AWAITING_TEXT}
+        assert by_rule["smm1.28"]["smm_clause"] == "SMM S01 ¶1.28"
+        assert by_rule["smm1.109"]["title"] == "Core and sample store"
+        assert all("verbatim from SMM S01" in row["needs"] for row in BILL_1_AWAITING_TEXT)
+
+    def test_the_two_traffic_flow_items_are_told_apart(self):
+        """BQ 1.5 and 1.6 are provision and maintenance of the SAME measures, one clause apart."""
+        provision = _item("1.5", bill_no="1", description="Provision of measures")
+        maintenance = _item("1.6", bill_no="1", description="Maintenance of measures")
+        from client_boq.boq.coverage import title_rules_for
+
+        assert [r.smm_clause for r in title_rules_for(provision)] == ["SMM S01 ¶1.14"]
+        assert [r.smm_clause for r in title_rules_for(maintenance)] == ["SMM S01 ¶1.15"]
+
+    def test_the_four_smart_site_safety_items_are_told_apart(self):
+        from client_boq.boq.coverage import title_rules_for
+
+        for word, clause in (("plan", "¶1.140"), ("review", "¶1.141"),
+                             ("network", "¶1.146"), ("components", "¶1.151")):
+            item = _item("1.52", bill_no="1",
+                         description=f"Smart Site Safety System — {word}")
+            refs = [r.smm_clause for r in title_rules_for(item)]
+            assert refs == [f"SMM S01 {clause}"], (word, refs)
+
+    def test_bill_one_has_no_bill_wide_list(self):
+        """A preliminaries item's coverage has nothing in common with its neighbour's — a bill-wide
+        list would attach the core-store heads to the insurance item."""
+        assert "1" not in SECTION_COVERAGE

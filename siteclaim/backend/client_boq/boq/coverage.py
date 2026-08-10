@@ -710,6 +710,99 @@ _WAGES_29 = [
               ]),
 ]
 
+
+# ---------------------------------------------------------------------------
+# Bill 1 â General & Preliminaries. THE CLAUSE NUMBERS ARE KNOWN; MOST OF THE TEXT IS NOT.
+# ---------------------------------------------------------------------------
+# SMM 1 carries 42 item-coverage blocks, one per preliminaries item, and the BQ's item numbers are
+# NOT those clause numbers: BQ 1.12 is *Contract Computer Facilities* while SMM ¶1.12 is something
+# else entirely. The mapping is by TITLE — the same lesson as "bill number is not PS number".
+#
+# THE SHAPE: per item, not a Bill-1-wide list. A preliminaries item's coverage has nothing in common
+# with its neighbour's, so a `SECTION_COVERAGE['1']` would attach the core-store heads to the
+# insurance item. There is no genuinely universal subset to put beside these — the one thing every
+# rate in the contract is deemed to include is already `DEEMED_INCLUDED`, ticked once at bill level.
+#
+# WHAT IS AND IS NOT HERE. The title → clause mapping below was read from the real BQ pages and is
+# transcribed in full. The clauses' SUB-HEADS were not: the deep-dive captured the numbers, not the
+# text of 42 blocks. **A head with a made-up label is worse than a named gap**, so no labels are
+# invented. Each entry carries its clause number, its title, and `heads=[]` — and
+# `BILL_1_AWAITING_TEXT` reports exactly which clauses still need their words supplied.
+#
+# An entry with no heads still does useful work: `has_list_for` stays FALSE for it, so the item
+# reads "no list" rather than "all covered", and `no_list_reason` names the clause that governs it.
+# That is the difference between "nobody knows what this rate must carry" and "we know which clause
+# says, and we have not read it yet".
+_BILL_1_MAPPING: tuple[tuple[str, tuple[str, ...], str, str], ...] = (
+    # (rule key, title phrases, SMM clause, what the BQ calls it)
+    ("smm1.05", ("project manager", "take over"), "SMM S01 ¶1.05",
+     "Project Manager's Site Office — take over"),
+    ("smm1.06", ("project manager", "maintain"), "SMM S01 ¶1.06",
+     "Project Manager's Site Office — maintain"),
+    ("smm1.07", ("project manager", "hand back"), "SMM S01 ¶1.07",
+     "Project Manager's Site Office — hand back"),
+    ("smm1.11", ("temporary accommodation",), "SMM S01 ¶1.11",
+     "Temporary accommodation for the Contractor"),
+    ("smm1.14", ("provision of measures",), "SMM S01 ¶1.14",
+     "Maintenance of traffic flow — provision of measures"),
+    ("smm1.15", ("maintenance of measures",), "SMM S01 ¶1.15",
+     "Maintenance of traffic flow — maintenance of measures"),
+    ("smm1.18", ("insurance",), "SMM S01 ¶1.18", "Insurance"),
+    ("smm1.22", ("vehicle", "project manager"), "SMM S01 ¶1.22–1.23",
+     "Vehicles for the Project Manager"),
+    ("smm1.28", ("computer facilities",), "SMM S01 ¶1.28",
+     "Contract Computer Facilities"),
+    ("smm1.28.edms", ("electronic document management",), "SMM S01 ¶1.28",
+     "Electronic Document Management System"),
+    ("smm1.32", ("photograph",), "SMM S01 ¶1.32",
+     "Photographs — progress set, additional, record"),
+    ("smm1.37", ("hoarding",), "SMM S01 ¶1.37", "Hoardings"),
+    ("smm1.40", ("air", "mitigation"), "SMM S01 ¶1.40–1.42",
+     "Environmental mitigation measures — air"),
+    ("smm1.45", ("noise", "mitigation"), "SMM S01 ¶1.45–1.47",
+     "Environmental mitigation measures — noise"),
+    ("smm1.66", ("trip ticket", "complete"), "SMM S01 ¶1.66",
+     "Site management plan for trip ticket system — complete"),
+    ("smm1.67", ("trip ticket", "implement"), "SMM S01 ¶1.67",
+     "Site management plan for trip ticket system — implement"),
+    ("smm1.76", ("dust covering",), "SMM S01 ¶1.76–1.77",
+     "Air pollution abatement — dust covering"),
+    ("smm1.85", ("smoke screen",), "SMM S01 ¶1.85", "Air pollution abatement — smoke screens"),
+    ("smm1.86", ("acoustic screen",), "SMM S01 ¶1.86",
+     "Air pollution abatement — acoustic screens"),
+    ("smm1.100", ("fuel sample",), "SMM S01 ¶1.100", "Fuel sample"),
+    ("smm1.104", ("survey of the site",), "SMM S01 ¶1.104", "Survey of the Site"),
+    ("smm1.109", ("core and sample store",), "SMM S01 ¶1.109–1.111",
+     "Core and sample store"),
+    ("smm1.116", ("telephone line",), "SMM S01 ¶1.116–1.117",
+     "24-hour telephone line"),
+    ("smm1.140", ("smart site safety", "plan"), "SMM S01 ¶1.140",
+     "Smart Site Safety System — plan"),
+    ("smm1.141", ("smart site safety", "review"), "SMM S01 ¶1.141",
+     "Smart Site Safety System — review"),
+    ("smm1.146", ("smart site safety", "network"), "SMM S01 ¶1.146",
+     "Smart Site Safety System — network"),
+    ("smm1.151", ("smart site safety", "component"), "SMM S01 ¶1.151",
+     "Smart Site Safety System — components"),
+)
+
+_BILL_1_NO_TEXT = (
+    "The clause that governs this item is known; its sub-heads were NOT transcribed. Inventing "
+    "labels for them would put words in the contract's mouth, so the clause is named and the text "
+    "is reported as outstanding — see `BILL_1_AWAITING_TEXT`.")
+
+_PRELIMINARIES_1 = [
+    TitleRule(key=key, bill_no="1", match=match, smm_clause=clause, title=title,
+              heads=[], partial=_BILL_1_NO_TEXT)
+    for key, match, clause, title in _BILL_1_MAPPING
+]
+
+BILL_1_AWAITING_TEXT: list[dict] = [
+    {"rule": rule.key, "smm_clause": rule.smm_clause, "title": rule.title,
+     "needs": "the sub-heads of this clause, verbatim from SMM S01"}
+    for rule in _PRELIMINARIES_1
+]
+
 TITLE_COVERAGE: list[TitleRule] = [
     TitleRule(key="rig.establish", match=("establishment of rigs",),
               smm_clause="SMM S02 ¶2.07", title="Setting up rigs",
@@ -720,6 +813,7 @@ TITLE_COVERAGE: list[TitleRule] = [
     TitleRule(key="rig.standing", match=("standing time",),
               smm_clause="SMM S02 ¶2.09", title="Standing time for rigs",
               heads=list(_STANDING_TIME_2_09)),
+    *_PRELIMINARIES_1,
     *_TREES_24,
     *_SAFETY_28,
     *_WAGES_29,
@@ -841,14 +935,19 @@ def title_rules_for(item: BillItem) -> list[TitleRule]:
 
 
 def has_list_for(item: BillItem) -> bool:
-    """Whether the printed item coverage for this item has been transcribed at all.
+    """Whether this item has an actual checklist — HEADS, not merely a clause with its name on it.
 
     The distinction `heads_for` cannot make on its own: an empty list means "this coverage was
     never written down here", not "this item's rate carries nothing".
+
+    IT IS `heads_for`, NOT THE SOURCES. Bill 1's mapping names the clause that governs each
+    preliminaries item and carries NO heads, because SMM S01's 42 blocks were not transcribed. An
+    earlier version of this asked "is there a rule for it?", and a matched-but-empty rule then made
+    `no_list_for_section` blank, which let `settled()` return True on an item with nothing to
+    check. "All covered" for coverage nobody has read is the exact failure this field exists to
+    prevent, and it came back through the door marked "we know which clause it is".
     """
-    return bool(section_of(item) in SECTION_COVERAGE
-                or item.full_ref in ITEM_COVERAGE
-                or title_rules_for(item))
+    return bool(heads_for(item))
 
 
 def heads_for(item: BillItem) -> list[CoverageHead]:
@@ -905,6 +1004,14 @@ def _no_list_reason(item: BillItem) -> str:
     transcribe a thing that is already sitting in this file.
     """
     bill_no = section_of(item)
+    # A clause matched by title but carrying no heads: the governing clause is KNOWN and its words
+    # are outstanding. Saying "nothing is transcribed for this bill" would throw that away.
+    named = [rule for rule in title_rules_for(item) if not rule.heads]
+    if named:
+        clauses = " Â· ".join(f"{rule.smm_clause} ({rule.title})" for rule in named)
+        return (f"{clauses} governs this item, and its sub-heads have not been transcribed. The "
+                f"clause is known; the words are outstanding. Nothing here invents them — a head "
+                f"with a made-up label is worse than a named gap.")
     for_this_bill = [rule for rule in TITLE_COVERAGE if rule.bill_no == bill_no]
     if not for_this_bill:
         return (f"No item-coverage list has been transcribed for Bill No.{bill_no}. Until one is, "
