@@ -216,6 +216,7 @@ Review, update and implement Implementation
 20
 mth
 Plan for Smart Site Safety System
+Site Communication Network
 1.54
 Provide site communication network
 20
@@ -228,7 +229,12 @@ class TestTheWrappedDescriptionIsCollectedWhole:
         """THE 1.53 DEFECT. A reader that stops at the first quantity-looking token keeps half
         the description — or, for a bare ref line, none: the old inventory skipped `1.53`
         outright for having no letters on its own line, so the deterministic backstop was blind
-        to exactly the row the extraction mangles."""
+        to exactly the row the extraction mangles.
+
+        The fixture now carries the NEXT section's heading ("Site Communication Network") right
+        after the wrapped tail, because the real pack does — and the first cut of this collector
+        appended it, shipping "…Smart Site Safety System Si…" at the 80-char cap. One fragment
+        after the columns, then stop: the heading never enters the description."""
         inv = _bq_item_inventory(WRAPPED_1_53, {"1"})
         assert inv["1.53"] == (
             "Review, update and implement Implementation Plan for Smart Site Safety System")

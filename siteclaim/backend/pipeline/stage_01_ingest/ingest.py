@@ -657,6 +657,7 @@ def _wrapped_description(lines: "list[str]", start: int, max_lines: int = 8) -> 
     Deterministic and deliberately bounded: at most ``max_lines`` are examined, so a bare number
     in running prose cannot swallow a paragraph."""
     fragments: list[str] = []
+    seen_column = False
     for raw in lines[start : start + max_lines]:
         line = raw.strip()
         if not line or line[:1] == "=" or _SKIP_LINE.match(raw) or _BQ_NOT_AN_ITEM.match(line):
@@ -664,8 +665,17 @@ def _wrapped_description(lines: "list[str]", start: int, max_lines: int = 8) -> 
         if _BQ_REF_LINE.match(line) and re.match(r"^\d{1,2}\s*[.\-/]\s*\d", line):
             break                     # the next item row — this description is over
         if _BQ_COLUMN_TOKEN.match(line):
+            seen_column = True
             continue                  # a quantity, unit or dash column token, interleaved
         fragments.append(line)
+        # ONE fragment after the columns, then stop. The interleaved shape is desc / qty / unit /
+        # desc — after the wrapped tail, the next text line is the NEXT section's heading, and on
+        # the real pack it bled in ("…Smart Site Safety System Si…", the first 80 chars of the
+        # description plus the start of "Site Communication Network"). A heading cannot be told
+        # from a third description line in sequence text, so the collector takes the one line the
+        # evidence shows and no more.
+        if seen_column:
+            break
     return " ".join(fragments).strip()
 
 
