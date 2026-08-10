@@ -50,6 +50,10 @@ ROUTE_LOAD = "load"
 ROUTE_SPREAD = "spread"
 ROUTE_ACCEPT = "accept"
 ROUTES = (ROUTE_QUERY, ROUTE_LOAD, ROUTE_SPREAD, ROUTE_ACCEPT)
+#: Not a route — the bucket for costs that have none, so `by_route` accounts for every cost it was
+#: given rather than quietly returning fewer than it holds. The fifth option is the one the gate
+#: exists to prevent, and it has to be visible before you reach the gate.
+ROUTE_NOWHERE = ""
 
 ROUTE_MEANING = {
     ROUTE_QUERY: "asked of the client before the query deadline",
@@ -104,10 +108,17 @@ class UnbilledSweep(BaseModel):
         return not self.outstanding()
 
     def by_route(self) -> dict[str, list[UnbilledCost]]:
-        out: dict[str, list[UnbilledCost]] = {name: [] for name in ROUTES}
+        """Every cost, in exactly one bucket. ``ROUTE_NOWHERE`` holds the ones with no valid route.
+
+        It used to be ``if cost.route in out`` — so an undecided cost, or one with a typo'd route,
+        fell through the loop and appeared in NO bucket. A screen rendering this showed fewer costs
+        than the sweep holds, and the missing ones were precisely the unrouted ones this module
+        exists to stop being forgotten. The gate would still have caught them, but only when
+        somebody reached the gate; until then they were invisible on the way there.
+        """
+        out: dict[str, list[UnbilledCost]] = {name: [] for name in (*ROUTES, ROUTE_NOWHERE)}
         for cost in self.costs:
-            if cost.route in out:
-                out[cost.route].append(cost)
+            out[cost.route if cost.route in ROUTES else ROUTE_NOWHERE].append(cost)
         return out
 
     def spread_total(self) -> float:

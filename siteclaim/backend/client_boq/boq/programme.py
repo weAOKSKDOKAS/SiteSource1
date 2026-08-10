@@ -214,8 +214,22 @@ def derive(quantities: Quantities, model: CostingModel) -> Programme:
 def _materials(programme: Programme, model: CostingModel) -> None:
     """Derived material quantities — computed from the schedule, never estimated."""
     quantities = programme.quantities
+    # CEIL, NOT ROUND. This count buys tubes: it feeds MATERIAL_TUBES on the build-up, and you
+    # cannot buy 0.7 of a liner. `resources.Sampling.soil_tubes` has always said so in as many
+    # words ("One liner per sampling interval, rounded up — you cannot buy 29.5 tubes"); this line
+    # disagreed with it, so the same soil depth produced two different tube counts depending on
+    # which module you asked. Unified on ceil, which is the one you can actually procure.
+    #
+    # `round` was also worse than it looks: Python rounds half to EVEN, so 1,150.5 samples came
+    # back as 1,150 and 1,151.5 as 1,152 — a rule nobody would defend if it were written down.
+    #
+    # NOT unified with `criteria.Sampling.count_at_interval`, which floors, because that answers a
+    # DIFFERENT question: how many sampling depths fit inside a hole. Sampling every 2 m down an
+    # 11 m hole gives depths at 2/4/6/8/10 — five, not six. Tubes to buy and depths to sample are
+    # two counts, and forcing them to agree would make one of them wrong. Pinned in
+    # test_the_remaining_audit.py so a later "tidy-up" cannot merge them.
     interval = model.value("mazier_interval_m")
-    programme.mazier_samples = int(round(quantities.soil_m / interval)) if interval else 0
+    programme.mazier_samples = math.ceil(quantities.soil_m / interval) if interval else 0
     programme.soil_in_tubes_m = (programme.mazier_samples
                                  * model.value("mazier_sample_length_m"))
     programme.soil_for_boxing_m = quantities.soil_m - programme.soil_in_tubes_m

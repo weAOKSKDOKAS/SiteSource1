@@ -72,6 +72,62 @@ def unpriced_items(priced: PricedBill, bill: ClientBill) -> list[EstimateFlag]:
     return flags
 
 
+def orphan_priced_items(priced: PricedBill, bill: ClientBill) -> list[EstimateFlag]:
+    """Priced lines whose reference is in no item of the client's bill.
+
+    THE SHAPE THAT MAKES THIS THE WORST KIND OF MISS. Every check that reasons about a rate looks
+    the item up first and skips a miss: ``unpriced_items``, ``pre_priced_mismatch`` and
+    ``erratic_pricing`` all begin ``if item is None: continue``. But ``casting_errors`` sums
+    ``priced.items`` directly, so an orphan's money DOES reach the bill total and the Grand Summary.
+    It counts where it helps and vanishes where it would be caught — an unpriced orphan is never
+    flagged as unpriced, a wrong one is never compared with the client's rate, and a wild one never
+    enters a peer group.
+
+    It happens the ordinary way: a reference typed with a different suffix, a revision that renamed
+    an item, a build-up keyed to a ref the current bill no longer has. That is Class 2 — written
+    under one identity, read under another — and the only defence is to say so.
+    """
+    known = set(bill.index())
+    flags: list[EstimateFlag] = []
+    for entry in priced.items:
+        if entry.full_ref in known:
+            continue
+        flags.append(EstimateFlag(
+            kind="orphan_priced_item", item_id=entry.full_ref,
+            message=(f"{entry.full_ref} carries {entry.amount:,.2f} but is in no item of the "
+                     f"client's bill at this revision. Its money reaches the bill total and the "
+                     f"Grand Summary, and every rate check skips it — so nothing else here will "
+                     f"ever tell you it is wrong. Either the reference is mistyped or the item was "
+                     f"renamed in a revision and the rate was not moved with it"),
+        ))
+    return flags
+
+
+def duplicate_bill_refs(bill: ClientBill) -> list[EstimateFlag]:
+    """Two items sharing one reference. ``ClientBill.index()`` keeps ONE of them.
+
+    ``index()`` is "the identity map every downstream stage keys on", and it is a dict comprehension
+    over ``full_ref`` — so a repeated reference silently collapses and the loser disappears from
+    every lookup in this module, from the coverage checklist and from the rate carry. The reader
+    already notes a duplicate WITHIN one bill; a reference repeated across two bills was noted
+    nowhere, because the reader's own key includes the bill number and ``index()``'s does not.
+    """
+    seen: dict[str, list[str]] = {}
+    for item in bill.items:
+        seen.setdefault(item.full_ref, []).append(f"Bill No.{item.bill_no} row {item.row}")
+    flags: list[EstimateFlag] = []
+    for ref, places in sorted(seen.items()):
+        if len(places) > 1:
+            flags.append(EstimateFlag(
+                kind="duplicate_bill_ref", item_id=ref,
+                message=(f"{ref} appears {len(places)} times ({', '.join(places)}). The identity "
+                         f"map every stage keys on holds one item per reference, so all but one of "
+                         f"these are invisible to the coverage checklist, the rate carry and every "
+                         f"check here. Neither is assumed correct"),
+            ))
+    return flags
+
+
 def pre_priced_mismatch(priced: PricedBill, bill: ClientBill) -> list[EstimateFlag]:
     """A client-inserted rate or amount we have not carried through exactly."""
     index = bill.index()
@@ -238,6 +294,10 @@ def run_checks(priced: PricedBill, bill: ClientBill, *,
     """Every guard, in the order an estimator would want to read them: what is missing, then what
     is wrong, then what will be asked about."""
     flags = [
+        # Identity first: a line nothing can find, and a reference two lines share. Both make every
+        # check below them read a population that is not the bill's.
+        *duplicate_bill_refs(bill),
+        *orphan_priced_items(priced, bill),
         *unpriced_items(priced, bill),
         *pre_priced_mismatch(priced, bill),
         *extension_errors(priced),
@@ -245,6 +305,13 @@ def run_checks(priced: PricedBill, bill: ClientBill, *,
         *provisional_sums_intact(bill, issued_sums),
         *erratic_pricing(priced, bill),
     ]
-    if fee_pct is not None or issued_sums:
+    # THE TRIGGER IS THE BILL'S OWN (C) LINE, not a proxy. This used to run only when a fee was
+    # supplied OR the bill had client-inserted provisional sums — and those are different things:
+    # (B), (D) and (E) are contingencies outside the contract, (C) is the direct fee. A bill with a
+    # fee line and no contingencies therefore skipped the check entirely, which is exactly the case
+    # it exists for: GCT App C 2.4 corrects an OMITTED fee to the minimum, binding you to the
+    # lowest markup available without ever asking.
+    has_fee_line = any(line.code == "C" for line in bill.summary)
+    if fee_pct is not None or has_fee_line:
         flags.extend(fee_percentage_in_range(fee_pct, *fee_range))
     return flags

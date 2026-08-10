@@ -158,6 +158,13 @@ class ItemCoverage(BaseModel):
     entries: list[CoverageEntry] = Field(default_factory=list)
     bill_level: Optional[CoverageEntry] = None
     note: str = NO_LATER_CLAIM
+    #: WHY THIS FIELD EXISTS. `SECTION_COVERAGE` is a transcription of the printed item coverage,
+    #: and only Bill No.2's has been transcribed. Every item in the other four bills therefore
+    #: produced ZERO heads — and zero heads with zero uncovered read as "all covered", so four
+    #: fifths of the bill reported itself fully settled because nobody had written its checklist
+    #: down. Absence looked exactly like completeness, which is the failure this whole package is
+    #: built against. An item with no list now says so and cannot settle.
+    no_list_for_section: str = ""
 
     def total(self) -> int:
         return len(self.entries)
@@ -167,13 +174,34 @@ class ItemCoverage(BaseModel):
 
     def summary(self) -> str:
         """The header line: `12 heads · 3 not covered`, or `12 heads · all covered`."""
+        if self.no_list_for_section:
+            return f"no item-coverage list transcribed for Bill No.{self.no_list_for_section}"
         missing = len(self.uncovered())
         return (f"{self.total()} heads · {missing} not covered" if missing
                 else f"{self.total()} heads · all covered")
 
     def settled(self) -> bool:
-        """Whether every head has a person's tick against it. Never a gate — a decision waiting."""
-        return not self.uncovered()
+        """Whether every head has a person's tick against it. Never a gate — a decision waiting.
+
+        An item with NO list is never settled. Not because anything is wrong with it, but because
+        nobody has yet said what its rate must carry, and "nothing to check" and "checked" are
+        different states that were previously indistinguishable.
+        """
+        return not self.no_list_for_section and not self.uncovered()
+
+
+def section_of(item: BillItem) -> str:
+    """Which bill's item coverage governs this item."""
+    return (item.bill_no or item.full_ref.split(".", 1)[0]).strip()
+
+
+def has_list_for(item: BillItem) -> bool:
+    """Whether the printed item coverage for this item's bill has been transcribed at all.
+
+    The distinction `heads_for` cannot make on its own: an empty list means "this bill's coverage
+    was never written down here", not "this item's rate carries nothing".
+    """
+    return section_of(item) in SECTION_COVERAGE or item.full_ref in ITEM_COVERAGE
 
 
 def heads_for(item: BillItem) -> list[CoverageHead]:
@@ -181,9 +209,11 @@ def heads_for(item: BillItem) -> list[CoverageHead]:
 
     Section coverage plus anything specific to the item. Deterministic: the same item always produces
     the same list, which is what lets a tick be keyed to a head and survive a re-read.
+
+    An empty return is AMBIGUOUS by itself — see `has_list_for`, which is what separates "nothing to
+    check" from "nobody has said what to check".
     """
-    section = (item.bill_no or item.full_ref.split(".", 1)[0]).strip()
-    return [*SECTION_COVERAGE.get(section, []), *ITEM_COVERAGE.get(item.full_ref, [])]
+    return [*SECTION_COVERAGE.get(section_of(item), []), *ITEM_COVERAGE.get(item.full_ref, [])]
 
 
 def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
@@ -227,7 +257,12 @@ def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
         ticked_at=bill_mark.get("ticked_at"))
 
     return ItemCoverage(full_ref=item.full_ref, description=item.description,
-                        entries=entries, bill_level=bill_level)
+                        entries=entries, bill_level=bill_level,
+                        # A model's proposed heads DO make a list where there was none: somebody
+                        # has now said what this rate must carry, and the heads arrive unticked
+                        # like every other, so nothing is settled by their arrival.
+                        no_list_for_section=("" if (has_list_for(item) or proposed)
+                                             else section_of(item)))
 
 
 def bill_summary(bill: ClientBill, ticks: dict[str, dict[str, dict]]) -> dict:
@@ -242,10 +277,17 @@ def bill_summary(bill: ClientBill, ticks: dict[str, dict[str, dict]]) -> dict:
             continue
         coverage = coverage_for(item, ticks=ticks.get(item.full_ref, {}))
         rows.append({"full_ref": item.full_ref, "total": coverage.total(),
-                     "uncovered": len(coverage.uncovered()), "settled": coverage.settled()})
+                     "uncovered": len(coverage.uncovered()), "settled": coverage.settled(),
+                     "no_list_for_section": coverage.no_list_for_section})
+    no_list = sorted({r["no_list_for_section"] for r in rows if r["no_list_for_section"]})
     return {
         "items": rows,
         "settled": sum(1 for r in rows if r["settled"]),
         "outstanding": sum(r["uncovered"] for r in rows),
+        # COUNTED SEPARATELY, not folded into `outstanding`. An item waiting for a tick and an item
+        # whose checklist was never written are different problems with different owners, and
+        # adding them together would hide the second inside the first.
+        "no_list": sum(1 for r in rows if r["no_list_for_section"]),
+        "bills_without_a_list": no_list,
         "note": NO_LATER_CLAIM,
     }
