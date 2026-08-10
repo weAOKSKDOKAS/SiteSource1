@@ -182,6 +182,19 @@ def derive(quantities: Quantities, model: CostingModel) -> Programme:
     if programme.method_b_days:
         programme.divergence = programme.method_b_days / programme.work_days - 1.0
         programme.allocation = programme.work_days / programme.method_b_days
+    else:
+        # METHOD B NEVER RAN, AND THAT MUST NOT READ AS AGREEMENT. With the split rates zeroed
+        # (a half-configured model), `divergence` stayed 0.0 and the convergence check below
+        # reported "the two methods agree to 0.0%" — a false sentence about a cross-check that
+        # never happened — while `allocation` stayed 1.0 over a zero split, so `scaled_days`
+        # returned 0 for every kind and the build-up priced all drilling at $0 total cost, silently.
+        # Probed: A = 623 work-days, B = 0, verdict "ok". The problem is recorded here (it stops
+        # `usable()`, like every other state the programme cannot price from) and `_checks` states
+        # it as a STOP rather than an agreement.
+        programme.problems.append(
+            "Method B produced no work-days — the split rates (set-up per hole, soil m/day, "
+            "rock m/day) are zero or missing, so the cross-check cannot run and the banded total "
+            "cannot be divided between set-up, soil and rock. Nothing is priced from this split.")
 
     # --- programme and resources ---------------------------------------------
     programme.calendar_days = programme.work_days * model.value("calendar_to_work_day", 1.0)
@@ -226,6 +239,14 @@ def _checks(programme: Programme, model: CostingModel) -> list[Check]:
     checks: list[Check] = []
 
     # 1. Do the two methods agree?
+    if not programme.method_b_days:
+        # A divergence of 0.0 here is not agreement — it is the cross-check having never run.
+        checks.append(Check(
+            key="convergence", verdict="stop", value=None,
+            message=("Method B produced no work-days — its split rates are zero or missing, so "
+                     "there is no cross-check on the banded total. The template's rule is: if the "
+                     "two methods cannot be compared, do not price until they can.")))
+        return checks + _non_convergence_checks(programme, model)
     gap = abs(programme.divergence)
     if gap > settings.divergent_threshold:
         checks.append(Check(
@@ -244,6 +265,16 @@ def _checks(programme: Programme, model: CostingModel) -> list[Check]:
         checks.append(Check(
             key="convergence", verdict="ok", value=programme.divergence,
             message=f"The two methods agree to {gap:.1%}."))
+
+    return checks + _non_convergence_checks(programme, model)
+
+
+def _non_convergence_checks(programme: Programme, model: CostingModel) -> list[Check]:
+    """Checks 2 and 3 — depth extrapolation and band confidence. Run whether or not Method B
+    could, because they are about the BAND, which Method A used either way."""
+    band = programme.band
+    settings = model.method
+    checks: list[Check] = []
 
     # 2. Is the band being used outside the data behind it?
     departure = 0.0

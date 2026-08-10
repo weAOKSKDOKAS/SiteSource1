@@ -414,6 +414,30 @@ class CostingModel(BaseModel):
             elif step.kind == MARKUP_ON_SELLING and step.rate(self.inputs) >= 1.0:
                 out.append(f"{step.label!r} takes {step.rate(self.inputs):.0%} on the selling price, "
                            f"which has no finite answer")
+        # A KEY THAT RESOLVES TO NOTHING PRICES AT ZERO, SILENTLY. `value()` defaults an absent
+        # input to 0.0 — the right behaviour for an optional knob, and exactly the wrong one for a
+        # typo: a mark-up component misspelt by one letter took the whole risk loading out of the
+        # selling factor (probed: ×1.278 instead of ×1.342) and nothing anywhere said so. The same
+        # read prices a material or a mobilisation component at $0. So every key a step or a basis
+        # row NAMES has to actually exist; a missing one is a configuration fault to report, never
+        # a zero to substitute.
+        for step in self.markup:
+            for name in step.components:
+                if name not in self.inputs:
+                    out.append(f"mark-up step {step.label!r} reads input {name!r}, which does not "
+                               f"exist — it would silently contribute 0% to the chain")
+        for row in self.basis_rows:
+            if row.unit_cost_key and row.unit_cost_key not in self.inputs:
+                out.append(f"{row.label!r} takes its unit cost from input {row.unit_cost_key!r}, "
+                           f"which does not exist — it would silently price at $0")
+            for component in row.components:
+                if component.rate_key and component.rate_key not in self.inputs:
+                    out.append(f"{row.label!r} component {component.label or component.rate_key!r} "
+                               f"reads rate input {component.rate_key!r}, which does not exist — "
+                               f"it would silently price at $0")
+                if component.qty_key and component.qty_key not in self.inputs:
+                    out.append(f"{row.label!r} component {component.label or component.qty_key!r} "
+                               f"reads quantity input {component.qty_key!r}, which does not exist")
         return out
 
     def usable(self) -> bool:
