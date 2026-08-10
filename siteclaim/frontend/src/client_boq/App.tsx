@@ -18,6 +18,7 @@ import type { NotDesignedId, ScreenId, Surface } from "./nav/routes";
 import { go, hashFor, parseHash } from "./nav/routes";
 import { commonRoot, fromDrop, fromInput } from "./upload";
 import type { PickedFile } from "./upload";
+import { NextLine } from "./next";
 import { AddendumPanel, RfiPanel } from "./panels";
 import type { PanelRequest } from "./panels";
 import { ProfilePicker } from "./profile/ProfilePicker";
@@ -924,6 +925,9 @@ function SetView({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <StepStrip current={tab} states={states} opened={opened} onSelect={selectTab} />
+      {/* "What now?", answered in one consistent place on every tender screen — from the same
+          data the chips read, so the two can never argue. The button only navigates. */}
+      {data && <NextLine data={data} current={tab} onGo={selectTab} />}
       <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {loading && !data ? (
           <WaitingOn title="Opening the set…">
