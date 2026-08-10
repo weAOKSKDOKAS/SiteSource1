@@ -505,6 +505,27 @@ export function SourcingTab({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {/* STALENESS, SAID WHERE THE STALE NUMBER IS SHOWN (F8). This screen works from the
+          confirmed routing; the split can be re-run after that, and then a package here may no
+          longer exist in the current split. The Route tab already refuses a stale confirm — but
+          discovering that at the gate is exactly the failure the walkthrough ranks: the warning
+          belongs on the card built from the stale data, with the way out on it. Same source as
+          Route's own card (`proposal.stale_packages`), so the two screens cannot disagree. */}
+      {(proposal?.stale_packages?.length ?? 0) > 0 && (
+        <div className="flex flex-none items-center gap-2.5 border-b border-cb-brass-line bg-cb-selected px-4 py-2">
+          <span className="font-cb-sans text-[11px] text-cb-body">
+            The split has been re-run since this routing was confirmed —{" "}
+            {proposal!.stale_packages.length === 1
+              ? `package ${proposal!.stale_packages[0]} is`
+              : `${proposal!.stale_packages.length} of these packages are`}{" "}
+            no longer in the current split. Re-propose and re-confirm the routing before sourcing
+            from it.
+          </span>
+          <span className="ml-auto flex-none">
+            <OpenTab setId={data.setId} tab="route">Open Route</OpenTab>
+          </span>
+        </div>
+      )}
       {/* The internal stepper. Like the tab strip above it, no step is disabled — a step that
           cannot run yet opens and says what it waits on. */}
       <nav className="flex flex-none items-center gap-1 border-b border-cb-divider bg-cb-panel px-4 py-1.5">

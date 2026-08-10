@@ -158,6 +158,12 @@ export function RouteTab({
   const [proposal, setProposal] = useState<BridgeRouteProposalRead | null>(null);
   const [decisions, setDecisions] = useState<BridgeRouteDecisions | null>(null);
   const [chosen, setChosen] = useState<Record<string, string>>({});
+  /** The package keys whose toggle a PERSON pressed since the last load/analyze. The confirm
+   *  records `chosen` wholesale — defaults included — and the walkthrough (F7) showed that one
+   *  click could therefore record the machine's whole proposal as the human's decision with
+   *  nothing on screen saying so. This set is what lets the confirm state that honestly. Reset
+   *  whenever the toggles are re-seeded, because a re-seed is not a person deciding. */
+  const [touched, setTouched] = useState<Set<string>>(new Set());
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"" | "bill" | "split" | "analyze" | "confirm">("");
@@ -191,6 +197,7 @@ export function RouteTab({
       // recorded until Confirm, and every card still reads "Recommended: …" beside the toggle.
       setChosen(Object.fromEntries(prop.packages.map((p) => [p.package_key, p.recommended_route])));
     }
+    setTouched(new Set());
     setLoading(false);
   }, [setId]);
 
@@ -268,6 +275,7 @@ export function RouteTab({
         has_split: true,
       });
       setChosen(Object.fromEntries(res.packages.map((p) => [p.package_key, p.recommended_route])));
+      setTouched(new Set());
       // In soft mode the analyze call SUCCEEDS on an unapproved register and says so in `notes`.
       // That sentence is the entire safety of the soft gate — a bypass nobody is told about is a
       // gate that has silently stopped existing — so it is rendered, never swallowed.
@@ -539,6 +547,27 @@ export function RouteTab({
                     </Button>
                   )}
                 </div>
+                {/* WHAT THE CONFIRM RECORDS, said before the click (F7). Confirm writes every
+                    toggle — the ones a person pressed AND the ones still sitting on the machine's
+                    recommendation. Recording the machine's whole proposal in one click is allowed;
+                    doing it without saying so is how brass quietly becomes "the human decided". */}
+                {packages.length > 0 && (
+                  <p className="mt-1.5 font-cb-sans text-[10.5px] text-cb-muted">
+                    {(() => {
+                      const pressed = packages.filter((p) => touched.has(p.package_key)).length;
+                      const defaulted = packages.length - pressed;
+                      // After a reload the toggles are seeded from the RECORDED decisions — the
+                      // person's own, not the machine's — and the sentence must not confuse the
+                      // two: brass is only brass the first time round.
+                      const rest = decided ? "as already recorded" : "still on the machine's recommendation";
+                      return defaulted === 0
+                        ? `Records ${packages.length} route${packages.length === 1 ? "" : "s"} — every one set by you this visit.`
+                        : pressed === 0
+                          ? `Records ${packages.length} route${packages.length === 1 ? "" : "s"} — ${rest}, none changed this visit.`
+                          : `Records ${packages.length} routes — ${pressed} changed by you this visit, ${defaulted} ${rest}.`;
+                    })()}
+                  </p>
+                )}
               </div>
 
               {/* THE PROPOSAL PREDATES THE SPLIT. Re-running the split rewrites `bridge_scopes`
@@ -634,7 +663,10 @@ export function RouteTab({
                         {["self_perform", "sublet"].map((r) => (
                           <button
                             key={r}
-                            onClick={() => setChosen((cur) => ({ ...cur, [p.package_key]: r }))}
+                            onClick={() => {
+                              setChosen((cur) => ({ ...cur, [p.package_key]: r }));
+                              setTouched((cur) => new Set(cur).add(p.package_key));
+                            }}
                             className={cx(
                               "px-3 py-1.5 font-cb-sans text-[11px] font-semibold transition-colors",
                               pick === r

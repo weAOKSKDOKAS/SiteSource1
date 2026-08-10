@@ -269,6 +269,15 @@ def _normalise_sections(items: list, valid: frozenset[str], family: str = "sor")
     return [c or first for c in codes] if first else codes
 
 
+# A table-of-contents dot leader with its page number: "Photos ..................... 14". A
+# contents page's SECTION lines match the header pattern, appear BEFORE the real headers, and
+# first-occurrence-wins — so the artifact became the section's TITLE, and one routing card shipped
+# as "Field Installations · Photos ……… 14" (seen on screen in the walkthrough). The words before
+# the leader are the same words the real header carries, so stripping the leader keeps the title
+# and loses the page number.
+_TOC_LEADER_RE = re.compile(r"(?:\s*\.){3,}\s*\d{1,4}\s*$")
+
+
 def _headers(pattern: re.Pattern, text: str) -> dict[str, str]:
     """``{code: title}`` for one header pattern over ``text`` — first occurrence of a code wins.
 
@@ -276,12 +285,15 @@ def _headers(pattern: re.Pattern, text: str) -> dict[str, str]:
     header shape exactly, and on CEDD ND/2025/04 — whose real bill headers are a bare `Bill No. 2`
     with no title at all — it was the only line that DID match, so every bill was titled "Total
     Carried to Grand Summary". That title is what `spec_match` matches a specification against.
+
+    A CONTENTS LINE is not a title either — see ``_TOC_LEADER_RE`` above.
     """
     from pipeline.stage_01_ingest.doc_index import _BILL_COLLECTION  # one owner for the phrase list
 
     titles: dict[str, str] = {}
     for m in pattern.finditer(text or ""):
         code, title = m.group(1).upper(), m.group(2).strip()
+        title = _TOC_LEADER_RE.sub("", title).rstrip()
         if code and title and code not in titles and not _BILL_COLLECTION.search(title):
             titles[code] = title
     return titles

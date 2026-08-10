@@ -188,3 +188,31 @@ def test_a_bills_page_span_starts_at_its_header_not_at_its_collection_line():
     assert spans["2"][0] == 8, "Bill 2 opens on page 9 (0-based 8)"
     assert spans["9"][0] == 24, "Bill 9 opens on page 25 (0-based 24)"
     assert all(spans[b] for b in "123456789"), "every bill has a span"
+
+
+def test_a_contents_line_is_not_a_title_either():
+    """The other line that matches the header shape: a table of contents. "SECTION 6  Photos
+    ..................... 14" appears BEFORE the real header and first-occurrence-wins, so the
+    dot leader and the page number became the section's TITLE — one routing card shipped as
+    "Field Installations · Photos ……… 14", seen on screen in the UX walkthrough. The words are
+    the header's own words; the leader and the page number are typesetting, and are cut."""
+    from pipeline.stage_01_ingest.ingest import _section_titles
+
+    text = (
+        "CONTENTS\n"
+        "SECTION 6 : Photos ..................... 14\n"
+        "SECTION 7 : Access . . . . . . . . . . . . 21\n"
+        "SECTION 6 : Photos\n"
+    )
+    titles = _section_titles(text)
+    assert titles["6"] == "Photos"
+    assert titles["7"] == "Access"
+
+
+def test_a_real_title_ending_in_a_number_is_not_mistaken_for_a_contents_line():
+    """The leader is what marks a contents line. A title that simply ends in digits — a phase, a
+    year — has no dot leader and must survive whole."""
+    from pipeline.stage_01_ingest.ingest import _section_titles
+
+    titles = _section_titles("SECTION 3 : Site Clearance Phase 2\n")
+    assert titles["3"] == "Site Clearance Phase 2"
