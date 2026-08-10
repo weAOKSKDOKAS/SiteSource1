@@ -8,7 +8,9 @@ import type {
   BidReply,
   BillCandidate,
   BqCandidates,
+  BridgeAward,
   BridgeCloseoutState,
+  BridgeCombinedPricing,
   BridgeFinalApproval,
   BridgeHandover,
   BridgeLesson,
@@ -696,6 +698,28 @@ export const api = {
       bpost<BridgeSubmissionRecord>(`${setPath(setId)}/submit`, {
         proof, ...(submittedBy ? { submitted_by: submittedBy } : {}),
       }),
+
+    // --- the award + the combined tender total (node 43) ---
+    /** Record which firm won a sublet package, at the levelled total of the return the human
+     *  chose. 400 for a self-perform package — the double-count front door. */
+    award: (setId: string, packageKey: string, firmId: string, firmName: string,
+            total: number | null) =>
+      bpost<BridgeAward>(`${setPath(setId)}/award`, {
+        package_key: packageKey, firm_id: firmId, firm_name: firmName, total,
+      }),
+
+    /** Withdraw an award (skip pressed, or re-levelling). Idempotent. */
+    clearAward: (setId: string, packageKey: string) =>
+      fetch(`${BRIDGE}${setPath(setId)}/award/${encodeURIComponent(packageKey)}`, {
+        method: "DELETE", headers: actorHeaders(),
+      }).then((r) => handle<{ cleared: boolean }>(r)),
+
+    awards: (setId: string) =>
+      bget<{ set_id: string; awards: BridgeAward[] }>(`${setPath(setId)}/awards`),
+
+    /** One tender total from both engines — a pure read; nothing rewrites the offer. */
+    combinedPricing: (setId: string) =>
+      bget<BridgeCombinedPricing>(`${setPath(setId)}/combined-pricing`),
 
     // --- closeout: outcome, lessons, change-control, handover (nodes 49–53) ---
     /** Outcome + lessons + events + whether a handover is meaningful. A pure read; nothing 404s. */

@@ -99,7 +99,7 @@ export function Recommend({
   sections: Record<string, Recommendation>;
   awards: Record<string, string>;
   awaitingTrades?: string[];
-  onSetAward: (trade: string, firmId: string) => void;
+  onSetAward: (trade: string, firm: RankedFirm) => void;
   onSkip: (trade: string) => void;
 }) {
   const trades = Object.keys(sections);
@@ -167,7 +167,7 @@ export function Recommend({
           trade={trade}
           rec={sections[trade]}
           award={awards[trade]}
-          onSetAward={(firmId) => onSetAward(trade, firmId)}
+          onSetAward={(firm) => onSetAward(trade, firm)}
           onSkip={() => onSkip(trade)}
           onOpenDetail={(firm, recommended) => setDetail({ firm, recommended })}
         />
@@ -193,7 +193,7 @@ function TradeRecommendation({
   trade: string;
   rec: Recommendation;
   award: string | undefined;
-  onSetAward: (firmId: string) => void;
+  onSetAward: (firm: RankedFirm) => void;
   onSkip: () => void;
   onOpenDetail: (firm: RankedFirm, recommended: boolean) => void;
 }) {
@@ -426,7 +426,7 @@ function TradeRecommendation({
                       name={`award-${trade}`}
                       checked={award === r.firm_id}
                       disabled={noCoverage}
-                      onChange={() => !noCoverage && onSetAward(r.firm_id)}
+                      onChange={() => !noCoverage && onSetAward(r)}
                       className="h-4 w-4 accent-[var(--color-cb-brass)]"
                     />
                     <span className="text-[12px] font-medium text-cb-ink-text">{r.firm_name}</span>

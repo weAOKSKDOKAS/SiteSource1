@@ -1093,6 +1093,48 @@ export interface BridgeSubmissionState {
   letter_ready: boolean;
 }
 
+// The persisted sublet award (node 43): which firm won a package, at what levelled total. A
+// Layer-4 record of the human's press — the ranking recommends, the radio decides.
+export interface BridgeAward {
+  set_id: string;
+  package_key: string;
+  firm_id: string;
+  firm_name: string;
+  total: number | null;
+  decided_by: string;
+  decided_at: string;
+}
+
+/** One package's contribution to the combined tender total, from whichever side prices it. */
+export interface CombinedSideLine {
+  package_key: string;
+  side: "self_perform" | "sublet";
+  amount: number | null;
+  items: number;
+  firm_name: string;
+  displaced_estimate: number | null;
+  note: string;
+}
+
+/** GET /bridge/{set_id}/combined-pricing — one tender total from both engines, every gap and
+ *  double-count NAMED, fork 5's normalisation questions riding on the payload. */
+export interface BridgeCombinedPricing {
+  set_id: string;
+  routed: boolean;
+  self_perform_total: number | null;
+  sublet_total: number | null;
+  combined_total: number | null;
+  lines: CombinedSideLine[];
+  unrouted_amount: number | null;
+  unrouted_items: number;
+  displaced_estimate_total: number;
+  letter_price: number | null;
+  gaps: string[];
+  double_counts: string[];
+  notes: string[];
+  open_questions: string[];
+}
+
 // Closeout — the only feedback edge (nodes 49–53). The tender OUTCOME (did we win) is NOT the
 // sublet award; they are kept apart in the API and here.
 export interface BridgeOutcome {

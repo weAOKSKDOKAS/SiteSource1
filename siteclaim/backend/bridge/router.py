@@ -47,6 +47,14 @@ class SubmitRequest(BaseModel):
     submitted_by: str = "operator"
 
 
+class AwardRequest(BaseModel):
+    package_key: str
+    firm_id: str
+    firm_name: str = ""
+    total: Optional[float] = None             # the levelled total of the chosen return
+    decided_by: str = "operator"
+
+
 class OutcomeRequest(BaseModel):
     status: str                               # submitted | won | lost | withdrawn
     notes: str = ""                           # human — award value, competitor, why
@@ -356,6 +364,51 @@ def get_submission(set_id: str) -> dict:
 
     try:
         return submission.submission_state(set_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# The award, and the combined tender total (node 43)
+# ---------------------------------------------------------------------------
+@router.post("/{set_id}/award")
+def post_award(set_id: str, req: AwardRequest) -> dict:
+    """Record which firm won a sublet package, at what levelled total. The award is the human's;
+    a package routed self-perform refuses (400) — the double-count front door."""
+    from bridge import award
+
+    try:
+        return award.record_award(set_id, req.package_key, req.firm_id, req.firm_name,
+                                  req.total, decided_by=req.decided_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{set_id}/award/{package_key}")
+def delete_award(set_id: str, package_key: str) -> dict:
+    """Withdraw an award (skip pressed, or re-levelling). Idempotent."""
+    from bridge import award
+
+    return {"set_id": set_id, "package_key": package_key,
+            "cleared": award.clear_award(set_id, package_key)}
+
+
+@router.get("/{set_id}/awards")
+def get_awards(set_id: str) -> dict:
+    from bridge import award
+
+    return {"set_id": set_id, "awards": award.load_awards(set_id)}
+
+
+@router.get("/{set_id}/combined-pricing")
+def get_combined_pricing(set_id: str, rev: Optional[int] = None) -> dict:
+    """One tender total from both engines — self-perform priced bill + awarded sublet packages —
+    with every gap and double-count NAMED, and fork 5's normalisation questions on the payload.
+    A pure read; nothing here rewrites the offer."""
+    from bridge import combine
+
+    try:
+        return combine.combined_pricing(set_id, rev).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

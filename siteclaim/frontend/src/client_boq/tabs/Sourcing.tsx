@@ -697,8 +697,20 @@ export function SourcingTab({
               sections={recommendations}
               awards={awards}
               awaitingTrades={awaitingTrades}
-              onSetAward={(trade, firmId) => setAwards((cur) => ({ ...cur, [trade]: firmId }))}
-              onSkip={(trade) => setAwards((cur) => ({ ...cur, [trade]: "" }))}
+              onSetAward={(trade, firm) => {
+                setAwards((cur) => ({ ...cur, [trade]: firm.firm_id }));
+                // PERSISTED, not just remembered: the award used to live only in this dict and
+                // died with the tab — so nothing downstream could ever know what a sublet package
+                // costs, and the tender total could not be assembled (node 43). The record is the
+                // human's press, with the levelled total of the return they chose.
+                void api.bridge
+                  .award(data.setId, trade, firm.firm_id, firm.firm_name, firm.corrected_total)
+                  .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
+              }}
+              onSkip={(trade) => {
+                setAwards((cur) => ({ ...cur, [trade]: "" }));
+                void api.bridge.clearAward(data.setId, trade).catch(() => undefined);
+              }}
             />
           ) : levelled ? (
             <div className="space-y-3">

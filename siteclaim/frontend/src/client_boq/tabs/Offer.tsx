@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 import type { SetData } from "../App";
 import { api } from "../api";
 import type {
+  BridgeCombinedPricing,
   BridgeSubmissionState,
   LetterAppendixItem,
   LetterResponse,
@@ -92,6 +93,9 @@ export function OfferTab({
         <div className="mx-auto max-w-[760px] p-[18px]">
           {/* --- approval + submission: the last human gate before it goes out --- */}
           <SubmitPanel data={data} doc={doc} onError={onError} onRefresh={onRefresh} />
+
+          {/* --- node 43: the WHOLE tender, both engines, gaps named --- */}
+          <CombinedPanel setId={data.setId} />
 
           {/* --- the header: what this is, and what it is not --- */}
           <div className="mt-4 flex flex-wrap items-start gap-3">
@@ -545,6 +549,93 @@ function SubmitPanel({
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+// The combined tender total — self-perform priced bill + awarded sublet packages, every gap and
+// double-count NAMED, fork 5's normalisation questions shown beside the figure so a raw
+// composition can never read as a settled price. A pure read; nothing here rewrites the letter.
+function CombinedPanel({ setId }: { setId: string }) {
+  const [combined, setCombined] = useState<BridgeCombinedPricing | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api.bridge
+      .combinedPricing(setId)
+      .then((c) => live && setCombined(c))
+      .catch(() => live && setCombined(null));
+    return () => {
+      live = false;
+    };
+  }, [setId]);
+
+  if (!combined) return null;
+  const fmt = (v: number | null) => (v == null ? "—" : money(v));
+  const healthy = !combined.gaps.length && !combined.double_counts.length;
+
+  return (
+    <section className="mt-4 rounded-cb-card border border-cb-border bg-cb-page p-[14px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <SectionLabel>THE WHOLE TENDER · BOTH ENGINES</SectionLabel>
+        <Chip
+          className={cx(
+            "font-cb-mono text-[8px]",
+            healthy ? "bg-cb-info-fill text-cb-navy" : "bg-cb-bad-tint text-cb-bad-dark",
+          )}
+        >
+          {healthy ? "EVERY PACKAGE PRICED ONCE" : `${combined.gaps.length + combined.double_counts.length} PROBLEM(S)`}
+        </Chip>
+      </div>
+
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-cb-sans text-[11px]">
+        <dt className="text-cb-faint">Self-perform (priced bill)</dt>
+        <dd className="font-cb-mono text-cb-ink-text">{fmt(combined.self_perform_total)}</dd>
+        <dt className="text-cb-faint">Sublet (awarded returns)</dt>
+        <dd className="font-cb-mono text-cb-ink-text">{fmt(combined.sublet_total)}</dd>
+        <dt className="text-cb-faint">Combined</dt>
+        <dd className="font-cb-mono text-[13px] font-semibold text-cb-ink-text">
+          {fmt(combined.combined_total)}
+        </dd>
+        {combined.displaced_estimate_total > 0 && (
+          <>
+            <dt className="text-cb-faint">Displaced estimate</dt>
+            <dd className="font-cb-mono text-cb-muted">
+              {fmt(combined.displaced_estimate_total)} — what the estimate said for the sublet
+              items; shown beside the awards, never added to them
+            </dd>
+          </>
+        )}
+      </dl>
+
+      {combined.gaps.map((g, i) => (
+        <p key={`g-${i}`} className="mt-1.5 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint/50 px-2.5 py-1 font-cb-sans text-[10.5px] leading-[1.5] text-cb-bad-dark">
+          {g}
+        </p>
+      ))}
+      {combined.double_counts.map((d, i) => (
+        <p key={`d-${i}`} className="mt-1.5 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint/50 px-2.5 py-1 font-cb-sans text-[10.5px] leading-[1.5] text-cb-bad-dark">
+          {d}
+        </p>
+      ))}
+      {combined.notes.map((n, i) => (
+        <p key={`n-${i}`} className="mt-1.5 font-cb-sans text-[10.5px] leading-[1.5] text-cb-muted">
+          {n}
+        </p>
+      ))}
+
+      <div className="mt-2 rounded-cb-card border border-cb-brass-line bg-cb-brass-tint px-3 py-2">
+        <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-brass-text">
+          OPEN BEFORE THIS FIGURE GOES NEAR THE LETTER
+        </div>
+        <ul className="mt-1 flex flex-col gap-0.5">
+          {combined.open_questions.map((q, i) => (
+            <li key={i} className="font-cb-sans text-[10.5px] leading-[1.5] text-cb-brass-text">
+              — {q}
+            </li>
+          ))}
+        </ul>
+      </div>
     </section>
   );
 }
