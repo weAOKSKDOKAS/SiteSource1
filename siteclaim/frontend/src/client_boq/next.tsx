@@ -132,7 +132,10 @@ export function NextLine({
   const next = nextFor(data);
   const here = next.tab === current;
   return (
-    <div className="flex flex-none items-center gap-2.5 border-b border-cb-border bg-cb-surface px-[18px] py-[7px]">
+    <div
+      aria-label="Next action"
+      className="flex flex-none items-center gap-2.5 border-b border-cb-border bg-cb-surface px-[18px] py-[7px]"
+    >
       <span className="flex-none font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
         NEXT
       </span>

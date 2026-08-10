@@ -226,7 +226,10 @@ export function StepStrip({
   return (
     // Full width and ABOVE the rail: rail contents change per tab, the steps do not, so folding
     // the rail must not move them.
-    <nav className="flex flex-none items-center overflow-x-auto border-b border-cb-border bg-cb-panel px-[18px]">
+    <nav
+      aria-label="Tender steps"
+      className="flex flex-none items-center overflow-x-auto border-b border-cb-border bg-cb-panel px-[18px]"
+    >
       {TABS.map((tab, i) => {
         const state = states[tab.id];
         const chip = chipFor(state, tab.id === current);
@@ -238,6 +241,7 @@ export function StepStrip({
             <button
               type="button"
               onClick={() => onSelect(tab.id)}
+              aria-current={isCurrent ? "step" : undefined}
               className={cx(
                 "cb-press flex flex-none items-center gap-2 whitespace-nowrap px-[14px] py-[9px] font-cb-sans text-[11px]",
                 isCurrent
@@ -318,7 +322,7 @@ function BarButton({
       title={title}
       disabled={disabled}
       className={cx(
-        "cb-press flex h-6 w-[27px] flex-none items-center justify-center rounded-cb-btn border font-cb-mono text-[12px]",
+        "cb-press flex h-7 w-[32px] flex-none items-center justify-center rounded-cb-btn border font-cb-mono text-[12px]",
         active
           ? "border-cb-brass bg-cb-ink-active text-cb-brass"
           : "border-cb-navy-line text-cb-dim",

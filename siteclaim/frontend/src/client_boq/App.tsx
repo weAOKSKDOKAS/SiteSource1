@@ -1066,6 +1066,10 @@ function JobStrip({
     .toUpperCase();
   return (
     <div
+      // A live region: a run starting, progressing and finishing is exactly the kind of state
+      // change a screen-reader user otherwise discovers by accident.
+      role="status"
+      aria-live="polite"
       className={cx(
         "flex flex-none items-center gap-3 border-b px-[18px] py-2",
         done ? "border-cb-ok bg-cb-ok-tint" : "border-cb-brass-line bg-cb-brass-tint",

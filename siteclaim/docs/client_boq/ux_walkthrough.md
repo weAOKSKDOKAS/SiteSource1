@@ -104,3 +104,47 @@ join modal's honesty ("Not a login — a name"); gates that state their conseque
 ("Locking freezes the parts", "Closing injects the N confirmed positions…"); the bill picker that
 refuses to guess; the DEMO banner; the step strip's refusal to padlock tabs (open-and-explain
 beats disabled-and-mute). The fixes above must extend this voice, not replace it.
+
+---
+
+## 6. The re-score — the same screens, after the build
+
+*Added after the six build commits. The same scripted walk was re-run against the same tender;
+what follows was read off the live screens, not off the diffs.*
+
+**What the four questions look like now, on the screens that scored worst:**
+
+- **Q2/Q3 (Register, manifest approved but not cut)** — was: *"The parts are split and ready"*
+  over `PARTS · 0` and a Run button that 409s. Now: three states, the middle one reading "The
+  manifest is approved but nothing has been cut yet. Split the binder into parts on Documents
+  first…" with **[Open Documents →]** on it. 2/5 → 5/5.
+- **Q2 (everywhere)** — the `NEXT` line renders on every tender screen from the same state as the
+  chips. Observed live: *"NEXT — decide bid or no-bid — the first real decision, now the terms are
+  read. [Open Bid →]"*. The walkthrough's central complaint ("at every stage he asked what do I do
+  now") has a standing answer.
+- **Q3 (every blocked tab)** — the sentence that named the unlocking tab now carries the button:
+  Sourcing → [Open Route], Offer → [Open Price], Closeout → [Open Offer], Price → [Open
+  Register]/[Open Scope], Scope → [Open Register], Route → [Open Documents].
+- **Bid signal provenance** — was `client_boq_set_meta.close_date`, `store.open_rfi_count`,
+  `coverage.py::bill_summary`. Observed now: *"the close date on the tender desk"*, *"queries
+  raised to the client that are still open"*, *"the register's own sign-off flag"*, *"the
+  item-coverage summary of the imported bill"*. The deadline explains itself in words: *"no close
+  date was found in the pack, and nobody has confirmed one on the desk."*
+- **Q4 (Route confirm)** — the button now states its record before the click. Observed live on a
+  set with recorded decisions: *"Records 3 routes — as already recorded, none changed this visit.
+  Re-confirming later replaces these in place."* On a fresh proposal the same line reads *"all
+  still on the machine's recommendation, none changed this visit"* — brass can no longer become
+  "the human decided" silently.
+- **Failures** — an unhandled server error now reaches the screen as a JSON sentence with CORS
+  headers instead of "Failed to fetch" (three tests pin it); the DEMO route split that crashed
+  during the first walk runs end to end (fixture + three tests).
+- **The chrome** — the app bar chip reads `belvidere`, not `set_id · belvidere`; the strip carries
+  `aria-label` and `aria-current="step"`; the job strip is an `aria-live` status region; the five
+  bar buttons grew from 24×27 to 28×32; focus-visible and reduced-motion were already right and
+  are untouched.
+
+**Still open, honestly:** the walkthrough's F6 vocabulary unification is only half done (the
+Price chip still says `WAITS ON THE SCOPE` while the costing view needs no gate); modal focus
+traps were not audited; the per-screen "?" (§4I) and the grouped navigation spine (§4E) are not
+built — the spine is the one structural change left, and the brief's own sequencing puts it last
+for exactly the reason it is last here: everything above had to be proven first.
