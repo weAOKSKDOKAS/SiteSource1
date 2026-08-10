@@ -20,7 +20,9 @@ def test_every_valid_status_is_accepted(status):
 
 @pytest.mark.parametrize("bad", ["", "WON", "awarded", "win", "pending"])
 def test_an_unknown_status_is_refused(bad):
-    with pytest.raises(ValueError, match="status must be one of"):
+    # RE-ANCHORED with the plain-language pass: the refusal names the four outcomes as words
+    # rather than printing a Python list on screen. Same refusal, same force.
+    with pytest.raises(ValueError, match="the outcome must be 'submitted'"):
         closeout.set_outcome("nd-2025-04", bad)
 
 

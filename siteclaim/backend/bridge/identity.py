@@ -46,7 +46,9 @@ def run_ref_for(set_id: str) -> str:
     """
     ref = (set_id or "").strip()
     if not ref:
-        raise ValueError("A tender needs a set_id — it is the run_ref on the procurement side.")
+        # Reachable from the URL (a whitespace tender name resolves here), so it speaks plainly;
+        # the identity rule it enforces (set_id == run_ref) stays in the module docstring.
+        raise ValueError("This request names no tender — the tender's name is missing or blank.")
     return ref
 
 

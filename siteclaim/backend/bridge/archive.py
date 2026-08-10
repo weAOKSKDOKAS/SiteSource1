@@ -337,8 +337,8 @@ def check_size(report: ArchiveReport) -> None:
     if total > ceiling:
         raise ValueError(
             f"This archive expands to {total / 1e6:.0f} MB, over the {ceiling / 1e6:.0f} MB "
-            "ceiling, so nothing was extracted. Raise SITESOURCE_ARCHIVE_MAX_BYTES if this pack "
-            "is genuinely that large."
+            "ceiling, so nothing was extracted. (An operator can raise the "
+            "SITESOURCE_ARCHIVE_MAX_BYTES limit if this pack is genuinely that large.)"
         )
 
 

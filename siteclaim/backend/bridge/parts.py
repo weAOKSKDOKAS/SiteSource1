@@ -216,7 +216,8 @@ def confirm_on(
         )
     parts = _set_parts(conn, set_id)
     if not parts:
-        raise LookupError(f"No parts found for set {set_id!r} — ingest the set first.")
+        raise LookupError(
+            "No parts found for this tender — upload its documents first.")
 
     live_ids = {spec.part_id for spec, _p, _c in parts}
     unknown = [pid for pid in wanted if pid not in live_ids]
@@ -224,8 +225,8 @@ def confirm_on(
         # Never store a phantom part: it would read back as a bill part and then fail, or worse,
         # quietly shrink the bill.
         raise ValueError(
-            f"Unknown part id(s) for set {set_id!r}: {', '.join(sorted(unknown))}. "
-            f"Valid ids: {', '.join(sorted(live_ids))}."
+            f"Unknown part id(s): {', '.join(sorted(unknown))}. This tender's parts are: "
+            f"{', '.join(sorted(live_ids))}."
         )
 
     stamp = _now()

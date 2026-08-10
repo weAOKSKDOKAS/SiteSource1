@@ -81,7 +81,8 @@ def set_outcome(set_id: str, status: str, notes: str = "", *, decided_by: str = 
     """
     ref = run_ref_for(set_id)
     if status not in OUTCOME_STATUSES:
-        raise ValueError(f"status must be one of {list(OUTCOME_STATUSES)}; got {status!r}")
+        raise ValueError(
+            f"the outcome must be 'submitted', 'won', 'lost' or 'withdrawn'; got {status!r}")
 
     conn = bridge_conn()
     try:

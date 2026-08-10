@@ -88,7 +88,7 @@ def confirm_final_approval(set_id: str, verdict: str, rationale: str = "", *,
     """
     ref = run_ref_for(set_id)
     if verdict not in FINAL_VERDICTS:
-        raise ValueError(f"verdict must be one of {list(FINAL_VERDICTS)}; got {verdict!r}")
+        raise ValueError(f"the verdict must be 'approve' or 'revise'; got {verdict!r}")
     text = (rationale or "").strip()
     if verdict == REVISE and not text:
         raise ValueError("a 'revise' verdict must say what to correct — rationale is required.")
@@ -232,8 +232,8 @@ def record_submission(set_id: str, *, proof: str = "", submitted_by: str = "oper
 
     if not is_approved(ref):
         raise NotApproved(
-            f"Tender {ref!r} has no final approval — POST /bridge/{ref}/final-approval with "
-            f"verdict 'approve' before submitting. A tender cannot go out unapproved."
+            "This tender has no final approval yet — record it in the approval panel on the "
+            "Offer screen, just above Submit. A tender cannot go out unapproved."
         )
 
     conn = bridge_conn()
@@ -243,8 +243,8 @@ def record_submission(set_id: str, *, proof: str = "", submitted_by: str = "oper
         letter = cb_store.load_letter(conn, ref)
         if letter is None:
             raise NotApproved(
-                f"Tender {ref!r} is approved but has no offer letter to submit — run the estimate "
-                f"first (it assembles the letter of offer)."
+                "This tender is approved but has no offer letter to submit — run the estimate "
+                "on the Price tab first; it assembles the letter of offer."
             )
         approval = conn.execute(
             "SELECT approved_by, approved_at FROM bridge_final_approvals WHERE set_id = ?", (ref,)

@@ -53,7 +53,9 @@ def run_scope(set_id: str, *, progress_cb: Optional[ProgressCB] = None) -> Scope
         parsed = store.load_parsed(conn, set_id)
         register = store.load_register(conn, set_id)
         if parsed is None or register is None:
-            raise ValueError(f"no reviewed document set for {set_id!r}; run and approve the review first")
+            raise ValueError(
+                "the review has not been run and closed for this tender — run it on the "
+                "Register tab and close the register first")
         summary = store.load_summary(conn, set_id) or ContextSummary()
         draft = s01_scope_review.review_scope(parsed, summary, register)
         store.save_scope_draft(conn, set_id, draft)

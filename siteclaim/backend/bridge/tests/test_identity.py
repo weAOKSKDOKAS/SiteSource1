@@ -39,7 +39,9 @@ def test_both_sides_slug_a_tender_name_to_the_same_id():
 
 def test_an_empty_set_id_is_refused_not_invented():
     for bad in ("", "   "):
-        with pytest.raises(ValueError, match="set_id"):
+        # RE-ANCHORED with the plain-language pass: the refusal stopped saying "set_id" (an
+        # internal name) and says the tender's name is missing. Same refusal, same inputs.
+        with pytest.raises(ValueError, match="names no tender"):
             identity.run_ref_for(bad)
 
 

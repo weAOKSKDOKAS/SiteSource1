@@ -112,7 +112,7 @@ def doc_index_state(set_id: str) -> dict:
     reasons: list[str] = []
     if unreadable:
         reasons.append(f"the index file exists but could not be read ({unreadable}) — this says "
-                       f"nothing about the pack; re-run the scope split to rebuild it")
+                       f"nothing about the pack; re-run the split on the Route tab to rebuild it")
     if incomplete:
         reasons.append(
             f"{indexable - len(entries)} document(s) have been added since this index was built")

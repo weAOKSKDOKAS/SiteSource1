@@ -75,7 +75,7 @@ def record_award(set_id: str, package_key: str, firm_id: str, firm_name: str = "
     ref = run_ref_for(set_id)
     key = (package_key or "").strip()
     if not key:
-        raise ValueError("an award needs a package_key")
+        raise ValueError("an award needs the package it is for")
     if not (firm_id or "").strip():
         raise ValueError("an award needs the firm that won it")
 

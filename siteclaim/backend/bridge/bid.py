@@ -123,7 +123,7 @@ def confirm_bid(set_id: str, verdict: str, rationale: str = "",
     """
     ref = run_ref_for(set_id)
     if verdict not in BID_VERDICTS:
-        raise ValueError(f"verdict must be one of {list(BID_VERDICTS)}; got {verdict!r}")
+        raise ValueError(f"the verdict must be 'bid', 'no_bid' or 'clarify'; got {verdict!r}")
     text = (rationale or "").strip()
     if verdict in _RATIONALE_REQUIRED and not text:
         raise ValueError(

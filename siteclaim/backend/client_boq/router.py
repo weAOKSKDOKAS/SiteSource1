@@ -1973,7 +1973,8 @@ def get_ingest_download(set_id: str, include_source: bool = False) -> Response:
     if record is None or not rows:
         raise HTTPException(
             status_code=404,
-            detail=f"No split parts for set {set_id!r}; run the ingest and split first.",
+            detail=f"No split parts for set {set_id!r}; split the binder into parts on "
+                   f"Documents first.",
         )
 
     ws = Workspace()

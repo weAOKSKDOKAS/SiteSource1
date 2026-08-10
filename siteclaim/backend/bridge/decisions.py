@@ -483,7 +483,7 @@ def confirm_routes(set_id: str, decisions: dict[str, str], *, decided_by: str = 
     bad = {key: route for key, route in decisions.items() if route not in ROUTES}
     if bad:
         raise ValueError(
-            f"unknown route(s) {bad} (use one of {list(ROUTES)})"
+            f"unknown route(s) {bad} — a package is routed 'self_perform' or 'sublet'"
         )
 
     conn = bridge_conn()

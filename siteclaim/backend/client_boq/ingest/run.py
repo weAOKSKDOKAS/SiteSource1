@@ -230,7 +230,8 @@ def run_split(set_id: str, *, progress_cb: Progress = None, count_cb: Count = No
     finally:
         conn.close()
     if manifest is None:
-        raise ValueError(f"No split manifest for set {set_id!r}; run the ingest first.")
+        raise ValueError(
+            f"No split manifest for set {set_id!r}; upload the tender documents first.")
     if not manifest.approved:
         raise ValueError(f"The split manifest for set {set_id!r} is not approved yet.")
 

@@ -28,7 +28,8 @@ def test_a_revise_verdict_carries_its_rationale():
 
 @pytest.mark.parametrize("bad", ["", "approved", "reject", "APPROVE ", "yes"])
 def test_an_unknown_verdict_is_refused(bad):
-    with pytest.raises(ValueError, match="verdict must be one of"):
+    # RE-ANCHORED with the plain-language pass: the two verdicts are named as words, not a list.
+    with pytest.raises(ValueError, match="the verdict must be 'approve' or 'revise'"):
         submission.confirm_final_approval("nd-2025-04", bad)
 
 

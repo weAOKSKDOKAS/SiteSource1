@@ -434,7 +434,8 @@ def scope_from_set(
     try:
         parts = cb_store.load_parts(conn, ref)
         if not parts:
-            raise LookupError(f"No parts found for set {ref!r} — ingest the set first.")
+            raise LookupError(
+                "No parts found for this tender — upload its documents first.")
         bill_ids = set(parts_mod.confirmed_bill_parts(conn, ref))
         if not bill_ids:
             raise ValueError(
@@ -462,8 +463,8 @@ def scope_from_set(
     doc_text = doc_text_from_parts(bill, on_error)
     if not doc_text.strip() and not workbook_items:
         raise ValueError(
-            f"The confirmed bill part(s) for set {ref!r} produced no readable text, so there is "
-            "nothing to split. Check the parts are cut and carry a text layer."
+            "The confirmed bill part(s) produced no readable text, so there is nothing to "
+            "split. Check the parts are cut and carry a text layer."
         )
     context_text = context_text_from_cards(context, on_error)
 
