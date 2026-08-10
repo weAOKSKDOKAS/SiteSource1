@@ -36,6 +36,7 @@ from client_boq.boq import costing_workbook as boq_costing_workbook
 from client_boq.boq import coverage as boq_coverage
 from client_boq.boq import derive as boq_derive
 from client_boq.boq import diff as boq_diff
+from client_boq.boq import optimiser as boq_optimiser
 from client_boq.boq import docmap as boq_docmap
 from client_boq.boq import model as boq_model
 from client_boq.boq import georef as boq_georef
@@ -4348,6 +4349,10 @@ def get_costing(set_id: str, rev: Optional[int] = None) -> dict:
         "checks": [c.model_dump() for c in programme.checks] + (
             [standing.model_dump()] if standing else []),
         "spread": parts["spread"].model_dump(),
+        # The rig count as a COMPARISON — every n priced, the cheapest feasible proposed. A
+        # consequence of the same programme and model the rest of this payload shows; the
+        # confirmed count stays the estimator's (the register's rig row is theirs to verdict).
+        "optimiser": boq_optimiser.optimise(programme, parts["model"]).model_dump(),
         "buildup": parts["buildup"].model_dump(),
         "priced": parts["priced"].model_dump(),
         "register": {
