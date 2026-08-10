@@ -28,6 +28,7 @@ import type {
   RegisterSource,
 } from "../types";
 import {
+  OpenTab,
   AUTHOR,
   AuthorBadge,
   AuthorSwatch,
@@ -464,11 +465,16 @@ export function RegisterTab({
   }
 
   if (!register) {
+    // THREE states, not two — and the middle one was the walkthrough's live contradiction: keyed
+    // on the manifest gate alone, this said "the parts are split and ready" on a set whose
+    // manifest was approved but never cut (PARTS · 0 on the very next tab), and the Run button it
+    // offered was a guaranteed refusal. An approved manifest is a decision; the cut is the work.
+    const hasParts = Boolean(data.parts?.count);
     return (
       <WaitingOn
         title="The register has not been run yet"
         action={
-          data.gates.manifest ? (
+          data.gates.manifest && hasParts ? (
             <div className="flex flex-col items-center gap-2.5">
               <Button variant="brass" onClick={runReview} disabled={running}>
                 Run the review
@@ -489,12 +495,16 @@ export function RegisterTab({
                 Read the specifications too — slower, and mostly appendices
               </label>
             </div>
-          ) : undefined
+          ) : (
+            <OpenTab setId={data.setId} tab="documents">Open Documents</OpenTab>
+          )
         }
       >
-        {data.gates.manifest
+        {data.gates.manifest && hasParts
           ? "The parts are split and ready. Running the review reads each part against the criteria library and produces the departure register."
-          : "The register waits on the manifest — every finding cites a page, and those page numbers are not fixed until the split is approved."}
+          : data.gates.manifest
+            ? "The manifest is approved but nothing has been cut yet. Split the binder into parts on Documents first — the review reads the parts, and every finding cites their page numbers."
+            : "The register waits on the manifest — every finding cites a page, and those page numbers are not fixed until the split is approved."}
       </WaitingOn>
     );
   }

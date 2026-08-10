@@ -27,7 +27,7 @@ import type {
   JobState,
   RateRowFull,
 } from "../types";
-import { Button, Chip, SectionLabel, Segmented, WaitingOn, cx, money } from "../ui";
+import { Button, Chip, OpenTab, SectionLabel, Segmented, WaitingOn, cx, money } from "../ui";
 import { Costing } from "./Costing";
 import { EMPTY_SCHEDULE, ScheduleEditor, useScheduleDraft } from "./ScheduleEditor";
 
@@ -303,10 +303,19 @@ function EstimateView({
   // --- gates and empty states ----------------------------------------------
   if (!data.gates.review || !data.gates.scope) {
     return (
-      <WaitingOn title="The price waits on two gates">
+      <WaitingOn
+        title="The price waits on two gates"
+        action={
+          !data.gates.review ? (
+            <OpenTab setId={data.setId} tab="register">Open Register</OpenTab>
+          ) : (
+            <OpenTab setId={data.setId} tab="scope">Open Scope</OpenTab>
+          )
+        }
+      >
         {!data.gates.review
-          ? "The register is not approved yet, so nothing downstream of it can be priced. Approve it on the Register tab."
-          : "The scope is not frozen yet. Freezing is what turns every unanswered query into an answer or a stated priced assumption — approve it on the Scope tab."}
+          ? "The register is not closed yet, so nothing downstream of it can be priced. Close it on the Register tab."
+          : "The scope is not approved yet. Approving it is what turns every unanswered query into an answer or a stated priced assumption — on the Scope tab."}
       </WaitingOn>
     );
   }

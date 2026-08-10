@@ -22,7 +22,7 @@ import type { SetData } from "../App";
 import { api, runJob } from "../api";
 import { Rail, TAB_FOR_JOB } from "../chrome";
 import type { JobState, ScopeItem, ScopeSection, ScopeSource, ScopeSourcesResponse } from "../types";
-import { Button, Chip, SectionLabel, WaitingOn, cx, money } from "../ui";
+import { Button, Chip, OpenTab, SectionLabel, WaitingOn, cx, money } from "../ui";
 
 const SECTIONS: { id: ScopeSection; label: string }[] = [
   { id: "qualifications", label: "QUALIFICATIONS & EXCLUSIONS" },
@@ -159,7 +159,9 @@ export function ScopeTab({
             <Button variant="brass" onClick={runScope} disabled={running}>
               Draft the scope
             </Button>
-          ) : undefined
+          ) : (
+            <OpenTab setId={data.setId} tab="register">Open Register</OpenTab>
+          )
         }
       >
         {data.gates.review

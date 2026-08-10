@@ -23,7 +23,7 @@ import type {
   LetterAppendixItem,
   LetterResponse,
 } from "../types";
-import { Button, Chip, SectionLabel, WaitingOn, cx, money } from "../ui";
+import { Button, Chip, OpenTab, SectionLabel, WaitingOn, cx, money } from "../ui";
 
 /** `LetterMeta`'s built-in fallback. Matching it is how the screen knows the letterhead has never
  *  been set — the backend deliberately keeps a renderable default so a letter always assembles. */
@@ -58,7 +58,10 @@ export function OfferTab({
 
   if (!data.hasEstimate && !letter) {
     return (
-      <WaitingOn title="The offer waits on the price">
+      <WaitingOn
+        title="The offer waits on the price"
+        action={<OpenTab setId={data.setId} tab="price">Open Price</OpenTab>}
+      >
         The letter is assembled from the priced estimate — its figure, its pricing schedule, and the
         departures the register confirmed. Run the estimate on the Price tab and it appears here.
       </WaitingOn>

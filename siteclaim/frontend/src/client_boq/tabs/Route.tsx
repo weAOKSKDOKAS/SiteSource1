@@ -36,6 +36,7 @@ import type {
   SorItem,
 } from "../types";
 import {
+  OpenTab,
   Button,
   Card,
   Chip,
@@ -332,8 +333,11 @@ export function RouteTab({
 
   if (!candidates) {
     return (
-      <WaitingOn title="Nothing to route yet">
-        This tender has no parts. Ingest the documents and approve the split manifest first — the
+      <WaitingOn
+        title="Nothing to route yet"
+        action={<OpenTab setId={data.setId} tab="documents">Open Documents</OpenTab>}
+      >
+        This tender has no parts. Upload the documents and approve the split manifest first — the
         bill has to exist before it can be routed.
       </WaitingOn>
     );

@@ -36,7 +36,7 @@ import type {
   ShortlistSet,
   TenderReplies,
 } from "../types";
-import { Button, ErrorNote, LoadingDots, WaitingOn, cx } from "../ui";
+import { Button, ErrorNote, LoadingDots, OpenTab, WaitingOn, cx } from "../ui";
 import { Dispatch, type Draft } from "./sourcing/Dispatch";
 import { Level } from "./sourcing/Level";
 import { Recommend } from "./sourcing/Recommend";
@@ -492,7 +492,10 @@ export function SourcingTab({
   // No decision yet, or nothing sublet. Both open and explain rather than locking.
   if (!sublet.length) {
     return (
-      <WaitingOn title={proposal?.packages.length ? "Nothing routed to sublet" : "Waits on the route"}>
+      <WaitingOn
+        title={proposal?.packages.length ? "Nothing routed to sublet" : "Waits on the route"}
+        action={<OpenTab setId={data.setId} tab="route">Open Route</OpenTab>}
+      >
         {proposal?.packages.length
           ? "Every package on this tender is routed self-perform, so there is nobody to source. Change a route on the Route tab if that is wrong."
           : "Sourcing works from the packages routed to sublet. Propose and confirm the routing on the Route tab first — that decision is what says which packages arrive here."}

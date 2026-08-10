@@ -466,6 +466,27 @@ export function Consequence({ children }: { children: ReactNode }) {
 
 /** A step that has not run yet says what it is waiting for. No step is ever disabled — a
  *  locked tab produces a dead end, an open one that explains itself does not. */
+/** The way out of a blocked state, offered where the blockage is explained.
+ *
+ *  Every WAITS-ON screen names the tab that unlocks it; this is that sentence's missing half —
+ *  a sentence that says "do it on the Route tab" and then makes you find the Route tab yourself
+ *  is only half an explanation. Navigation only: it never performs the unlocking action itself,
+ *  so no gate is weakened by it.
+ */
+export function OpenTab({ setId, tab, children }: { setId: string; tab: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        window.location.hash = `#/tender/s/${encodeURIComponent(setId)}/${tab}`;
+      }}
+      className="cb-press rounded-cb-btn border border-cb-brass-line bg-cb-brass-tint px-3 py-1.5 font-cb-sans text-[11.5px] font-semibold text-cb-brass-text"
+    >
+      {children} →
+    </button>
+  );
+}
+
 export function WaitingOn({
   title,
   children,

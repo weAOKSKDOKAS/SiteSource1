@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import type { SetData } from "../App";
 import { api } from "../api";
 import type { BridgeCloseoutState, BridgeHandover } from "../types";
-import { Button, Chip, SectionLabel, WaitingOn, cx } from "../ui";
+import { Button, Chip, OpenTab, SectionLabel, WaitingOn, cx } from "../ui";
 
 const OUTCOMES: { value: string; label: string; cls: string }[] = [
   { value: "won", label: "Won", cls: "bg-cb-ok-tint text-cb-ok-dark" },
@@ -59,7 +59,10 @@ export function CloseoutTab({
 
   if (!submitted) {
     return (
-      <WaitingOn title="The closeout waits on submission">
+      <WaitingOn
+        title="The closeout waits on submission"
+        action={<OpenTab setId={data.setId} tab="offer">Open Offer</OpenTab>}
+      >
         There is nothing to close out until the tender has gone out. Approve and submit it on the
         Offer tab, then record here whether we won.
       </WaitingOn>
