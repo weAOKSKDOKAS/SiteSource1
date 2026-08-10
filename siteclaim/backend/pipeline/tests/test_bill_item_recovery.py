@@ -414,3 +414,89 @@ class TestTheDetachedDescriptionsNeedThePage:
         refs = {it.item_ref for it in out.packages[0].sor_items}
         assert not ({"1.45", "1.46", "1.47", "1.48", "1.49", "1.50"} & refs)
         assert "1.51" in refs
+
+
+# ---------------------------------------------------------------------------
+# One ref, two rows — the 64-from-63 instrument
+# ---------------------------------------------------------------------------
+class TestADuplicateRefIsNamedNeverDropped:
+    """The routing card counted 64 Bill 1 items where the bill prints 63 (1.1-1.63, verified, no
+    gaps, no letter suffixes) — an over-count, so something is counted twice. The demonstrated
+    path: the chunk merge dedups by ref within one trade only, and consolidation reunites strays
+    with no dedup on arrival. Whether that is what happened on the live run needs the live
+    artifacts; what the deterministic layer can do NOW is make the next run diagnose itself."""
+
+    def _dup_scope(self) -> ScopePackages:
+        return ScopePackages(project_name="ND/2025/04", packages=[
+            TradeWorkPackage(trade="builders_work", scope_summary="prelims", sor_items=[
+                SorItem(item_ref="1.53", description="Review, update and implement Implementation",
+                        unit="mth", section="1"),
+            ]),
+            TradeWorkPackage(trade="ground_investigation", scope_summary="gi", sor_items=[
+                SorItem(item_ref="1.53", description="Plan for Smart Site Safety System",
+                        unit="mth", section="1"),
+                SorItem(item_ref="2.1", description="Establishment of rigs", unit="nr",
+                        section="2"),
+            ]),
+        ])
+
+    def test_the_note_names_the_ref_the_count_and_both_homes(self):
+        from pipeline.stage_01_ingest.ingest import report_duplicate_refs
+
+        notes: list[str] = []
+        report_duplicate_refs(self._dup_scope(), on_note=notes.append)
+        assert len(notes) == 1
+        assert "item 1.53 appears on 2 rows" in notes[0]
+        assert "builders_work" in notes[0] and "ground_investigation" in notes[0]
+        assert "counted 2 times" in notes[0]
+        assert "Nothing was dropped" in notes[0]
+
+    def test_nothing_is_dropped_or_moved_by_the_report(self):
+        """Deliberate: the two rows carry different halves of the description, and which to keep
+        is a reconciliation, not a coin toss. A silent dedup would make the count look right for
+        the wrong reason."""
+        from pipeline.stage_01_ingest.ingest import report_duplicate_refs
+
+        scope = self._dup_scope()
+        report_duplicate_refs(scope, on_note=lambda _n: None)
+        assert sum(len(p.sor_items) for p in scope.packages) == 3
+
+    def test_a_duplicate_inside_one_package_is_caught_too(self):
+        """Consolidation reunites the two copies into ONE package — the report must not depend on
+        them still sitting apart."""
+        from pipeline.stage_01_ingest.ingest import report_duplicate_refs
+
+        scope = ScopePackages(project_name="x", packages=[
+            TradeWorkPackage(trade="builders_work", scope_summary="s", sor_items=[
+                SorItem(item_ref="1.53", description="half one", unit="mth", section="1"),
+                SorItem(item_ref="1.53", description="half two", unit="mth", section="1"),
+            ]),
+        ])
+        notes: list[str] = []
+        report_duplicate_refs(scope, on_note=notes.append)
+        assert len(notes) == 1 and "appears on 2 rows" in notes[0]
+
+    def test_a_letter_variant_is_a_distinct_row_not_a_duplicate(self):
+        """TA2 inserted 1.61A beside 1.61 — two real rows. Identity is the full reference."""
+        from pipeline.stage_01_ingest.ingest import report_duplicate_refs
+
+        scope = ScopePackages(project_name="x", packages=[
+            TradeWorkPackage(trade="builders_work", scope_summary="s", sor_items=[
+                SorItem(item_ref="1.61", description="VR safety training", unit="item",
+                        section="1"),
+                SorItem(item_ref="1.61A", description="Signboard, size A", unit="nr",
+                        section="1"),
+            ]),
+        ])
+        assert report_duplicate_refs(scope, on_note=None) == []
+
+    def test_a_clean_scope_reports_nothing(self):
+        from pipeline.stage_01_ingest.ingest import report_duplicate_refs
+
+        scope = ScopePackages(project_name="x", packages=[
+            TradeWorkPackage(trade="builders_work", scope_summary="s", sor_items=[
+                SorItem(item_ref="1.1", description="a", unit="item", section="1"),
+                SorItem(item_ref="1.2", description="b", unit="item", section="1"),
+            ]),
+        ])
+        assert report_duplicate_refs(scope, on_note=None) == []

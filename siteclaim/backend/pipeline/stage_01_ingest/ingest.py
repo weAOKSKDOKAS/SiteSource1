@@ -942,6 +942,46 @@ def report_sequence_gaps(
     return gaps
 
 
+def report_duplicate_refs(scope: ScopePackages,
+                          on_note: "Optional[Callable[[str], None]]" = None) -> list[str]:
+    """A ref on more than one row is one bill row counted twice, everywhere downstream — named,
+    never silently dropped.
+
+    THE 64-FROM-63 TRACE. The routing card's "priced lines" figure is the raw sum of package
+    ``sor_items`` lengths, and two deterministic steps preserve a model-side double: the chunk
+    merge dedups by ref WITHIN one trade package only, so a ref the model emits in two chunks
+    under two different trades survives twice — and section consolidation then moves the strays
+    into one package with no dedup on arrival, reuniting both copies. A wrapped or detached row
+    (the 1.45–1.53 shapes) is exactly where a model would emit a ref once with half a description
+    and again with the rest.
+
+    Reported rather than deduped, deliberately: the two rows carry DIFFERENT halves of the truth,
+    and which is the row to keep is a reconciliation, not a coin toss — dropping one silently
+    would be the count looking right for the wrong reason. The note lands in the split's own
+    notes, which the Route screen already shows, so a live re-run diagnoses itself. Letter
+    variants (``1.61`` / ``1.61a``) are distinct rows, not duplicates."""
+    where: "dict[str, list[str]]" = {}
+    for p in scope.packages:
+        for it in p.sor_items:
+            key = _norm_ref(it.item_ref or "")
+            if key:
+                where.setdefault(key, []).append(p.trade)
+    notes: list[str] = []
+    for key, trades in sorted(where.items()):
+        if len(trades) < 2:
+            continue
+        homes = ", ".join(sorted(set(trades)))
+        notes.append(
+            f"item {key} appears on {len(trades)} rows (in {homes}) — one bill row, counted "
+            f"{len(trades)} times in every priced-lines figure. The extraction can produce this "
+            f"when a wrapped row spans two of its reading chunks. Nothing was dropped: reconcile "
+            f"which row carries the true description before pricing.")
+    for note in notes:
+        if on_note:
+            on_note(note)
+    return notes
+
+
 def consolidate_fragmented_sections(scope: ScopePackages) -> ScopePackages:
     """Deterministic Layer-1 repair: when one SoR SECTION's rows get scattered across several
     trade packages (the LLM sometimes assigns a stray row a different trade — e.g. a "Flowmeter"
@@ -1427,6 +1467,8 @@ def ingest_tender(
     consolidated = consolidate_fragmented_sections(annotated)
     final = annotate_sections(consolidated, doc_text)
     # Last, on the finished scope: an interior hole in a bill's numbering means rows were priced
-    # in the document and did not come out. Reported, never silently accepted.
+    # in the document and did not come out — and a ref on TWO rows means one row is counted
+    # twice. Both reported, never silently accepted; neither is repaired by guesswork.
     report_sequence_gaps(final, on_note=on_error)
+    report_duplicate_refs(final, on_note=on_error)
     return final
