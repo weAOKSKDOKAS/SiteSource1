@@ -1,0 +1,109 @@
+{
+  "project_name": "DEMO \u2014 ground investigation tender",
+  "packages": [
+    {
+      "trade": "ground_investigation",
+      "scope_summary": "Drilling and sampling: establishment and moving of rigs, rotary drilling in soil and rock, standing time, in-situ tests and disturbed/undisturbed sampling, with temporary traffic arrangements per PS 1.14\u20131.15.",
+      "sor_items": [
+        {
+          "item_ref": "2.1",
+          "description": "Establishment of rigs",
+          "unit": "nr",
+          "qty": 12.0,
+          "section": "2"
+        },
+        {
+          "item_ref": "2.2",
+          "description": "Moving rigs between investigation stations",
+          "unit": "nr",
+          "qty": 34.0,
+          "section": "2"
+        },
+        {
+          "item_ref": "2.4",
+          "description": "Rotary drilling, vertically downwards, material other than rock",
+          "unit": "m",
+          "qty": 480.0,
+          "section": "2"
+        },
+        {
+          "item_ref": "2.5",
+          "description": "Rotary drilling, vertically downwards, rock",
+          "unit": "m",
+          "qty": 120.0,
+          "section": "2"
+        },
+        {
+          "item_ref": "3.1",
+          "description": "Environmental boreholes \u2014 drilling and sampling",
+          "unit": "m",
+          "qty": 90.0,
+          "section": "3"
+        }
+      ],
+      "source_refs": [
+        "the confirmed bill part"
+      ]
+    },
+    {
+      "trade": "field_testing",
+      "scope_summary": "Laboratory testing of soil and rock samples: classification, compaction, triaxial and chemical suites, in an accepted laboratory with calibration certificates per SMM \u00b62.35.",
+      "sor_items": [
+        {
+          "item_ref": "4.1",
+          "description": "Classification tests on soil samples",
+          "unit": "nr",
+          "qty": 260.0,
+          "section": "4"
+        },
+        {
+          "item_ref": "4.18",
+          "description": "Determination of carbonate content",
+          "unit": "nr",
+          "qty": 40.0,
+          "section": "4"
+        },
+        {
+          "item_ref": "5.2",
+          "description": "Rock uniaxial compressive strength",
+          "unit": "nr",
+          "qty": 30.0,
+          "section": "5"
+        }
+      ],
+      "source_refs": [
+        "the confirmed bill part"
+      ]
+    },
+    {
+      "trade": "field_installations",
+      "scope_summary": "Standpipes, piezometers and groundwater monitoring devices: installation, response tests, readings and reporting per SMM \u00b62.30.",
+      "sor_items": [
+        {
+          "item_ref": "6.4",
+          "description": "Standpipe installation",
+          "unit": "nr",
+          "qty": 24.0,
+          "section": "6"
+        },
+        {
+          "item_ref": "6.5",
+          "description": "Piezometer installation",
+          "unit": "nr",
+          "qty": 18.0,
+          "section": "6"
+        },
+        {
+          "item_ref": "6.6",
+          "description": "Automatic groundwater monitoring device",
+          "unit": "nr",
+          "qty": 6.0,
+          "section": "6"
+        }
+      ],
+      "source_refs": [
+        "the confirmed bill part"
+      ]
+    }
+  ]
+}

@@ -325,3 +325,57 @@ def test_the_scope_endpoint_409s_without_a_confirmed_bill(client, piling_set):
 def test_the_scope_endpoints_404_for_an_unknown_set(client):
     assert client.post("/bridge/never-ingested/scope").status_code == 404
     assert client.get("/bridge/never-ingested/scope").status_code == 404
+
+
+@pytest.fixture
+def sectionless_set(make_set, part_spec, make_pdf):
+    """A set whose bill declares NO section headers — the shape a real uploaded binder takes in
+    DEMO, and the provenance guard's own documented skip case ("with no headers to check against,
+    skip the guard rather than block a legitimate split")."""
+    bill_pdf = make_pdf("bill.pdf", ["PRICED SCHEDULE\nDrilling and testing works, priced monthly."])
+    make_set("demo-walk", "Demo Walk Tender", [
+        part_spec(1, "SR", "Priced Schedule", "pricing"),
+    ], pdf_paths={"01-sr": bill_pdf})
+    return "demo-walk"
+
+
+def test_the_demo_branch_reaches_its_fixture_without_a_stub(client, sectionless_set):
+    """THE WALKTHROUGH BUG. The stubbed test above proves the wiring; it also HID that the DEMO
+    branch passed no `demo_fixture`, so the first person to press "Run the split" in DEMO got a
+    server crash dressed as "Failed to fetch" — `complete_json` refuses a bare call in DEMO by
+    design. This walks the same path the button does, stub-free: the deterministic reading
+    (parts, confirmed bill, doc text, the index) runs for real, and only the Layer-2 call is
+    answered by the baked fixture."""
+    parts_mod.confirm_bill_parts(sectionless_set, ["01-sr"])
+
+    posted = client.post(f"/bridge/{sectionless_set}/scope")
+    assert posted.status_code == 200, posted.text
+    trades = [p["trade"] for p in posted.json()["scope"]["packages"]]
+    assert trades == ["ground_investigation", "field_testing", "field_installations"], (
+        "the fixture's three taxonomy-valid packages, none quarantined — this bill declares no "
+        "sections, so the guard honestly stands down")
+
+    read_back = client.get(f"/bridge/{sectionless_set}/scope")
+    assert [p["trade"] for p in read_back.json()["scope"]["packages"]] == trades
+
+
+def test_the_demo_fixture_is_still_subject_to_the_provenance_guard(client, piling_set):
+    """Trap 9, both halves. The piling bill DECLARES `SECTION G`, so the guard is armed — and the
+    fixture's sections (2–6) are not the document's, so every fixture item must be quarantined
+    with its reason rather than routed. A fixture may stand in for the model; it may never
+    outrank the measurement."""
+    parts_mod.confirm_bill_parts(piling_set, ["02-sr"])
+
+    posted = client.post(f"/bridge/{piling_set}/scope")
+    assert posted.status_code == 200, posted.text
+    body = posted.json()
+    assert body["scope"]["packages"] == [], "nothing document-grounded survived, and none should"
+    reasons = {u["reason"] for u in body["unrecognised_items"] if u["item_ref"] == "2.4"}
+    assert any("not a Schedule-of-Rates section" in r for r in reasons)
+
+
+def test_the_demo_fixture_does_not_paper_over_the_bill_gate(client, piling_set):
+    """The gate half: with the fixture wired, an unconfirmed bill must STILL refuse. A fixture
+    that answered before the gate would quietly defeat the Phase-3 human decision."""
+    resp = client.post(f"/bridge/{piling_set}/scope")
+    assert resp.status_code == 409

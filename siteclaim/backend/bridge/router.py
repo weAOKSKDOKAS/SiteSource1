@@ -133,7 +133,14 @@ def post_scope(set_id: str) -> dict:
     if demo_mode():
         notes: list[str] = []
         try:
-            scope, unrecognised = scope_mod.scope_from_set(set_id, on_error=notes.append)
+            # The fixture is the client_boq invariant ("every AI call passes a demo_fixture so
+            # DEMO is fully offline") applied to the one call that was missing it. Without it the
+            # extraction reaches `complete_json` bare, which raises in DEMO — a 500 the CORS
+            # middleware never dresses, so the screen said "Failed to fetch" about a crash. Found
+            # by walking the app, not by the suite: every test injects its own `client=`.
+            scope, unrecognised = scope_mod.scope_from_set(
+                set_id, on_error=notes.append,
+                demo_fixture="cases/client_boq/bridge_scope_split.json")
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
