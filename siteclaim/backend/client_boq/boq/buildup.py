@@ -92,7 +92,9 @@ class Spread(BaseModel):
     rows: list[SpreadRow] = Field(default_factory=list)
     cost_per_rig_day: float = 0.0
     cost_per_contract_day: float = 0.0
-    site_team_supervises: float = 3.0
+    # The fallback mirrors the stated 6:1 rule (see model.DEFAULT_INPUTS) — a spread built
+    # without a model input in reach must not resurrect the template's old 3:1.
+    site_team_supervises: float = 6.0
     site_teams_required: int = 0
 
     rig_cost_programme: float = 0.0         # P50
@@ -114,7 +116,7 @@ def build_spread(programme: Programme, model: CostingModel) -> Spread:
                   note=line.note)
         for line in model.spread
     ]
-    supervises = model.value("site_team_supervises_rigs", 3.0) or 3.0
+    supervises = model.value("site_team_supervises_rigs", 6.0) or 6.0
     # Teams follow the UNROUNDED rig count, as the template does: 1.56 rigs still needs one team,
     # and rounding the rigs first would occasionally buy a second team nobody needs.
     teams = math.ceil(programme.rigs_exact / supervises) if programme.rigs_exact > 0 else 0

@@ -162,6 +162,16 @@ def build(programme: Programme, model: CostingModel, buildup: Buildup, spread: S
               f"contract period regardless of how much drilling is happening, and is recovered in "
               f"Bill 1 rather than inside a drilling rate."))
 
+    rows.append(Assumption(
+        key="supervision_ratio", label="Supervision ratio",
+        value=f"{spread.site_team_supervises:g} rigs per team",
+        source=SOURCE_JUDGEMENT, confidence=CONFIDENCE_LOW,
+        basis="The stated rule is 6 rigs per 1 GFT, carried as the default. OPEN QUESTION to "
+              "confirm here: is 'site team' the same resource as a GFT? The SITE TEAM block is "
+              "engineer + foreman + geologist + PM — if the 6:1 rule counts GFTs only, the ratio "
+              "and the block's membership are two different judgements. The template previously "
+              "carried 3:1; at 6:1 the team count halves for any job between 3 and 6 exact rigs."))
+
     # --- the judgements ------------------------------------------------------
     residual = model.value("residual_site_factor", 1.0)
     rows.append(Assumption(

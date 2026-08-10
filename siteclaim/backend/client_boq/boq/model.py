@@ -534,7 +534,16 @@ DEFAULT_INPUTS: dict[str, float] = {
     "truck_days": 2.0,
     "survey_per_location": 1000.0,
     # ORGANISATION
-    "site_team_supervises_rigs": 3.0,
+    #
+    # THE STATED RULE IS 6 RIGS PER 1 SITE TEAM (GFT), and 6.0 is that rule as the default. The
+    # template carried 3.0; moving to the stated 6:1 HALVES the team count for any job between
+    # 3 and 6 exact rigs and shifts every figure computed from it — a deliberate, documented
+    # behaviour change, not a drift. OPEN QUESTION for the estimator (recorded on the assumptions
+    # register): is "site team" the same resource as a GFT? The SITE TEAM spread block is
+    # engineer + foreman + geologist + PM; if the 6:1 rule counts GFTs only, the ratio and the
+    # block's membership are two different judgements. The value is an ordinary model input —
+    # change it per tender like anything else.
+    "site_team_supervises_rigs": 6.0,
     "hours_per_day": 8.0,
 }
 

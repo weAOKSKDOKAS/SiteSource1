@@ -69,9 +69,15 @@ class TestTheDailyCost:
         assert pm.multiplier == 0.33 and pm.cost_per_day == pytest.approx(990.0)
 
     def test_one_site_team_covers_this_job(self, spread):
-        assert spread.site_teams_required == 1, "1.56 rigs, one team supervises three"
+        assert spread.site_teams_required == 1, "1.56 rigs, one team supervises six"
 
     def test_a_fourth_rig_buys_a_second_team(self, programme, model):
+        # RE-ANCHORED when the default ratio moved 3.0 → 6.0 (the stated 6-rigs-per-GFT rule).
+        # This test is about the MECHANISM — teams follow the unrounded rig count over the ratio —
+        # and it used to encode the template's 3:1 default as if that were the rule. It now states
+        # the ratio it exercises; the 6:1 default has its own tests in
+        # test_the_supervision_ratio_is_the_stated_rule.py.
+        model.inputs["site_team_supervises_rigs"] = 3.0
         model.inputs["contract_period_months"] = 8          # squeeze the programme
         tighter = derive(TECHNOPOLE, model)
         assert tighter.rigs_exact == pytest.approx(3.909, abs=0.01)
