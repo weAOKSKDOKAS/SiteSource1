@@ -716,11 +716,12 @@ _WAGES_29 = [
 # distinguishing phrase this side of the vehicle specification, and a false split that guesses
 # wrong words would silently miss one of them.
 #
-# TWO RECONCILIATIONS STILL NEED THE REAL WORKBOOK IN HAND (noted from the BQ read, not
-# reproducible from this repo): BQ 1.53's description wraps across three printed lines and
-# dropped from one earlier extraction, and one routing card reported 64 Bill 1 items where the
-# bill prints 63 (1.1–1.63; a letter-suffixed insert would explain it). Both are about reading
-# the bill, not about this mapping.
+# TWO RECONCILIATIONS, NOW ANSWERED by an independent read of the real bill: BQ 1.53 dropped
+# because its wrapped description linearises with the quantity and unit INSIDE it — fixed in
+# `pipeline/stage_01_ingest/ingest.py::_bq_item_inventory` (the wrapped-description collector,
+# pinned with 1.53 as the fixture) — and Bill 1 prints 63 items (1.1–1.63, no gaps, no letter
+# suffixes), so the routing card's 64 was an over-count of the same wrapped row, not a missing
+# item. Both were about reading the bill, not about this mapping.
 _BILL_1_MAPPING: tuple[tuple[str, tuple[str, ...], str, str, tuple[str, ...]], ...] = (
     # (rule key, title phrases — matched over heading chain + line, SMM clause, what the BQ
     #  calls it, the transcribed clauses its heads come from)

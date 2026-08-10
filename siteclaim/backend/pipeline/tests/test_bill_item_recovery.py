@@ -195,3 +195,69 @@ def test_every_reported_ref_is_recoverable_individually(ref):
     bill = ref.split(".")[0]
     others = {"1": ["1.12", "1.18"], "2": ["2.1", "2.3"], "7": ["7.1", "7.3"]}[bill]
     assert ref in _refs(recover_dropped_sor_items(_scope(others), DOC_TEXT))
+
+
+# ---------------------------------------------------------------------------
+# The wrapped description whose quantity and unit land INSIDE it — BQ 1.53
+# ---------------------------------------------------------------------------
+# Read independently off the real bill (I-ND_2025_04_BQ-0.pdf, Bill 1, page 7): 1.53's
+# description wraps across printed lines, and in EXTRACTION ORDER the quantity and unit sit
+# between the two halves. The neighbouring 1.52, whose description fits one line, extracts
+# cleanly — which is why 1.53 alone was the gap in 163 items. Same rule as the module docstring:
+# this is the SHAPE of the real text, not the document.
+WRAPPED_1_53 = """Bill No. 1
+1.52
+Complete Implementation Plan for Smart Site
+-
+item
+-
+1.53
+Review, update and implement Implementation
+20
+mth
+Plan for Smart Site Safety System
+1.54
+Provide site communication network
+20
+mth
+"""
+
+
+class TestTheWrappedDescriptionIsCollectedWhole:
+    def test_the_interleaved_quantity_and_unit_do_not_split_the_description(self):
+        """THE 1.53 DEFECT. A reader that stops at the first quantity-looking token keeps half
+        the description — or, for a bare ref line, none: the old inventory skipped `1.53`
+        outright for having no letters on its own line, so the deterministic backstop was blind
+        to exactly the row the extraction mangles."""
+        inv = _bq_item_inventory(WRAPPED_1_53, {"1"})
+        assert inv["1.53"] == (
+            "Review, update and implement Implementation Plan for Smart Site Safety System")
+
+    def test_the_fragment_never_becomes_a_row_of_its_own(self):
+        """The 64-versus-63 half of the same defect: the bill prints 63 items and one count came
+        back 64 — an over-count, so something was read twice, and the likeliest something is a
+        wrapped fragment taken for a row. In this inventory the fragment cannot become one:
+        `Plan for Smart Site Safety System` opens with no item number, and the three refs here
+        stay exactly three."""
+        inv = _bq_item_inventory(WRAPPED_1_53, {"1"})
+        assert sorted(inv) == ["1.52", "1.53", "1.54"]
+
+    def test_a_single_line_neighbour_still_reads_as_before(self):
+        inv = _bq_item_inventory(WRAPPED_1_53, {"1"})
+        assert inv["1.52"] == "Complete Implementation Plan for Smart Site"
+        assert inv["1.54"] == "Provide site communication network"
+
+    def test_an_amounts_only_row_still_collects_nothing(self):
+        """The guard the collector must not loosen: a ref whose own line carries the AMOUNT
+        columns (`2.4  250.00  1,830.00`) is a row whose text sits elsewhere on the page, and the
+        lines after it belong to some other row. Only the BARE-ref shape collects."""
+        text = "2.4    250.00    1,830.00\nSome other row's wandering text\n"
+        assert _bq_item_inventory(text, {"2"}) == {}
+
+    def test_the_collector_is_bounded_and_stops_at_the_next_row(self):
+        """A bare ref at the end of a page must not swallow the page footer or the next bill's
+        prose — the collection stops at page furniture and is capped."""
+        text = "1.53\nReview, update and implement Implementation\n" + "=== next doc ===\n" \
+               + "This prose belongs to another document entirely\n"
+        inv = _bq_item_inventory(text, {"1"})
+        assert inv["1.53"] == "Review, update and implement Implementation"

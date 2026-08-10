@@ -608,7 +608,8 @@ def _bq_item_inventory(doc_text: str, bills: set) -> "dict[str, str]":
     inv: dict[str, str] = {}
     if not bills:
         return inv
-    for raw in (doc_text or "").splitlines():
+    lines = (doc_text or "").splitlines()
+    for i, raw in enumerate(lines):
         line = raw.strip()
         if not line or line[:1] == "=" or _SKIP_LINE.match(raw) or _BQ_NOT_AN_ITEM.match(line):
             continue
@@ -619,12 +620,53 @@ def _bq_item_inventory(doc_text: str, bills: set) -> "dict[str, str]":
         if bill_of(ref) not in bills:
             continue
         rest = m.group(2).strip()
+        if not rest:
+            # A BARE ref line: the description follows on its own lines — and on a wrapped row
+            # the quantity and unit LAND INSIDE it in extraction order. BQ 1.53 of the reference
+            # bill linearises as `1.53 / Review, update and implement Implementation / 20 / mth /
+            # Plan for Smart Site Safety System`, so a reader that stops at the first
+            # quantity-looking token keeps half the description — or, as here, none. The
+            # fragments are collected up to the next item row, skipping the interleaved column
+            # tokens. Only the BARE-ref shape collects: a ref whose own line carries the amount
+            # columns (`1.12  250.00  1,830.00`) keeps its existing skip below, because the lines
+            # after it belong to some other row's text.
+            rest = _wrapped_description(lines, i + 1)
+            if not rest:
+                continue
         # A row needs a description. `1.12   250.00   1,830.00` is the amount columns of a row
         # whose text sits elsewhere on the page, and `1.12 .......... 14` is a contents line.
         if sum(c.isalpha() for c in rest) < 2 or _BQ_NOT_AN_ITEM.match(rest):
             continue
         inv.setdefault(ref, rest[:80])
     return inv
+
+
+# The tokens a bill's quantity/unit/rate columns contribute when a page linearises column by
+# column: bare numbers (with separators), the `-` of a lump row, and the short unit words the
+# reference bills actually print. Anything else between a bare item ref and the next row is
+# description text.
+_BQ_COLUMN_TOKEN = re.compile(
+    r"(?i)^(?:-|[\d,./\s-]+|item|no\.?|nr\.?|sum|l\.?s\.?|m|mm|m2|m3|kg|t|h|hr|hrs|day|days|"
+    r"wk|wks|mth|mths|month|months|week|weeks|%)$")
+
+
+def _wrapped_description(lines: "list[str]", start: int, max_lines: int = 8) -> str:
+    """The description of a bill row whose ref sits alone on its line — fragments joined across
+    the interleaved quantity/unit tokens, stopping at the next item row or page furniture.
+
+    Deterministic and deliberately bounded: at most ``max_lines`` are examined, so a bare number
+    in running prose cannot swallow a paragraph."""
+    fragments: list[str] = []
+    for raw in lines[start : start + max_lines]:
+        line = raw.strip()
+        if not line or line[:1] == "=" or _SKIP_LINE.match(raw) or _BQ_NOT_AN_ITEM.match(line):
+            break
+        if _BQ_REF_LINE.match(line) and re.match(r"^\d{1,2}\s*[.\-/]\s*\d", line):
+            break                     # the next item row — this description is over
+        if _BQ_COLUMN_TOKEN.match(line):
+            continue                  # a quantity, unit or dash column token, interleaved
+        fragments.append(line)
+    return " ".join(fragments).strip()
 
 
 def _ocr_item_inventory(doc_text: str) -> "dict[str, str]":
