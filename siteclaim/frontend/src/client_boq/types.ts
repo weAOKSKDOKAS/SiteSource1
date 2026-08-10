@@ -260,6 +260,67 @@ export interface ResolvedNorm {
   unit: string;
 }
 
+// --- the access board (Site › MAP) -----------------------------------------
+// Where the holes are, and everything that can be KNOWN about reaching them. `proposed_class` is
+// on every cluster and is permanently "" — the backend never writes it, and the type carries the
+// field so that "nothing proposes an access class" is visible rather than remembered.
+export interface Evidence {
+  kind: "map" | "imagery" | "drawing" | "satellite" | "street_view" | "road_distance";
+  label: string;
+  /** A path back into THIS api when the source needs a credential; an external URL only when it
+   *  needs none. A keyed URL handed to a browser is a published credential. */
+  url: string;
+  external: boolean;
+  available: boolean;
+  unavailable_reason: string;
+}
+
+export interface ClusterEvidence {
+  label: string;
+  stations: string[];
+  holes: number;
+  lat: number;
+  lon: number;
+  /** How far the furthest station sits from the centroid. A cluster 400 m across is not one place. */
+  spread_m: number;
+  soil_m: number;
+  rock_m: number;
+  deepest_m: number;
+  /** What a HUMAN has already decided, per class. "" counts the undecided. Read, never written. */
+  decided: Record<string, number>;
+  /** ALWAYS "". Declared so the absence is a property of the contract. */
+  proposed_class: string;
+  evidence: Evidence[];
+  notes: string[];
+}
+
+export interface MapProviders {
+  basemap: {
+    provider: string;
+    imagery_tiles: string;
+    basemap_tiles: string;
+    label_tiles: string;
+    attribution: string;
+    requires_key: boolean;
+  };
+  google: {
+    key_present: boolean;
+    static_maps: boolean;
+    street_view: boolean;
+    distance_matrix: boolean;
+  };
+}
+
+export interface AccessBoardResponse {
+  set_id: string;
+  clusters: ClusterEvidence[];
+  radius_m: number;
+  unlocated: string[];
+  problems: string[];
+  providers: MapProviders;
+  waiting_on?: string;
+}
+
 export interface GroupsResponse {
   set_id: string;
   rev: number;

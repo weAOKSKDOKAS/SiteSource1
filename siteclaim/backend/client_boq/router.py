@@ -15,6 +15,7 @@ from __future__ import annotations
 import time as _time
 
 import io
+import os
 import re
 import zipfile
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from client_boq import criteria_loader, criteria_store, jobs, models, rates_store, store
+from client_boq.boq import access as boq_access
 from client_boq.boq import allocate as boq_allocate
 from client_boq.boq import assumptions as boq_assumptions
 from client_boq.boq import buildup as boq_buildup
@@ -3685,6 +3687,78 @@ def get_station_positions(set_id: str) -> dict:
         "problems": problems,
         "providers": boq_hk1980.provider_config(),
     }
+
+
+@router.get("/site/{set_id}/access")
+def get_access_board(set_id: str, radius_m: float = 250.0) -> dict:
+    """The access board: proximity clusters over the map, and the evidence for reaching each.
+
+    Assembles; never concludes. ``proposed_class`` is on every cluster and is permanently empty —
+    the access class is worth real money (80 Class A rig moves against 11 Class B, and a platform
+    lands on the rig-move item), no document in the tender says which hole is which, and a machine
+    reading a photograph would be guessing at something a person is accountable for.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+        classes = store.load_station_classes(conn, set_id) if schedule else {}
+    finally:
+        conn.close()
+    if schedule is None:
+        return {"set_id": set_id, "clusters": [], "radius_m": radius_m, "unlocated": [],
+                "problems": [], "providers": boq_hk1980.provider_config(),
+                "waiting_on": "the borehole details schedule has not been read yet"}
+    board = boq_access.board(
+        schedule, set_id=set_id, radius_m=radius_m,
+        classes={name: (row.get("access_class") or "") for name, row in classes.items()},
+        # Registrations are not persisted yet, so no sheet is located and the drawing crop reports
+        # what it is waiting for. The moment they are, this set fills and the cards light up.
+        located_sheets=set())
+    return {"set_id": set_id, **board.model_dump()}
+
+
+@router.get("/site/{set_id}/access/still")
+def get_access_still(set_id: str, lat: float, lon: float, kind: str = "satellite") -> Response:
+    """A keyed still (satellite or Street View), fetched SERVER-SIDE.
+
+    The key never reaches the browser. A URL with a credential in it, handed to a page, is a
+    published credential whatever the referrer policy says — so the client asks this path and the
+    key stays here. With no key configured this is a 503 naming the missing thing, which the card
+    renders as its unavailable reason rather than as a broken image.
+    """
+    key = (os.getenv("GOOGLE_MAPS_API_KEY") or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail=("No GOOGLE_MAPS_API_KEY is configured, so this kind of evidence is dark. The "
+                    "map, the Lands Department imagery and the drawing crop need no key and are "
+                    "unaffected."))
+    if kind not in {"satellite", "street_view"}:
+        raise HTTPException(status_code=400, detail=f"unknown still kind {kind!r}")
+    if not boq_hk1980.in_hong_kong(lat, lon):
+        raise HTTPException(
+            status_code=400,
+            detail=f"({lat:.5f}, {lon:.5f}) is outside Hong Kong — refusing to fetch a picture of "
+                   f"somewhere the works are not.")
+
+    url = ("https://maps.googleapis.com/maps/api/streetview" if kind == "street_view"
+           else "https://maps.googleapis.com/maps/api/staticmap")
+    params = ({"size": "600x400", "location": f"{lat},{lon}", "key": key}
+              if kind == "street_view" else
+              {"center": f"{lat},{lon}", "zoom": "18", "size": "600x400",
+               "maptype": "satellite", "scale": "2", "key": key})
+    try:
+        import httpx
+
+        reply = httpx.get(url, params=params, timeout=20.0)
+    except Exception as exc:                                    # network, DNS, timeout
+        raise HTTPException(status_code=502,
+                            detail=f"could not reach the imagery provider: {exc}") from exc
+    if reply.status_code != 200:
+        raise HTTPException(status_code=502,
+                            detail=f"the imagery provider answered {reply.status_code}")
+    return Response(content=reply.content,
+                    media_type=reply.headers.get("content-type", "image/png"))
 
 
 @router.post("/site/schedule")

@@ -1,6 +1,7 @@
 // Site — the drawing's half of the estimate. Three views behind one tab:
 //
 //   Schedule  what the borehole details drawing said, checked against what the client billed
+//   Map       where the holes actually are, clustered, with the evidence for reaching each
 //   Holes     the class of every hole — the judgement no document in the set contains
 //   Groups    which holes drill alike, and the arithmetic that follows
 //
@@ -13,6 +14,7 @@ import type { SetData } from "../App";
 import { api } from "../api";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
 import { PageView } from "../PageView";
+import { AccessMap } from "../site/AccessMap";
 import type {
   DerivedResponse,
   GroupPreview,
@@ -32,7 +34,7 @@ import {
   formatNorm,
 } from "../ui";
 
-type View = "schedule" | "holes" | "groups";
+type View = "schedule" | "map" | "holes" | "groups";
 
 const CLASS_OPTIONS = [
   { value: "A", label: "A", title: "Reachable by road, or by hand without a temporary platform." },
@@ -130,7 +132,7 @@ export function SiteTab({
       {/* ---------------- pane 1 — what the numbers mean ---------------- */}
       {panes.railOpen ? (
         <Rail width={panes.railWidth} onResize={panes.dragRail}>
-          {view === "holes" ? (
+          {view === "holes" || view === "map" ? (
             <ClassRail counts={counts} billed={billed} unassigned={unassigned} />
           ) : view === "groups" ? (
             <GroupsRail groups={groups} />
@@ -162,6 +164,7 @@ export function SiteTab({
             value={view}
             options={[
               { value: "schedule" as View, label: "SCHEDULE" },
+              { value: "map" as View, label: "MAP" },
               { value: "holes" as View, label: "HOLES" },
               { value: "groups" as View, label: "GROUPS" },
             ]}
@@ -175,7 +178,18 @@ export function SiteTab({
           </span>
         </header>
 
-        {view === "schedule" ? (
+        {view === "map" ? (
+          <AccessMap
+            setId={data.setId}
+            onError={onError}
+            onFocusStation={(station) => {
+              // The map assembles evidence; the class is decided on HOLES. Sending the reader
+              // there with the hole already picked is the whole handoff.
+              setSelected(station);
+              setView("holes");
+            }}
+          />
+        ) : view === "schedule" ? (
           <ScheduleView
             schedule={schedule}
             derived={derived}

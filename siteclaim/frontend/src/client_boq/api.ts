@@ -52,6 +52,7 @@ import type {
   PartDetail,
   PartSpec,
   PartsResponse,
+  AccessBoardResponse,
   CostingModelShape,
   CostingResponse,
   LibraryModelResponse,
@@ -323,6 +324,12 @@ export const api = {
   stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),
   derived: (setId: string) => get<DerivedResponse>(`/site/${setId}/derived`),
   holeGroups: (setId: string) => get<GroupsResponse>(`/site/${setId}/groups`),
+  /** The access board: proximity clusters over the map, and the evidence for reaching each. It
+   *  assembles and never concludes — `proposed_class` comes back "" on every cluster. */
+  accessBoard: (setId: string, radiusM?: number) =>
+    get<AccessBoardResponse>(
+      `/site/${setId}/access${radiusM ? `?radius_m=${radiusM}` : ""}`,
+    ),
   /** Class one hole. "" un-decides it; C says in its note that it has no bill item to sit on. */
   setStationClass: (setId: string, station: string, accessClass: string) =>
     post<{ counts: Record<string, number>; decided_by: string; note: string }>("/site/class", {
