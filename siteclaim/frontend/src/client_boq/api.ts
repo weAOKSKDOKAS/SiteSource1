@@ -83,6 +83,7 @@ import type {
   RevisionRow,
   ScheduleResponse,
   SchedulePasteResponse,
+  ScheduleReadResponse,
   StationScheduleResponse,
   StationScheduleShape,
   ScopeGateState,
@@ -374,6 +375,20 @@ export const api = {
       text,
       source_sheet: sourceSheet,
     }),
+  /**
+   * Read the take-off off the borehole details drawing(s). Hand it the drawing folder — it works
+   * out which sheets carry a station table before opening any of them, off the drawing register's
+   * own text layer, and it reads BOTH: the engineering schedule and the environmental one, which
+   * are billed separately. Returns a proposal; saves nothing.
+   */
+  readStationSchedule(setId: string, files: File[]): Promise<ScheduleReadResponse> {
+    const form = new FormData();
+    form.append("set_id", setId);
+    for (const file of files) form.append("files", file);
+    return fetch(`${ROOT}/site/schedule/read`, { method: "POST", body: form }).then((r) =>
+      handle<ScheduleReadResponse>(r),
+    );
+  },
   /** The writer that existed from the beginning and that nothing in this app ever called. */
   saveStationSchedule: (setId: string, schedule: StationScheduleShape, sourceSheet = "") =>
     post<{ set_id: string; usable: boolean; problems: string[] }>("/site/schedule", {

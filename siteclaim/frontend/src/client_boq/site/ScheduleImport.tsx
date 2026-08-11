@@ -18,7 +18,7 @@
 
 import { useCallback, useState } from "react";
 import { api } from "../api";
-import type { SchedulePasteResponse, Station } from "../types";
+import type { SchedulePasteResponse, ScheduleReadResponse, Station } from "../types";
 import { Button, SectionLabel, cx, formatNorm } from "../ui";
 
 const EXAMPLE = `CE19-ABH01\t834120.5\t817430.2\t34.90\t5.00\t34.90\t40.0\t29.90\t0\t5.00\tY\tN`;
@@ -39,6 +39,57 @@ export function ScheduleImport({
   const [sheet, setSheet] = useState("");
   const [read, setRead] = useState<SchedulePasteResponse | null>(null);
   const [busy, setBusy] = useState(false);
+  const [drawn, setDrawn] = useState<ScheduleReadResponse | null>(null);
+
+  /** Read it off the drawings instead of typing it.
+   *
+   *  Measured on the reference pack: the schedule sheets are flattened raster carrying 28
+   *  characters of text — the title-block stamp — so reading one is a vision call. Working out
+   *  WHICH sheets they are is free, because the issuer ships a drawing register and it is the one
+   *  document in the set with a real text layer. Give this the whole drawing folder.
+   *
+   *  It reads BOTH: the engineering schedule and the environmental one, which are billed under
+   *  different bills. Stopping at the first would under-read the tender, and every check
+   *  downstream would agree with it, because they all measure what was read against what was read.
+   */
+  const readDrawings = useCallback(
+    async (files: File[]) => {
+      setBusy(true);
+      try {
+        const report = await api.readStationSchedule(setId, files);
+        setDrawn(report);
+        // The proposal lands in the same review panel a pasted one does, so a machine reading and
+        // a typed one get looked at the same way before either is saved.
+        setRead({
+          set_id: report.set_id,
+          schedule: report.schedule,
+          headline: report.headline,
+          header_found: false,
+          delimiter: "",
+          mapping: {},
+          unmapped_columns: [],
+          missing_columns: [],
+          skipped_lines: [],
+          cells_unread: report.cells_unread,
+          bad_rows: report.bad_rows,
+          unread_rows: report.unread_rows,
+          empty_rows: report.empty_rows,
+          duplicate_names: report.duplicate_names,
+          problems: report.problems,
+          usable: report.usable,
+          totals: report.totals,
+        });
+        if (report.triage.sheets.length) {
+          setSheet(report.triage.sheets.map((entry) => entry.number).join(" + "));
+        }
+      } catch (e) {
+        onError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [setId, onError],
+  );
 
   const parse = useCallback(async () => {
     setBusy(true);
@@ -83,7 +134,47 @@ export function ScheduleImport({
         </p>
 
         <div className="mt-5">
-          <SectionLabel>THE SHEET IT CAME FROM</SectionLabel>
+          <SectionLabel>READ IT OFF THE DRAWINGS</SectionLabel>
+          <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
+            Give it the whole drawing folder. It reads the drawing register to work out which
+            sheets carry a station table — that part costs nothing — and then reads those sheets.
+            There are usually two: the engineering boreholes and the environmental holes, which are
+            billed separately.
+          </p>
+          <input
+            type="file"
+            accept="application/pdf"
+            multiple
+            disabled={busy}
+            onChange={(e) => {
+              const picked = [...(e.target.files ?? [])];
+              e.target.value = "";
+              if (picked.length) void readDrawings(picked);
+            }}
+            className="mt-2 w-full font-cb-sans text-[10.5px] text-cb-body"
+          />
+          {drawn && (
+            <div className="mt-2 rounded-cb-btn border border-cb-border bg-cb-tint px-2.5 py-2">
+              <p className="font-cb-sans text-[10.5px] leading-[1.55] text-cb-body">
+                {drawn.triage.headline}
+              </p>
+              {drawn.sheets_read.map((s) => (
+                <p
+                  key={s.sheet}
+                  className={cx(
+                    "mt-1 font-cb-sans text-[9.5px] leading-[1.5]",
+                    s.read ? "text-cb-muted" : "text-cb-bad-dark",
+                  )}
+                >
+                  {s.headline}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5">
+          <SectionLabel>OR PASTE IT — THE SHEET IT CAME FROM</SectionLabel>
           <input
             value={sheet}
             onChange={(e) => setSheet(e.target.value)}

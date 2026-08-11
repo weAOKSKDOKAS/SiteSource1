@@ -2350,3 +2350,42 @@ export interface ArchiveUploadResponse {
   parts: number;
   manifest_approved: boolean;
 }
+
+
+/**
+ * What the drawing reader made of the sheets it was given. A PROPOSAL — nothing is stored, and the
+ * take-off arrives unconfirmed with every unreadable cell marked rather than filled with a zero.
+ */
+export interface ScheduleReadResponse {
+  set_id: string;
+  schedule: StationScheduleShape;
+  headline: string;
+  /** How the schedule sheets were identified, and what was passed over. */
+  triage: {
+    /** "register" (free, off the cover sheet's text) · "filename" (weaker) · "none". */
+    tier: string;
+    reason: string;
+    headline: string;
+    /** The file the register was read from, when one was found. */
+    register: string;
+    sheets: { number: string; title: string; kind: string; filename: string }[];
+    /** Coordinate sheets that are NOT station schedules — the working-area plans. */
+    excluded: string[];
+    total_drawings: number;
+  };
+  sheets_read: {
+    sheet: string;
+    read: boolean;
+    problem: string;
+    cells_unread: number;
+    headline: string;
+  }[];
+  cells_unread: number;
+  bad_rows: string[];
+  unread_rows: string[];
+  empty_rows: string[];
+  duplicate_names: string[];
+  problems: string[];
+  usable: boolean;
+  totals: Partial<ScheduleTotals>;
+}

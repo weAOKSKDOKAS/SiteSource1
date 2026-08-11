@@ -57,6 +57,9 @@ from client_boq.boq import programme as boq_programme
 from client_boq.boq import reader as boq_reader
 from client_boq.boq import schedule as boq_schedule
 from client_boq.boq import schedule_paste as boq_schedule_paste
+from client_boq.ingest import pdfops as boq_pdfops
+from client_boq.ingest import schedule_read as boq_schedule_read
+from client_boq.ingest import schedule_sheets as boq_sheets
 from client_boq.boq import trace as boq_trace
 from client_boq.boq import unbilled as boq_unbilled
 from client_boq.models import (
@@ -3866,6 +3869,114 @@ def post_parse_station_schedule(req: StationPasteRequest) -> dict:
             "trial_pits": len(schedule.trial_pits),
         },
     }
+
+
+@router.post("/site/schedule/read")
+def post_read_station_schedule(
+    files: list[UploadFile] = File(...),
+    set_id: str = Form(...),
+) -> dict:
+    """Read the take-off off the borehole details drawing(s). Returns a proposal; **saves nothing.**
+
+    Hand it the drawing folder — or just the schedule sheets and the register — and it works out
+    which sheets carry a station table before opening any of them. That triage is free: the issuer
+    ships a drawing register (`GI-COVER`) and it is the one document in the whole drawing set with
+    a real text layer (2,582 characters against 28 on every sheet), so the titles are simply read
+    and the ones ending "- COORDINATE" kept, minus the WORKING AREA sheets, which are the site
+    boundary rather than the holes.
+
+    THERE ARE TWO SCHEDULE SHEETS on the reference pack — `GI/210` for the engineering boreholes
+    and `GI/310` for the environmental ones, which are billed under Bills 3 and 5. Both are read
+    and merged. A reader that finds the first and stops has under-read the tender, and every check
+    downstream would agree with it, because they all measure what was read against what was read.
+
+    The reading itself is a vision call per sheet: the sheets are flattened raster (48 images, 28
+    characters), and at the API's own downscale ceiling the table is legible cell by cell, so one
+    call reads one sheet. What comes back is a PROPOSAL — unconfirmed, with every cell the reader
+    could not make out marked unread rather than filled with a zero, and the two arithmetic checks
+    it cannot influence still in front of it: each row against its own stated length, and the
+    totals against Bill No.2's own quantities.
+    """
+    uploads = [(f.filename or "drawing.pdf", f.file.read()) for f in files]
+    if not uploads:
+        raise HTTPException(status_code=400, detail="No drawings were uploaded.")
+
+    # The register, if one came with the drawings. Its text layer is the whole triage.
+    register_text = ""
+    register_name = ""
+    for name, data in uploads:
+        if not boq_pdfops.has_text_layer(data):
+            continue
+        text = boq_pdfops.page_text(data, 1, 0)
+        if len(text.strip()) >= 500 and text.upper().count("GI") >= 3:
+            register_text, register_name = text, name
+            break
+
+    plan = boq_sheets.plan(register_text, [name for name, _ in uploads])
+    by_name = dict(uploads)
+    reports: list = []
+    for entry in plan.sheets:
+        data = by_name.get(entry.filename)
+        if data is None:
+            reports.append(boq_schedule_read.ReadReport(
+                sheet=entry.number,
+                problem=("the register lists this sheet but its file was not among the drawings "
+                         "uploaded")))
+            continue
+        reports.append(boq_schedule_read.read_sheet(
+            data, set_id=set_id, sheet=f"{entry.number}"))
+
+    schedule = boq_schedule_read.merge(reports, set_id=set_id)
+    return {
+        "set_id": set_id,
+        "schedule": schedule.model_dump(),
+        "headline": _read_headline(plan, reports, schedule),
+        "triage": {
+            "tier": plan.tier, "reason": plan.reason, "headline": plan.headline(),
+            "register": register_name,
+            "sheets": [{"number": e.number, "title": e.title, "kind": e.kind(),
+                        "filename": e.filename} for e in plan.sheets],
+            "excluded": plan.excluded,
+            "total_drawings": plan.total_drawings,
+        },
+        "sheets_read": [{"sheet": r.sheet, "read": r.read, "problem": r.problem,
+                         "cells_unread": r.cells_unread, "headline": r.headline()}
+                        for r in reports],
+        "cells_unread": sum(r.cells_unread for r in reports),
+        "bad_rows": schedule.bad_rows(),
+        "unread_rows": schedule.unread_rows(),
+        "empty_rows": schedule.empty_rows(),
+        "duplicate_names": schedule.duplicate_names(),
+        "problems": schedule.problems(),
+        "usable": schedule.usable(),
+        "totals": {
+            "holes": schedule.hole_count(), "soil_m": schedule.soil_m(),
+            "rock_m": schedule.rock_m(), "hard_m": schedule.hard_m(),
+            "standpipes": schedule.standpipes(), "piezometers": schedule.piezometers(),
+            "instruments": schedule.instruments(), "deepest": schedule.deepest(),
+            "trial_pits": len(schedule.trial_pits),
+        },
+    }
+
+
+def _read_headline(plan, reports: list, schedule) -> str:
+    """One sentence for the top of the panel. Never reassuring about a sheet nobody read."""
+    if not plan.found():
+        return plan.headline()
+    unread_sheets = [r.sheet for r in reports if not r.read]
+    if unread_sheets and len(unread_sheets) == len(reports):
+        return (f"None of the {len(reports)} schedule sheet(s) could be read. "
+                + " ".join(f"{r.sheet}: {r.problem}." for r in reports))
+    head = (f"Read {len(schedule.stations)} borehole(s)"
+            + (f" and {len(schedule.trial_pits)} trial pit(s)" if schedule.trial_pits else "")
+            + f" from {len([r for r in reports if r.read])} of {len(reports)} sheet(s).")
+    if unread_sheets:
+        head += (f" {', '.join(unread_sheets)} could NOT be read, so every hole on "
+                 f"{'them' if len(unread_sheets) > 1 else 'it'} is missing from this take-off.")
+    problems = schedule.problems()
+    if problems:
+        head += f" {len(problems)} row(s) are not settled — every one is named below."
+    return head + " Nothing is saved until you say so, and nothing here is confirmed."
 
 
 @router.get("/site/{set_id}/derived")

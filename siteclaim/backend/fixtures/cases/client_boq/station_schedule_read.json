@@ -1,0 +1,20 @@
+{
+  "boreholes": [
+    {"station": "CE19-ABH02", "kind": "BH", "easting": 825184.31, "northing": 838917.94,
+     "ground_level_mpd": 18.00, "rockhead_level_mpd": -19.00, "length_m": 30.00,
+     "max_boring_m": 30.00, "soil_m": 30.00, "hard_above_rockhead_m": 0.0, "rock_m": 0.0,
+     "standpipe": true, "piezometer": false},
+    {"station": "CE19-ABH19", "kind": "BH", "easting": 826337.69, "northing": 839177.88,
+     "ground_level_mpd": 14.90, "rockhead_level_mpd": -15.00, "length_m": 34.90,
+     "max_boring_m": 80.00, "soil_m": 29.90, "hard_above_rockhead_m": 0.0, "rock_m": 5.00,
+     "standpipe": false, "piezometer": true},
+    {"station": "CE19-ABH23", "kind": "BH", "easting": 826163.45, "northing": 838856.63,
+     "ground_level_mpd": 9.60, "rockhead_level_mpd": -33.00, "length_m": 30.00,
+     "max_boring_m": 30.00, "soil_m": null, "hard_above_rockhead_m": 0.0, "rock_m": 0.0,
+     "standpipe": null, "piezometer": false}
+  ],
+  "trial_pits": [
+    {"station": "CE19-NTP01", "kind": "TP", "easting": 826100.00, "northing": 838800.00,
+     "ground_level_mpd": 11.20, "depth_m": 3.00, "max_depth_m": 4.50, "depth_in_soil_m": 3.00}
+  ]
+}
