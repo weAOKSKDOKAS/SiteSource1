@@ -4663,6 +4663,39 @@ def put_library_model(req: CostingModelRequest, actor: str = Depends(_actor)) ->
     return {"model": req.model.model_dump(), "problems": req.model.problems()}
 
 
+def conservation_state(set_id: str, rev: Optional[int] = None) -> dict:
+    """Does this tender's cost come out the other side exactly once? A pure read, for any caller.
+
+    THE LAW. ``price()`` computes ``row.direct_cost = qty × basis.cost_per_unit`` and ``build()``
+    computes ``basis.cost_per_unit = basis.total_cost / basis.divisor``, so a basis is recovered
+    exactly once when the quantities of the items claiming it sum to its divisor. Anything else is
+    money moving without anybody deciding it should.
+
+    THE ONE PUBLIC ENTRY POINT for that verdict, because it has to be read in three places that do
+    not share a module: the costing screen, the offer letter's approval, and the deliverable
+    workbook. Three implementations of one law is how two of them would come to disagree.
+
+    Degrades honestly and never raises. A costing that cannot be built returns ``checked: False``
+    with the reason — which is a DIFFERENT state from "checked and clean", and the payload says
+    which, because absence reading as health is this codebase's recurring failure.
+    """
+    conn = store.get_conn()
+    try:
+        parts = _costing(conn, set_id, rev)
+    except HTTPException as exc:
+        return {"checked": False, "clean": None, "difference": 0.0, "headline": "",
+                "problems": [], "not_checked_because": str(exc.detail)}
+    except Exception as exc:  # noqa: BLE001 — a check that cannot run must not sink its caller
+        return {"checked": False, "clean": None, "difference": 0.0, "headline": "",
+                "problems": [], "not_checked_because": str(exc)}
+    finally:
+        conn.close()
+    balance = parts["conservation"]
+    return {"checked": True, "clean": balance.clean(), "difference": balance.difference(),
+            "headline": balance.headline(), "problems": balance.problems(),
+            "not_checked_because": ""}
+
+
 @router.get("/costing/{set_id}")
 def get_costing(set_id: str, rev: Optional[int] = None) -> dict:
     """Everything the costing screens need: the model in force, the programme, and the priced bill."""
@@ -5340,10 +5373,16 @@ def get_costing_workbook(set_id: str, rev: Optional[int] = None) -> Response:
     finally:
         conn.close()
 
+    # Empty when the tender conserves, a sentence when it does not. Read from the single owner of
+    # that verdict rather than recomputed — the screen, the approval and this file must not be able
+    # to disagree about whether the money comes out the other side.
+    balance = parts["conservation"]
+    conservation_note = "" if balance.clean() else balance.headline()
     xlsx = boq_costing_workbook.build_workbook(
         parts["model"], parts["programme"], parts["spread"], parts["buildup"],
         parts["priced"], parts["register"],
-        contract_reference=meta.get("client", "") or set_id)
+        contract_reference=meta.get("client", "") or set_id,
+        conservation=conservation_note)
     return Response(
         content=xlsx,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

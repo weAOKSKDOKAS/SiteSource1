@@ -63,17 +63,38 @@ def ensure_final_approval_table(conn: sqlite3.Connection) -> None:
             verdict     TEXT NOT NULL,                       -- 'approve' | 'revise'
             rationale   TEXT NOT NULL DEFAULT '',            -- REQUIRED for 'revise' (what to correct)
             approved_by TEXT NOT NULL DEFAULT 'operator',
-            approved_at TEXT NOT NULL
+            approved_at TEXT NOT NULL,
+            -- WHAT THE ARITHMETIC SAID AT THE MOMENT SOMEBODY SIGNED. Frozen, not looked up: the
+            -- model moves after an approval, and "was this tender conserved when it was approved"
+            -- must not become "is it conserved now".
+            conservation TEXT NOT NULL DEFAULT ''
         );
         """
     )
+    _add_column(conn, "bridge_final_approvals", "conservation", "TEXT NOT NULL DEFAULT ''")
     conn.commit()
+
+
+def _add_column(conn: sqlite3.Connection, table: str, column: str, spec: str) -> None:
+    """Add a column to a table that already exists. Idempotent, applied by shape.
+
+    ``CREATE TABLE IF NOT EXISTS`` never alters an existing table and this repo has no migration
+    framework, so a database created before a column has to be brought forward here. Additive only,
+    and with a DEFAULT: a row written before the column existed must read back as something honest.
+    """
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if existing and column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
 
 
 def _approval_row(row: sqlite3.Row) -> dict:
     return {
         "set_id": row["set_id"], "verdict": row["verdict"], "rationale": row["rationale"] or "",
         "approved_by": row["approved_by"] or "operator", "approved_at": row["approved_at"] or "",
+        # What the conservation check said when this verdict was given. Empty on a verdict recorded
+        # before the column existed, or one where the costing could not be built — and the sentence
+        # itself says which, because "" and "it was clean" must never be the same reading.
+        "conservation": (row["conservation"] if "conservation" in row.keys() else "") or "",
     }
 
 
@@ -85,6 +106,19 @@ def confirm_final_approval(set_id: str, verdict: str, rationale: str = "", *,
     boundary, upserts (re-deciding replaces), stamps who and when. ``revise`` without a rationale is
     refused — node 47 is "what to correct", and a revise verdict that says nothing to correct is not
     a decision anybody can act on.
+
+    IT ALSO FREEZES THE CONSERVATION VERDICT, and does not block on it. That is a decision, so it is
+    stated: an unconserved model **warns and is recorded, it does not refuse**. A basis nothing
+    claims may genuinely not be required by this contract, and refusing a correct tender because
+    arithmetic cannot tell which is the case would make the product wrong more often than the
+    estimator is. But the failure this closes is that a HK$3,038,117 leak reached a screen reporting
+    `unpriced: []` and `placeholders: []` — everything priced, nothing missing, a third of the cost
+    gone. So the verdict is put in front of the person signing and frozen ON the signature: an
+    approval given over an unconserved model becomes a fact on the record instead of a memory.
+
+    Frozen rather than looked up, for the same reason the letter is: the model moves after an
+    approval, and *was this tender conserved when it was approved* must not silently become *is it
+    conserved now*.
     """
     ref = run_ref_for(set_id)
     if verdict not in FINAL_VERDICTS:
@@ -98,18 +132,40 @@ def confirm_final_approval(set_id: str, verdict: str, rationale: str = "", *,
         ensure_final_approval_table(conn)
         conn.execute(
             """
-            INSERT INTO bridge_final_approvals (set_id, verdict, rationale, approved_by, approved_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO bridge_final_approvals
+                (set_id, verdict, rationale, approved_by, approved_at, conservation)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(set_id) DO UPDATE SET
                 verdict = excluded.verdict, rationale = excluded.rationale,
-                approved_by = excluded.approved_by, approved_at = excluded.approved_at
+                approved_by = excluded.approved_by, approved_at = excluded.approved_at,
+                conservation = excluded.conservation
             """,
-            (ref, verdict, text, approved_by, _now()),
+            (ref, verdict, text, approved_by, _now(), conservation_sentence(ref)),
         )
         conn.commit()
         return load_final_approval(ref) or {}
     finally:
         conn.close()
+
+
+def conservation_sentence(set_id: str) -> str:
+    """One line saying whether this tender's cost is recovered exactly once. Never raises.
+
+    Reads the single owner of that verdict (``client_boq.router.conservation_state``) rather than
+    re-deriving it: three implementations of one law is how two of them come to disagree. A check
+    that could not run says so — it is a different state from one that ran and came out clean, and
+    this string is going onto a signature.
+    """
+    try:
+        from client_boq.router import conservation_state
+
+        state = conservation_state(set_id)
+    except Exception as exc:  # noqa: BLE001 — an approval must never fail on a read-only check
+        return f"the conservation check could not be run ({exc})"
+    if not state.get("checked"):
+        return (f"the conservation check could not be run: "
+                f"{state.get('not_checked_because') or 'no reason given'}")
+    return state.get("headline", "")
 
 
 def load_final_approval(set_id: str) -> Optional[dict]:
@@ -323,4 +379,9 @@ def submission_state(set_id: str) -> dict:
         "deadline": deadline,
         "deadline_known": known,
         "letter_ready": letter is not None,
+        # THE LIVE CONSERVATION VERDICT, beside the frozen one on the approval. Both, deliberately:
+        # the frozen one says what was true when somebody signed, this one says what is true now,
+        # and a model edited after approval is exactly the case where those differ and somebody
+        # needs to see that they do. It warns; it never blocks — see `confirm_final_approval`.
+        "conservation": conservation_sentence(ref),
     }

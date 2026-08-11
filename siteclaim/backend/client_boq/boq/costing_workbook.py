@@ -123,18 +123,25 @@ class _Ref:
 
 def build_workbook(model: CostingModel, programme: Programme, spread: Spread, buildup: Buildup,
                    priced: PricedBQ, register: Register, *,
-                   contract_reference: str = "") -> bytes:
-    """The eight sheets, wired together. Returns the .xlsx bytes."""
+                   contract_reference: str = "", conservation: str = "") -> bytes:
+    """The eight sheets, wired together. Returns the .xlsx bytes.
+
+    ``conservation`` is the one-line verdict on whether this tender's direct cost is recovered
+    exactly once — empty when it is, a sentence when it is not. It goes on the deliverable because
+    the deliverable is what leaves the building: a HK$3,038,117 leak once reached a screen reporting
+    every line priced and nothing missing, and a workbook that cannot say so is a workbook that
+    carries the leak out of the door.
+    """
     book = Workbook()
     book.remove(book.active)
     where = _Ref()
 
-    _readme(book.create_sheet(SHEETS[0]), priced)
+    _readme(book.create_sheet(SHEETS[0]), priced, conservation)
     _inputs(book.create_sheet(SHEETS[1]), model, where, contract_reference)
     _production(book.create_sheet(SHEETS[2]), programme, model, where)
     _resource_rates(book.create_sheet(SHEETS[3]), model, spread, where)
     _item_buildup(book.create_sheet(SHEETS[4]), model, buildup, where)
-    _bq_priced(book.create_sheet(SHEETS[5]), priced, where)
+    _bq_priced(book.create_sheet(SHEETS[5]), priced, where, conservation)
     _register(book.create_sheet(SHEETS[6]), register)
     _empirical(book.create_sheet(SHEETS[7]))
 
@@ -144,7 +151,7 @@ def build_workbook(model: CostingModel, programme: Programme, spread: Spread, bu
 
 
 # ---------------------------------------------------------------------------
-def _readme(ws, priced: Optional[PricedBQ] = None) -> None:
+def _readme(ws, priced: Optional[PricedBQ] = None, conservation: str = "") -> None:
     ws["A1"] = "GI Tender Costing"
     ws["A1"].font = TITLE
     ws["A2"] = ("SiteSource — pricing engine output. Bottom-up cost build-up for ground "
@@ -169,6 +176,20 @@ def _readme(ws, priced: Optional[PricedBQ] = None) -> None:
         ws.row_dimensions[3].height = 62
         ws.sheet_properties.tabColor = ALARM_TAB
 
+    # THE COST THAT LEAVES BY A DIFFERENT DOOR FROM THE ONE IT CAME IN BY. A placeholder is a rate
+    # nobody chose; this is cost nobody recovers, which no rate on 05 can show because every rate
+    # there is arithmetically fine. `unpriced: []` and `placeholders: []` were both true while a
+    # third of the direct cost went missing.
+    if conservation:
+        ws["A4"] = f"⚠ {conservation}"
+        ws["A4"].font = ALARM_FONT
+        ws["A4"].alignment = Alignment(wrap_text=True, vertical="center")
+        ws.merge_cells("A4:B4")
+        ws["A4"].fill = ALARM_FILL
+        ws["B4"].fill = ALARM_FILL
+        ws.row_dimensions[4].height = 48
+        ws.sheet_properties.tabColor = ALARM_TAB
+
     rows = [
         ("PURPOSE", "Convert a bill of quantities into defensible unit rates via a bottom-up cost "
                     "build-up, with every assumption recorded for human review before submission."),
@@ -186,7 +207,7 @@ def _readme(ws, priced: Optional[PricedBQ] = None) -> None:
         ("", "02 Production carries that band through. Do not submit the P50 rate without reading "
              "the P90 column."),
     ]
-    for n, (head, text) in enumerate(rows, start=4):
+    for n, (head, text) in enumerate(rows, start=6):
         ws.cell(row=n, column=1, value=head).font = LABEL
         ws.cell(row=n, column=2, value=text).alignment = Alignment(wrap_text=True, vertical="top")
     ws.column_dimensions["A"].width = 16
@@ -726,7 +747,7 @@ def _item_buildup(ws, model: CostingModel, buildup: Buildup, where: _Ref) -> Non
 
 
 # ---------------------------------------------------------------------------
-def _bq_priced(ws, priced: PricedBQ, where: _Ref) -> None:
+def _bq_priced(ws, priced: PricedBQ, where: _Ref, conservation: str = "") -> None:
     """05 BQ Priced — the deliverable. Column K is what goes into the client's bill."""
     ws["A1"] = "05 — BQ priced"
     ws["A1"].font = TITLE
@@ -879,12 +900,22 @@ def _bq_priced(ws, priced: PricedBQ, where: _Ref) -> None:
     # `priced.problems` are composed carefully in `costing.py` and reached no sheet at all, so a
     # line with NO RATE contributed nothing to column L and was counted nowhere — the workbook's
     # total looked complete because the shortfall was invisible rather than because it was zero.
-    if priced.unpriced or priced.problems:
+    if priced.unpriced or priced.problems or conservation:
         row += 2
         ws.cell(row=row, column=3, value="WHAT IS NOT SETTLED").font = HEADING
         for column in range(2, 14):
             ws.cell(row=row, column=column).fill = ALARM_FILL
         row += 1
+        # THE ONE THING NO RATE ON THIS SHEET CAN SHOW. Every rate here can be arithmetically
+        # perfect while a basis nobody claims sits outside the bill entirely — cost that reaches no
+        # rate is not saved, it is given away under General Preambles ¶6 for the life of a
+        # remeasured contract.
+        if conservation:
+            ws.cell(row=row, column=3, value=conservation).font = Font(
+                bold=True, color="FF9C0006")
+            ws.cell(row=row, column=3).alignment = Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[row].height = 30
+            row += 1
         if priced.unpriced:
             ws.cell(row=row, column=3, value=(
                 f"{len(priced.unpriced)} line(s) carry no rate at all and add nothing to the total "

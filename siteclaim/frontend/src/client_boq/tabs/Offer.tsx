@@ -492,6 +492,45 @@ function SubmitPanel({
         ))}
       </ul>
 
+      {/*
+        DOES THE MONEY COME OUT THE OTHER SIDE EXACTLY ONCE?
+
+        This is in front of the signature because it is the one thing the checks above cannot say.
+        A basis nothing claims sits OUTSIDE the bill: every line can be priced, `unpriced` and
+        `placeholders` can both be empty, and a third of the direct cost can still be missing —
+        which is exactly what happened, to the tune of HK$3,038,117. Cost that reaches no rate is
+        not saved; General Preambles ¶6 gives it away for the life of a remeasured contract.
+
+        It WARNS and does not block. A basis nothing claims may genuinely not be required by this
+        contract, and arithmetic cannot tell which — refusing a correct tender would make the
+        product wrong more often than the estimator is. What it does instead is put the verdict
+        under the button and freeze it onto the signature, so an approval given over an
+        unconserved model is a fact on the record rather than a memory.
+      */}
+      {state?.conservation && (
+        <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint px-2.5 py-1.5">
+          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
+            THE COST DOES NOT COME OUT ONCE
+          </div>
+          <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-bad-dark">
+            {state.conservation}
+          </p>
+        </div>
+      )}
+
+      {/* What the arithmetic said when somebody signed, which is not the same question as what it
+          says now — and a model edited after approval is exactly where the two part company. */}
+      {approval?.conservation && approval.conservation !== state?.conservation && (
+        <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
+          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+            AT THE MOMENT OF APPROVAL
+          </div>
+          <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-ink-text">
+            {approval.conservation}
+          </p>
+        </div>
+      )}
+
       {approval?.verdict === "revise" && approval.rationale && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
           <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">

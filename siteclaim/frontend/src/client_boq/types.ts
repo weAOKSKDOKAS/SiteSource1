@@ -1412,6 +1412,12 @@ export interface BridgeFinalApproval {
   rationale: string;
   approved_by: string;
   approved_at: string;
+  /**
+   * What the conservation check said at the moment this verdict was given — frozen on the
+   * signature, not looked up. Empty when the tender conserved, when the costing could not be
+   * built, or on a verdict recorded before the column existed; the sentence itself says which.
+   */
+  conservation: string;
 }
 
 export interface BridgeSubmissionRecord {
@@ -1437,6 +1443,12 @@ export interface BridgeSubmissionState {
   deadline: string;
   deadline_known: boolean;
   letter_ready: boolean;
+  /**
+   * The LIVE conservation verdict, beside the frozen one on the approval. Both, deliberately: the
+   * frozen one says what was true when somebody signed and this one says what is true now, and a
+   * model edited after approval is exactly where they differ. It warns; it never blocks.
+   */
+  conservation: string;
 }
 
 // The persisted sublet award (node 43): which firm won a package, at what levelled total. A
