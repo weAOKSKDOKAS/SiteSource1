@@ -5202,8 +5202,26 @@ def _ground_for(conn, set_id: str) -> "boq_ask.Ground":
     register = store.load_register(conn, set_id)
     if register is not None and register.items:
         for item in register.items[:60]:
-            label = f"register:{item.criterion_id or item.clause_ref or item.id}"
-            ground.sources[label] = f"{item.title}. {item.finding}"[:1200]
+            # THE FIELDS ARE `DepartureItem`'s. This block used to read `item.title`,
+            # `item.finding`, `item.clause_ref` and `item.id` — four names the model does not have
+            # and never had, and `model_config` is `{}` so pydantic raises rather than returning
+            # None. `item.title` was evaluated unconditionally for EVERY register item, so
+            # `/costing/ask` returned a bare 500 on any tender with a review register, before a
+            # single token was sent. It was never an LLM defect; it was an AttributeError wearing
+            # one, and DEMO could not see it because the fixture short-circuit is downstream.
+            label = f"register:{item.criterion_id or item.clause or item.item}"
+            said = " ".join(part for part in (
+                item.clause_area,
+                f"({item.category})" if item.category else "",
+                item.extracted_value,
+                item.rationale,
+                item.proposed_position,
+                f"Cited: {item.cited_text}" if item.cited_text else "",
+            ) if part)
+            # `status` is excluded from the emptiness test on purpose: it always has a value, so
+            # including it would make a line with no substance look like ground worth citing.
+            body = said or f"register line {item.item} carries no text."
+            ground.sources[label] = f"{body[:1200]} Status: {item.status}."
 
     try:
         bill = _bill_or_404(conn, set_id, None)
