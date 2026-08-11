@@ -3522,6 +3522,19 @@ def save_bill_assumption(req: AssumptionRequest, actor: str = Depends(_actor)) -
     }
 
 
+def _rate_inputs(stored: dict) -> tuple[dict, dict]:
+    """Split the stored bill rates into the two things ``price_bill`` takes.
+
+    A row with a build-up is priced from it; a row with only a rate was priced in an earlier
+    revision and carried. The two are different facts and the split is the same everywhere it is
+    made, so it is made once.
+    """
+    build_ups = {ref: row["build_up"] for ref, row in stored.items() if row["build_up"] is not None}
+    carried = {ref: row["rate"] for ref, row in stored.items()
+               if row["rate"] is not None and row["build_up"] is None}
+    return build_ups, carried
+
+
 @router.get("/boq/{set_id}/priced")
 def get_priced_bill(set_id: str, rev: Optional[int] = None, margin_pct: float = 0.0) -> dict:
     """The bill, priced from the stored build-ups and rates."""
@@ -3530,13 +3543,18 @@ def get_priced_bill(set_id: str, rev: Optional[int] = None, margin_pct: float = 
         bill = _bill_or_404(conn, set_id, rev)
         stored = store.load_bill_rates(conn, set_id, bill.rev)
         rate_rows = rates_store.load(conn)
+        # THE POOL REACHES THE RATES. `price_bill` has taken a `spread=` argument since it was
+        # written and was never given one, because nothing converted a routed-SPREAD `UnbilledCost`
+        # into the `SpreadLine` it wants. So every item's share was 0.0 and `tendered_total` omitted
+        # the pool — for costs the contract explicitly orders INTO the rates ("There shall be no
+        # measurement or separate payment"). A cost with no bill item is not saved by having
+        # nowhere to go.
+        sweep = store.load_sweep(conn, set_id, bill.rev)
     finally:
         conn.close()
-    build_ups = {ref: row["build_up"] for ref, row in stored.items() if row["build_up"] is not None}
-    carried = {ref: row["rate"] for ref, row in stored.items()
-               if row["rate"] is not None and row["build_up"] is None}
+    build_ups, carried = _rate_inputs(stored)
     priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, margin_pct=margin_pct,
-                                    carried=carried)
+                                    carried=carried, spread=sweep.spread_lines())
     return {"set_id": set_id, "rev": bill.rev, **priced.model_dump()}
 
 
@@ -3550,13 +3568,12 @@ def get_bill_checks(set_id: str, rev: Optional[int] = None, margin_pct: float = 
         stored = store.load_bill_rates(conn, set_id, bill.rev)
         rate_rows = rates_store.load(conn)
         pending = store.bill_review_pending(conn, set_id, bill.rev)
+        sweep = store.load_sweep(conn, set_id, bill.rev)
     finally:
         conn.close()
-    build_ups = {ref: row["build_up"] for ref, row in stored.items() if row["build_up"] is not None}
-    carried = {ref: row["rate"] for ref, row in stored.items()
-               if row["rate"] is not None and row["build_up"] is None}
+    build_ups, carried = _rate_inputs(stored)
     priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, margin_pct=margin_pct,
-                                    carried=carried)
+                                    carried=carried, spread=sweep.spread_lines())
     issued = {line.code: line.amount for line in bill.summary
               if line.client_inserted and line.code in {"B", "D", "E"} and line.amount is not None}
     flags = boq_checks.run_checks(priced, bill, issued_sums=issued, fee_pct=fee_pct)
@@ -4261,6 +4278,28 @@ class SweepCostRequest(BaseModel):
     reason: str = ""
 
 
+def _spread_share_of(bill, stored: dict, rate_rows: list, sweep, full_ref: str) -> float:
+    """This item's slice of the sweep pool, as the pricing engine itself computes it.
+
+    Not a second opinion: it prices the bill through ``price_bill`` and reads back the one item's
+    ``spread``, so the number on the trace is the number in the rate by construction rather than by
+    agreement. Pre-margin, because ``_allocate`` runs on build-up value before the factor is applied
+    and the trace shows the margin as its own line further up the tree.
+
+    Cheap in the case that matters: an unspread pool costs nothing, because there is nothing to
+    allocate and the pricing run is skipped entirely.
+    """
+    spread = sweep.spread_lines()
+    if not spread:
+        return 0.0
+    build_ups, carried = _rate_inputs(stored)
+    priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, carried=carried, spread=spread)
+    for entry in priced.items:
+        if entry.full_ref == full_ref:
+            return entry.spread
+    return 0.0
+
+
 def _coverage_or_404(conn, set_id: str, rev: Optional[int], full_ref: str):
     bill = _bill_or_404(conn, set_id, rev)
     item = bill.index().get(full_ref)
@@ -4405,8 +4444,10 @@ def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
         schedule, _meta = store.load_station_schedule(conn, set_id)
         groups = store.load_hole_groups(conn, set_id, bill.rev)
         sweep = store.load_sweep(conn, set_id, bill.rev)
+        rate_rows = rates_store.load(conn)
     finally:
         conn.close()
+    spread_share = _spread_share_of(bill, rates, rate_rows, sweep, full_ref)
 
     row = rates.get(full_ref)
     # A lump item's quantity is legitimately absent — SMM Corr. 1/2007 Part III ¶3 prints "-" in the
@@ -4423,7 +4464,13 @@ def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
         amount=row["amount"] if row else None, margin_pct=margin_pct,
         margin_owner=(row.get("updated_by", "") if row else ""),
         groups=groups, schedule=schedule,
-        spread_share=0.0, spread_total=sweep.spread_total(),
+        # `PricedItem.spread` IS this item's share — `_allocate` computes it pro rata on build-up
+        # value, which `pricing.py` states is the only proxy the bill itself supplies. This was a
+        # literal 0.0 beside a `spread_total` loaded from the real sweep, and because `trace.py`
+        # guards the node on `if spread_share:`, the total was read from the database and thrown
+        # away on every request: the endpoint could not show a penny of the pool.
+        spread_share=spread_share,
+        spread_total=sweep.spread_total(),
     )
     return {
         "set_id": set_id, "rev": bill.rev, "full_ref": full_ref,

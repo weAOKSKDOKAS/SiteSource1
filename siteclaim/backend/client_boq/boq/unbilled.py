@@ -142,6 +142,34 @@ class UnbilledSweep(BaseModel):
             out[cost.route if cost.route in ROUTES else ROUTE_NOWHERE].append(cost)
         return out
 
+    def spread_lines(self) -> list:
+        """The routed-SPREAD costs as the pricing engine's own `SpreadLine`s. Pure.
+
+        THE ONE MAPPING NOBODY HAD WRITTEN, and its absence is why the pool never reached a rate.
+        `price_bill` takes a `spread=` argument, `_allocate` behind it is written and tested, and
+        `PricedItem.spread` is carried per item — and `models.SpreadLine`, the type the argument
+        wants, was constructed nowhere in production. So `spread=None` at both call sites, every
+        item's share 0.0, and `tendered_total` omitted the pool entirely.
+
+        The fields line up one to one and always did: label to label, amount to amount, and the
+        clause that says there is no separate item to `reason`. The judgement is already made and
+        already stamped with a name — `route == ROUTE_SPREAD` is somebody's decision, recorded with
+        their `decided_by`. What happens after that decision is arithmetic:
+
+            Particular Preamble 4A — "Any item missed out from the item coverage shall not be
+            measured."
+
+        A cost with no bill item is not saved by having nowhere to go; it is given away unless it
+        reaches the rates. Only costs with a known amount can be spread — a QUERIED cost has no
+        number yet, and inventing one to make the pool tidy is the opposite of what the query is for.
+        """
+        from client_boq.models import SpreadLine
+
+        return [SpreadLine(label=cost.label, amount=float(cost.amount or 0.0),
+                           reason=cost.source or "no separate item is measured for this")
+                for cost in self.costs
+                if cost.route == ROUTE_SPREAD and cost.amount is not None]
+
     def spread_total(self) -> float:
         """What goes into the pool, to be shared across every priced rate."""
         return money(sum(c.amount or 0.0 for c in self.costs if c.route == ROUTE_SPREAD))

@@ -72,6 +72,48 @@ def unpriced_items(priced: PricedBill, bill: ClientBill) -> list[EstimateFlag]:
     return flags
 
 
+def spread_reaches_the_rates(priced: PricedBill) -> list[EstimateFlag]:
+    """The sweep pool against the sum of the shares that actually landed on items.
+
+    A cost routed to SPREAD has already been decided: it is real, it is yours, and the contract
+    orders it into the rates instead of measuring it —
+
+        PP 11/2A (site uniform), NTT C2 (Subcontractor Management Plan), NTT C25 (Pay for Safety to
+        subcontractors): "There shall be no measurement or separate payment."
+
+    But ``_allocate`` spreads pro rata on build-up value, and returns **nothing at all** when no
+    priceable item has a build-up. ``PricedBill.spread_total`` still reports the pool, so the screen
+    shows the money as handled while no rate carries a penny of it, and ``tendered_total`` — the sum
+    of the extensions — leaves it out entirely. That is the recurring shape: the number is right and
+    the population was never checked.
+
+        Particular Preamble 4A — "Any item missed out from the item coverage shall not be measured."
+        General Preambles 6 — an item with no rate is "deemed to be covered by the other rates".
+
+    Both point one way: a cost that reaches no rate is a cost given away.
+    """
+    pool = money(priced.spread_total or 0.0)
+    if pool <= 0:
+        return []
+    landed = money(sum(entry.spread for entry in priced.items))
+    if abs(pool - landed) <= CENT:
+        return []
+    if landed <= 0:
+        return [EstimateFlag(
+            kind="spread_unallocated", item_id="(spread)",
+            message=(f"{pool:,.2f} of swept cost was routed into the rates and reached none of "
+                     f"them. The pool is spread pro rata on build-up value, and no item in this "
+                     f"bill has a build-up yet — so the whole pool is shown as handled and is in "
+                     f"no rate and in no tendered total. Price at least one item and it lands"),
+        )]
+    return [EstimateFlag(
+        kind="spread_unallocated", item_id="(spread)",
+        message=(f"{money(pool - landed):,.2f} of the {pool:,.2f} swept into the rates reached no "
+                 f"item — {landed:,.2f} was allocated. A cost the contract orders into the rates "
+                 f"and that lands in none of them is work you have agreed to do for nothing"),
+    )]
+
+
 def orphan_priced_items(priced: PricedBill, bill: ClientBill) -> list[EstimateFlag]:
     """Priced lines whose reference is in no item of the client's bill.
 
@@ -299,6 +341,7 @@ def run_checks(priced: PricedBill, bill: ClientBill, *,
         *duplicate_bill_refs(bill),
         *orphan_priced_items(priced, bill),
         *unpriced_items(priced, bill),
+        *spread_reaches_the_rates(priced),
         *pre_priced_mismatch(priced, bill),
         *extension_errors(priced),
         *casting_errors(priced),
