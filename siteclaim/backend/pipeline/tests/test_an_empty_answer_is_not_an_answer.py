@@ -140,7 +140,36 @@ class TestTheAnthropicPathNowRaises:
         with pytest.raises(CompletionTruncated) as caught:
             self._call(monkeypatch, self._resp("", "max_tokens"))
         assert "8000-token completion budget" in str(caught.value)
-        assert "not bad, it is absent" in str(caught.value)
+
+    def test_it_reports_where_the_budget_actually_went(self, monkeypatch):
+        """RE-ANCHORED 2026-08-11, disclosed. The message said the answer was "absent" and stopped
+        there — true, and not enough to act on. Two failures produce the same empty answer and need
+        OPPOSITE fixes: an answer too big to write wants a bigger budget, and a budget spent on a
+        chain of thought billed as completion tokens gets WORSE with one. The second live run hit
+        the second kind and the message could not say so, so the next step would have been a guess.
+        """
+        with pytest.raises(CompletionTruncated) as caught:
+            self._call(monkeypatch, self._resp("", "max_tokens"))
+        message = str(caught.value)
+        assert "no content blocks at all" in message
+        assert "if those tokens are in a text block" in message.lower()
+        assert "buys more thinking, not an answer" in message
+
+    def test_a_thinking_block_is_named_and_sized(self, monkeypatch):
+        """The distinguishing evidence. If the tokens are here, raising max_tokens is the wrong
+        move and the message says so rather than leaving somebody to find out."""
+        class _Thinking:
+            type = "thinking"
+            thinking = "x" * 4096
+
+        class _Resp:
+            content = [_Thinking()]
+            usage = None
+            stop_reason = "max_tokens"
+
+        with pytest.raises(CompletionTruncated) as caught:
+            self._call(monkeypatch, _Resp())
+        assert "thinking: 4,096 chars" in str(caught.value)
 
     def test_an_empty_answer_that_stopped_normally_does_not(self, monkeypatch):
         """A model that legitimately answers with nothing is a different problem, and inventing a

@@ -62,7 +62,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from client_boq.boq.schedule import Station, StationSchedule, TrialPit
 from client_boq.ingest import pdfops
@@ -124,6 +124,10 @@ INSTRUCTION = (
     "sentence. On those sheets there is no ground level, no rockhead and no soil/rock split — "
     "return null for every one of them and put the termination sentence verbatim in "
     "'termination'. Do not translate a termination sentence into a depth.\n\n"
+    "OMIT any field you have no value for. Do not write it as null — a table of 91 rows repeats "
+    "every key name on every row, and leaving out what is empty is the difference between an "
+    "answer that fits in one reply and one that does not. A field you leave out means exactly what "
+    "null means: not read, or not on this sheet.\n\n"
     "Column meanings, where they appear:\n"
     "  TENTATIVE BOREHOLE LENGTH -> length_m\n"
     "  MAX. BORING LENGTH -> max_boring_m\n"
@@ -136,16 +140,50 @@ INSTRUCTION = (
 )
 
 
+def _or_none(value):
+    """Anything the reader could not give as a number becomes ``None``, per cell.
+
+    THE READER'S OUTPUT TYPE MUST BE THE MOST TOLERANT THING IN THIS MODULE, and that is not
+    laxness — it is where the honesty discipline actually has to live. Every ounce of strictness
+    here converts a partial read into a total failure, because pydantic validates the payload as
+    ONE object: measured, a single null in row 11 discarded 22 perfectly good rows. The strictness
+    that matters is downstream, in arithmetic that cannot be talked out of it.
+
+    So a cell that arrives as ``"n/a"``, ``"-"`` or a smudge degrades to "not read" — exactly what
+    the mapper below already does with a genuine ``None`` — instead of taking its row, its slice and
+    its sheet with it.
+    """
+    if value is None or isinstance(value, (int, float)):
+        return value
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 class RawStation(BaseModel):
     """One row as the reader saw it. EVERY value optional — `None` means "I could not read this".
 
     There is deliberately no confidence field, no note about whether the row looks right, and no
     way to mark a reading as checked. A reader that can grade itself is a reader whose grade
     somebody will eventually believe.
+
+    ALL THREE TEXT FIELDS ACCEPT ``None``, and that is the fix for the second live run. `station`,
+    `kind` and `termination` were plain ``str``: a default makes a field safe to OMIT, and does
+    nothing at all when the key is present holding ``null``. GI/210's boreholes have no termination
+    column — it exists only on GI/310 — so the model correctly returned ``null`` and the schema
+    rejected the row for it, taking every other field on every other row in that slice with it,
+    including the ground level, the rockhead and the soil/rock split it had plainly read.
+
+    That is the principle this module already enforces for the depth columns — *a column that is
+    not on the sheet is not a blank cell* — arriving one field late.
     """
 
-    station: str = ""
-    kind: str = ""                                  # "BH" | "TP", as printed
+    station: Optional[str] = None
+    kind: Optional[str] = None
     easting: Optional[float] = None
     northing: Optional[float] = None
     ground_level_mpd: Optional[float] = None
@@ -157,19 +195,57 @@ class RawStation(BaseModel):
     rock_m: Optional[float] = None
     standpipe: Optional[bool] = None
     piezometer: Optional[bool] = None
-    #: The environmental sheet's prose depth rule, verbatim. Never turned into a number here.
-    termination: str = ""
+    #: The environmental sheet's prose depth rule, verbatim. Never turned into a number here, and
+    #: ``None`` on any sheet that does not carry the column at all.
+    termination: Optional[str] = None
     # Trial-pit columns.
     depth_m: Optional[float] = None
     max_depth_m: Optional[float] = None
     depth_in_soil_m: Optional[float] = None
 
+    _numbers = field_validator(
+        "easting", "northing", "ground_level_mpd", "rockhead_level_mpd", "length_m",
+        "max_boring_m", "soil_m", "hard_above_rockhead_m", "rock_m", "depth_m", "max_depth_m",
+        "depth_in_soil_m", mode="before")(_or_none)
+
 
 class RawSchedule(BaseModel):
-    """What the reader returned. Not a schedule — the deterministic mapper makes one of these."""
+    """What the reader returned. Not a schedule — the deterministic mapper makes one of these.
+
+    A ROW THAT CANNOT BE MADE SENSE OF IS DROPPED AND COUNTED, never allowed to fail the payload.
+    Measured on the second live run: two slices came back as complete, correct JSON and were thrown
+    away whole because one field on one row held ``null``. Forty-seven boreholes and twenty-one
+    trial pits, read correctly, discarded by a schema.
+
+    So the last line of defence is structural rather than hopeful: whatever the reader sends, this
+    keeps the rows it can and names the ones it cannot. It is the same rule as everywhere else here
+    — no silent drops — with the emphasis on *silent*, not on *drops*.
+    """
 
     boreholes: list[RawStation] = Field(default_factory=list)
     trial_pits: list[RawStation] = Field(default_factory=list)
+    #: Rows the reader sent that could not be made into a row at all, as they arrived. Never
+    #: silently discarded: a slice that lost four rows is a different thing from one that read four
+    #: fewer.
+    unusable_rows: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _keep_what_can_be_kept(cls, data):
+        if not isinstance(data, dict):
+            return data
+        kept: dict = {"boreholes": [], "trial_pits": [],
+                      "unusable_rows": list(data.get("unusable_rows") or [])}
+        for key in ("boreholes", "trial_pits"):
+            for row in (data.get(key) or []):
+                if isinstance(row, RawStation):
+                    kept[key].append(row)
+                    continue
+                try:
+                    kept[key].append(RawStation.model_validate(row))
+                except Exception:  # noqa: BLE001 — a row we cannot read is named, not fatal
+                    kept["unusable_rows"].append(str(row)[:200])
+        return kept
 
 
 class ReadReport(BaseModel):
@@ -260,11 +336,11 @@ def _station(raw: RawStation, sheet: str) -> Station:
         else:
             values[field] = bool(value)
 
-    if raw.termination.strip():
+    if (raw.termination or '').strip():
         # THE ENVIRONMENTAL SHEET'S DEPTH RULE, kept as words. It is a driller's instruction —
         # "~6M BELOW EXISTING GROUND LEVEL OR +11MPD, WHICHEVER IS LOWER" — and turning it into a
         # metre would be the reader deciding something the drawing left to site.
-        notes.append(f"termination requirement, as printed: {raw.termination.strip()}")
+        notes.append(f"termination requirement, as printed: {(raw.termination or '').strip()}")
         if set(DEPTH_FIELDS) <= set(unread):
             notes.append(
                 "this sheet carries no ground level, no rockhead and no soil/rock split — it gives "
@@ -302,12 +378,18 @@ def to_schedule(raw: RawSchedule, *, set_id: str, sheet: str) -> StationSchedule
     resolved. `confirmed_by` is left empty because this function has no way to fill it: a machine
     reading is a proposal, and confirming is a person saying they checked THIS reading.
     """
+    notes = [f"read from {sheet} by the drawing reader — a proposal, not a confirmed take-off"]
+    if raw.unusable_rows:
+        notes.append(
+            f"{len(raw.unusable_rows)} row(s) the reader sent could not be made into a station at "
+            f"all and are NOT in this take-off: {'; '.join(raw.unusable_rows[:5])}"
+            + (" …" if len(raw.unusable_rows) > 5 else ""))
     return StationSchedule(
         set_id=set_id, source_sheet=sheet,
         stations=[_station(row, sheet) for row in raw.boreholes if (row.station or "").strip()],
         trial_pits=[_trial_pit(row, sheet) for row in raw.trial_pits
                     if (row.station or "").strip()],
-        notes=[f"read from {sheet} by the drawing reader — a proposal, not a confirmed take-off"],
+        notes=notes,
     )
 
 
@@ -357,6 +439,7 @@ def _merge_raw(parts: list[RawSchedule]) -> RawSchedule:
     merged = RawSchedule()
     seen: set[str] = set()
     for part in parts:
+        merged.unusable_rows.extend(part.unusable_rows)
         for row in part.boreholes:
             name = (row.station or "").strip()
             if name and name not in seen:

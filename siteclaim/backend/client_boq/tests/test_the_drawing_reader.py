@@ -614,3 +614,181 @@ class TestTheBudgetIsAskedForRatherThanDefaulted:
         from pipeline.llm_client import VISION_CAPABLE
 
         assert "deepseek" not in VISION_CAPABLE
+
+
+# =================================================================================================
+# The second live run: GI/310 stable, GI/210 failing two different ways
+# =================================================================================================
+#
+# FINDING B, and it is the one that destroyed correct work. Slices 3 and 4 did NOT truncate — they
+# came back as complete JSON and failed validation, ~47 and ~21 errors, every one of them:
+#
+#     boreholes.0.termination
+#       Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]
+#
+# GI/210's boreholes have no termination column; it exists only on GI/310. So the model correctly
+# found nothing to put there and returned null, and a plain `str` field rejected it. A default makes
+# a field safe to OMIT and does nothing when the key is present holding null.
+#
+# Then pydantic validates the payload as ONE object, so rejecting one row's `termination` discarded
+# every field on every row in that slice — including the ground level, the rockhead and the
+# soil/rock split the model plainly had read.
+#
+# Measured: `station`, `kind` AND `termination` all rejected null. Three fields, not one.
+#
+# FINDING A is not what the shape suggests, and this is why the constant was NOT raised again.
+# The message that fired only fires on EMPTY text, and slices 3 and 4 wrote complete JSON on the
+# same model, the same budget and the same prompt shape. So the answer is demonstrably writable:
+# something other than the answer consumed slices 1 and 2. Raising the ceiling would buy more of
+# whatever that is. The guard now reports where the tokens went instead of guessing.
+
+class TestAColumnThatIsNotOnTheSheet:
+    """Finding B. The principle this module already enforced for the depth columns, one field late."""
+
+    def test_every_text_field_accepts_null(self):
+        """All three rejected it. Any of them could have destroyed a slice."""
+        for field in ("station", "kind", "termination"):
+            row = reader.RawStation.model_validate({field: None})
+            assert getattr(row, field) is None
+
+    def test_the_exact_live_payload_validates(self):
+        got = reader.RawSchedule.model_validate(
+            {"boreholes": [{"station": "CE19-ABH02", "easting": 825184.31, "soil_m": 30.0,
+                            "termination": None}]})
+        assert len(got.boreholes) == 1
+        assert got.boreholes[0].soil_m == 30.0
+
+    def test_a_borehole_with_no_termination_column_still_maps(self):
+        schedule = reader.to_schedule(
+            reader.RawSchedule(boreholes=[reader.RawStation(
+                station="CE19-ABH02", soil_m=30.0, rock_m=0.0, hard_above_rockhead_m=0.0,
+                length_m=30.0, standpipe=True, piezometer=False, termination=None)]),
+            set_id="t", sheet="GI/210")
+        station = schedule.stations[0]
+        assert station.soil_m == 30.0 and station.unread == []
+        assert not any("termination" in note for note in station.notes)
+
+    def test_the_environmental_sheet_still_keeps_its_sentence(self):
+        """Making the field optional must not lose the one sheet that carries it."""
+        schedule = reader.to_schedule(
+            reader.RawSchedule(boreholes=[reader.RawStation(
+                station="CE19-AEDH17A",
+                termination="~6M BELOW EXISTING GROUND LEVEL OR +11MPD, WHICHEVER IS LOWER")]),
+            set_id="t", sheet="GI/310")
+        assert any("WHICHEVER IS LOWER" in note for note in schedule.stations[0].notes)
+
+
+class TestOneBadCellCannotTakeTheSliceWithIt:
+    """The structural half. Even with the three fields fixed, ANY future mismatch would have
+    discarded a whole band — so the reader's output type is now the most tolerant thing here."""
+
+    def test_a_null_in_one_row_no_longer_discards_the_others(self):
+        payload = {"boreholes": [
+            {"station": f"CE19-ABH{n:02d}", "easting": 825184.31, "soil_m": 30.0}
+            for n in range(23)]}
+        payload["boreholes"][11]["termination"] = None
+        assert len(reader.RawSchedule.model_validate(payload).boreholes) == 23
+
+    def test_an_unreadable_cell_degrades_to_that_cell(self):
+        """"n/a" in a numeric column is exactly what `None` means here — not read. It must cost
+        one cell, not one row and not one slice."""
+        got = reader.RawSchedule.model_validate(
+            {"boreholes": [{"station": "CE19-ABH02", "soil_m": "n/a", "rock_m": "5.00"}]})
+        assert got.boreholes[0].soil_m is None
+        assert got.boreholes[0].rock_m == 5.0
+
+    def test_a_number_written_with_a_thousands_separator_is_still_a_number(self):
+        got = reader.RawSchedule.model_validate(
+            {"boreholes": [{"station": "X", "easting": "825,184.31"}]})
+        assert got.boreholes[0].easting == 825184.31
+
+    def test_a_row_that_is_not_a_row_is_named_rather_than_fatal(self):
+        payload = {"boreholes": [{"station": "CE19-ABH02", "soil_m": 30.0}, "not a row at all"]}
+        got = reader.RawSchedule.model_validate(payload)
+        assert len(got.boreholes) == 1
+        assert got.unusable_rows == ["not a row at all"]
+
+    def test_the_dropped_rows_reach_the_take_off(self):
+        """No silent drops. A slice that lost four rows is a different thing from one that read
+        four fewer, and only the take-off's own notes can say which."""
+        schedule = reader.to_schedule(
+            reader.RawSchedule.model_validate(
+                {"boreholes": [{"station": "CE19-ABH02", "soil_m": 30.0}, 42]}),
+            set_id="t", sheet="GI/210")
+        assert any("could not be made into a station" in note for note in schedule.notes)
+
+    def test_they_survive_the_merge_across_slices(self):
+        one = reader.RawSchedule.model_validate({"boreholes": [{"station": "A"}, "junk one"]})
+        two = reader.RawSchedule.model_validate({"boreholes": [{"station": "B"}, "junk two"]})
+        merged = reader._merge_raw([one, two])
+        assert merged.unusable_rows == ["junk one", "junk two"]
+
+
+class TestTheAskIsSmallerAndTheBandsAreNotDoubled:
+    """Finding A's two changes that are measurements rather than guesses."""
+
+    def test_the_reader_asks_the_model_to_omit_empty_fields(self):
+        """Measured: 329 chars per row with every key, 255 without the empty ones — 22% of a
+        91-row answer, for no information at all."""
+        assert "OMIT any field you have no value for" in reader.INSTRUCTION
+        assert "means exactly what null means" in reader.INSTRUCTION
+
+    def test_an_omitted_field_still_means_not_read(self):
+        """The instruction is only safe because the two are identical to the mapper."""
+        omitted = reader.RawSchedule.model_validate({"boreholes": [{"station": "X"}]})
+        explicit = reader.RawSchedule.model_validate(
+            {"boreholes": [{"station": "X", "soil_m": None, "rock_m": None,
+                            "hard_above_rockhead_m": None}]})
+        assert (reader.to_schedule(omitted, set_id="t", sheet="s").stations[0].unread
+                == reader.to_schedule(explicit, set_id="t", sheet="s").stations[0].unread)
+
+    def test_the_first_band_does_not_carry_its_own_header_twice(self):
+        """Band 0's body IS the head of the sheet. Composing the header strip above it printed the
+        table's heading twice and repeated the first rows under themselves."""
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page(width=1191, height=842)
+        page.insert_text((60, 40), "HEADERROW EASTING NORTHING", fontsize=11)
+        for n in range(40):
+            page.insert_text((60, 90 + n * 18), f"CE19-ABH{n:02d} 825184.31 838917.94", fontsize=9)
+        data = doc.tobytes()
+        doc.close()
+
+        from client_boq.ingest import pdfops
+
+        first = pdfops.render_band(data, 1, 0, 4)
+        second = pdfops.render_band(data, 1, 1, 4)
+        assert first and second
+        assert len(first) < len(second), "band 0 is no longer the tallest image of the four"
+
+    def test_a_middle_band_still_gets_the_header(self):
+        """The fix must not take the column names away from the bands that need them."""
+        import fitz
+
+        from client_boq.ingest import pdfops
+
+        doc = fitz.open()
+        page = doc.new_page(width=1191, height=842)
+        page.insert_text((60, 40), "HEADERROW EASTING NORTHING", fontsize=11)
+        for n in range(40):
+            page.insert_text((60, 90 + n * 18), f"CE19-ABH{n:02d} 825184.31 838917.94", fontsize=9)
+        rect = page.rect
+        data = doc.tobytes()
+        doc.close()
+
+        source = fitz.open(stream=data, filetype="pdf")
+        height = rect.height
+        overlap, step = height * pdfops.BAND_OVERLAP_SHARE, height / 4
+        top = max(rect.y0, rect.y0 + 2 * step - overlap)
+        header = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + height * pdfops.BAND_HEADER_SHARE)
+        body = fitz.Rect(rect.x0, top, rect.x1, min(rect.y1, rect.y0 + 3 * step + overlap))
+        composed = fitz.open()
+        target = composed.new_page(width=rect.width, height=header.height + body.height)
+        target.show_pdf_page(fitz.Rect(0, 0, rect.width, header.height), source, 0, clip=header)
+        target.show_pdf_page(
+            fitz.Rect(0, header.height, rect.width, header.height + body.height),
+            source, 0, clip=body)
+        assert "HEADERROW" in target.get_text()
+        composed.close()
+        source.close()

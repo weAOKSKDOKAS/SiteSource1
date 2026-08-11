@@ -790,6 +790,24 @@ def render_band(data: bytes, page: int, band: int, bands: int,
             header = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + height * BAND_HEADER_SHARE)
             body = fitz.Rect(rect.x0, top, rect.x1, bottom)
 
+            # A BAND THAT ALREADY STARTS AT THE TOP DOES NOT NEED THE TOP STACKED ABOVE IT.
+            # Band 0's body IS the head of the sheet, so composing the header strip above it
+            # printed the table's heading twice and repeated the first rows underneath themselves.
+            # At best that is a bigger image and a longer answer for nothing; at worst it asks the
+            # model to make sense of a table that appears to restart. Either way it is not the
+            # picture the sheet is.
+            if body.y0 <= header.y0 + 0.5:
+                target_doc = fitz.open()
+                width = rect.width or 1.0
+                page_only = target_doc.new_page(width=width, height=body.height)
+                page_only.show_pdf_page(fitz.Rect(0, 0, width, body.height), doc, page - 1,
+                                        clip=body)
+                fitting_only = int(MAX_RENDER_WIDTH_PX * 72 / width)
+                png_only = page_only.get_pixmap(
+                    dpi=max(MIN_RENDER_DPI, min(dpi, fitting_only))).tobytes("png")
+                target_doc.close()
+                return png_only
+
             # A new page the height of both crops, with the header composed above the body. Done
             # with `show_pdf_page` rather than by stitching two pixmaps, so it needs nothing but
             # PyMuPDF and stays vector until the single rasterise at the end.

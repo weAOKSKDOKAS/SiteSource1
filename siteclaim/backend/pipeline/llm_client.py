@@ -566,10 +566,34 @@ class LLMClient:
             # of "" reached the operator as "Invalid JSON: EOF while parsing" — a completely true
             # statement about a string that was never the problem.
             if not text.strip() and getattr(resp, "stop_reason", None) == "max_tokens":
+                # WHERE THE BUDGET WENT, not just that it went. Two different failures produce this
+                # same empty answer and they need opposite fixes:
+                #
+                #   * the answer was too big to write   -> a bigger budget, or a smaller ask
+                #   * the budget went somewhere that is not a text block (a chain of thought billed
+                #     as completion tokens, the exact shape of trap 10 on DeepSeek) -> a bigger
+                #     budget makes it WORSE, and the fix is to stop paying for the thinking
+                #
+                # Measured 2026-08-11 on the second live run: two slices of one sheet produced this
+                # on 16,000 tokens while two other slices of the SAME sheet, same model, same
+                # budget, wrote complete JSON. So the answer is demonstrably writable and something
+                # else consumed those two. Nothing in the message said which, so the next run could
+                # only guess. It says which now.
+                blocks: dict[str, int] = {}
+                for block in getattr(resp, "content", None) or []:
+                    kind = str(getattr(block, "type", "?"))
+                    body = getattr(block, "text", None) or getattr(block, "thinking", None) or ""
+                    blocks[kind] = blocks.get(kind, 0) + len(str(body))
+                shape = (", ".join(f"{k}: {n:,} chars" for k, n in sorted(blocks.items()))
+                         or "no content blocks at all")
+                spent = tokens.get("out")
                 raise CompletionTruncated(
                     f"{model} used its entire {max_tokens}-token completion budget and returned no "
-                    f"answer. The reply is not bad, it is absent: ask for a bigger budget, or give "
-                    f"the model less to answer in one call."
+                    f"answer. Spent {spent if spent is not None else 'an unreported number of'} "
+                    f"output tokens on — {shape}. If those tokens are in a text block the answer "
+                    f"was too big to write, so ask for less or budget more; if they are anywhere "
+                    f"else, the model is being paid to think and a bigger budget buys more "
+                    f"thinking, not an answer."
                 )
             return text
 
