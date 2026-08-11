@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -45,6 +46,8 @@ from schemas.models import DocType, ScopePackages, TenderDocument, TenderPackage
 # Imported rather than repeated: if ingest ever changes its context budget, the warning below must
 # move with it instead of quietly reporting against a stale number.
 from pipeline.stage_01_ingest.ingest import _CONTEXT_MAX_CHARS
+
+_log = logging.getLogger(__name__)
 
 BILL_DOC_TYPE = DocType.SCHEDULE_OF_RATES
 CATEGORY_DOC_TYPES = {
@@ -376,6 +379,43 @@ def save_scope_on(conn: sqlite3.Connection, set_id: str, scope: ScopePackages) -
         (set_id, scope.model_dump_json(), _now()),
     )
     conn.commit()
+    _register_the_name_the_documents_gave_it(conn, set_id, scope)
+
+
+def _register_the_name_the_documents_gave_it(conn: sqlite3.Connection, set_id: str,
+                                             scope: ScopePackages) -> None:
+    """Record the split's own project name as an alias of this tender.
+
+    THE DEFECT THIS CLOSES. `register_set_on` (`identity.py:148`) registers the names known at the
+    START of a split — the set_id and the set row's display name, which on the archive path is the
+    ZIP filename's stem. The tender's real title arrives LATER: `ingest_tender` asks the model for
+    a `project_name` and `_merge_scopes` prefers the model's answer over the registered one
+    (`ingest.py:1203-1233`), so on any PDF-bill tender the split ends up carrying the title as
+    printed in the documents — a string registered nowhere.
+
+    The desk then dispatches under exactly that string (`Sourcing.tsx:273`, `:300` — it is the
+    reference on the plan, the compose and the send), `resolve_ref` misses on all three of its
+    exact-equality chances, and `tender_ref` quietly falls back to the name itself
+    (`identity.py:78`). `Workspace.tender_dir` mints a fresh directory from the unresolved string,
+    the document index there is empty, and `relevant_docs` substitutes a GENERATED pricing sheet
+    for the client's own sliced bill — flagged on the plan and on the drafts, and **silent on the
+    confirm-and-send path**, which computes no plan at all.
+
+    One call site, deliberately: `save_scope_on` is the only funnel a split is persisted through
+    (`router.py:148` for the DEMO inline path, `scope_job.py:57` for the live job), so every string
+    the frontend can later send back for dispatch passed through here. `register_aliases` refuses
+    to re-point an alias already owned by a different tender (`db/project.py:101-106`), so this
+    cannot cross two tenders' artifacts, and it reports by omission rather than raising.
+    """
+    name = (scope.project_name or "").strip()
+    if not name:
+        return
+    try:
+        from db import project as uproject
+
+        uproject.register_aliases(conn, set_id, name)
+    except Exception:  # noqa: BLE001 — an identity registry must never fail a split
+        _log.warning("could not register %r as an alias of %r", name, set_id, exc_info=True)
 
 
 def load_scope_on(conn: sqlite3.Connection, set_id: str) -> Optional[ScopePackages]:
