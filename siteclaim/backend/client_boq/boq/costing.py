@@ -392,6 +392,58 @@ class PricedBQ(BaseModel):
     def index(self) -> dict[str, PricedRow]:
         return {row.full_ref: row for row in self.rows}
 
+    def duplicate_refs(self) -> dict[str, int]:
+        """Item references priced more than once, and how many rows each has. Empty is the norm.
+
+        WHY THIS IS NOT PEDANTRY. One `PricedRow` is emitted per non-parent `BillItem`
+        (:func:`price`, one append per loop iteration), and `BillItem`s come straight from the
+        client's own workbook via :func:`client_boq.boq.reader.read_workbook`, which appends a row
+        per reference row it finds and **keeps both copies of a repeated reference on purpose** —
+        "both kept, neither is assumed correct" (`reader.py:381-387`). That is the right call: a
+        reader must not choose which of two printed rows is the real one.
+
+        But every consumer downstream keys on the reference. :meth:`index` and
+        :meth:`ClientBill.index` both collapse the pair, so a screen reading through an index shows
+        63 where the workbook prints 64 — and the workbook's `SUM` counts the duplicated line's
+        amount **twice**, because it sums printed rows rather than distinct references. A typed
+        override for that reference applies to both copies, so the double lands in the tender.
+
+        Observed on the reference pack: Bill 1 prints 63 items (1.1…1.63, no gaps, no letter
+        suffixes) and the priced sheet carried 64 rows. This does not say which row is the phantom
+        — nothing here can, and the reader was right not to guess. It says the total is not the sum
+        of the bill.
+        """
+        counts: dict[str, int] = {}
+        for row in self.rows:
+            counts[row.full_ref] = counts.get(row.full_ref, 0) + 1
+        return {ref: n for ref, n in counts.items() if n > 1}
+
+    def duplicate_total(self) -> float:
+        """The money the extra copies add — what the total is over by, if each is a repeat."""
+        dupes = self.duplicate_refs()
+        if not dupes:
+            return 0.0
+        seen: dict[str, int] = {}
+        extra = 0.0
+        for row in self.rows:
+            if row.full_ref not in dupes:
+                continue
+            seen[row.full_ref] = seen.get(row.full_ref, 0) + 1
+            if seen[row.full_ref] > 1:
+                extra += row.amount or 0.0
+        return round(extra, 2)
+
+    def duplicate_note(self) -> str:
+        """One sentence for a screen or a sheet. Empty when every reference is priced once."""
+        dupes = self.duplicate_refs()
+        if not dupes:
+            return ""
+        named = ", ".join(f"{ref} ×{n}" for ref, n in sorted(dupes.items()))
+        return (f"{len(dupes)} item reference(s) are priced more than once — {named}. The bill "
+                f"reader keeps both copies of a repeated reference rather than choosing between "
+                f"them, so the total below counts {self.duplicate_total():,.2f} twice. Settle which "
+                f"printed row is the item before this figure is submitted.")
+
 
 def price(bill: ClientBill, model: CostingModel, programme: Programme, buildup: Buildup,
           mappings: Optional[list[ItemMapping]] = None,

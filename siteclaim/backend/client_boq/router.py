@@ -4641,6 +4641,16 @@ def get_costing(set_id: str, rev: Optional[int] = None) -> dict:
             "headline": parts["conservation"].headline(),
             "problems": parts["conservation"].problems(),
         },
+        # A reference priced more than once. The bill reader keeps both copies of a repeated
+        # reference deliberately — "neither is assumed correct" — but every index downstream keys
+        # on the reference and collapses them, so a screen shows 63 where the workbook prints 64
+        # and the workbook's SUM counts one line's amount twice. Named here so the two surfaces
+        # stop disagreeing silently.
+        "duplicates": {
+            "refs": parts["priced"].duplicate_refs(),
+            "amount": parts["priced"].duplicate_total(),
+            "note": parts["priced"].duplicate_note(),
+        },
         "register": {
             "rows": [r.model_dump() for r in register.rows],
             "gate": register.gate(), "summary": register.summary(),

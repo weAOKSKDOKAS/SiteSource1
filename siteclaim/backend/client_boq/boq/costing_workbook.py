@@ -710,8 +710,19 @@ def _bq_priced(ws, priced: PricedBQ, where: _Ref) -> None:
         cell.font = HEADING
         cell.fill = HEADER_FILL
 
+    # A reference priced twice is called out where the money is. The bill reader keeps both copies
+    # of a repeated reference on purpose ("neither is assumed correct"), and every index downstream
+    # collapses them — so the sheet is the ONLY place the second copy is visible, and the SUM below
+    # is the only place it costs anything. Observed on the reference pack: Bill 1 prints 63 items
+    # and this sheet carried 64 rows.
+    dupes = priced.duplicate_refs()
+    if dupes:
+        ws["A3" if not priced.placeholders else "A4"] = priced.duplicate_note()
+        ws["A3" if not priced.placeholders else "A4"].font = Font(bold=True, color="FFC25539")
+
     row = 5
     first = row
+    seen_refs: dict[str, int] = {}
     for line in priced.rows:
         ws.cell(row=row, column=2, value=line.full_ref)
         ws.cell(row=row, column=3, value=line.description).alignment = Alignment(wrap_text=True)
@@ -766,19 +777,39 @@ def _bq_priced(ws, priced: PricedBQ, where: _Ref) -> None:
             if line.source == "placeholder":
                 mark = ws.cell(row=row, column=13, value=f"PROVISIONAL — {line.note}")
                 mark.font = Font(bold=True, color="FFC25539")
+        if line.full_ref in dupes:
+            seen_refs[line.full_ref] = seen_refs.get(line.full_ref, 0) + 1
+            existing = ws.cell(row=row, column=13).value or ""
+            mark = ws.cell(row=row, column=13, value=(
+                f"{existing}  " if existing else "") + (
+                f"DUPLICATE REFERENCE — copy {seen_refs[line.full_ref]} of "
+                f"{dupes[line.full_ref]}. The bill prints this reference more than once and the "
+                f"reader kept every copy rather than choosing. Its amount is in the total below "
+                f"{dupes[line.full_ref]} times."))
+            mark.font = Font(bold=True, color="FFC25539")
         row += 1
 
-    ws.cell(row=row, column=3, value="TOTAL OF PRICED ITEMS").font = HEADING
+    # The label says what the SUM actually is. It sums printed ROWS, and when a reference is
+    # printed twice that is not the same thing as the bill's total — which is exactly the case a
+    # reader looking at this cell needs told, at the cell rather than three sheets away.
+    ws.cell(row=row, column=3,
+            value=("TOTAL OF PRICED ITEMS" if not dupes else
+                   "TOTAL OF PRICED ROWS — NOT THE BILL'S TOTAL")).font = HEADING
     cell = ws.cell(row=row, column=12, value=f"=SUM(L{first}:L{row - 1})")
     cell.font = HEADING
     cell.number_format = MONEY
+    if dupes:
+        ws.cell(row=row + 1, column=3, value="of which counted twice").font = NOTE
+        over = ws.cell(row=row + 1, column=12, value=priced.duplicate_total())
+        over.number_format = MONEY
+        over.font = Font(bold=True, color="FFC25539")
     if priced.placeholders:
         ws.cell(row=row, column=13,
                 value=(f"PROVISIONAL. {len(priced.placeholders)} of these lines stand on a "
                        f"placeholder, worth {priced.placeholder_total:,.0f} of this total. "
                        f"Actually priced: {priced.total - priced.placeholder_total:,.0f}.")
                 ).font = Font(bold=True, color="FFC25539")
-    row += 2
+    row += 3 if dupes else 2
     ws.cell(row=row, column=3,
             value="Column K is BLUE because it is yours: the rounded rate beside it is only a "
                   "proposal, and the amount follows whatever you actually submit.").font = NOTE
