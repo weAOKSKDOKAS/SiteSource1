@@ -56,6 +56,20 @@ export function OfferTab({
     };
   }, [data.setId, data.hasEstimate]);
 
+  // Two different states, and telling them apart is the whole point. "Nothing has been priced" is
+  // a step you have not reached; "priced with the costing engine" is a gap in THIS screen, and
+  // sending that estimator to Price — whose own next-action line then points back here — was a
+  // closed loop with the way out on neither side.
+  if (!data.hasEstimate && !letter && data.hasBill) {
+    return (
+      <WaitingOn title="This tender was priced with the costing engine">
+        The letter is assembled by the earlier resource-schedule engine, from its figure, its
+        pricing schedule and the departures the register confirmed. It cannot read a priced client
+        bill yet, so there is nothing for it to assemble here. The priced bill itself is on Price —
+        download the workbook, or run the estimate if this tender needs a letter.
+      </WaitingOn>
+    );
+  }
   if (!data.hasEstimate && !letter) {
     return (
       <WaitingOn

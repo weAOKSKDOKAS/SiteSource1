@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SetData } from "../App";
 import { api, runJob } from "../api";
-import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, TAB_FOR_JOB, usePanes, usePersisted } from "../chrome";
 import { PageView } from "../PageView";
 import type {
   CompanySettings,
@@ -95,7 +95,23 @@ export function PriceTab(props: {
   /** The shell's job tracker — `keep` in the estimate view runs through it when present. */
   onTrack?: <T>(label: string, run: () => Promise<T>) => Promise<T>;
 }) {
-  const [view, setView] = useState<PriceView>("costing");
+  // WHICH ENGINE YOU LAND ON, when you come back to this tab.
+  //
+  // `view` was a plain useState defaulting to "costing", and the tab genuinely unmounts on every
+  // navigation — so a tender priced on the EARLIER ESTIMATE engine, with no client bill imported,
+  // showed the Costing empty state ("No bill of quantities yet", plus a bill picker) every single
+  // time the estimator came back. The work was never lost — the estimate is refetched below and
+  // the bill import is persisted server-side — but the screen said it did not exist and invited a
+  // re-import, which is indistinguishable from losing it.
+  //
+  // So the default follows the tender rather than the code: land on the engine that has your work.
+  // The choice is then remembered per tender, because an estimator working two tenders at once is
+  // not working them on the same engine.
+  const [remembered, remember] = usePersisted<PriceView | "">(`priceView.${props.data.setId}`, "");
+  const fallback: PriceView =
+    props.data.hasBill || !props.data.hasEstimate ? "costing" : "estimate";
+  const view = remembered || fallback;
+  const setView = (next: PriceView) => remember(next);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="flex flex-none items-center gap-2 border-b border-cb-border bg-cb-surface px-4 py-2">

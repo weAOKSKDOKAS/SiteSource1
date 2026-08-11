@@ -99,10 +99,26 @@ export function nextFor(data: SetData): NextAction {
       tab: "site", go: "Open Site",
     };
   }
-  if (!data.hasEstimate) {
+  // EITHER engine counts as priced. `hasEstimate` reads `client_boq_estimates`, which only the
+  // retired resource-schedule engine writes — so a tender priced the normal way (import the
+  // client's bill, settle the rates) stuck on this branch forever. And because the branch names
+  // "price" while you are standing on Price, the `here` check below suppressed the button: the
+  // line degraded to "You are on the right tab" with no way onward, Offer's chip read WAITS ON THE
+  // PRICE, and Offer's only button pointed back at Price. Two screens pointing at each other.
+  if (!data.hasEstimate && !data.hasBill) {
     return {
       sentence: "build the price. Sourcing runs beside it for the sublet packages.",
       tab: "price", go: "Open Price",
+    };
+  }
+  // The offer letter is assembled by the retired engine and cannot yet read a costing bill. Say
+  // that, rather than sending the estimator to a screen whose only button sends them back.
+  if (!data.hasEstimate && data.hasBill) {
+    return {
+      sentence: "the bill is priced. The offer letter is still assembled by the earlier estimate " +
+                "engine and cannot read a costing bill yet — download the workbook from Price, " +
+                "or run the estimate if this tender needs a letter.",
+      tab: null, go: null,
     };
   }
   if (data.submission?.approval?.verdict !== "approve") {

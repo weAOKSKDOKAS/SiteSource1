@@ -48,6 +48,10 @@ export interface SetRow {
   tier: number | null;
   gates: GateStates;
   price: number | null;
+  /** The CURRENT engine's evidence: the client's bill has been imported and is priced from.
+   *  `price` above is the retired resource-schedule engine's headline figure and is null on every
+   *  tender priced the normal way — the two are different engines and neither implies the other. */
+  has_bill: boolean;
   has_letter: boolean;
   meta: SetMeta;
   counts: SetCounts;

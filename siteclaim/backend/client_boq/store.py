@@ -206,6 +206,13 @@ def list_sets(conn: sqlite3.Connection, include_archived: bool = False) -> list[
                r.register_json          AS register_json,
                COALESCE(sc.approved, 0) AS scope_approved,
                e.estimate_json          AS estimate_json,
+               -- Whether the CURRENT engine has anything. `estimate_json` is written only by the
+               -- retired resource-schedule engine (`save_estimate`), so a tender priced the normal
+               -- way -- import the client's bill, settle the rates -- left every "has a price"
+               -- flag false forever, and the app's next-action line never advanced past "build the
+               -- price". An EXISTS rather than the engine: a list view must not run the costing.
+               EXISTS (SELECT 1 FROM client_boq_bill_revisions br
+                        WHERE br.set_id = s.set_id)  AS has_bill,
                (l.set_id IS NOT NULL)   AS has_letter,
                (SELECT COUNT(*) FROM client_boq_scope_items si
                  WHERE si.set_id = s.set_id AND si.is_fallback = 1 AND si.accepted = 0
@@ -256,6 +263,10 @@ def list_sets(conn: sqlite3.Connection, include_archived: bool = False) -> list[
                 "scope": bool(row["scope_approved"]),
             },
             "price": price,
+            # The retired engine's headline figure, or None. `has_bill` is the current engine's
+            # evidence and is deliberately a separate field: they are different engines and one
+            # having run says nothing about the other.
+            "has_bill": bool(row["has_bill"]),
             "has_letter": bool(row["has_letter"]),
             "meta": meta,
             "counts": {

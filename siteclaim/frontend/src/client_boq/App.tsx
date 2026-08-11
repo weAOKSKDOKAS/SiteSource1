@@ -79,7 +79,16 @@ export interface SetData {
   /** The desk metadata — the client's name feeds the offer letter's header, so it is never
    *  typed a second time on the Offer screen. */
   meta: SetMeta | null;
+  /** The RETIRED resource-schedule engine has run. */
   hasEstimate: boolean;
+  /** The CURRENT costing engine has the client's bill and is pricing from it.
+   *
+   *  These are two flags because they are two engines. `hasEstimate` reads `client_boq_estimates`,
+   *  which only `/estimate/run` writes — so a tender priced the normal way (import the bill,
+   *  settle the rates) left it false forever, the next-action line never advanced past "build the
+   *  price", the Offer chip read WAITS ON THE PRICE, and Offer's only button pointed back at
+   *  Price. Two screens pointing at each other, with the way out on neither. */
+  hasBill: boolean;
   /** The routing fork, read back from the bridge rather than remembered — a reload must not reset
    *  a step chip to a state the tender is already past. Both reads are pure: they never re-run the
    *  analysis, which would be a write and, live, a model call. */
@@ -805,6 +814,7 @@ function SetView({
       site,
       meta: setRow?.meta ?? null,
       hasEstimate: setRow?.price != null,
+      hasBill: Boolean(setRow?.has_bill),
       route: {
         hasProposal: Boolean(proposal?.packages.length),
         hasDecisions: Boolean(decisions?.decisions.length),
@@ -907,7 +917,9 @@ function SetView({
         parts: Boolean(data?.parts?.count),
         register: Boolean(data?.register),
         scope: Boolean(data?.scope),
-        estimate: Boolean(data?.hasEstimate),
+        // Either engine. A chip that says WAITS ON THE PRICE about a tender that has been priced
+        // is worse than no chip.
+        estimate: Boolean(data?.hasEstimate || data?.hasBill),
         proposal: Boolean(data?.route.hasProposal),
         decisions: Boolean(data?.route.hasDecisions),
         site: Boolean(data?.site?.stations.length),

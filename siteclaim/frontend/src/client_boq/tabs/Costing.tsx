@@ -14,7 +14,7 @@ import { Ask } from "../costing/Ask";
 import { Conditions } from "../costing/Conditions";
 import { Outstanding } from "../Outstanding";
 import type { AssumptionRow, CostingCheck, CostingResponse, PricedRow } from "../types";
-import { SectionLabel, WaitingOn, cx, formatNorm, money } from "../ui";
+import { Button, SectionLabel, WaitingOn, cx, formatNorm, money } from "../ui";
 
 const VERDICTS = ["Accepted", "Revised", "Rejected"];
 
@@ -27,15 +27,27 @@ export function Costing({
 }) {
   const [data, setData] = useState<CostingResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  // The engine failing is NOT the same state as no bill having been imported, and this screen used
+  // to render them identically: any throw set `data` to null, so a 500 out of the costing run
+  // produced "No bill of quantities yet" with a bill picker under it — a screen actively inviting
+  // an estimator to re-import a bill that is already there. `GET /costing` re-runs the whole
+  // engine on every read (propose, derive, spread, build, price, assumptions), so there is plenty
+  // to throw. The message is kept so the screen can say which of the two happened.
+  const [failure, setFailure] = useState("");
 
   const load = useCallback(async () => {
     try {
       setData(await api.costing(setId));
+      setFailure("");
     } catch (e) {
       // A set with no bill yet is a state, not a failure — the empty view says what is missing.
       setData(null);
-      if (!(e instanceof Error && e.message.includes("No bill of quantities"))) {
-        onError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes("No bill of quantities")) {
+        setFailure("");
+      } else {
+        setFailure(message);
+        onError(message);
       }
     } finally {
       setLoading(false);
@@ -48,6 +60,28 @@ export function Costing({
 
   if (loading) {
     return <WaitingOn title="Running the costing model…">Reading the bill.</WaitingOn>;
+  }
+  if (!data && failure) {
+    // The bill may well be imported and priced. Saying so, and offering the retry rather than the
+    // importer, is the difference between a transient fault and a lost afternoon.
+    return (
+      <div className="flex h-full w-full items-start justify-center overflow-y-auto p-8">
+        <div className="w-full max-w-2xl">
+          <div className="font-cb-serif text-[17px] font-semibold text-cb-ink-text">
+            The costing run did not finish
+          </div>
+          <p className="mt-2 font-cb-sans text-[11.5px] leading-[1.6] text-cb-muted">
+            This is the engine failing, not a missing bill — whatever was imported is still
+            imported, and nothing has been lost. The whole model is recomputed on every read, so a
+            retry is free and often enough.
+          </p>
+          <p className="mt-2 font-cb-mono text-[10.5px] leading-[1.55] text-cb-bad-dark">{failure}</p>
+          <div className="mt-4">
+            <Button variant="dark" onClick={() => void load()}>Try again</Button>
+          </div>
+        </div>
+      </div>
+    );
   }
   if (!data) {
     // Not a dead end. This screen used to say "import the client's workbook on the Documents step"
