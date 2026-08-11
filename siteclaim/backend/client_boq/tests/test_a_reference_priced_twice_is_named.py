@@ -154,14 +154,20 @@ class TestItReachesTheWorkbook:
     def test_a_placeholder_and_a_duplicate_are_both_said_on_the_same_row(self):
         """Two different problems with one line. Overwriting one with the other would hide
         whichever the code happened to write second."""
+        from client_boq.boq.model import PLACEHOLDER_NOTE
+
         first_copy = _row("1.53", source="placeholder")
         first_copy.cost_basis = 100.0
-        first_copy.note = "no rate in the book for this shape"
+        # The real note, as `costing.py` composes it — it already opens "PROVISIONAL — ".
+        first_copy.note = PLACEHOLDER_NOTE
         both = _priced(first_copy, _row("1.53"))
         both.placeholders = ["1.53"]
         ws = self._sheet(both)
         first = ws.cell(row=5, column=13).value or ""
         assert "PROVISIONAL" in first and "DUPLICATE REFERENCE" in first
+        assert first.count("PROVISIONAL —") == 1, (
+            "the writer used to prefix a note that already carried the prefix, rendering "
+            "'PROVISIONAL — PROVISIONAL — …'")
 
     def test_the_over_count_figure_is_on_the_sheet_as_a_number(self):
         ws = self._sheet(_priced(_row("1.53", qty=10.0, rate=100.0),

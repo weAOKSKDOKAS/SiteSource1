@@ -70,6 +70,23 @@ NOTE = Font(italic=True, size=9, color="FF7F7F7F")
 KEY_ASSUMPTION = PatternFill("solid", fgColor="FFFFF2CC")
 HEADER_FILL = PatternFill("solid", fgColor="FFEFEFEF")
 
+# THE WARNING HAS TO SURVIVE THE SCROLL, AND THE VIEWPORT.
+#
+# The "DO NOT SUBMIT" banner was one unmerged, unwrapped, unfilled cell at A3 in an 11pt terracotta,
+# on sheet 6 of 8, above a sheet with no freeze panes — so it left the screen on the first
+# wheel-turn and the director read a grand total with no warning in view. And the per-line marking
+# was written into column M, which starts past 1,380 px of columns B..L: the only place a
+# placeholder line was marked began beyond the right edge of a normal window, leaving B..L
+# byte-identical to a genuinely priced row. The code comment there claimed the opposite.
+#
+# So: the banner is filled, merged and wrapped; the rows above the table are frozen so it cannot
+# scroll away; the sheet tab turns red; the README says it on the first sheet somebody opens; and a
+# placeholder line is tinted ACROSS the row, which is the one marking that cannot be off-screen.
+ALARM_FILL = PatternFill("solid", fgColor="FFF8D7DA")
+ALARM_FONT = Font(bold=True, size=12, color="FF9C0006")
+PLACEHOLDER_FILL = PatternFill("solid", fgColor="FFFDEDEE")
+ALARM_TAB = "FFC25539"
+
 MONEY = "#,##0.00"
 NUMBER = "#,##0.00"
 PERCENT = "0.0%"
@@ -112,7 +129,7 @@ def build_workbook(model: CostingModel, programme: Programme, spread: Spread, bu
     book.remove(book.active)
     where = _Ref()
 
-    _readme(book.create_sheet(SHEETS[0]))
+    _readme(book.create_sheet(SHEETS[0]), priced)
     _inputs(book.create_sheet(SHEETS[1]), model, where, contract_reference)
     _production(book.create_sheet(SHEETS[2]), programme, model, where)
     _resource_rates(book.create_sheet(SHEETS[3]), model, spread, where)
@@ -127,12 +144,30 @@ def build_workbook(model: CostingModel, programme: Programme, spread: Spread, bu
 
 
 # ---------------------------------------------------------------------------
-def _readme(ws) -> None:
+def _readme(ws, priced: Optional[PricedBQ] = None) -> None:
     ws["A1"] = "GI Tender Costing"
     ws["A1"].font = TITLE
     ws["A2"] = ("SiteSource — pricing engine output. Bottom-up cost build-up for ground "
                 "investigation tenders.")
     ws["A2"].font = NOTE
+
+    # THE FIRST SHEET SOMEBODY OPENS. The provisional warning lived on sheet 6 of 8 and the README
+    # said nothing about placeholders at all, so a director could open this workbook, read the
+    # purpose, jump to the total, and never pass the warning.
+    if priced is not None and priced.placeholders:
+        ws["A3"] = (f"⚠ DO NOT SUBMIT THIS TENDER. {len(priced.placeholders)} lines on "
+                    f"'05 BQ Priced' stand on a PLACEHOLDER — a stand-in for the shape of a line, "
+                    f"not an estimate of it. {priced.placeholder_total:,.0f} of the "
+                    f"{priced.total:,.0f} total was chosen by nobody. Actually priced: "
+                    f"{priced.total - priced.placeholder_total:,.0f}. Every placeholder line is "
+                    f"tinted on that sheet and named in its Notes column.")
+        ws["A3"].font = ALARM_FONT
+        ws["A3"].alignment = Alignment(wrap_text=True, vertical="center")
+        ws.merge_cells("A3:B3")
+        ws["A3"].fill = ALARM_FILL
+        ws["B3"].fill = ALARM_FILL
+        ws.row_dimensions[3].height = 62
+        ws.sheet_properties.tabColor = ALARM_TAB
 
     rows = [
         ("PURPOSE", "Convert a bill of quantities into defensible unit rates via a bottom-up cost "
@@ -701,14 +736,32 @@ def _bq_priced(ws, priced: PricedBQ, where: _Ref) -> None:
     if priced.placeholders:
         ws["A3"] = (f"⚠ DO NOT SUBMIT. {len(priced.placeholders)} lines stand on a placeholder — a "
                     f"stand-in for the SHAPE of a line, not an estimate of it. "
-                    f"{priced.placeholder_total:,.0f} of the total below was chosen by nobody.")
-        ws["A3"].font = Font(bold=True, color="FFC25539")
+                    f"{priced.placeholder_total:,.0f} of the total below was chosen by nobody. "
+                    f"Every one of those lines is tinted below.")
+        ws["A3"].font = ALARM_FONT
+        ws["A3"].alignment = Alignment(wrap_text=True, vertical="center")
+        ws.merge_cells("A3:M3")
+        for column in range(1, 14):
+            ws.cell(row=3, column=column).fill = ALARM_FILL
+        ws.row_dimensions[3].height = 30
+        ws.sheet_properties.tabColor = ALARM_TAB
     headers = ["BQ item", "Description", "Quantity", "Unit", "Cost basis ($/unit)", "Direct cost",
                "Selling factor", "Rate (raw)", "Rate (rounded)", "RATE TO SUBMIT", "Amount"]
     for n, head in enumerate(headers, start=2):
         cell = ws.cell(row=4, column=n, value=head)
         cell.font = HEADING
         cell.fill = HEADER_FILL
+    # Column M was the only unlabelled column on the sheet, and the one carrying every warning.
+    notes_head = ws.cell(row=4, column=13, value="Notes and warnings")
+    notes_head.font = HEADING
+    notes_head.fill = HEADER_FILL
+    # The banner and the header stay on screen. Without this the warning above scrolls away on the
+    # first wheel-turn and the grand total is read with nothing in view.
+    ws.freeze_panes = "A5"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = "1:4"
 
     # A reference priced twice is called out where the money is. The bill reader keeps both copies
     # of a repeated reference on purpose ("neither is assumed correct"), and every index downstream
@@ -775,8 +828,16 @@ def _bq_priced(ws, priced: PricedBQ, where: _Ref) -> None:
             # and is called out in red on its own row. Somebody scrolling this sheet must be able to
             # see which numbers nobody chose without cross-referencing anything.
             if line.source == "placeholder":
-                mark = ws.cell(row=row, column=13, value=f"PROVISIONAL — {line.note}")
+                # `line.note` ALREADY begins "PROVISIONAL — " (`model.PLACEHOLDER_NOTE`, applied at
+                # `costing.py:496`), so prefixing it again rendered "PROVISIONAL — PROVISIONAL — …".
+                mark = ws.cell(row=row, column=13, value=line.note)
                 mark.font = Font(bold=True, color="FFC25539")
+        # The marking that cannot be off-screen. Column M begins past ~1,380 px of columns B..L,
+        # so a note there leaves the visible part of a placeholder row identical to a real one.
+        if line.source == "placeholder":
+            for column in range(2, 14):
+                ws.cell(row=row, column=column).fill = PLACEHOLDER_FILL
+
         if line.full_ref in dupes:
             seen_refs[line.full_ref] = seen_refs.get(line.full_ref, 0) + 1
             existing = ws.cell(row=row, column=13).value or ""
@@ -813,6 +874,31 @@ def _bq_priced(ws, priced: PricedBQ, where: _Ref) -> None:
     ws.cell(row=row, column=3,
             value="Column K is BLUE because it is yours: the rounded rate beside it is only a "
                   "proposal, and the amount follows whatever you actually submit.").font = NOTE
+
+    # WHAT IS NOT SETTLED, on the sheet rather than only in the API payload. `priced.unpriced` and
+    # `priced.problems` are composed carefully in `costing.py` and reached no sheet at all, so a
+    # line with NO RATE contributed nothing to column L and was counted nowhere — the workbook's
+    # total looked complete because the shortfall was invisible rather than because it was zero.
+    if priced.unpriced or priced.problems:
+        row += 2
+        ws.cell(row=row, column=3, value="WHAT IS NOT SETTLED").font = HEADING
+        for column in range(2, 14):
+            ws.cell(row=row, column=column).fill = ALARM_FILL
+        row += 1
+        if priced.unpriced:
+            ws.cell(row=row, column=3, value=(
+                f"{len(priced.unpriced)} line(s) carry no rate at all and add nothing to the total "
+                f"above: {', '.join(priced.unpriced[:40])}"
+                + (" …" if len(priced.unpriced) > 40 else "")
+            )).font = Font(bold=True, color="FF9C0006")
+            ws.cell(row=row, column=3).alignment = Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[row].height = 30
+            row += 1
+        for problem in priced.problems[:20]:
+            ws.cell(row=row, column=3, value=problem).alignment = Alignment(
+                wrap_text=True, vertical="top")
+            ws.row_dimensions[row].height = 26
+            row += 1
 
     _widths(ws, {"B": 10, "C": 56, "D": 11, "E": 8, "F": 16, "G": 15, "H": 13, "I": 14, "J": 14,
                  "K": 16, "L": 16, "M": 60})
