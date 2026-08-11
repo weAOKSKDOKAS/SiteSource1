@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, health, pollJob, runJob, setActor } from "./api";
-import { GlobalBar, StepStrip, TAB_FOR_JOB, stepStates, usePersisted } from "./chrome";
+import { GlobalBar, StepStrip, TAB_FOR_JOB, TAB_FOR_READ, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
@@ -102,6 +102,15 @@ export interface SetData {
   /** The recorded bid verdict, or "" when nobody has decided. Read back like the rest so a reload
    *  does not reset the Bid chip to a state the tender is already past. */
   bidVerdict: string;
+  /**
+   * Reads that FAILED, by name — not reads that returned nothing.
+   *
+   * Every field above is `null` for two different reasons: the step has not run, or the read did
+   * not happen. Those were the same value, so a 500 arrived as tender state and every screen
+   * believed it. A key in here means the corresponding field's `null` is a hole in what we know,
+   * and a screen that would otherwise render nothing must say so instead.
+   */
+  failures: Record<string, string>;
 }
 
 const EMPTY_GATES: GateStates = { manifest: false, review: false, scope: false };
@@ -830,30 +839,52 @@ function SetView({
   const loadSet = useCallback(async () => {
     const rows = await api.sets(true);
     const setRow = rows.sets.find((r) => r.set_id === setId);
-    const optional = <T,>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
+
+    // A READ THAT FAILED IS NOT A STEP THAT HAS NOT RUN.
+    //
+    // Every one of these used to be `p.catch(() => null)`, which made a 500 and a 404 the same
+    // value — so a transport failure arrived as tender state and every screen believed it. The
+    // sharpest case is `submission`: `Offer.tsx` reads `data.submission` and renders its
+    // conservation banners off it, INCLUDING the one that says "you are signing without that check
+    // having run". A failed read deleted the warning about the missing check, which is the failure
+    // mode this whole codebase exists to refuse.
+    //
+    // The two are distinguishable and always were. `api.ts`'s `handle` attaches the status code, so
+    // a 404/409 is genuinely "not yet" and null is the right answer; anything else — a 500, or a
+    // network failure with no status at all — is a read that did not happen, and it is recorded
+    // under its own name rather than flattened into the same null.
+    const failures: Record<string, string> = {};
+    const optional = <T,>(key: string, p: Promise<T>): Promise<T | null> =>
+      p.catch((e: unknown) => {
+        const status = (e as { status?: number })?.status;
+        if (status !== 404 && status !== 409) {
+          failures[key] = e instanceof Error ? e.message : String(e);
+        }
+        return null;
+      });
 
     const [manifest, parts, register, scope, proposal, decisions, site, submission] =
       await Promise.all([
-        optional(api.manifest(setId)),
-        optional(api.parts(setId)),
-        optional(api.register(setId)),
-        optional(api.scope(setId)),
-        optional(api.bridge.proposal(setId)),
-        optional(api.bridge.decisions(setId)),
+        optional("manifest", api.manifest(setId)),
+        optional("parts", api.parts(setId)),
+        optional("register", api.register(setId)),
+        optional("scope", api.scope(setId)),
+        optional("proposal", api.bridge.proposal(setId)),
+        optional("decisions", api.bridge.decisions(setId)),
         // The take-off, for the step strip: the Site chip must not say "not read yet" about a
         // schedule somebody has read, and Price carries the unassigned-hole count live.
-        optional(api.stationSchedule(setId)),
+        optional("site", api.stationSchedule(setId)),
         // The approval/submission state, read the same pure way — so the Offer chip and panel
         // show APPROVED / SUBMITTED after a reload instead of resetting to "not yet approved".
-        optional(api.bridge.submission(setId)),
+        optional("submission", api.bridge.submission(setId)),
       ]);
-    const closeout = await optional(api.bridge.closeout(setId));
+    const closeout = await optional("closeout", api.bridge.closeout(setId));
     // The tender's first decision, for the step strip and the tab chip. A pure read: asking for
     // the brief never records anything.
-    const bidBrief = await optional(api.bridge.bid(setId));
+    const bidBrief = await optional("bid", api.bridge.bid(setId));
     // Citations need a reviewed register AND split parts; asking for them before either exists
     // is a 404/409, not a failure worth showing.
-    const citations = register ? await optional(api.citations(setId)) : null;
+    const citations = register ? await optional("citations", api.citations(setId)) : null;
 
     setData({
       setId,
@@ -875,6 +906,7 @@ function SetView({
       submission,
       closeout,
       bidVerdict: bidBrief?.decision?.verdict ?? "",
+      failures,
     });
   }, [setId]);
 
@@ -986,7 +1018,11 @@ function SetView({
         submitted: Boolean(data?.submission?.submission),
         outcomeRecorded: Boolean(
           data?.closeout?.outcome && data.closeout.outcome.status !== "submitted"),
-      }, runningTab, reviewGateSoft),
+      }, runningTab, reviewGateSoft,
+      // A chip must not report the state a missing read implies.
+      [...new Set(Object.keys(data?.failures ?? {})
+        .map((key) => TAB_FOR_READ[key])
+        .filter(Boolean))] as TabId[]),
     [data, runningTab, reviewGateSoft],
   );
 
@@ -996,6 +1032,25 @@ function SetView({
       {/* "What now?", answered in one consistent place on every tender screen — from the same
           data the chips read, so the two can never argue. The button only navigates. */}
       {data && <NextLine data={data} current={tab} onGo={selectTab} />}
+      {/* A READ THAT FAILED, NAMED. Every one of these used to arrive as `null` and be shown as
+          "this step has not run" — so the screens went on rendering a tender state nobody had
+          actually read. Named rather than a generic banner, because "the submission state could
+          not be read" and "the register could not be read" send a person to different places. */}
+      {data && Object.keys(data.failures).length > 0 && (
+        <div
+          role="status"
+          className="flex-none border-b border-cb-bad-line bg-cb-bad-tint px-[18px] py-1.5"
+        >
+          <p className="font-cb-sans text-[10.5px] leading-[1.55] text-cb-bad-dark">
+            <span className="font-semibold">
+              {Object.keys(data.failures).length} of this tender's reads did not come back
+            </span>{" "}
+            — {Object.keys(data.failures).join(", ")}. Anything on screen that depends on{" "}
+            {Object.keys(data.failures).length > 1 ? "them" : "it"} is showing a gap in what was
+            read, not a step that has not run. Reload once the server is answering again.
+          </p>
+        </div>
+      )}
       <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {loading && !data ? (
           <WaitingOn title="Opening the set…">

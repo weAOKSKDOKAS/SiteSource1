@@ -109,6 +109,9 @@ export function stepStates(
    *  those are data dependencies (there is nothing to source without a decision, nothing to price
    *  without a frozen scope), not the review gate, and the soft switch must not reach them. */
   reviewGateSoft = false,
+  /** Tabs whose underlying read FAILED — see `TAB_FOR_READ`. Their chips say so rather than
+   *  reporting the state a missing read implies. */
+  failedReads: TabId[] = [],
 ): Record<TabId, StepState> {
   // The review gate as the downstream steps should read it. Soft mode does not mark the register
   // approved — `gates.review` is untouched and the Register tab still shows the real state — it
@@ -198,8 +201,33 @@ export function stepStates(
   // A running step says so, whatever it would otherwise have said — including over a `done`,
   // because a RE-run is still a run in flight.
   if (running && states[running]) states[running] = { kind: "waiting", label: "RUNNING…" };
+  // A CHIP MUST NOT SAY "NOT YET RUN" ABOUT A STEP NOBODY MANAGED TO READ.
+  //
+  // Every `has.*` above is derived from a value that is `null` for two different reasons — the step
+  // has not run, or the read failed — so a transport failure was rendering as tender state on the
+  // most-looked-at surface in the product. This overrides last, over `done` as well: a step that
+  // was read as finished by a read that did not happen is not finished, it is unknown.
+  for (const tab of failedReads ?? []) {
+    if (states[tab]) states[tab] = { kind: "waiting", label: "NOT KNOWN — READ FAILED" };
+  }
   return states;
 }
+
+/** Which chip a failed read blanks. One read can feed more than one chip and one chip more than
+ *  one read, so the mapping is explicit rather than derived from a name. */
+export const TAB_FOR_READ: Record<string, TabId> = {
+  parts: "documents",
+  manifest: "documents",
+  register: "register",
+  citations: "register",
+  scope: "scope",
+  proposal: "route",
+  decisions: "route",
+  site: "site",
+  bid: "bid",
+  submission: "offer",
+  closeout: "closeout",
+};
 
 /** Which tab owns a job of this kind. The job store names workflows; the tab strip names tabs,
  *  and one screen has to be able to translate between them. Unknown kinds map to nothing rather

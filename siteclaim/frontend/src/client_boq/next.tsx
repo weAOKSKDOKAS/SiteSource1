@@ -28,6 +28,24 @@ export interface NextAction {
 /** The first incomplete step of the tender's default path. Deliberately a plain chain of ifs in
  *  pipeline order — the same order the strip prints — so a reader can check it against the strip
  *  top to bottom. */
+/** What to say when the read this branch depends on did not come back.
+ *
+ * A `null` means two things — the step has not run, or the read failed — and every branch below
+ * reads one. Saying "run the review" about a register that could not be READ invites an expensive
+ * re-run of work that may already be done; saying "decide bid or no-bid" invites re-deciding a
+ * decision already taken. So a branch whose evidence is missing answers with the honest thing and
+ * offers no button: there is nowhere useful to send somebody until the server answers.
+ */
+function unknown(data: SetData, key: string, what: string): NextAction | null {
+  const failure = data.failures[key];
+  if (!failure) return null;
+  return {
+    sentence: `${what} could not be read (${failure}), so what is waiting on you is not known. ` +
+              `Reload before acting — this is a gap in what was read, not a step that has not run.`,
+    tab: null, go: null,
+  };
+}
+
 export function nextFor(data: SetData): NextAction {
   const hasParts = Boolean(data.parts?.count);
 
@@ -37,12 +55,16 @@ export function nextFor(data: SetData): NextAction {
       tab: "documents", go: "Open Documents",
     };
   }
+  const parts = unknown(data, "parts", "this tender's parts");
+  if (parts) return parts;
   if (!hasParts) {
     return {
       sentence: "the manifest is approved — split the binder into parts.",
       tab: "documents", go: "Open Documents",
     };
   }
+  const register = unknown(data, "register", "the review register");
+  if (register) return register;
   if (!data.register) {
     return {
       sentence: "run the review — it reads each part against the criteria library.",
@@ -55,6 +77,8 @@ export function nextFor(data: SetData): NextAction {
       tab: "register", go: "Open Register",
     };
   }
+  const bid = unknown(data, "bid", "the bid decision");
+  if (bid) return bid;
   if (!data.bidVerdict) {
     return {
       sentence: "decide bid or no-bid — the first real decision, now the terms are read.",
@@ -68,6 +92,8 @@ export function nextFor(data: SetData): NextAction {
       tab: null, go: null,
     };
   }
+  const scope = unknown(data, "scope", "the scope");
+  if (scope) return scope;
   if (!data.scope) {
     return {
       sentence: "draft the scope — it reads the confirmed positions back out of the register.",
@@ -80,6 +106,9 @@ export function nextFor(data: SetData): NextAction {
       tab: "scope", go: "Open Scope",
     };
   }
+  const route = unknown(data, "decisions", "the routing decisions")
+    ?? unknown(data, "proposal", "the routing proposal");
+  if (route) return route;
   if (!data.route.hasDecisions) {
     return {
       sentence: data.route.hasProposal
@@ -92,6 +121,8 @@ export function nextFor(data: SetData): NextAction {
   // route an estimator straight past it to "build the price" — past the only independent check
   // there is on the client's own soil and rock metres, and past the only screen where a hole is
   // given its class. Advice, like every other line here: Site has no gate, and this adds none.
+  const site = unknown(data, "site", "the take-off");
+  if (site) return site;
   if (!data.site?.stations.length) {
     return {
       sentence: "read in the take-off — the drawing's soil and rock metres are the only check " +
@@ -121,6 +152,11 @@ export function nextFor(data: SetData): NextAction {
       tab: null, go: null,
     };
   }
+  // A FAILED READ IS NOT A TENDER AWAITING APPROVAL. `data.submission` is null for both, and
+  // reading the second as the first would send an estimator to approve something that may already
+  // be approved — or, worse, submitted.
+  const submission = unknown(data, "submission", "this tender's approval state");
+  if (submission) return submission;
   if (data.submission?.approval?.verdict !== "approve") {
     return {
       sentence: "the price is built — read the offer and approve it.",
@@ -133,6 +169,8 @@ export function nextFor(data: SetData): NextAction {
       tab: "offer", go: "Open Offer",
     };
   }
+  const closeout = unknown(data, "closeout", "the closeout record");
+  if (closeout) return closeout;
   const outcome = data.closeout?.outcome;
   if (!outcome || outcome.status === "submitted") {
     return {

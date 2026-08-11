@@ -116,6 +116,19 @@ export function SiteTab({
     return <WaitingOn title="Reading the take-off…">Loading the stations.</WaitingOn>;
   }
 
+  // A FAILED READ IS NOT AN EMPTY TAKE-OFF. `data.site` is null for both, and showing the importer
+  // over a read that did not happen invites an operator to read in a schedule that may already be
+  // there — and then to save it over one somebody has confirmed.
+  if (data.failures.site) {
+    return (
+      <WaitingOn title="The take-off could not be read">
+        {data.failures.site}. That is a gap in what was read, not a tender with no schedule — so
+        nothing is offered here, because reading one in now could overwrite a take-off that already
+        exists. Reload once the server is answering.
+      </WaitingOn>
+    );
+  }
+
   // No take-off yet: the whole tab IS the way in. This used to be a `WaitingOn` with no button —
   // a dead end on the step that gates the bill-vs-drawing check, the access map, and the only
   // place in the application where a hole is given its class.

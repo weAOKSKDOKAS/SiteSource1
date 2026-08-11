@@ -522,7 +522,25 @@ function SubmitPanel({
           on it would print a red alarm over "every basis balances" — a banner that cries wolf on
           every clean tender is a banner nobody reads on the one that is not. And a check that could
           not run is neither: it is amber, and it says so. */}
-      {state?.conservation_clean === false && (
+      {/* A FOURTH STATE, and it is the one that was invisible. `state` is null both when nothing has
+          been approved yet AND when the read failed, so a 500 on the submission endpoint deleted all
+          three banners below — including the amber one whose entire job is to say the check did not
+          run. The warning about a missing check was itself removed by a missing read. Loudest of the
+          four, because signing without knowing what the arithmetic said is worse than signing over
+          an answer you can see. */}
+      {data.failures.submission && (
+        <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint px-2.5 py-1.5">
+          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
+            NOT KNOWN — THE READ FAILED
+          </div>
+          <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-bad-dark">
+            This tender's approval state could not be read ({data.failures.submission}), so nothing
+            below is known: not whether the cost comes out once, not whether the check ran, and not
+            whether somebody has already approved this. Reload before you sign anything.
+          </p>
+        </div>
+      )}
+      {!data.failures.submission && state?.conservation_clean === false && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint px-2.5 py-1.5">
           <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
             THE COST DOES NOT COME OUT ONCE
@@ -532,7 +550,7 @@ function SubmitPanel({
           </p>
         </div>
       )}
-      {state?.conservation_clean === null && state?.conservation && (
+      {!data.failures.submission && state?.conservation_clean === null && state?.conservation && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
           <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
             NOT CHECKED
