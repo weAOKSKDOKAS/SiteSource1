@@ -31,6 +31,42 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parent / "sitesource.db"
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
+def _how_to_build(path: Path) -> str:
+    """The missing-database message, read off the path that is actually missing.
+
+    THE DEFECT THIS CLOSES. This used to say "Build it with `python -m db.seed`" for every path,
+    and that command is wrong in the case an operator most often hits. `db.seed` defaults to
+    ``--profile demo`` (`seed.py:316`), which writes ``sitesource.db`` — never the
+    ``sitesource_live.db`` the env var points at — and it **unlinks the target first**
+    (`seed.py:169-170`). So the operator who set ``SITESOURCE_DB=db/sitesource_live.db`` on a fresh
+    clone, and followed the app's own instruction, got the identical error on the next start plus
+    a deleted-and-rebuilt copy of a **committed** file. Every other place in this repository that
+    documents the seed already says ``--profile live``; this was the single wrong copy.
+
+    There is no one command that is right for both branches, which is why this reads the path it
+    already has in hand rather than printing a constant.
+    """
+    from db import seed as _seed          # for the two profile defaults only
+
+    resolved = path.resolve()
+    if resolved == _seed.LIVE_DB_PATH.resolve():
+        how = "python -m db.seed --profile live"
+    elif resolved == _seed.DEFAULT_DB_PATH.resolve():
+        how = ("git checkout -- siteclaim/backend/db/sitesource.db   (it is COMMITTED — prefer "
+               "restoring it), or rebuild it with `python -m db.seed --profile demo`")
+    else:
+        # SITESOURCE_DB can name any path, and neither profile default will produce it. `--out`
+        # is required, and `build_database` connects directly rather than creating parents.
+        how = (f"python -m db.seed --profile live --out {path}   (the parent directory must "
+               f"already exist)")
+    env = os.getenv("SITESOURCE_DB", "").strip() or "<unset>"
+    return (f"SiteSource DB not found at {path} (SITESOURCE_DB={env}). "
+            f"Build it from siteclaim/backend/ with: {how}. "
+            f"Note: `python -m db.seed` with no --profile builds the DEMO database at "
+            f"{_seed.DEFAULT_DB_PATH} and DELETES whatever is there first.")
+
+
+
 def get_connection(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
     """Open the SiteSource DB read-only-ish (a plain connection with Row access).
 
@@ -45,9 +81,7 @@ def get_connection(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
         env_path = os.getenv("SITESOURCE_DB", "").strip()
         path = Path(env_path) if env_path else DEFAULT_DB_PATH
     if not path.is_file():
-        raise FileNotFoundError(
-            f"SiteSource DB not found at {path}. Build it with `python -m db.seed`."
-        )
+        raise FileNotFoundError(_how_to_build(path))
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     return conn
