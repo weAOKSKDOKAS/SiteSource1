@@ -134,7 +134,14 @@ class Conservation(BaseModel):
         return [b for b in self.bases if b.claimed_by and not b.clean()]
 
     def clean(self) -> bool:
-        return abs(self.difference()) <= TOLERANCE and not self.miscounted()
+        """Every basis balances — and there WERE bases.
+
+        The `self.bases` guard is not decoration. A build-up that produced no bases at all has a
+        difference of 0.00 and no miscounted rows, so without it an engine that computed nothing
+        reported perfect conservation — the exact failure this module was written against, arriving
+        through its own front door. Nothing to check and checked are different states.
+        """
+        return bool(self.bases) and abs(self.difference()) <= TOLERANCE and not self.miscounted()
 
     def problems(self) -> list[str]:
         """Every basis that does not balance, worst money first. Empty when the bill conserves."""
@@ -144,6 +151,10 @@ class Conservation(BaseModel):
 
     def headline(self) -> str:
         """One sentence for the top of a screen. Says nothing reassuring unless it is true."""
+        if not self.bases:
+            return ("The cost build-up produced no bases at all, so there is nothing to conserve "
+                    "and nothing here has been checked. That is not a clean bill — it is a model "
+                    "that computed no cost.")
         if self.clean():
             return (f"Every basis balances: {self.direct_cost:,.2f} of direct cost is recovered "
                     f"exactly once across the priced items.")

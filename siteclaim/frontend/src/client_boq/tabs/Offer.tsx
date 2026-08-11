@@ -507,7 +507,11 @@ function SubmitPanel({
         under the button and freeze it onto the signature, so an approval given over an
         unconserved model is a fact on the record rather than a memory.
       */}
-      {state?.conservation && (
+      {/* THREE STATES, not two. The sentence is non-empty on good news as well as bad, so branching
+          on it would print a red alarm over "every basis balances" — a banner that cries wolf on
+          every clean tender is a banner nobody reads on the one that is not. And a check that could
+          not run is neither: it is amber, and it says so. */}
+      {state?.conservation_clean === false && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint px-2.5 py-1.5">
           <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
             THE COST DOES NOT COME OUT ONCE
@@ -517,9 +521,32 @@ function SubmitPanel({
           </p>
         </div>
       )}
+      {state?.conservation_clean === null && state?.conservation && (
+        <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
+          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+            NOT CHECKED
+          </div>
+          <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-ink-text">
+            {state.conservation} You are signing without that check having run.
+          </p>
+        </div>
+      )}
 
       {/* What the arithmetic said when somebody signed, which is not the same question as what it
           says now — and a model edited after approval is exactly where the two part company. */}
+      {/* A verdict recorded before the column existed carries no sentence, and silence there would
+          read as "it was fine when they signed". It was not checked; that is what is said. */}
+      {approval && !approval.conservation && (
+        <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
+          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+            AT THE MOMENT OF APPROVAL
+          </div>
+          <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-ink-text">
+            This verdict was recorded before the conservation check existed, so nothing is known
+            about whether the cost came out once when it was signed.
+          </p>
+        </div>
+      )}
       {approval?.conservation && approval.conservation !== state?.conservation && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
           <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">

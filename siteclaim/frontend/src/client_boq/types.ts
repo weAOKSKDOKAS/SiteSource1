@@ -701,6 +701,18 @@ export interface ConditionsResponse {
 }
 
 export interface CostingResponse extends ModelDeclarations {
+  /**
+   * Does the money come out the other side exactly once? The one check no rate on this screen can
+   * make: a cost basis nothing claims sits OUTSIDE the bill, so every line can be priced,
+   * `unpriced` and `placeholders` can both be empty, and a third of the direct cost can still be
+   * missing. Branch on `clean`; `headline` is a sentence whatever the news is.
+   */
+  conservation: {
+    clean: boolean;
+    difference: number;
+    headline: string;
+    problems: string[];
+  };
   set_id: string;
   rev: number;
   model: CostingModelShape;
@@ -1414,8 +1426,9 @@ export interface BridgeFinalApproval {
   approved_at: string;
   /**
    * What the conservation check said at the moment this verdict was given — frozen on the
-   * signature, not looked up. Empty when the tender conserved, when the costing could not be
-   * built, or on a verdict recorded before the column existed; the sentence itself says which.
+   * signature, not looked up. A sentence whatever the news was, because a record that says nothing
+   * when the news was good cannot be told from one written before anybody checked. Empty ONLY on a
+   * verdict recorded before the column existed, which the screen says out loud.
    */
   conservation: string;
 }
@@ -1447,8 +1460,17 @@ export interface BridgeSubmissionState {
    * The LIVE conservation verdict, beside the frozen one on the approval. Both, deliberately: the
    * frozen one says what was true when somebody signed and this one says what is true now, and a
    * model edited after approval is exactly where they differ. It warns; it never blocks.
+   *
+   * ALWAYS a sentence — on good news, on bad news, and when nothing could be checked. Branch on
+   * `conservation_clean`, never on this being non-empty.
    */
   conservation: string;
+  /**
+   * `true` every basis balances · `false` the cost does not come out once · `null` the check could
+   * not be run. Three states, and collapsing them into two is how "we do not know" comes to read
+   * as "it is fine".
+   */
+  conservation_clean: boolean | null;
 }
 
 // The persisted sublet award (node 43): which firm won a package, at what levelled total. A

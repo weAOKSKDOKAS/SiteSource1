@@ -55,7 +55,7 @@ class TestTheVerdictHasOneOwner:
 
         from bridge import submission
 
-        source = inspect.getsource(submission.conservation_sentence)
+        source = inspect.getsource(submission.conservation_verdict)
         assert "from client_boq.router import conservation_state" in source
 
     def test_a_tender_with_no_bill_says_the_check_could_not_run(self, client):
@@ -127,6 +127,7 @@ class TestItReachesTheSignature:
         state = submission_state(SET)
         assert "conservation" in state
         assert isinstance(state["conservation"], str)
+        assert "conservation_clean" in state
 
     def test_the_offer_endpoint_carries_it(self, client):
         response = client.get(f"{BASE}/{SET}/submission")
@@ -206,3 +207,33 @@ class TestABlankVerdictNeverReadsAsAGoodOne:
         from bridge.submission import conservation_sentence
 
         assert "could not be run" in conservation_sentence("a-tender-with-no-bill")
+
+
+class TestThreeStatesNeverCollapseIntoTwo:
+    """The sentence is non-empty on GOOD news too, so branching on it is a false alarm waiting."""
+
+    def test_a_check_that_could_not_run_is_neither_clean_nor_dirty(self, client):
+        from bridge.submission import conservation_verdict
+
+        sentence, clean = conservation_verdict("a-tender-with-no-bill")
+        assert clean is None, "None is 'we do not know', and it must not be False either"
+        assert "could not be run" in sentence
+
+    def test_the_flag_is_what_a_caller_branches_on(self, client):
+        """`conservation_sentence` is for the frozen record and is always populated. A screen that
+        branched on it being non-empty would print a red alarm over 'every basis balances'."""
+        from bridge.submission import conservation_verdict
+
+        sentence, clean = conservation_verdict(SET)
+        assert isinstance(sentence, str) and sentence
+        assert clean is None or isinstance(clean, bool)
+
+    def test_a_model_that_computed_nothing_is_not_conserved(self, client):
+        """`Conservation(bases=[])` had a difference of 0.00 and no miscounted rows, so it reported
+        perfect conservation — this module's own failure, arriving through its own front door."""
+        from client_boq.boq.conservation import Conservation
+
+        empty = Conservation()
+        assert empty.clean() is False
+        assert "produced no bases at all" in empty.headline()
+        assert "not a clean bill" in empty.headline()

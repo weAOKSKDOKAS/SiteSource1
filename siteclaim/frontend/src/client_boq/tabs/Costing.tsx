@@ -244,6 +244,43 @@ export function Costing({
           </p>
         </section>
 
+        {/*
+          DOES THE MONEY COME OUT THE OTHER SIDE EXACTLY ONCE?
+
+          Above `Outstanding`, and unconditionally, because `Outstanding` returns null when nothing
+          needs work — and "nothing needs work" is exactly the state this catches. A cost basis
+          nothing claims is not a bill line: every row can be priced, `unpriced` and `placeholders`
+          can both be empty, and HK$3,038,117 of direct cost can still reach no rate. The endpoint
+          has returned this block since the guard was written and no screen read it, so the warning
+          existed everywhere except where the price is built.
+
+          Cost that reaches no rate is not saved. General Preambles ¶6 gives it away for the life of
+          a remeasured contract.
+        */}
+        {!data.conservation.clean && (
+          <section className="mt-4 rounded-cb-card border border-cb-bad-line bg-cb-bad-tint p-[14px]">
+            <SectionLabel className="text-cb-bad-dark">
+              THE COST DOES NOT COME OUT ONCE
+            </SectionLabel>
+            <p className="mt-1 font-cb-sans text-[11.5px] leading-[1.6] text-cb-bad-dark">
+              {data.conservation.headline}
+            </p>
+            {data.conservation.problems.map((problem) => (
+              <p
+                key={problem}
+                className="mt-1.5 font-cb-sans text-[10.5px] leading-[1.55] text-cb-body"
+              >
+                {problem}
+              </p>
+            ))}
+            <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+              Nothing here is repaired for you. Whether a basis belongs in a preliminaries item, is
+              spread across the rates, or is work this contract does not require are three different
+              answers worth different money, and only you know which.
+            </p>
+          </section>
+        )}
+
         <Outstanding data={data} setId={setId} onChanged={load} onError={onError} />
 
         {/* ---- the assumptions ---- */}

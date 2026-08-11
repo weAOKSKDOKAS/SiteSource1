@@ -71,6 +71,11 @@ export function stepStates(
      *  you pricing, but it is the sweep that will refuse, and the warning belongs where the
      *  consequence lands. */
     unassignedHoles?: number;
+    /** No take-off has been read at all — so the classes are UNKNOWN, which is not the same as
+     *  none being needed. `unassignedHoles` computed over an empty list reads 0, so without this
+     *  the chip said the same thing about a tender with every hole classified and a tender where
+     *  nobody had even read the holes. */
+    noTakeOff?: boolean;
     /** The tender has been submitted — the offer step's terminal `done`. The finer lifecycle
      *  (priced → not yet approved → approved → submitted) lives inside the Offer tab, which is
      *  where the approve and submit actions are; the chip only needs the terminal fact. */
@@ -110,6 +115,7 @@ export function stepStates(
   // only stops scope and route from claiming they are blocked by something that is not blocking.
   const reviewClear = gates.review || reviewGateSoft;
   const unassigned = has.unassignedHoles ?? 0;
+  const takeOffUnread = Boolean(has.noTakeOff);
   const states = {
     documents: gates.manifest ? { kind: "done" } : has.parts ? { kind: "open" } : { kind: "open" },
     register: gates.review
@@ -161,6 +167,12 @@ export function stepStates(
     price:
       unassigned > 0
         ? { kind: "waiting", label: `⚠ ${unassigned} HOLES UNASSIGNED` }
+        // ABSENCE IS NOT CLEARANCE. With no take-off there are no holes to be unassigned, so the
+        // count above reads 0 and this chip used to say the same thing about a tender with every
+        // hole classified and one where nobody had looked. The sweep now refuses in that state, so
+        // the chip has to warn in it too or the strip contradicts the gate.
+        : takeOffUnread
+          ? { kind: "waiting", label: "⚠ NO HOLE CLASSES — TAKE-OFF UNREAD" }
         : has.estimate
           ? { kind: "done" }
           : gates.scope

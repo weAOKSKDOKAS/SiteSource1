@@ -4376,6 +4376,19 @@ def post_sweep_cost(req: SweepCostRequest, actor: str = Depends(_actor)) -> dict
             "outstanding": len(sweep.outstanding()), "settled": sweep.settled()}
 
 
+#: The bill items that price a rig move by class of site. If the client billed either, the holes
+#: exist whether or not anybody has read the take-off — which is what lets the settle refuse an
+#: unread schedule instead of waving it through.
+RIG_MOVE_REFS = ("2.2a", "2.2b")
+
+
+def _billed_rig_moves(bill) -> bool:
+    """Does this bill price rig moves by class of site? Read off the client's own quantities."""
+    index = bill.index()
+    return any((index.get(ref) is not None and (index[ref].qty or index[ref].lump))
+               for ref in RIG_MOVE_REFS)
+
+
 @router.post("/price/{set_id}/sweep/settle")
 def settle_sweep(set_id: str, rev: Optional[int] = None, actor: str = Depends(_actor)) -> dict:
     """Declare the sweep settled. **The app's only hard stop.**
@@ -4393,6 +4406,20 @@ def settle_sweep(set_id: str, rev: Optional[int] = None, actor: str = Depends(_a
     finally:
         conn.close()
 
+    # ABSENCE IS NOT CLEARANCE.
+    #
+    # This read `if schedule is not None:`, and the net could therefore not fire in exactly the
+    # case it was written for: with no take-off there are no holes, so no hole is unclassed, so
+    # nothing refused — and the only screen in the application that assigns an access class sits
+    # behind the take-off gate, so there was no path by which those classes could have been
+    # supplied. A tender could be settled and priced with the net silently absent rather than
+    # tripped. `chrome.tsx` had the mirror of it, computing "N HOLES UNASSIGNED" over an empty list
+    # and reading 0.
+    #
+    # The bill's own quantities are what make the refusal possible without a take-off: 2.2a and
+    # 2.2b are the rig moves the CLIENT billed, and if he billed any, holes exist and somebody has
+    # to say which class each is. No schedule then means the classes are UNKNOWN, which is a
+    # refusal, not a pass.
     if schedule is not None:
         unassigned = [s.station for s in schedule.stations
                       if not classes.get(s.station, {}).get("access_class")]
@@ -4402,6 +4429,14 @@ def settle_sweep(set_id: str, rev: Optional[int] = None, actor: str = Depends(_a
                 detail=(f"{len(unassigned)} hole(s) still have no class of site — "
                         f"{', '.join(unassigned[:5])}{'…' if len(unassigned) > 5 else ''}. "
                         f"Each one is a rig move that has not been priced against 2.2a or 2.2b."))
+    elif _billed_rig_moves(bill):
+        raise HTTPException(
+            status_code=409,
+            detail=("No station schedule has been read for this tender, so no hole has a class of "
+                    "site — and the bill prices rig moves against 2.2a and 2.2b, which means the "
+                    "holes exist and somebody has to say which class each one is. Read the "
+                    "take-off in on the Site step (paste it, or read it off the borehole details "
+                    "drawing) and classify the holes. An unknown class is not a cleared one."))
     try:
         boq_unbilled.gate(sweep)
     except boq_unbilled.UnroutedCost as refused:

@@ -342,6 +342,25 @@ function ScheduleRail({
         </div>
       )}
 
+      {schedule.stations.some((s) => s.notes.length > 0) && (
+        <div className="border-b border-cb-border p-3">
+          <SectionLabel>WHAT THE READING RECORDED</SectionLabel>
+          {schedule.stations
+            .filter((s) => s.notes.length > 0)
+            .map((s) =>
+              s.notes.map((note) => (
+                <p
+                  key={`${s.station}-${note}`}
+                  className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted"
+                >
+                  <span className="font-cb-mono font-semibold text-cb-body">{s.station}</span>{" "}
+                  {note}
+                </p>
+              )),
+            )}
+        </div>
+      )}
+
       <div className="border-b border-cb-border p-3">
         <SectionLabel>AGAINST THE BILL</SectionLabel>
         {!derived?.checked_against_a_bill ? (
@@ -436,13 +455,24 @@ function ScheduleView({
             <tr
               key={s.station}
               onClick={() => onSelect(s.station)}
+              // `Station.notes` was declared on the model, written by the reader, and consumed by
+              // NOTHING — no backend reader, no router field, no render. A field that silently
+              // discards what somebody wrote down is worse than no field, so it is read here.
+              title={s.notes.length ? s.notes.join("\n") : undefined}
               className={cx(
                 "cb-row cursor-pointer border-b border-cb-divider last:border-0",
                 bad.has(s.station) && "bg-cb-bad-tint",
                 selected === s.station && "bg-cb-selected",
               )}
             >
-              <td className={cx(cell, "font-semibold text-cb-ink-text")}>{s.station}</td>
+              <td className={cx(cell, "font-semibold text-cb-ink-text")}>
+                {s.station}
+                {s.notes.length > 0 && (
+                  <span className="ml-1 font-cb-sans text-[9px] text-cb-brass-text">
+                    ({s.notes.length} note{s.notes.length > 1 ? "s" : ""})
+                  </span>
+                )}
+              </td>
               <Cell station={s} field="easting">{fmt(s.easting)}</Cell>
               <Cell station={s} field="northing">{fmt(s.northing)}</Cell>
               <Cell station={s} field="ground_level_mpd">{fmt(s.ground_level_mpd)}</Cell>

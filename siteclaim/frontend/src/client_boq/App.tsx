@@ -976,6 +976,9 @@ function SetView({
         proposal: Boolean(data?.route.hasProposal),
         decisions: Boolean(data?.route.hasDecisions),
         site: Boolean(data?.site?.stations.length),
+        // Two different states, and the count alone cannot tell them apart: every hole classified
+        // reads 0, and no hole read at all also reads 0.
+        noTakeOff: !data?.site?.stations.length,
         unassignedHoles: (data?.site?.stations ?? []).filter(
           (s: Station) => !data?.site?.classes[s.station]?.access_class,
         ).length,

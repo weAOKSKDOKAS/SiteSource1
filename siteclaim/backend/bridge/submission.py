@@ -148,24 +148,38 @@ def confirm_final_approval(set_id: str, verdict: str, rationale: str = "", *,
         conn.close()
 
 
-def conservation_sentence(set_id: str) -> str:
-    """One line saying whether this tender's cost is recovered exactly once. Never raises.
+def conservation_verdict(set_id: str) -> tuple[str, Optional[bool]]:
+    """``(sentence, clean)`` — what the arithmetic said, and whether that is good news.
 
-    Reads the single owner of that verdict (``client_boq.router.conservation_state``) rather than
-    re-deriving it: three implementations of one law is how two of them come to disagree. A check
-    that could not run says so — it is a different state from one that ran and came out clean, and
-    this string is going onto a signature.
+    THREE STATES, and they must not collapse into two. ``clean`` is ``True`` when every basis
+    balances, ``False`` when the cost does not come out once, and ``None`` when the check could not
+    be run at all. A caller that branches on the sentence being non-empty gets the middle and the
+    last one wrong, and a caller that branches on it being EMPTY reads "we do not know" as "it is
+    fine" — which is the failure this whole package exists to refuse.
+
+    The sentence is always present, including on a clean tender, because it is going onto a
+    signature: a record that says nothing when the news was good cannot be told from a record
+    written before anybody checked.
+
+    Reads the single owner of the verdict (``client_boq.router.conservation_state``) rather than
+    re-deriving it: three implementations of one law is how two of them come to disagree. Never
+    raises — an approval must not fail because a read-only check fell over.
     """
     try:
         from client_boq.router import conservation_state
 
         state = conservation_state(set_id)
     except Exception as exc:  # noqa: BLE001 — an approval must never fail on a read-only check
-        return f"the conservation check could not be run ({exc})"
+        return f"the conservation check could not be run ({exc})", None
     if not state.get("checked"):
         return (f"the conservation check could not be run: "
-                f"{state.get('not_checked_because') or 'no reason given'}")
-    return state.get("headline", "")
+                f"{state.get('not_checked_because') or 'no reason given'}"), None
+    return state.get("headline", ""), bool(state.get("clean"))
+
+
+def conservation_sentence(set_id: str) -> str:
+    """The sentence alone, for the frozen record. See :func:`conservation_verdict`."""
+    return conservation_verdict(set_id)[0]
 
 
 def load_final_approval(set_id: str) -> Optional[dict]:
@@ -372,6 +386,7 @@ def submission_state(set_id: str) -> dict:
         deadline, known = deadline_for(conn, ref)
     finally:
         conn.close()
+    sentence, clean = conservation_verdict(ref)
     return {
         "set_id": ref,
         "approval": load_final_approval(ref),
@@ -383,5 +398,10 @@ def submission_state(set_id: str) -> dict:
         # the frozen one says what was true when somebody signed, this one says what is true now,
         # and a model edited after approval is exactly the case where those differ and somebody
         # needs to see that they do. It warns; it never blocks — see `confirm_final_approval`.
-        "conservation": conservation_sentence(ref),
+        #
+        # The sentence and the FLAG travel together because the sentence alone cannot be branched
+        # on: it is non-empty when the news is good, when it is bad, and when nothing could be
+        # checked. `conservation_clean` is True / False / None for exactly those three.
+        "conservation": sentence,
+        "conservation_clean": clean,
     }
