@@ -36,6 +36,7 @@ from client_boq.boq import buildup as boq_buildup
 from client_boq.boq import carry as boq_carry
 from client_boq.boq import checks as boq_checks
 from client_boq.boq import conditions as boq_conditions
+from client_boq.boq import conservation as boq_conservation
 from client_boq.boq import costing as boq_costing
 from client_boq.boq import costing_workbook as boq_costing_workbook
 from client_boq.boq import coverage as boq_coverage
@@ -4467,11 +4468,16 @@ def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
                                      verdicts=state["verdicts"],
                                      billed_standing_hours=billed_standing)
 
+    # Is every cost recovered exactly once? A deterministic join between the build-up and the
+    # priced bill — see `boq/conservation.py`. Computed on the one path everything goes through,
+    # so no screen and no workbook can show a total without it having been asked.
+    balance = boq_conservation.check(bill, buildup, item_mappings)
+
     return {
         "bill": bill, "library": library, "own": own, "model": model, "state": state,
         "mapping": mapping, "item_mappings": item_mappings, "programme": programme,
         "spread": spread, "buildup": buildup, "priced": priced, "register": register,
-        "billed_standing_hours": billed_standing,
+        "billed_standing_hours": billed_standing, "conservation": balance,
     }
 
 
@@ -4556,6 +4562,17 @@ def get_costing(set_id: str, rev: Optional[int] = None) -> dict:
         "optimiser": boq_optimiser.optimise(programme, parts["model"]).model_dump(),
         "buildup": parts["buildup"].model_dump(),
         "priced": parts["priced"].model_dump(),
+        # THE CONSERVATION CHECK. `priced.total` is a number; this says whether it is the cost of
+        # the work. A basis nothing claims is cost given away (GP ¶6); a basis whose claimants do
+        # not sum to its divisor is cost recovered twice. Reported beside the total, never applied
+        # to it — which of those is the right repair is the estimator's decision, not arithmetic.
+        "conservation": {
+            **parts["conservation"].model_dump(),
+            "clean": parts["conservation"].clean(),
+            "difference": parts["conservation"].difference(),
+            "headline": parts["conservation"].headline(),
+            "problems": parts["conservation"].problems(),
+        },
         "register": {
             "rows": [r.model_dump() for r in register.rows],
             "gate": register.gate(), "summary": register.summary(),
