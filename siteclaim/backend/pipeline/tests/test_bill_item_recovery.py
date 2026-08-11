@@ -316,10 +316,18 @@ Arrange and conduct testing of fuel samples by
 Provide environmental management measures
 """
 
-# The same page as pymupdf's words see it: refs at x=64.3, headings at x=93.2, descriptions
-# between the ref and the column tokens, same-row words sharing a y. Continuation lines
-# ("collection system", "laboratory", "or enclosures") sit on their own y directly under their
-# rows, opening lowercase — the pack's headings always open upper-case.
+# The same page as pymupdf's words see it: refs at x=64.3, descriptions (and every continuation of
+# one) at the description column, section headings at x=93.2, same-row words sharing a y.
+#
+# RE-ANCHORED 2026-08-11, and it is a correction of a measured fact rather than a weakening. The
+# three continuation rows were originally placed at x=93.2 — the SAME x as the two heading rows —
+# with a comment claiming continuations open lowercase and headings upper-case. Measured on the
+# real pack, a continuation sits in the description column at 103.4 and a heading 10.2pt left of it
+# at 93.2, and case separates neither: 1.53's continuation "Plan for Smart Site Safety System" and
+# 1.54's heading "Components of Smart Site Safety System" both open upper-case (see
+# TestTheContinuationRuleIsGeometryNotCase). The old geometry made an x-based rule impossible to
+# satisfy while making a case-based one look sufficient. Every assertion below is unchanged and
+# byte-identical under the corrected fixture.
 def _row_words(y, tokens, x0=64.3, dx=38.0):
     return [(x0 + i * dx, y, x0 + i * dx + 30.0, y + 9.0, tok) for i, tok in enumerate(tokens)]
 
@@ -327,19 +335,19 @@ def _row_words(y, tokens, x0=64.3, dx=38.0):
 PAGE6_WORDS = [
     *_row_words(311.0, ["1.45", "Provision,", "maintenance", "and", "removal", "of",
                         "acoustic", "screens", "-", "item", "-"]),
-    *_row_words(325.0, ["or", "enclosures"], x0=93.2),
+    *_row_words(325.0, ["or", "enclosures"], x0=103.4),          # description column
     *_row_words(345.0, ["1.46", "Adoption", "of", "other", "noise", "abatement",
                         "practices", "-", "item", "-"]),
-    *_row_words(362.0, ["Wastewater", "Pollution", "Abatement"], x0=93.2),   # a heading row
+    *_row_words(362.0, ["Wastewater", "Pollution", "Abatement"], x0=93.2),   # heading column
     *_row_words(390.0, ["1.47", "Provision,", "maintenance", "and", "removal", "of",
                         "wastewater", "-", "item", "-"]),
-    *_row_words(404.0, ["collection", "system"], x0=93.2),
-    *_row_words(420.0, ["Waste", "Management"], x0=93.2),                    # a heading row
+    *_row_words(404.0, ["collection", "system"], x0=103.4),      # description column
+    *_row_words(420.0, ["Waste", "Management"], x0=93.2),                    # heading column
     *_row_words(445.0, ["1.48", "Arrange", "and", "conduct", "on-site", "sorting",
                         "of", "C&D", "materials", "-", "item", "-"]),
     *_row_words(488.0, ["1.49", "Arrange", "and", "conduct", "testing", "of", "fuel",
                         "samples", "by", "20", "nr."]),
-    *_row_words(502.0, ["laboratory"], x0=93.2),
+    *_row_words(502.0, ["laboratory"], x0=103.4),                # description column
     *_row_words(543.0, ["1.50", "Provide", "environmental", "management", "measures",
                         "20", "mth"]),
 ]
@@ -371,9 +379,14 @@ class TestTheDetachedDescriptionsNeedThePage:
         }
 
     def test_a_heading_row_is_neither_an_item_nor_a_continuation(self):
-        """"Wastewater Pollution Abatement" sits between 1.46 and 1.47 as its own row. It opens
-        upper-case, so it is not appended to 1.46; it opens with a word, not a ref, so it is
-        never an item. Both failure modes are the mis-attachment the y/x reading exists to end."""
+        """"Wastewater Pollution Abatement" sits between 1.46 and 1.47 as its own row. It is
+        printed in the heading column, 10.2pt left of 1.46's description column, so it is not
+        appended to 1.46; it opens with a word, not a ref, so it is never an item. Both failure
+        modes are the mis-attachment the y/x reading exists to end.
+
+        (This test used to reason from case — "it opens upper-case, so it is not appended". That
+        was true of this heading and false as a rule, and the test would have gone on passing for
+        a reason its own text denied.)"""
         from pipeline.stage_01_ingest.ingest import positional_bill_rows
 
         inv = positional_bill_rows([PAGE6_WORDS], {"1"})
@@ -500,3 +513,142 @@ class TestADuplicateRefIsNamedNeverDropped:
             ]),
         ])
         assert report_duplicate_refs(scope, on_note=None) == []
+
+
+# =================================================================================================
+# The continuation rule: geometry, not case
+# =================================================================================================
+#
+# The measured pair off the real pack (I-ND_2025_04_BQ-0.pdf, Bill 1), and the reason the rule had
+# to change. Both of these rows open UPPER-CASE:
+#
+#   1.53  Review, update and implement Implementation      20  mth
+#         Plan for Smart Site Safety System                          <- CONTINUATION. must append.
+#         Components of Smart Site Safety System                     <- HEADING.      must not.
+#   1.54  Provide site communication network                20  mth
+#
+# No test of the first character can separate them. The old rule ("a following row opening lowercase
+# is a continuation") scored one out of two: it dropped 1.53's tail silently and rejected the
+# heading by luck. What separates them is where they are PRINTED — measured x on the real page:
+#
+#   item ref                             64.3
+#   description, and its continuations  103.4
+#   section heading                      93.2      (10.2pt left of the description column)
+#
+# Both fixtures live in ONE test class on purpose. A rule that reads the case cannot pass both, and
+# a rule that reads x passes both — which is the only thing that distinguishes the two rules, and
+# so the only thing worth pinning.
+
+_REAL_REF_X = 64.3       # measured
+_REAL_DESC_X = 103.4     # measured
+_REAL_HEADING_X = 93.2   # measured
+
+
+def _measured_row(y, tokens, x0):
+    """One printed row at a MEASURED x. Words step right from x0; only the first word's x is read
+    by the rule, so the pitch is cosmetic."""
+    return [(x0 + i * 40.0, y, x0 + i * 40.0 + 32.0, y + 9.0, tok) for i, tok in enumerate(tokens)]
+
+
+# 1.53 and 1.54 as pymupdf's words see them, at the three measured columns.
+PAGE_1_53_WORDS = [
+    *_measured_row(200.0, ["1.53", "Review,", "update", "and", "implement", "Implementation",
+                           "20", "mth"], _REAL_REF_X),
+    *_measured_row(214.0, ["Plan", "for", "Smart", "Site", "Safety", "System"], _REAL_DESC_X),
+    *_measured_row(240.0, ["Components", "of", "Smart", "Site", "Safety", "System"],
+                   _REAL_HEADING_X),
+    *_measured_row(266.0, ["1.54", "Provide", "site", "communication", "network", "20", "mth"],
+                   _REAL_REF_X),
+]
+
+
+class TestTheContinuationRuleIsGeometryNotCase:
+    """Two opposing fixtures, both upper-case, opposite outcomes. A case rule cannot pass this."""
+
+    def test_an_upper_case_continuation_in_the_description_column_is_appended(self):
+        from pipeline.stage_01_ingest.ingest import positional_bill_rows
+
+        inv = positional_bill_rows([PAGE_1_53_WORDS], {"1"})
+        assert inv["1.53"] == (
+            "Review, update and implement Implementation Plan for Smart Site Safety System")
+
+    def test_an_upper_case_heading_in_the_heading_column_is_not(self):
+        from pipeline.stage_01_ingest.ingest import positional_bill_rows
+
+        inv = positional_bill_rows([PAGE_1_53_WORDS], {"1"})
+        assert "Components" not in inv["1.53"]
+        assert "Components" not in inv["1.54"]
+        assert set(inv) == {"1.53", "1.54"}, "a heading is never promoted to an item"
+
+    def test_the_two_rows_are_indistinguishable_by_case(self):
+        """States the premise in the suite rather than only in a comment: if this ever stops being
+        true the pair stops being the thing that justifies the rule."""
+        continuation = PAGE_1_53_WORDS[8][4]      # "Plan"
+        heading = PAGE_1_53_WORDS[14][4]          # "Components"
+        assert continuation[0].isupper() and heading[0].isupper()
+        assert not continuation[0].islower() and not heading[0].islower()
+
+    def test_the_case_rule_would_get_exactly_one_of_them_right(self):
+        """The measurement that condemned the old rule, kept executable. Under `not islower()` the
+        continuation is refused (wrong) and the heading is refused (right) — one out of two, and
+        the half it gets wrong is the half that loses text."""
+        rows = [["Plan", "for", "Smart"], ["Components", "of", "Smart"]]
+        by_case = [not row[0][:1].islower() for row in rows]
+        assert by_case == [True, True], "the old rule rejects BOTH — identical verdicts"
+
+    def test_the_column_is_measured_from_the_row_not_hardcoded(self):
+        """Shift the whole page 200pt right — a different margin, a different template — and the
+        rule follows, because `desc_x` comes from the ref row's own first description word."""
+        from pipeline.stage_01_ingest.ingest import positional_bill_rows
+
+        shifted = [(x + 200.0, y, x1 + 200.0, y1, t) for x, y, x1, y1, t in PAGE_1_53_WORDS]
+        inv = positional_bill_rows([shifted], {"1"})
+        assert inv["1.53"].endswith("Plan for Smart Site Safety System")
+        assert "Components" not in inv["1.53"]
+
+    def test_a_row_in_neither_column_stops_the_walk(self):
+        """A block indented well right of the description column is not a continuation of it. The
+        test is proximity to the description column, not "anywhere right of the ref"."""
+        from pipeline.stage_01_ingest.ingest import positional_bill_rows
+
+        words = [
+            *_measured_row(200.0, ["1.53", "Review,", "update", "20", "mth"], _REAL_REF_X),
+            *_measured_row(214.0, ["Note:", "priced", "elsewhere"], _REAL_DESC_X + 60.0),
+        ]
+        assert positional_bill_rows([words], {"1"})["1.53"] == "Review, update"
+
+    def test_a_ref_row_with_no_description_appends_nothing(self):
+        """No description column to measure means no continuation to find. Guessing one from
+        elsewhere on the page would be inventing a column."""
+        from pipeline.stage_01_ingest.ingest import positional_bill_rows
+
+        words = [
+            *_measured_row(200.0, ["2.4", "-", "item", "-"], _REAL_REF_X),
+            *_measured_row(214.0, ["Drilling", "in", "soil"], _REAL_DESC_X),
+        ]
+        assert positional_bill_rows([words], {"2"}) == {}
+
+
+class TestTheRowsKeepTheirCoordinates:
+    """`_y_rows` used to drop x on its return line, which is why the rule above could not exist."""
+
+    def test_a_row_carries_x_with_each_word(self):
+        from pipeline.stage_01_ingest.ingest import _y_rows
+
+        rows = _y_rows(PAGE_1_53_WORDS)
+        assert rows[0][0] == (_REAL_REF_X, "1.53")
+        assert all(isinstance(x, float) and isinstance(t, str) for row in rows for x, t in row)
+
+    def test_words_are_still_left_to_right_within_a_row(self):
+        from pipeline.stage_01_ingest.ingest import _y_rows
+
+        for row in _y_rows(PAGE_1_53_WORDS):
+            assert [x for x, _t in row] == sorted(x for x, _t in row)
+
+    def test_rows_are_still_clustered_on_y_within_three_points(self):
+        from pipeline.stage_01_ingest.ingest import _y_rows
+
+        jittered = [(64.3, 200.0, 90.0, 209.0, "1.55"), (103.4, 202.0, 140.0, 211.0, "Provide"),
+                    (200.0, 203.0, 230.0, 212.0, "20")]
+        rows = _y_rows(jittered)
+        assert len(rows) == 1 and [t for _x, t in rows[0]] == ["1.55", "Provide", "20"]

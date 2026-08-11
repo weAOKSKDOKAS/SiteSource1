@@ -718,11 +718,31 @@ def _ocr_item_inventory(doc_text: str) -> "dict[str, str]":
 # A bill item reference standing alone as one word — the anchor of a positional row.
 _BQ_REF_TOKEN = re.compile(r"^\d{1,2}[.\-/]\d{1,3}[a-z]?$", re.I)
 
+# How far a row's first word may sit from the description column and still BE that column.
+#
+# Measured on the real pack (I-ND_2025_04_BQ-0.pdf, Bill 1): the item ref sits at x=64.3, the
+# description AND every continuation of it at x=103.4, and a section heading at x=93.2 — a 10.2pt
+# separation between the two things that must be told apart. Anything under half of that separates
+# them cleanly, and 4.0 leaves margin at both ends: above the intra-column jitter of a real word
+# box, below the 5.1 that would start admitting the heading column.
+#
+# Note what this is NOT. A rule of the form "indented past the ref" admits the heading, which sits
+# 28.9pt RIGHT of the ref column. Only proximity to the description column tells them apart, and
+# the description column is measured from each ref row itself rather than written down here — a
+# different bill, a different margin and a different template all move it.
+_DESC_COL_TOL = 4.0
 
-def _y_rows(words: "list[tuple]") -> "list[list[str]]":
+
+def _y_rows(words: "list[tuple]") -> "list[list[tuple[float, str]]]":
     """Words regrouped into printed rows: clustered on y (3pt tolerance), sorted by x within a
-    row. ``words`` are pymupdf ``page.get_text("words")`` tuples — ``(x0, y0, x1, y1, text, …)``;
-    only the first two coordinates and the text are read, so any same-shaped source serves."""
+    row, each word kept as ``(x, text)``. ``words`` are pymupdf ``page.get_text("words")`` tuples —
+    ``(x0, y0, x1, y1, text, …)``; only the first two coordinates and the text are read, so any
+    same-shaped source serves.
+
+    The x is carried out, not thrown away at the door. It used to be dropped on this return line,
+    which left the caller knowing the ORDER of the words on a row and not their COORDINATES — and
+    so able to ask only what character a row begins with, which is the wrong question (see
+    :func:`positional_bill_rows`)."""
     rows: list[list] = []          # [y_sum, count, [(x, text)]]
     for w in sorted(words, key=lambda w: (float(w[1]), float(w[0]))):
         x, y, text = float(w[0]), float(w[1]), str(w[4])
@@ -732,7 +752,7 @@ def _y_rows(words: "list[tuple]") -> "list[list[str]]":
             rows[-1][2].append((x, text))
         else:
             rows.append([y, 1, [(x, text)]])
-    return [[text for _x, text in sorted(r[2])] for r in rows]
+    return [sorted(r[2]) for r in rows]
 
 
 def positional_bill_rows(pages: "list[list[tuple]]", bills: set) -> "dict[str, str]":
@@ -750,31 +770,56 @@ def positional_bill_rows(pages: "list[list[tuple]]", bills: set) -> "dict[str, s
 
     Per row: the first word must BE a ref (refs sit in their own left column — a section heading
     row starts with a word, never a ref); the description is the words between the ref and the
-    first column token. A following row whose first word starts LOWERCASE is a wrapped
-    continuation and is appended — a heading in this pack always opens upper-case, and a
-    continuation that happens to open upper-case is left un-appended rather than risking a
-    heading in the description (the sequence collector learned that the hard way). Deterministic;
-    no model, no page cap; first occurrence of a ref wins, as everywhere in this module."""
+    first column token.
+
+    THE CONTINUATION RULE IS X-ALIGNMENT, and it is x-alignment because case does not work.
+    Measured on the real pack: 1.53's continuation reads "Plan for Smart Site Safety System" and
+    MUST be appended; the heading two rows down reads "Components of Smart Site Safety System" and
+    MUST NOT. Both open upper-case, so no test of the first character can tell them apart — the
+    earlier rule here ("a following row opening lowercase is a continuation") scored one out of two
+    on that pair, dropping the tail of 1.53 silently while rejecting the heading by luck.
+
+    What separates them is where they are printed. A continuation sits in the DESCRIPTION column,
+    directly under the words it continues; a heading sits in its own column, 10.2pt to the left of
+    it and 28.9pt right of the ref. So the description column is measured from the ref row itself —
+    the x of its own first description word — and a following row is a continuation when its first
+    word starts within ``_DESC_COL_TOL`` of that. Nothing is hardcoded: the column comes from the
+    row being read, so a different bill or margin or template moves it and the rule follows.
+
+    The case test is gone rather than ANDed or ORed. ANDed it preserves the 1.53 defect verbatim,
+    which is the whole point of the change; ORed it appends any lowercase-opening row anywhere on
+    the page, including one in the heading column — so it can only add false positives to a
+    discriminator already correct on both measured cases.
+
+    Deterministic; no model, no page cap; first occurrence of a ref wins, as everywhere here."""
     inv: dict[str, str] = {}
     if not bills:
         return inv
     for words in pages or []:
         rows = _y_rows(words)
-        for idx, texts in enumerate(rows):
-            if not texts or not _BQ_REF_TOKEN.match(texts[0]):
+        for idx, row in enumerate(rows):
+            if not row or not _BQ_REF_TOKEN.match(row[0][1]):
                 continue
-            ref = re.sub(r"\s+", "", texts[0])
+            ref = re.sub(r"\s+", "", row[0][1])
             if bill_of(ref) not in bills:
                 continue
             desc: list[str] = []
-            for token in texts[1:]:
+            desc_x: "Optional[float]" = None     # THIS row's description column, measured
+            for x, token in row[1:]:
                 if _BQ_COLUMN_TOKEN.match(token):
                     break
+                if desc_x is None:
+                    desc_x = x
                 desc.append(token)
-            for later in rows[idx + 1 : idx + 4]:
-                if not later or _BQ_REF_TOKEN.match(later[0]) or not later[0][:1].islower():
-                    break
-                desc.extend(t for t in later if not _BQ_COLUMN_TOKEN.match(t))
+            # No description column to measure — a ref row carrying nothing but column tokens has
+            # no continuation to find, and guessing one from the page would be inventing a column.
+            if desc_x is not None:
+                for later in rows[idx + 1 : idx + 4]:
+                    if not later or _BQ_REF_TOKEN.match(later[0][1]):
+                        break
+                    if abs(later[0][0] - desc_x) > _DESC_COL_TOL:
+                        break
+                    desc.extend(t for _x, t in later if not _BQ_COLUMN_TOKEN.match(t))
             joined = " ".join(desc).strip()
             if sum(c.isalpha() for c in joined) >= 2 and not _BQ_NOT_AN_ITEM.match(joined):
                 inv.setdefault(ref, joined[:80])
