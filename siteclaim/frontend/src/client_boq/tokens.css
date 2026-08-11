@@ -65,6 +65,13 @@
   --color-cb-bad-dark: #8a3826;
   --color-cb-bad-mid: #a8432b;
   --color-cb-bad-tint: #f4e1d9;
+  /* The hairline for a bad-tint panel, paired with `--color-cb-bad-tint` exactly as
+     `--color-cb-brass-line` is paired with `--color-cb-brass-tint`. It was USED in five places
+     and never defined: an undefined token generates no utility in Tailwind v4 and no error
+     either, so `border-cb-bad-line` was a class with no CSS and every red banner in the app drew
+     its border in the inherited text colour. Same shape as the rest of this file's bugs — the
+     absence produced no complaint. */
+  --color-cb-bad-line: #e6bcab;
 
   /* --- type ------------------------------------------------------------- */
   /* Roles, not preferences. Serif carries the argument, sans carries the interface,

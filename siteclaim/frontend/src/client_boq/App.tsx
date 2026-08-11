@@ -9,7 +9,7 @@
 //   #/tender/awaiting           open queries    #/tender/s/{setId}/{tab}   one tender
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, health, pollJob, runJob, setActor } from "./api";
+import { api, health, isNotYet, pollJob, readFailure, runJob, setActor } from "./api";
 import { GlobalBar, StepStrip, TAB_FOR_JOB, TAB_FOR_READ, stepStates, usePersisted } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
@@ -856,10 +856,7 @@ function SetView({
     const failures: Record<string, string> = {};
     const optional = <T,>(key: string, p: Promise<T>): Promise<T | null> =>
       p.catch((e: unknown) => {
-        const status = (e as { status?: number })?.status;
-        if (status !== 404 && status !== 409) {
-          failures[key] = e instanceof Error ? e.message : String(e);
-        }
+        if (!isNotYet(e)) failures[key] = readFailure(e);
         return null;
       });
 

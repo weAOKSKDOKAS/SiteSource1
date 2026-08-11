@@ -141,6 +141,27 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Is this rejection the server saying "that has not happened yet", or a read that did not happen?
+ *
+ *  The distinction the whole app turns on. A 404 means the step has not run and a 409 means a gate
+ *  is still shut — both are tender state, and `null` is the honest answer. Anything else (a 500, or
+ *  a network failure with no status at all) is a read that FAILED, and flattening it to the same
+ *  `null` makes a broken backend indistinguishable from an untouched tender: the screen then says
+ *  "none yet" about groups it never asked for, or "no bill imported" about a bill that is there.
+ *
+ *  Absence reading as health is this codebase's recurring failure, and `.catch(() => null)` is how
+ *  it gets written. This function is the one place the rule lives, so every reader applies the
+ *  same one.
+ */
+export const isNotYet = (e: unknown): boolean => {
+  const status = (e as { status?: number })?.status;
+  return status === 404 || status === 409;
+};
+
+/** The message to show for a read that did not happen. Never a substitute for `isNotYet`. */
+export const readFailure = (e: unknown): string =>
+  e instanceof Error ? e.message : String(e);
+
 const get = <T>(path: string): Promise<T> => fetch(ROOT + path).then((r) => handle<T>(r));
 
 const post = <T>(path: string, body: unknown): Promise<T> =>

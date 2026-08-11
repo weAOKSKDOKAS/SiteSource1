@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { SetData } from "../App";
-import { api } from "../api";
+import { api, isNotYet, readFailure } from "../api";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
 import { PageView } from "../PageView";
 import { AccessMap } from "../site/AccessMap";
@@ -64,21 +64,34 @@ export function SiteTab({
   const [schedule, setSchedule] = useState<StationScheduleResponse | null>(null);
   const [groups, setGroups] = useState<GroupsResponse | null>(null);
   const [derived, setDerived] = useState<DerivedResponse | null>(null);
+  const [failed, setFailed] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
   const panes = usePanes("site", 236, 620, railOpen);
 
   const load = useCallback(async () => {
+    // `App.tsx` already applies this rule to the ten tender-state reads; these two are the tab's
+    // own, and they were still `.catch(() => null)`. The screens below read `null` as tender state
+    // in the most misleading way available: no groups becomes "None yet. A group is a set of holes
+    // that drill alike…", and no derivation becomes "No bill of quantities has been imported" —
+    // said about a bill that may be sitting right there.
+    const failures: Record<string, string> = {};
+    const optional = <T,>(key: string, p: Promise<T>): Promise<T | null> =>
+      p.catch((e: unknown) => {
+        if (!isNotYet(e)) failures[key] = readFailure(e);
+        return null;
+      });
     try {
       const [s, g] = await Promise.all([
         api.stationSchedule(data.setId),
-        api.holeGroups(data.setId).catch(() => null),
+        optional("groups", api.holeGroups(data.setId)),
       ]);
       setSchedule(s);
       setGroups(g);
       // A derivation needs a schedule; asking for one before there is a take-off is a 404 that
       // means "not yet", not "broken".
-      setDerived(s.stations.length ? await api.derived(data.setId).catch(() => null) : null);
+      setDerived(s.stations.length ? await optional("derived", api.derived(data.setId)) : null);
+      setFailed(failures);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     }
@@ -156,9 +169,9 @@ export function SiteTab({
           {view === "holes" || view === "map" ? (
             <ClassRail counts={counts} billed={billed} unassigned={unassigned} />
           ) : view === "groups" ? (
-            <GroupsRail groups={groups} />
+            <GroupsRail groups={groups} failed={failed.groups} />
           ) : (
-            <ScheduleRail schedule={schedule} derived={derived} />
+            <ScheduleRail schedule={schedule} derived={derived} failed={failed.derived} />
           )}
         </Rail>
       ) : (
@@ -230,6 +243,7 @@ export function SiteTab({
           <ScheduleView
             schedule={schedule}
             derived={derived}
+            derivedFailed={failed.derived}
             selected={selected}
             onSelect={setSelected}
           />
@@ -245,6 +259,7 @@ export function SiteTab({
           <GroupsView
             setId={data.setId}
             groups={groups}
+            failed={failed.groups}
             schedule={schedule}
             onChanged={() => void load()}
             onError={onError}
@@ -281,9 +296,11 @@ function assignedCount(schedule: StationScheduleResponse): number {
 function ScheduleRail({
   schedule,
   derived,
+  failed,
 }: {
   schedule: StationScheduleResponse;
   derived: DerivedResponse | null;
+  failed?: string;
 }) {
   const t = schedule.totals;
   const good = schedule.stations.length - schedule.bad_rows.length;
@@ -376,7 +393,12 @@ function ScheduleRail({
 
       <div className="border-b border-cb-border p-3">
         <SectionLabel>AGAINST THE BILL</SectionLabel>
-        {!derived?.checked_against_a_bill ? (
+        {failed ? (
+          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark">
+            NOT CHECKED — the derivation could not be read. {failed}. This panel is not saying the
+            drawing and the bill agree, and it is not saying no bill was imported.
+          </p>
+        ) : !derived?.checked_against_a_bill ? (
           <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
             No bill of quantities has been imported, so there is nothing to check this reading
             against. The quantities below are what the drawing implies.
@@ -406,11 +428,13 @@ function ScheduleRail({
 function ScheduleView({
   schedule,
   derived,
+  derivedFailed,
   selected,
   onSelect,
 }: {
   schedule: StationScheduleResponse;
   derived: DerivedResponse | null;
+  derivedFailed?: string;
   selected: string | null;
   onSelect: (station: string) => void;
 }) {
@@ -441,6 +465,16 @@ function ScheduleView({
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
+      {/* No banner is the app saying the drawing and the bill agree. When the derivation could not
+          be read, the banner cannot be trusted to be absent for that reason, so it says so. */}
+      {derivedFailed && (
+        <div className="border-b border-cb-bad-line bg-cb-bad-tint px-4 py-2">
+          <p className="font-cb-sans text-[10.5px] leading-[1.55] text-cb-bad-dark">
+            The drawing has NOT been checked against the client's quantities — that read failed
+            ({derivedFailed}). A quiet table here is not agreement.
+          </p>
+        </div>
+      )}
       {derived && derived.divergences.length > 0 && (
         <div className="border-b border-cb-brass-line bg-cb-brass-tint px-4 py-2">
           {derived.divergences.map((d) => (
@@ -703,7 +737,7 @@ function HoleTile({
 // ---------------------------------------------------------------------------
 // Groups — your judgement on the left, arithmetic on the right
 // ---------------------------------------------------------------------------
-function GroupsRail({ groups }: { groups: GroupsResponse | null }) {
+function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?: string }) {
   return (
     <>
       <div className="border-b border-cb-border p-3">
@@ -716,11 +750,18 @@ function GroupsRail({ groups }: { groups: GroupsResponse | null }) {
             tone={groups?.not_ready[g.label]?.length ? "warn" : "ok"}
           />
         ))}
-        {!groups?.groups.length && (
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
-            None yet. A group is a set of holes that drill alike — nothing in the client's
-            documents draws these lines, so they are yours.
+        {failed ? (
+          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark">
+            NOT KNOWN — the groups could not be read. {failed}. There may be groups on this tender;
+            this panel is not saying there are none.
           </p>
+        ) : (
+          !groups?.groups.length && (
+            <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+              None yet. A group is a set of holes that drill alike — nothing in the client's
+              documents draws these lines, so they are yours.
+            </p>
+          )
         )}
       </div>
 
@@ -754,12 +795,14 @@ function GroupsRail({ groups }: { groups: GroupsResponse | null }) {
 function GroupsView({
   setId,
   groups,
+  failed,
   schedule,
   onChanged,
   onError,
 }: {
   setId: string;
   groups: GroupsResponse | null;
+  failed?: string;
   schedule: StationScheduleResponse;
   onChanged: () => void;
   onError: (msg: string) => void;
@@ -783,6 +826,20 @@ function GroupsView({
       onError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  // NOT AN EMPTY SET OF GROUPS. The harm here is concrete rather than cosmetic: "+ Group" names
+  // the new one `Group ${count + 1}` and saves it under that slug, so over a failed read it
+  // proposes `Group 1` — and `saveGroup` writes by key, over whatever `group-1` already holds.
+  // A read that did not happen must not become a write.
+  if (failed) {
+    return (
+      <WaitingOn title="The groups could not be read">
+        {failed}. That is a gap in what was read, not a tender with no groups — so nothing is
+        offered here, because adding one now would number it from a count of zero and could save
+        over a group that already exists. Reload once the server is answering.
+      </WaitingOn>
+    );
+  }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">

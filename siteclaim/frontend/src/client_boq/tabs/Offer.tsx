@@ -16,7 +16,7 @@
 
 import { useEffect, useState } from "react";
 import type { SetData } from "../App";
-import { api } from "../api";
+import { api, isNotYet, readFailure } from "../api";
 import type {
   BridgeCombinedPricing,
   BridgeSubmissionState,
@@ -39,6 +39,7 @@ export function OfferTab({
   onRefresh?: () => Promise<void> | void;
 }) {
   const [letter, setLetter] = useState<LetterResponse | null>(null);
+  const [letterFailed, setLetterFailed] = useState("");
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"structured" | "markdown">("structured");
   const [copied, setCopied] = useState(false);
@@ -46,15 +47,36 @@ export function OfferTab({
   useEffect(() => {
     let live = true;
     setLoading(true);
+    setLetterFailed("");
     api
       .letter(data.setId)
       .then((r) => live && setLetter(r))
-      .catch(() => live && setLetter(null)) // 404 = the estimate has not been run
+      // A 404 IS THE ESTIMATE NOT HAVING RUN; A 500 IS NOT. This was `.catch(() => null)`, and
+      // every branch below reads `!letter` as tender state — so a failed read sent the estimator
+      // to Price to run an estimate that may already have run, or told them the letter was never
+      // persisted when nobody had managed to ask.
+      .catch((e: unknown) => {
+        if (!live) return;
+        setLetter(null);
+        if (!isNotYet(e)) setLetterFailed(readFailure(e));
+      })
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
     };
   }, [data.setId, data.hasEstimate]);
+
+  // FIRST, because every branch under it reads `!letter` as a fact about the tender. A read that
+  // did not happen is a fact about the server, and the two must not share a screen.
+  if (letterFailed) {
+    return (
+      <WaitingOn title="The letter could not be read">
+        {letterFailed}. That is a gap in what was read, not a tender with no letter — this screen
+        is not telling you the estimate has not run, and it is not telling you nothing was
+        persisted. Reload once the server is answering.
+      </WaitingOn>
+    );
+  }
 
   // Two different states, and telling them apart is the whole point. "Nothing has been priced" is
   // a step you have not reached; "priced with the costing engine" is a gap in THIS screen, and
