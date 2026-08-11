@@ -81,7 +81,9 @@ import type {
   RegisterResponse,
   RevisionRow,
   ScheduleResponse,
+  SchedulePasteResponse,
   StationScheduleResponse,
+  StationScheduleShape,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -364,6 +366,20 @@ export const api = {
 
   // --- the take-off (Site) --------------------------------------------------
   stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),
+  /** Read a pasted table into a PROPOSED schedule. Saves nothing — see `saveStationSchedule`. */
+  parseStationSchedule: (setId: string, text: string, sourceSheet = "") =>
+    post<SchedulePasteResponse>("/site/schedule/parse", {
+      set_id: setId,
+      text,
+      source_sheet: sourceSheet,
+    }),
+  /** The writer that existed from the beginning and that nothing in this app ever called. */
+  saveStationSchedule: (setId: string, schedule: StationScheduleShape, sourceSheet = "") =>
+    post<{ set_id: string; usable: boolean; problems: string[] }>("/site/schedule", {
+      set_id: setId,
+      schedule,
+      source_sheet: sourceSheet,
+    }),
   derived: (setId: string) => get<DerivedResponse>(`/site/${setId}/derived`),
   holeGroups: (setId: string) => get<GroupsResponse>(`/site/${setId}/groups`),
   // --- site photographs -----------------------------------------------------

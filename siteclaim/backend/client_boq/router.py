@@ -56,6 +56,7 @@ from client_boq.boq import production as boq_production
 from client_boq.boq import programme as boq_programme
 from client_boq.boq import reader as boq_reader
 from client_boq.boq import schedule as boq_schedule
+from client_boq.boq import schedule_paste as boq_schedule_paste
 from client_boq.boq import trace as boq_trace
 from client_boq.boq import unbilled as boq_unbilled
 from client_boq.models import (
@@ -3587,6 +3588,13 @@ class StationScheduleRequest(BaseModel):
     confirm: bool = False
 
 
+class StationPasteRequest(BaseModel):
+    """A table of stations as it came off a spreadsheet or a PDF, for reading — not for saving."""
+    set_id: str
+    text: str
+    source_sheet: str = ""
+
+
 class StationClassRequest(BaseModel):
     set_id: str
     station: str
@@ -3802,6 +3810,52 @@ def post_station_schedule(req: StationScheduleRequest, actor: str = Depends(_act
             "duplicate_names": req.schedule.duplicate_names(),
             "problems": req.schedule.problems(),
             "usable": req.schedule.usable()}
+
+
+@router.post("/site/schedule/parse")
+def post_parse_station_schedule(req: StationPasteRequest) -> dict:
+    """Read a pasted table of stations. Returns a proposal; **saves nothing.**
+
+    The take-off had no way in. `POST /site/schedule` has always accepted a schedule and nothing in
+    this application ever produced one — no frontend call, no backend constructor, zero rows in the
+    demo database — so the screen's instruction to "read it off the drawing and save it first" was
+    one the app gave no means of following. Behind that dead end sat the bill-vs-drawing check, the
+    access map, and the only place a hole is ever given its class.
+
+    This is the door. Ninety-one rows and twelve columns is a thousand form fields, and whatever the
+    estimator is reading from is already tabular, so the paste is the honest shape.
+
+    Separate from the save on purpose: what comes back is what was *understood*, including every
+    cell that could not be read, and a person decides whether that is the schedule. Deterministic —
+    no model is involved at any point.
+    """
+    report = boq_schedule_paste.parse(req.text, set_id=req.set_id, source_sheet=req.source_sheet)
+    schedule = report.schedule
+    return {
+        "set_id": req.set_id,
+        "schedule": schedule.model_dump(),
+        "headline": report.headline(),
+        "header_found": report.header_found,
+        "delimiter": report.delimiter,
+        "mapping": report.mapping,
+        "unmapped_columns": report.unmapped_columns,
+        "missing_columns": report.missing_columns,
+        "skipped_lines": report.skipped_lines,
+        "cells_unread": report.cells_unread(),
+        "bad_rows": schedule.bad_rows(),
+        "unread_rows": schedule.unread_rows(),
+        "empty_rows": schedule.empty_rows(),
+        "duplicate_names": schedule.duplicate_names(),
+        "problems": schedule.problems(),
+        "usable": schedule.usable(),
+        "totals": {
+            "holes": schedule.hole_count(), "soil_m": schedule.soil_m(),
+            "rock_m": schedule.rock_m(), "hard_m": schedule.hard_m(),
+            "standpipes": schedule.standpipes(), "piezometers": schedule.piezometers(),
+            "instruments": schedule.instruments(), "deepest": schedule.deepest(),
+            "trial_pits": len(schedule.trial_pits),
+        },
+    }
 
 
 @router.get("/site/{set_id}/derived")

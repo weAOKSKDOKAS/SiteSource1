@@ -88,6 +88,17 @@ export function nextFor(data: SetData): NextAction {
       tab: "route", go: "Open Route",
     };
   }
+  // The take-off, before the price rests on it. This line never mentioned Site at all, and would
+  // route an estimator straight past it to "build the price" — past the only independent check
+  // there is on the client's own soil and rock metres, and past the only screen where a hole is
+  // given its class. Advice, like every other line here: Site has no gate, and this adds none.
+  if (!data.site?.stations.length) {
+    return {
+      sentence: "read in the take-off — the drawing's soil and rock metres are the only check " +
+                "there is on the client's quantities.",
+      tab: "site", go: "Open Site",
+    };
+  }
   if (!data.hasEstimate) {
     return {
       sentence: "build the price. Sourcing runs beside it for the sublet packages.",

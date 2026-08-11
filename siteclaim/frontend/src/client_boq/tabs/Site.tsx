@@ -18,6 +18,7 @@ import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
 import { PageView } from "../PageView";
 import { AccessMap } from "../site/AccessMap";
 import { Photos } from "../site/Photos";
+import { ScheduleImport } from "../site/ScheduleImport";
 import type {
   DerivedResponse,
   GroupPreview,
@@ -37,7 +38,7 @@ import {
   formatNorm,
 } from "../ui";
 
-type View = "schedule" | "map" | "photos" | "holes" | "groups";
+type View = "schedule" | "map" | "photos" | "holes" | "groups" | "import";
 
 const CLASS_OPTIONS = [
   { value: "A", label: "A", title: "Reachable by road, or by hand without a temporary platform." },
@@ -115,13 +116,17 @@ export function SiteTab({
     return <WaitingOn title="Reading the take-off…">Loading the stations.</WaitingOn>;
   }
 
+  // No take-off yet: the whole tab IS the way in. This used to be a `WaitingOn` with no button —
+  // a dead end on the step that gates the bill-vs-drawing check, the access map, and the only
+  // place in the application where a hole is given its class.
   if (!schedule.stations.length) {
     return (
-      <WaitingOn title="The station schedule has not been read yet">
-        Every quantity in Bill No.2 comes from the borehole details drawing — the coordinates,
-        the ground and rockhead levels, and the soil and rock split of each hole. Until that
-        schedule is in, there is nothing here to check the client's quantities against.
-      </WaitingOn>
+      <ScheduleImport
+        setId={data.setId}
+        hasSchedule={false}
+        onSaved={() => void load()}
+        onError={onError}
+      />
     );
   }
 
@@ -171,6 +176,7 @@ export function SiteTab({
               { value: "photos" as View, label: "PHOTOS" },
               { value: "holes" as View, label: "HOLES" },
               { value: "groups" as View, label: "GROUPS" },
+              { value: "import" as View, label: "IMPORT" },
             ]}
             onChange={setView}
           />
@@ -182,7 +188,19 @@ export function SiteTab({
           </span>
         </header>
 
-        {view === "photos" ? (
+        {view === "import" ? (
+          // A re-read is a better reading of the same drawing, not a new document. It lands
+          // unconfirmed, because confirming is a person saying they checked THIS reading.
+          <ScheduleImport
+            setId={data.setId}
+            hasSchedule
+            onSaved={() => {
+              setView("schedule");
+              void load();
+            }}
+            onError={onError}
+          />
+        ) : view === "photos" ? (
           <Photos setId={data.setId} onError={onError} />
         ) : view === "map" ? (
           <AccessMap

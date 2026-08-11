@@ -216,6 +216,46 @@ export interface StationScheduleResponse {
   waiting_on?: string;
 }
 
+/** The schedule as it goes back to the server — the shape `POST /site/schedule` accepts. */
+export interface StationScheduleShape {
+  set_id: string;
+  source_sheet: string;
+  stations: Station[];
+  trial_pits: TrialPit[];
+  notes: string[];
+  confirmed_by: string;
+}
+
+/**
+ * What a pasted table was understood to say. A PROPOSAL — the parse endpoint stores nothing, and
+ * saving it is a separate call a person makes.
+ */
+export interface SchedulePasteResponse {
+  set_id: string;
+  schedule: StationScheduleShape;
+  /** One sentence for the top of the panel. Reassuring only when it is true. */
+  headline: string;
+  header_found: boolean;
+  /** "tab" | "comma" | "spaces" — how the columns were separated. */
+  delimiter: string;
+  /** `field -> the header text it came from`. Empty when the columns were taken by position. */
+  mapping: Record<string, string>;
+  /** Headers present in the paste that match no field. Named rather than dropped. */
+  unmapped_columns: string[];
+  /** Fields the paste carries no column for. */
+  missing_columns: string[];
+  /** Lines that could not be made into a row, with the line number as pasted. */
+  skipped_lines: string[];
+  cells_unread: number;
+  bad_rows: string[];
+  unread_rows: string[];
+  empty_rows: string[];
+  duplicate_names: string[];
+  problems: string[];
+  usable: boolean;
+  totals: Partial<ScheduleTotals>;
+}
+
 /** One quantity the drawing implies, and what the client billed for it. */
 export interface Derived {
   full_ref: string;
