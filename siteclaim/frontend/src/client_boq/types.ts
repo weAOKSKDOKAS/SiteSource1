@@ -387,12 +387,20 @@ export interface GroupsResponse {
   /** group label → field name → where that output came from. Drives the SourceChips. */
   sources: Record<string, Record<string, ResolvedNorm>>;
   counts: Record<string, number>;
+  /** Holes in the take-off with no class of site — over the WHOLE schedule, not just the grouped
+   *  part of it. Read it beside `take_off_read`: 0 with no take-off means nothing is known. */
   unassigned: number;
   billed_class_counts: Record<string, number>;
-  /** Where the estimator's classification disagrees with the bill. Empty means agreed. */
+  /** Where the estimator's classification disagrees with the bill. Empty means agreed AND
+   *  checkable — with no billed counts to compare against it now says so instead of going quiet. */
   reconcile: string[];
   not_ready: Record<string, string[]>;
   class_refs: Record<string, string>;
+  /** How many holes there are to class, or null when no schedule has been read. */
+  total_holes: number | null;
+  take_off_read: boolean;
+  /** Why the counts above are over an empty take-off. Empty when a schedule has been read. */
+  not_checked_because: string;
 }
 
 // --- the costing engine ----------------------------------------------------

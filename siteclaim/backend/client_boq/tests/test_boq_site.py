@@ -189,8 +189,39 @@ class TestGroups:
         client.post(f"{BASE}/site/group",
                     json={"set_id": SET, "group_id": "g1", "group": self._group()})
         body = client.get(f"{BASE}/site/{SET}/groups").json()
-        assert body["unassigned"] == 2
+        # RE-ANCHORED 2026-08-11, deliberately: this asserted 2 — the two holes inside the one
+        # group. The take-off holds six, and none of the six has a class of site, so 2 was the
+        # count of a population that excluded the four holes nobody had touched. `unassigned` now
+        # means what it says: holes in the schedule with no class. See
+        # test_a_take_off_nobody_has_grouped_is_not_a_classified_one for the shape it was hiding.
+        assert body["unassigned"] == 6
         assert "no access class yet" in body["reconcile"][0]
+
+    def test_a_take_off_nobody_has_grouped_is_not_a_classified_one(self, client):
+        """Six holes read, no group made: the number must not be 0.
+
+        `GroupPlan.unassigned()` summed holes that were IN a group, so a hole in no group counted
+        for nothing — and a tender where nobody had started reported every hole classed. It is the
+        same shape `settle_sweep` names ("ABSENCE IS NOT CLEARANCE") one step further in.
+        """
+        _save(client)
+        body = client.get(f"{BASE}/site/{SET}/groups").json()
+        assert body["groups"] == [] and body["total_holes"] == 6
+        assert body["unassigned"] == 6, "an ungrouped hole is unassigned, not absent"
+        assert "no access class yet" in body["reconcile"][0]
+
+    def test_a_tender_with_no_take_off_says_the_counts_are_over_nothing(self, client):
+        body = client.get(f"{BASE}/site/{SET}/groups").json()
+        assert body["take_off_read"] is False and body["total_holes"] is None
+        assert "not known" in body["not_checked_because"]
+
+    def test_with_nothing_to_check_against_the_reconciliation_is_not_silence(self, client):
+        """No bill, so no billed class counts. "Agreed" would be a claim about a comparison that
+        never ran — the client's counts are the only external check this judgement has."""
+        _save(client)
+        body = client.get(f"{BASE}/site/{SET}/groups").json()
+        assert any("nothing to check this classification against" in p
+                   for p in body["reconcile"])
 
 
 class TestThePreviewUnderTheGroupsScreen:

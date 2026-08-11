@@ -4105,7 +4105,11 @@ def get_hole_groups(set_id: str, rev: Optional[int] = None) -> dict:
 
     plan = boq_groups.GroupPlan(
         groups=filled,
-        billed_class_counts=_billed_class_counts(bill, class_refs) if bill else {})
+        billed_class_counts=_billed_class_counts(bill, class_refs) if bill else {},
+        # THE POPULATION, not just the part of it somebody has already grouped. Without this
+        # `unassigned()` counts holes inside groups only, so 91 stations and no groups reported
+        # 0 unassigned — every hole classed, on a tender where none of them was.
+        total_holes=len(schedule.stations) if schedule is not None else None)
     return {
         "set_id": set_id, "rev": resolved_rev,
         "groups": [g.model_dump() for g in filled],
@@ -4116,6 +4120,15 @@ def get_hole_groups(set_id: str, rev: Optional[int] = None) -> dict:
         "reconcile": plan.reconcile(),
         "not_ready": plan.not_ready(),
         "class_refs": class_refs,
+        # How many holes there are TO group, and whether that is even known. A screen showing
+        # "0 unassigned" beside "no take-off has been read" is telling the truth; one showing it
+        # alone is not.
+        "total_holes": plan.total_holes,
+        "take_off_read": schedule is not None,
+        "not_checked_because": ("" if schedule is not None else
+                                "no station schedule has been read for this tender, so how many "
+                                "holes need a class of site is not known — every count on this "
+                                "screen is over an empty take-off"),
     }
 
 

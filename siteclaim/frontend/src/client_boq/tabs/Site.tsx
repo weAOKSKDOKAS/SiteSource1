@@ -765,6 +765,34 @@ function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?
         )}
       </div>
 
+      {/* AGAINST THE BILL. The endpoint calls this "the whole point of the screen" — the client
+          bills 80 Class A and 11 Class B rig moves and never says which holes, so his counts are
+          the only external check on a judgement the estimator otherwise makes alone. It was
+          computed on every request and rendered by nothing. */}
+      {groups && (
+        <div className="border-b border-cb-border p-3">
+          <SectionLabel>AGAINST THE BILL</SectionLabel>
+          {!groups.take_off_read ? (
+            <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark">
+              NOT CHECKED — {groups.not_checked_because}
+            </p>
+          ) : groups.reconcile.length === 0 ? (
+            <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-ok-dark">
+              ✓ Every hole is classed and your counts match what the client billed.
+            </p>
+          ) : (
+            groups.reconcile.map((problem) => (
+              <p
+                key={problem}
+                className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-brass-text"
+              >
+                {problem}
+              </p>
+            ))
+          )}
+        </div>
+      )}
+
       {groups && Object.keys(groups.not_ready).length > 0 && (
         <div className="border-b border-cb-border p-3">
           <SectionLabel>NOT READY</SectionLabel>

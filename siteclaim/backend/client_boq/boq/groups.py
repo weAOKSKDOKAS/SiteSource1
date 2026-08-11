@@ -314,6 +314,16 @@ class GroupPlan(BaseModel):
 
     groups: list[HoleGroup] = Field(default_factory=list)
     billed_class_counts: dict[str, int] = Field(default_factory=dict)   # {"A": 80, "B": 11}
+    #: How many holes the take-off actually holds. ``None`` when no schedule has been read — and
+    #: that is a different fact from zero, which is why it is Optional and not defaulted to 0.
+    #:
+    #: WITHOUT IT ``unassigned()`` COUNTS THE WRONG POPULATION. It sums holes that are IN a group
+    #: and have no class, so a hole in no group contributes nothing — and a tender with 91 stations
+    #: read off the drawing and not one group made reports **0 unassigned**, which reads as "every
+    #: hole has been classed". `router.py`'s settle gate names this exact shape ("ABSENCE IS NOT
+    #: CLEARANCE") for the case where no schedule exists at all; this is the same error one step in,
+    #: where the schedule exists and the grouping has not started.
+    total_holes: Optional[int] = None
 
     def counts(self) -> dict[str, int]:
         out = {name: 0 for name in CLASSES}
@@ -323,17 +333,32 @@ class GroupPlan(BaseModel):
         return out
 
     def unassigned(self) -> int:
-        return sum(g.hole_count for g in self.groups if g.access_class not in CLASSES)
+        """Holes with no class of site. Over the WHOLE take-off when it is known.
+
+        Falls back to the grouped-only count when ``total_holes`` is not supplied, because that is
+        genuinely all this object can see — the caller that knows the take-off passes it.
+        """
+        if self.total_holes is None:
+            return sum(g.hole_count for g in self.groups if g.access_class not in CLASSES)
+        classed = sum(g.hole_count for g in self.groups if g.access_class in CLASSES)
+        return max(0, self.total_holes - classed)
 
     def reconcile(self) -> list[str]:
         """Where the estimator's classification disagrees with the bill's counts. Empty means agreed.
 
         The client never says which holes, only how many — so this is the one external check on a
-        judgement he otherwise makes alone.
+        judgement he otherwise makes alone. Which is why an empty ``billed_class_counts`` is not
+        silence but its own problem: with nothing to check against, "agreed" is a claim about a
+        comparison that never ran.
         """
         problems: list[str] = []
         if self.unassigned():
             problems.append(f"{self.unassigned()} station(s) have no access class yet")
+        if not self.billed_class_counts:
+            problems.append(
+                "the bill's rig-move items have not been identified, so there is nothing to check "
+                "this classification against — the client's counts are the only external check "
+                "there is on it")
         for name, billed in sorted(self.billed_class_counts.items()):
             mine = self.counts().get(name, 0)
             if mine != billed:
