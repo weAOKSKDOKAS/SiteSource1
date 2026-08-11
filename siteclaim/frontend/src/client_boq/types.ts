@@ -2379,7 +2379,16 @@ export interface ScheduleReadResponse {
     problem: string;
     cells_unread: number;
     headline: string;
+    /** How many slices the sheet was cut into. >1 means one call could not hold its answer. */
+    bands: number;
+    /** Slices that failed. Non-empty means the sheet is only PARTLY read. */
+    bands_failed: string[];
+    /** True when some slices came back and some did not — rows are missing and no total on this
+     *  sheet is the sheet's total. */
+    partial: boolean;
   }[];
+  /** Sheets that are only partly read, by number. The loudest thing on this response. */
+  partial_sheets: string[];
   cells_unread: number;
   bad_rows: string[];
   unread_rows: string[];

@@ -106,6 +106,20 @@ _FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 # Back-compat alias (older imports referenced MODEL).
 MODEL = ANTHROPIC_MODEL
 
+def _looks_truncated(raw: str) -> bool:
+    """Did this answer stop mid-structure rather than come back malformed?
+
+    Deliberately conservative — the cost of a false positive is refusing a retry that might have
+    worked, and the cost of a false negative is only the retry we already do. So: it must open like
+    JSON, be substantial, and end somewhere a finished document never ends. A model that returns
+    prose, or an apology, or a short broken object is NOT this case and still gets its retry.
+    """
+    text = (raw or "").strip()
+    if len(text) < 200 or not text.startswith(("{", "[")):
+        return False
+    return not text.endswith(("}", "]"))
+
+
 class CompletionTruncated(RuntimeError):
     """The model hit its completion ceiling without writing an answer.
 
@@ -306,6 +320,17 @@ class LLMClient:
         try:
             return target_model.model_validate_json(strip_code_fences(raw))
         except (ValidationError, ValueError):
+            # A TRUNCATED ANSWER IS NOT A BADLY-FORMATTED ONE, and the corrective retry cannot fix
+            # it. The prose below asks for valid JSON; the model already wrote valid JSON and ran
+            # out of room. Re-sending the identical budget fails identically at double the cost —
+            # which is what the live run did — so an answer that looks cut off says so instead.
+            if _looks_truncated(raw):
+                raise CompletionTruncated(
+                    f"the answer stopped mid-JSON after {len(raw):,} characters against a "
+                    f"{max_tokens:,}-token budget, so it is incomplete rather than malformed. "
+                    f"Retrying with the same budget would fail the same way: ask for a bigger "
+                    f"budget, or give the model less to answer in one call."
+                ) from None
             corrective = (
                 user
                 + "\n\nYour previous output was invalid JSON for the required schema. "
@@ -526,7 +551,27 @@ class LLMClient:
             usage = getattr(resp, "usage", None)
             tokens["in"] = getattr(usage, "input_tokens", None)
             tokens["out"] = getattr(usage, "output_tokens", None)
-            return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+            text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+            # THE SAME RULE AS THE OTHER TWO PROVIDERS, on the one that needed it most.
+            #
+            # DeepSeek and OpenAI have raised on an empty answer that stopped at the ceiling since
+            # trap 10; this path returned whatever it had, whatever `stop_reason` said. And it is
+            # the path a VISION call is forced onto — `_route` sends any request carrying images to
+            # a VISION_CAPABLE provider, which excludes DeepSeek — so `DEEPSEEK_MIN_MAX_TOKENS`,
+            # the floor that exists for exactly this failure, cannot apply here by construction.
+            #
+            # Measured 2026-08-11 on the real drawing pack: reading a 91-row schedule needs
+            # ~9,200-10,250 output tokens and DEFAULT_MAX_TOKENS is 8,000, so the answer was
+            # truncated, the corrective retry hit the same ceiling, and an unguarded pydantic parse
+            # of "" reached the operator as "Invalid JSON: EOF while parsing" — a completely true
+            # statement about a string that was never the problem.
+            if not text.strip() and getattr(resp, "stop_reason", None) == "max_tokens":
+                raise CompletionTruncated(
+                    f"{model} used its entire {max_tokens}-token completion budget and returned no "
+                    f"answer. The reply is not bad, it is absent: ask for a bigger budget, or give "
+                    f"the model less to answer in one call."
+                )
+            return text
 
         start = time.perf_counter()
         text = self._retry(call, transient)

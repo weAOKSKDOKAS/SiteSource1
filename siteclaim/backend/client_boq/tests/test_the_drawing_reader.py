@@ -369,3 +369,248 @@ class TestTheHttpSurface:
                     files=[("files", ("notes.txt", b"hello", "text/plain"))])
         after = client.get("/client-boq/site/technopole-gi/schedule").json()
         assert before["stations"] == after["stations"] == []
+
+
+# =================================================================================================
+# The first live run: one sheet worked, the large one did not
+# =================================================================================================
+#
+# GI/310 (9 rows, 5 columns) read correctly and in full — real coordinates, the four columns that
+# sheet does not carry marked `unread` on all nine rows, the termination requirement verbatim,
+# `usable: false` for the right reason. GI/210 (91 rows, 12 columns) failed outright:
+#
+#     reading the drawing failed (ValidationError: Invalid JSON: EOF while parsing
+#     a value at line 1 column 0 [input_value='', input_type=str])
+#
+# THE ARITHMETIC SETTLES IT. Serialising this module's own output type for 91 boreholes and 21
+# trial pits is 36,885 characters — roughly 9,200-10,250 output tokens. `DEFAULT_MAX_TOKENS` is
+# 8,000 and this call passed no budget at all. GI/310's answer needs ~991. That is the entire
+# difference between the two sheets, and it is measured rather than inferred.
+#
+# Three things compounded, and each is now closed:
+#   * a vision call is FORCED to a VISION_CAPABLE provider, which excludes DeepSeek — so
+#     `DEEPSEEK_MIN_MAX_TOKENS`, the floor that exists for exactly this failure, could never apply;
+#   * `_anthropic_complete` had no truncation guard, unlike the other two providers;
+#   * `complete_json`'s corrective retry re-sent the identical budget, so it failed identically.
+
+class TestASheetTooBigForOneAnswer:
+    """The fix is not a bigger constant. A bigger constant is a higher ceiling."""
+
+    class _Truncates:
+        """A client whose first answer never fits, and whose slices always do."""
+
+        def __init__(self, rows_per_band: int = 3):
+            self.calls: list[str] = []
+            self.rows_per_band = rows_per_band
+
+        def complete_json(self, *, user: str, **_kw):
+            from pipeline.llm_client import CompletionTruncated
+
+            self.calls.append(user)
+            if "THIS IMAGE IS A SLICE" not in user:
+                raise CompletionTruncated("the answer stopped mid-JSON")
+            index = len(self.calls)
+            base = (index - 2) * self.rows_per_band
+            return reader.RawSchedule(boreholes=[
+                reader.RawStation(station=f"CE19-ABH{base + n:02d}", soil_m=30.0, rock_m=0.0,
+                                  hard_above_rockhead_m=0.0, length_m=30.0,
+                                  standpipe=False, piezometer=False)
+                for n in range(self.rows_per_band)])
+
+    class _Fits:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def complete_json(self, *, user: str, **_kw):
+            self.calls.append(user)
+            return reader.RawSchedule(boreholes=[
+                reader.RawStation(station="CE19-ABH02", soil_m=30.0, rock_m=0.0,
+                                  hard_above_rockhead_m=0.0, length_m=30.0,
+                                  standpipe=False, piezometer=False)])
+
+    @staticmethod
+    def _sheet_pdf() -> bytes:
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page(width=1191, height=842)
+        page.insert_text((60, 40), "PROPOSED GI STATION EASTING NORTHING SOIL ROCK", fontsize=11)
+        for n in range(40):
+            page.insert_text((60, 90 + n * 18), f"CE19-ABH{n:02d} 825184.31 838917.94 30.00 0.00",
+                             fontsize=9)
+        data = doc.tobytes()
+        doc.close()
+        return data
+
+    def test_a_sheet_that_fits_still_costs_exactly_one_call(self):
+        """GI/310 read correctly before this change and must keep costing what it cost."""
+        client = self._Fits()
+        report = reader.read_sheet(self._sheet_pdf(), set_id="t", sheet="GI/310", client=client)
+        assert report.read and report.bands == 1
+        assert len(client.calls) == 1
+        assert "THIS IMAGE IS A SLICE" not in client.calls[0]
+
+    def test_a_truncated_answer_falls_back_to_slices(self):
+        client = self._Truncates()
+        report = reader.read_sheet(self._sheet_pdf(), set_id="t", sheet="GI/210", client=client,
+                                   bands_on_truncation=4)
+        assert report.read is True
+        assert report.bands == 4
+        assert len(client.calls) == 5, "one whole-sheet attempt, then one per slice"
+        assert len(report.schedule.stations) == 12
+
+    def test_every_slice_is_told_it_is_a_slice_and_where_the_header_is(self):
+        client = self._Truncates()
+        reader.read_sheet(self._sheet_pdf(), set_id="t", sheet="GI/210", client=client,
+                          bands_on_truncation=4)
+        for call in client.calls[1:]:
+            assert "THIS IMAGE IS A SLICE" in call
+            assert "column headings are reproduced at the top" in call
+            assert "expect the first and last of them to also appear" in call
+
+    def test_the_take_off_says_it_was_read_in_slices(self):
+        client = self._Truncates()
+        report = reader.read_sheet(self._sheet_pdf(), set_id="t", sheet="GI/210", client=client,
+                                   bands_on_truncation=4)
+        assert any("read in 4 slices" in note for note in report.schedule.notes)
+        assert "one call could not hold the whole sheet" in report.headline()
+
+    def test_a_row_read_twice_by_the_overlap_survives_once(self):
+        """Bands overlap on purpose so no row is cut in half. The duplicate is an artefact of how
+        the sheet was cut, not a fact about the pack, so it is dropped here rather than reported."""
+        both = reader.RawSchedule(boreholes=[
+            reader.RawStation(station="CE19-ABH07", soil_m=30.0, rock_m=0.0,
+                              hard_above_rockhead_m=0.0, standpipe=False, piezometer=False)])
+        merged = reader._merge_raw([both, both, both])
+        assert [r.station for r in merged.boreholes] == ["CE19-ABH07"]
+
+    def test_a_station_on_two_different_sheets_is_still_reported(self):
+        """De-duplicating within a sheet must not silence the cross-sheet check."""
+        one = reader.ReadReport(
+            schedule=reader.to_schedule(reader.RawSchedule(boreholes=[
+                reader.RawStation(station="CE19-ABH02", soil_m=30.0, rock_m=0.0,
+                                  hard_above_rockhead_m=0.0, standpipe=False, piezometer=False)]),
+                set_id="t", sheet="GI/210"), sheet="GI/210", read=True)
+        two = reader.ReadReport(
+            schedule=reader.to_schedule(reader.RawSchedule(boreholes=[
+                reader.RawStation(station="CE19-ABH02", termination="~6M BELOW GROUND")]),
+                set_id="t", sheet="GI/310"), sheet="GI/310", read=True)
+        assert reader.merge([one, two], set_id="t").duplicate_names()
+
+
+class TestAPartialReadIsAReadAndSaysSo:
+    """The degrade-not-fail rule, actually honoured: today one failure zeroes 91 rows."""
+
+    class _OneBandFails:
+        def __init__(self, bad: int = 3):
+            self.calls = 0
+            self.bad = bad
+
+        def complete_json(self, *, user: str, **_kw):
+            from pipeline.llm_client import CompletionTruncated
+
+            self.calls += 1
+            if "THIS IMAGE IS A SLICE" not in user:
+                raise CompletionTruncated("the answer stopped mid-JSON")
+            index = self.calls - 1          # 1-based slice number
+            if index == self.bad:
+                raise RuntimeError("the model returned nothing for this slice")
+            return reader.RawSchedule(boreholes=[
+                reader.RawStation(station=f"CE19-ABH{index:02d}", soil_m=30.0, rock_m=0.0,
+                                  hard_above_rockhead_m=0.0, length_m=30.0,
+                                  standpipe=False, piezometer=False)])
+
+    def _report(self, bad: int = 3) -> reader.ReadReport:
+        return reader.read_sheet(TestASheetTooBigForOneAnswer._sheet_pdf(), set_id="t",
+                                 sheet="GI/210", client=self._OneBandFails(bad),
+                                 bands_on_truncation=4)
+
+    def test_the_slices_that_worked_are_kept(self):
+        report = self._report()
+        assert report.read is True
+        assert len(report.schedule.stations) == 3, "three of four slices came back"
+
+    def test_the_slice_that_failed_is_named(self):
+        report = self._report()
+        assert report.partial()
+        assert len(report.bands_failed) == 1
+        assert "slice 3 of 4 failed" in report.bands_failed[0]
+
+    def test_every_slice_is_attempted_even_after_one_fails(self):
+        """Abandoning the rest at the first error gives back the whole point of slicing."""
+        client = self._OneBandFails(bad=2)
+        reader.read_sheet(TestASheetTooBigForOneAnswer._sheet_pdf(), set_id="t", sheet="GI/210",
+                          client=client, bands_on_truncation=4)
+        assert client.calls == 5
+
+    def test_the_headline_refuses_to_call_the_total_the_sheets_total(self):
+        headline = self._report().headline()
+        assert "ONLY PARTLY READ" in headline
+        assert "no total on it is the sheet's total" in headline
+
+    def test_the_warning_travels_on_the_take_off_not_only_in_the_report(self):
+        """A screen may show the schedule and not the per-sheet report. The note goes with the
+        thing that gets saved."""
+        merged = reader.merge([self._report()], set_id="t")
+        assert any("only PARTLY read" in note for note in merged.notes)
+        assert any("no total on this take-off is that sheet's total" in note
+                   for note in merged.notes)
+
+    def test_a_sheet_where_every_slice_fails_is_unread_not_empty(self):
+        class _AllFail:
+            def complete_json(self, *, user: str, **_kw):
+                from pipeline.llm_client import CompletionTruncated
+
+                raise CompletionTruncated("nothing fits")
+
+        report = reader.read_sheet(TestASheetTooBigForOneAnswer._sheet_pdf(), set_id="t",
+                                   sheet="GI/210", client=_AllFail(), bands_on_truncation=4)
+        assert report.read is False
+        assert "none of its 4 slices could be read" in report.problem
+
+    def test_a_failure_that_is_not_a_truncation_is_not_sliced(self):
+        """Slicing a sheet the model refused, or could not see, would be four refusals instead of
+        one — and the message would stop naming the real reason."""
+        class _Refuses:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, **_kw):
+                self.calls += 1
+                raise RuntimeError("the request was rejected")
+
+        client = _Refuses()
+        report = reader.read_sheet(TestASheetTooBigForOneAnswer._sheet_pdf(), set_id="t",
+                                   sheet="GI/210", client=client, bands_on_truncation=4)
+        assert client.calls == 1
+        assert report.read is False
+        assert "the request was rejected" in report.problem
+
+
+class TestTheBudgetIsAskedForRatherThanDefaulted:
+
+    def test_the_reader_asks_for_more_than_the_default(self):
+        """The measured need is ~9,200-10,250 output tokens for 91 rows; the default is 8,000."""
+        from pipeline.llm_client import DEFAULT_MAX_TOKENS
+
+        assert reader.READ_MAX_TOKENS > DEFAULT_MAX_TOKENS
+        assert reader.READ_MAX_TOKENS >= 10_250, "the real sheet's answer must fit"
+
+    def test_the_budget_actually_reaches_the_call(self):
+        seen: dict = {}
+
+        class _Records:
+            def complete_json(self, **kw):
+                seen.update(kw)
+                return reader.RawSchedule()
+
+        reader.read_sheet(TestASheetTooBigForOneAnswer._sheet_pdf(), set_id="t", sheet="GI/210",
+                          client=_Records())
+        assert seen["max_tokens"] == reader.READ_MAX_TOKENS
+
+    def test_a_vision_call_can_never_reach_the_deepseek_floor(self):
+        """Why the existing guard could not help: `_route` forces any request carrying images onto
+        a VISION_CAPABLE provider, and DeepSeek is not in that set."""
+        from pipeline.llm_client import VISION_CAPABLE
+
+        assert "deepseek" not in VISION_CAPABLE

@@ -72,6 +72,30 @@ from client_boq.ingest import pdfops
 #: bandwidth. Measured legible at that size, cell by cell, on the real sheet.
 READ_DPI = pdfops.MAX_RENDER_DPI
 
+#: WHAT ONE SHEET'S ANSWER COSTS TO WRITE, and the ceiling it was hitting.
+#:
+#: Measured 2026-08-11, on the first live run against the real pack. Serialising this module's own
+#: output type for GI/210 — 91 boreholes and 21 trial pits — is 36,885 characters, roughly
+#: **9,200-10,250 output tokens**. `DEFAULT_MAX_TOKENS` is 8,000 and this call passed no budget at
+#: all, so the model wrote valid JSON and ran out of room. GI/310, at 9 rows, needs ~991 and read
+#: perfectly. That is the entire difference between the two sheets.
+#:
+#: The floor that exists for this failure could not help: `DEEPSEEK_MIN_MAX_TOKENS` is 32,000, but
+#: `_route` sends any request carrying images to a VISION_CAPABLE provider and DeepSeek is excluded
+#: from that set — so a vision call can never reach the guard by construction.
+#:
+#: 16,000 is not the fix, it is the headroom. A bigger constant is a higher ceiling somebody else's
+#: sheet will hit, which is what `BANDS_ON_TRUNCATION` below is for.
+READ_MAX_TOKENS = 16_000
+
+#: How many slices to cut a sheet into when one call could not hold its answer.
+#:
+#: Four is one call's worth of headroom per band on a table twice the size of the reference sheet's,
+#: and it is the number that makes a failure PARTIAL: band 3 failing leaves bands 1, 2 and 4 read,
+#: where today a single failure zeroes 91 rows. Derived from a real truncation rather than guessed
+#: up front, so a small sheet still costs exactly one call.
+BANDS_ON_TRUNCATION = 4
+
 #: What the model must not be allowed to leave out silently. These three have no way to say
 #: "unknown" on `Station` — they are plain floats defaulting to 0.0 — so a `None` from the reader
 #: becomes an `unread` mark rather than a zero.
@@ -158,6 +182,16 @@ class ReadReport(BaseModel):
     #: produced no rows still says so here rather than returning an empty schedule silently.
     problem: str = ""
     cells_unread: int = 0
+    #: How many slices the sheet was cut into. 1 is the ordinary case; more means one call could
+    #: not hold the answer and the sheet was banded.
+    bands: int = 1
+    #: Bands that failed, with why. A PARTIAL read: the rows from the bands that worked are in the
+    #: schedule above, and these say what is missing from it — which is the difference between a
+    #: take-off that is short and a take-off nobody knows is short.
+    bands_failed: list[str] = Field(default_factory=list)
+
+    def partial(self) -> bool:
+        return bool(self.read and self.bands_failed)
 
     def headline(self) -> str:
         if not self.read:
@@ -170,6 +204,13 @@ class ReadReport(BaseModel):
         if schedule.trial_pits:
             parts.append(f"{len(schedule.trial_pits)} trial pit(s)")
         head = f"{self.sheet}: read {' and '.join(parts)}"
+        if self.bands > 1:
+            head += (f" from {self.bands - len(self.bands_failed)} of {self.bands} slices "
+                     f"(one call could not hold the whole sheet)")
+        if self.bands_failed:
+            return (f"{head}. THIS SHEET IS ONLY PARTLY READ — "
+                    f"{'; '.join(self.bands_failed)}. Whatever rows those slices carried are "
+                    f"missing from the take-off above, and no total on it is the sheet's total.")
         problems = schedule.problems()
         if not self.cells_unread and not problems:
             return (f"{head} — {schedule.soil_m():,g} m of soil and {schedule.rock_m():,g} m of "
@@ -270,15 +311,84 @@ def to_schedule(raw: RawSchedule, *, set_id: str, sheet: str) -> StationSchedule
     )
 
 
+def _ask(client, png: bytes, demo_fixture: str, *, band: str = "") -> RawSchedule:
+    """One image to the model. Raises; the caller decides what a failure means."""
+    import base64
+
+    user = INSTRUCTION
+    if band:
+        user += (f"\n\nTHIS IMAGE IS A SLICE of a larger sheet: {band}. The table's column "
+                 f"headings are reproduced at the top of the image above the slice. Transcribe "
+                 f"only the rows in the slice, and expect the first and last of them to also "
+                 f"appear in a neighbouring slice — that is intended, do not try to correct it.")
+    return client.complete_json(
+        system=SYSTEM, user=user, target_model=RawSchedule,
+        images=[base64.b64encode(png).decode("ascii")],
+        max_tokens=READ_MAX_TOKENS,
+        demo_fixture=demo_fixture, purpose="client_boq-ingest-schedule-read",
+    )
+
+
+def _truncated(exc: Exception) -> bool:
+    """Did the answer run out of room, as opposed to being wrong?
+
+    Imported lazily and matched by NAME as well as by class, because `CompletionTruncated` lives in
+    the procurement chassis and this module must not fail to recognise it if that import ever moves.
+    """
+    try:
+        from pipeline.llm_client import CompletionTruncated
+
+        if isinstance(exc, CompletionTruncated):
+            return True
+    except Exception:  # noqa: BLE001 — the name check below still works
+        pass
+    return type(exc).__name__ == "CompletionTruncated"
+
+
+def _merge_raw(parts: list[RawSchedule]) -> RawSchedule:
+    """Several slices of one sheet into one reading, de-duplicated on the station name.
+
+    Bands overlap by design, so a row near a boundary is read twice on purpose. First occurrence
+    wins — the same rule every other reader in this module uses — and the duplicate is dropped
+    silently HERE because it is an artefact of how the sheet was cut, not a fact about the pack.
+    A station genuinely printed twice on one sheet still survives as one row, and a station on two
+    different SHEETS is a different question that `duplicate_names()` still answers.
+    """
+    merged = RawSchedule()
+    seen: set[str] = set()
+    for part in parts:
+        for row in part.boreholes:
+            name = (row.station or "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                merged.boreholes.append(row)
+        for row in part.trial_pits:
+            name = (row.station or "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                merged.trial_pits.append(row)
+    return merged
+
+
 def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                client=None, demo_fixture: str = "cases/client_boq/station_schedule_read.json",
+               bands_on_truncation: int = BANDS_ON_TRUNCATION,
                ) -> ReadReport:
     """Read one schedule drawing. Returns a proposal; stores nothing; never raises.
+
+    ONE CALL, THEN SLICES — adaptive rather than decided up front. A nine-row sheet costs exactly
+    one call, as it does today. A ninety-one-row sheet whose answer will not fit is cut into bands
+    and read again, and the band count is derived from a real truncation rather than guessed at
+    every sheet's expense.
 
     MEASURE FIRST, IN EVERY MODE. The render is attempted before the fixture is considered, because
     a fixture returned in front of an unreadable sheet is the trap-9 failure exactly: a confident
     schedule for pixels nobody saw. A sheet that will not render is reported as unread whether or
     not there is a fixture behind it.
+
+    A PARTIAL READ IS A READ. If three bands of four come back, the rows from those three are kept
+    and the fourth is named — because a take-off that is short and says so is a different thing from
+    a take-off nobody knows is short. Only a sheet where NOTHING came back is reported as unread.
     """
     try:
         png = pdfops.render_page(data, page, dpi=READ_DPI)
@@ -289,23 +399,61 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                           problem=("the drawing could not be rendered to an image, so nothing on "
                                    "it has been looked at"))
 
-    import base64
-
     if client is None:
         from client_boq.llm import make_client
 
         client = make_client()
+
     try:
-        raw = client.complete_json(
-            system=SYSTEM, user=INSTRUCTION, target_model=RawSchedule,
-            images=[base64.b64encode(png).decode("ascii")],
-            demo_fixture=demo_fixture, purpose="client_boq-ingest-schedule-read",
-        )
+        raw = _ask(client, png, demo_fixture)
     except Exception as exc:  # noqa: BLE001 — a failed read is a gap that says so
-        return ReadReport(sheet=sheet, problem=f"reading the drawing failed ({type(exc).__name__}: {exc})")
+        if not _truncated(exc) or bands_on_truncation < 2:
+            return ReadReport(
+                sheet=sheet,
+                problem=(f"reading the drawing failed ({type(exc).__name__}: {exc})"
+                         if not _truncated(exc) else
+                         f"the sheet's answer did not fit in one call and it could not be sliced "
+                         f"({exc})"))
+        return _read_in_bands(data, page, set_id=set_id, sheet=sheet, client=client,
+                              demo_fixture=demo_fixture, bands=bands_on_truncation, why=str(exc))
 
     schedule = to_schedule(raw, set_id=set_id, sheet=sheet)
     return ReadReport(schedule=schedule, sheet=sheet, read=True,
+                      cells_unread=sum(len(s.unread) for s in schedule.stations))
+
+
+def _read_in_bands(data: bytes, page: int, *, set_id: str, sheet: str, client,
+                   demo_fixture: str, bands: int, why: str) -> ReadReport:
+    """The sheet in slices, after one call could not hold its answer.
+
+    Every band is attempted even after one fails: the whole point of slicing is that a failure stops
+    being all-or-nothing, and abandoning the rest at the first error would give that back.
+    """
+    parts: list[RawSchedule] = []
+    failed: list[str] = []
+    for index in range(bands):
+        png = pdfops.render_band(data, page, index, bands, dpi=READ_DPI)
+        if not png:
+            failed.append(f"slice {index + 1} of {bands} could not be rendered")
+            continue
+        try:
+            parts.append(_ask(client, png, demo_fixture,
+                              band=f"slice {index + 1} of {bands}, top to bottom"))
+        except Exception as exc:  # noqa: BLE001 — one bad slice must not lose the others
+            failed.append(f"slice {index + 1} of {bands} failed ({type(exc).__name__}: {exc})")
+
+    if not parts:
+        return ReadReport(
+            sheet=sheet, bands=bands, bands_failed=failed,
+            problem=(f"the sheet's answer did not fit in one call ({why}), and none of its "
+                     f"{bands} slices could be read either"))
+
+    schedule = to_schedule(_merge_raw(parts), set_id=set_id, sheet=sheet)
+    schedule.notes.append(
+        f"one call could not hold this sheet's answer, so it was read in {bands} slices "
+        f"({bands - len(failed)} of them successfully). Rows near a slice boundary are read twice "
+        f"by design and de-duplicated on the station name.")
+    return ReadReport(schedule=schedule, sheet=sheet, read=True, bands=bands, bands_failed=failed,
                       cells_unread=sum(len(s.unread) for s in schedule.stations))
 
 
@@ -327,6 +475,14 @@ def merge(reports: list[ReadReport], *, set_id: str) -> StationSchedule:
         if not report.read:
             merged.notes.append(f"{report.sheet or 'a drawing'} was NOT read: {report.problem}")
             continue
+        if report.partial():
+            # A PARTIALLY-READ SHEET POISONS EVERY TOTAL BELOW IT, and the totals do not know that.
+            # `soil_m()` sums what is there; it cannot sum what a failed slice was carrying. So the
+            # take-off says it, at the top, in the notes that travel with it — not only in the
+            # per-sheet report a screen might not show.
+            merged.notes.append(
+                f"{report.sheet} is only PARTLY read — {'; '.join(report.bands_failed)}. Rows from "
+                f"those slices are missing, so no total on this take-off is that sheet's total.")
         merged.stations.extend(report.schedule.stations)
         merged.trial_pits.extend(report.schedule.trial_pits)
     merged.notes.append(

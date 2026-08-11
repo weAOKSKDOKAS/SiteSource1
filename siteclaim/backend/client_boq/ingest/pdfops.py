@@ -729,6 +729,86 @@ def render_page(data: bytes, page: int, dpi: int = DEFAULT_RENDER_DPI) -> Option
         return None
 
 
+#: How much of the sheet's height the header strip is worth carrying into every band. The column
+#: headings live at the top of the table and a band without them is a grid of numbers whose columns
+#: nobody can name — so every band gets the top of the sheet stacked above its own slice.
+#:
+#: ERRS GENEROUS ON PURPOSE. Too small and a band loses the column names, which is fatal and silent:
+#: the model would map twelve numeric columns by guessing. Too large and the first rows are read in
+#: every band, which is wasteful and harmless — the caller de-duplicates on the station name.
+BAND_HEADER_SHARE = 0.22
+
+#: How far each band reaches into its neighbours. A table row split by a boundary must appear WHOLE
+#: in at least one band, and the caller de-duplicates on the station name afterwards. 6% of an A3
+#: sheet is roughly two row heights on a 91-row table — enough for the row, small enough that the
+#: overlap is not a second read of the table.
+BAND_OVERLAP_SHARE = 0.06
+
+
+def render_band(data: bytes, page: int, band: int, bands: int,
+                dpi: int = DEFAULT_RENDER_DPI) -> Optional[bytes]:
+    """One horizontal slice of a page, with the sheet's header stacked above it. PNG or None.
+
+    WHY THIS EXISTS. A 91-row schedule's transcription does not fit in one answer: measured on the
+    real pack, it needs ~9,200-10,250 output tokens against a default ceiling of 8,000, so the
+    model wrote valid JSON and ran out of room. Splitting the SHEET is the only fix that keeps
+    working when somebody's table is bigger still — and it is the one that turns a whole-sheet
+    failure into a partial read, because band 3 failing leaves bands 1, 2, 4 and 5 read.
+
+    TWO THINGS MAKE A BAND READABLE, and both are geometry rather than judgement:
+
+    * **The header travels with every band.** The column headings are printed once, at the top. A
+      middle band on its own is a grid of numbers whose columns nobody can name, so the top
+      ``BAND_HEADER_SHARE`` of the sheet is composed above each band's own slice — one image, two
+      crops, no model involved in deciding what a column means.
+    * **Bands overlap.** A row cut in half by a boundary would otherwise be half-read twice or lost
+      once. Each band reaches ``BAND_OVERLAP_SHARE`` into its neighbours so every row is whole
+      somewhere, and the caller de-duplicates on the station name — first occurrence wins, as
+      everywhere else in this module.
+
+    Band 0 of 1 is the whole page and is exactly :func:`render_page`, so a caller can ask for one
+    band without a special case.
+    """
+    import fitz  # PyMuPDF — lazy
+
+    if not data or page < 1 or bands < 1 or band < 0 or band >= bands:
+        return None
+    if bands == 1:
+        return render_page(data, page, dpi)
+    dpi = max(MIN_RENDER_DPI, min(int(dpi or DEFAULT_RENDER_DPI), MAX_RENDER_DPI))
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            if page > len(doc):
+                return None
+            source = doc[page - 1]
+            rect = source.rect
+            height = rect.height or 1.0
+            overlap = height * BAND_OVERLAP_SHARE
+            step = height / bands
+            top = max(rect.y0, rect.y0 + band * step - overlap)
+            bottom = min(rect.y1, rect.y0 + (band + 1) * step + overlap)
+            header = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + height * BAND_HEADER_SHARE)
+            body = fitz.Rect(rect.x0, top, rect.x1, bottom)
+
+            # A new page the height of both crops, with the header composed above the body. Done
+            # with `show_pdf_page` rather than by stitching two pixmaps, so it needs nothing but
+            # PyMuPDF and stays vector until the single rasterise at the end.
+            composed = fitz.open()
+            width = rect.width or 1.0
+            target = composed.new_page(width=width, height=header.height + body.height)
+            target.show_pdf_page(fitz.Rect(0, 0, width, header.height), doc, page - 1, clip=header)
+            target.show_pdf_page(
+                fitz.Rect(0, header.height, width, header.height + body.height),
+                doc, page - 1, clip=body)
+            fitting = int(MAX_RENDER_WIDTH_PX * 72 / width)
+            pixmap = target.get_pixmap(dpi=max(MIN_RENDER_DPI, min(dpi, fitting)))
+            png = pixmap.tobytes("png")
+            composed.close()
+            return png
+    except Exception:  # noqa: BLE001 — an unrenderable band is a gap, not a crash
+        return None
+
+
 # The search box has no minimum length, unlike :func:`_search_fragments`' 45-character floor.
 # The floor exists because a citation confirmed by an accidental match is worse than one left
 # unconfirmed — it is a rule about *proof*. A person typing into a search box is not making a

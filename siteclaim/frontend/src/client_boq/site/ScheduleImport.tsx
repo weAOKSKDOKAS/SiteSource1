@@ -154,7 +154,14 @@ export function ScheduleImport({
             className="mt-2 w-full font-cb-sans text-[10.5px] text-cb-body"
           />
           {drawn && (
-            <div className="mt-2 rounded-cb-btn border border-cb-border bg-cb-tint px-2.5 py-2">
+            <div
+              className={cx(
+                "mt-2 rounded-cb-btn border px-2.5 py-2",
+                drawn.partial_sheets.length || drawn.sheets_read.some((s) => !s.read)
+                  ? "border-cb-bad-line bg-cb-bad-tint"
+                  : "border-cb-border bg-cb-tint",
+              )}
+            >
               <p className="font-cb-sans text-[10.5px] leading-[1.55] text-cb-body">
                 {drawn.triage.headline}
               </p>
@@ -163,7 +170,10 @@ export function ScheduleImport({
                   key={s.sheet}
                   className={cx(
                     "mt-1 font-cb-sans text-[9.5px] leading-[1.5]",
-                    s.read ? "text-cb-muted" : "text-cb-bad-dark",
+                    // A PARTLY-READ SHEET IS NOT A READ SHEET. `read` is true for both, because
+                    // some rows did come back — so the partial case has to be as loud as a
+                    // failure, or a take-off short by twenty holes reads as a success.
+                    !s.read || s.partial ? "text-cb-bad-dark" : "text-cb-muted",
                   )}
                 >
                   {s.headline}

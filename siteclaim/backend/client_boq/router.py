@@ -3940,8 +3940,14 @@ def post_read_station_schedule(
             "total_drawings": plan.total_drawings,
         },
         "sheets_read": [{"sheet": r.sheet, "read": r.read, "problem": r.problem,
-                         "cells_unread": r.cells_unread, "headline": r.headline()}
+                         "cells_unread": r.cells_unread, "headline": r.headline(),
+                         # How the sheet was read, and what is missing from it. `bands > 1` means
+                         # one call could not hold the answer; `bands_failed` non-empty means the
+                         # sheet is only PARTLY read and no total on it is the sheet's total.
+                         "bands": r.bands, "bands_failed": r.bands_failed,
+                         "partial": r.partial()}
                         for r in reports],
+        "partial_sheets": [r.sheet for r in reports if r.partial()],
         "cells_unread": sum(r.cells_unread for r in reports),
         "bad_rows": schedule.bad_rows(),
         "unread_rows": schedule.unread_rows(),
@@ -3963,6 +3969,7 @@ def _read_headline(plan, reports: list, schedule) -> str:
     """One sentence for the top of the panel. Never reassuring about a sheet nobody read."""
     if not plan.found():
         return plan.headline()
+    partial = [r for r in reports if r.partial()]
     unread_sheets = [r.sheet for r in reports if not r.read]
     if unread_sheets and len(unread_sheets) == len(reports):
         return (f"None of the {len(reports)} schedule sheet(s) could be read. "
@@ -3973,6 +3980,9 @@ def _read_headline(plan, reports: list, schedule) -> str:
     if unread_sheets:
         head += (f" {', '.join(unread_sheets)} could NOT be read, so every hole on "
                  f"{'them' if len(unread_sheets) > 1 else 'it'} is missing from this take-off.")
+    for report in partial:
+        head += (f" {report.sheet} is only PARTLY read: {'; '.join(report.bands_failed)} — rows "
+                 f"from there are missing, so no total below is that sheet's total.")
     problems = schedule.problems()
     if problems:
         head += f" {len(problems)} row(s) are not settled — every one is named below."
