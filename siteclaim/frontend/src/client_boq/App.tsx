@@ -1060,10 +1060,33 @@ function JobStrip({
       ? `STAGE ${job.stage_index} OF ${job.stage_total}`
       : `STAGE ${job.stage_index}`
     : "";
-  const heading = [work?.label ?? job?.kind, job?.stage?.replace(/-/g, " ")]
+  // THE HEADING NAMES WHOSE PROGRESS THIS IS.
+  //
+  // It used to read `work?.label ?? job?.kind` — and that `??` was a lie waiting to happen. `work`
+  // is a per-ACTION label set by `track()`, with no job id, no kind and no link to anything on the
+  // server; `job` is chosen per-SET out of `/jobs/live-all`. Nothing joins them, and the `??`
+  // dropped the one token that would have exposed the mismatch precisely when a mismatch was
+  // possible. Observed live: "PROPOSING A ROUTE PER PACKAGE · INGESTING · STAGE 1 · 0/94" — the
+  // Route tab's label spliced onto a REVIEW job's first stage (which is called "ingesting", a
+  // homonym of the ingest workflow), with a chunk counter that has nothing to do with packages.
+  //
+  // The Route tab's analyze is a blocking HTTP call that creates no job (`bridge/router.py:241`),
+  // so it can never appear in `inFlight` — which is also why the "+N MORE RUNNING" chip, the one
+  // guard built for this, could not fire. And `TAB_FOR_JOB` has no entry for "route", so the
+  // "prefer the job this tab owns" branch is structurally dead there and the arbitrary fallback
+  // always wins.
+  //
+  // The bar, the counter, the elapsed time and the STOP button all describe the JOB. So the job
+  // keeps the heading and is always named by kind, and an unrelated action label is shown beside
+  // it as its own statement rather than being joined to it as though they were one thing.
+  const jobHeading = [job?.kind, job?.stage?.replace(/-/g, " ")]
     .filter(Boolean)
     .join(" · ")
     .toUpperCase();
+  const heading = jobHeading || (work?.label ?? "").toUpperCase();
+  // An action running BESIDE the job. Suppressed when it is the only thing running, because then
+  // it is the heading.
+  const alongside = jobHeading && work?.status === "running" ? work.label : "";
   return (
     <div
       // A live region: a run starting, progressing and finishing is exactly the kind of state
@@ -1086,6 +1109,18 @@ function JobStrip({
       >
         {done ? `${heading} · DONE` : heading}
       </span>
+      {!done && alongside && (
+        <Chip
+          className="flex-none border border-cb-amber text-cb-amber"
+          title={
+            `"${alongside}" is running too. It is a direct call rather than a background job, so ` +
+            `it has no progress of its own — everything else on this bar describes the ` +
+            `${(job?.kind ?? "background").toUpperCase()} job, including STOP.`
+          }
+        >
+          ALSO: {alongside.toUpperCase()}
+        </Chip>
+      )}
       {!done && (liveCount ?? 0) > 1 && (
         <Chip className="flex-none border border-cb-amber text-cb-amber">
           +{(liveCount ?? 1) - 1} MORE RUNNING
@@ -1145,7 +1180,11 @@ function JobStrip({
         <button
           type="button"
           onClick={() => onStop(job.job_id as string)}
-          title="Stop after the current step finishes"
+          // Names the job, because the bar may be showing an unrelated action beside it and this
+          // button has only ever cancelled the job. A STOP that does not say what it stops is the
+          // same splice as the heading, one control further along.
+          title={`Stop the ${(job.kind ?? "background").toUpperCase()} job after its current step `
+            + `finishes.${alongside ? ` "${alongside}" is not a job and cannot be stopped here.` : ""}`}
           className="cb-press ml-auto flex-none rounded-cb-btn border border-cb-brass-line px-2.5 py-[3px] font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text"
         >
           STOP
