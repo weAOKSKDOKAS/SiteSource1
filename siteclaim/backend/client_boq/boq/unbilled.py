@@ -105,7 +105,28 @@ class UnbilledSweep(BaseModel):
         return [note for note in (cost.problem() for cost in self.costs) if note]
 
     def settled(self) -> bool:
-        return not self.outstanding()
+        """Every believed cost has a route, AND somebody actually listed the costs.
+
+        The `self.costs` guard is the whole of it. This read `not self.outstanding()`, and an empty
+        cost list has nothing outstanding — so a sweep nobody had opened reported itself settled.
+        That is not a corner case: the sweep is hand-typed and is never seeded from the build-up,
+        so an EMPTY sweep is the normal state of a tender that has just been priced. "Nobody has
+        looked" was reading as "looked, and clean" on every tender in the product.
+        """
+        return bool(self.costs) and not self.outstanding()
+
+    def not_settled_because(self) -> str:
+        """Why this sweep is not settled, in words. Empty when it is.
+
+        A separate sentence rather than a flag, because the two reasons are different work: an
+        empty sweep needs somebody to think about what the contract orders into the rates with no
+        bill line, and an unrouted cost needs a decision about one cost already named.
+        """
+        if not self.costs:
+            return ("nobody has listed the costs this contract orders into the rates with no bill "
+                    "line — an empty sweep is where every tender starts, not a tender that has "
+                    "been swept")
+        return "; ".join(self.outstanding())
 
     def by_route(self) -> dict[str, list[UnbilledCost]]:
         """Every cost, in exactly one bucket. ``ROUTE_NOWHERE`` holds the ones with no valid route.

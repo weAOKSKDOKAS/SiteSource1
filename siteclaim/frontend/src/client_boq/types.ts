@@ -654,8 +654,10 @@ export interface BidSignals {
   };
   open_clarifications: BidSignal & { count: number };
   review_approved: BidSignal & { value: boolean };
-  departures: BidSignal & { total: number; unresolved: number };
-  scope_gaps: BidSignal & { gaps: number; inputs_missing: number };
+  /** `"unknown"` until a review register has been assembled — with no register, nothing is known
+   *  about the pack's departures, and 0 of 0 would read as a register that came out clean. */
+  departures: BidSignal & { total: number | "unknown"; unresolved: number | "unknown" };
+  scope_gaps: BidSignal & { gaps: number | "unknown"; inputs_missing: number | "unknown" };
   coverage: BidSignal & {
     /** "unknown" until a bill is imported — coverage is per bill item, so with no bill there is
      *  nothing to have coverage OF. */

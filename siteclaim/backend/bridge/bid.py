@@ -226,8 +226,18 @@ def _register_signals(conn: sqlite3.Connection, set_id: str) -> tuple[dict, dict
 
     register = cb_store.load_register(conn, set_id)
     if register is None:
-        return ({"total": 0, "unresolved": 0, "source": "no review register yet"},
-                {"gaps": 0, "inputs_missing": 0, "source": "no review register yet"})
+        # UNKNOWN, not zero — the same rule `_deadline_signal` above and `_coverage_signal` below
+        # already apply, and this signal was the one that did not. "0 of 0 departures, 0 scope
+        # gaps" in the ordinary tone is visually indistinguishable from a register that WAS read
+        # and came out clean, on the screen where bid or no-bid is decided. A register nobody has
+        # run tells you nothing about the departures in the pack, and saying nothing is the honest
+        # report of that.
+        why = ("no review register has been assembled for this tender, so nothing is known about "
+               "its departures or its scope gaps")
+        return ({"total": UNKNOWN, "unresolved": UNKNOWN, "source": "the review register",
+                 "why_unknown": why},
+                {"gaps": UNKNOWN, "inputs_missing": UNKNOWN, "source": "the review register",
+                 "why_unknown": why})
 
     items = register.items
     still_open = {cb_models.STATUS_CANDIDATE, cb_models.STATUS_UNRESOLVED,

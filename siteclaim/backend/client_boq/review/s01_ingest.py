@@ -82,15 +82,36 @@ def _chunk(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
     return chunks
 
 
-def _structure(client: LLMClient, body: str, label: str) -> list[ClauseItem]:
-    """One structuring call. A chunk that fails is reported and skipped, never fatal — losing
-    one chunk of one part must not lose the whole document set."""
+def _structure(client: LLMClient, body: str, label: str,
+               on_note: Optional[Callable[[str], None]] = None) -> list[ClauseItem]:
+    """One structuring call. A chunk that fails is REPORTED and skipped, never fatal — losing one
+    chunk of one part must not lose the whole document set.
+
+    "Reported" was a claim this function did not keep. It returned ``[]`` and said nothing, and the
+    caller's comment asserted "the gap is already reported elsewhere" — which was not true either:
+    `on_note` existed on `ingest_from_parts` and had four call sites, all about deferred, skipped or
+    non-contractual parts, and none about a chunk that failed.
+
+    What that cost: a rate-limit or timeout storm during a review yields a register assembled from
+    fewer clauses than the pack contains, **indistinguishable from a pack with fewer departures**.
+    That register can then be approved, and the bid brief reads "nothing on the register is
+    unresolved and the review is approved" — a BID recommendation resting on clauses nobody read.
+
+    An unread chunk is now a sentence, and it names the part and the chunk so the re-run is
+    targeted rather than a whole document set re-read.
+    """
     try:
         parsed = client.complete_json(
             system=_SYSTEM, user=_INSTRUCTION + body, target_model=ParsedDocumentSet,
             purpose=f"client_boq-review-ingest-{label}",
         )
-    except Exception:  # noqa: BLE001 — a failed chunk is a gap, not a crash
+    except Exception as exc:  # noqa: BLE001 — a failed chunk is a gap, not a crash
+        if on_note:
+            on_note(
+                f"chunk {label} could not be structured ({type(exc).__name__}: {exc}). Its clauses "
+                f"are NOT in the register, and nothing downstream can tell that from a part with "
+                f"no clauses in it. Re-run the review to read it."
+            )
         return []
     return list(parsed.clauses)
 
@@ -324,11 +345,13 @@ def ingest_from_parts(
         nonlocal done_count
         part, _source, chunk_no, body = task
         try:
-            return _structure(client, body, f"{part.part_id}-{chunk_no}")
+            return _structure(client, body, f"{part.part_id}-{chunk_no}", on_note)
         finally:
             # In `finally`, so a chunk that fails still advances the bar. Progress measures calls
             # COMPLETED, not calls that succeeded; a bar that stalls on a failure would report the
-            # run as hung when it is merely lossy, and the gap is already reported elsewhere.
+            # run as hung when it is merely lossy. The gap itself is reported by `_structure`,
+            # which is where the failure is known — this comment used to say it was reported
+            # "elsewhere", and it was reported nowhere.
             with done_lock:
                 done_count += 1
                 if count_cb is not None:

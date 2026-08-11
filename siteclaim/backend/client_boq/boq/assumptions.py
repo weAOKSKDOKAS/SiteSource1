@@ -105,13 +105,26 @@ class Register(BaseModel):
         return [row for row in self.rows if row.outstanding]
 
     def cleared(self) -> bool:
-        return not self.outstanding()
+        """Every assumption reviewed, AND there were assumptions.
+
+        The `self.rows` guard: an empty register has nothing outstanding, so it used to report
+        CLEARED and "0 assumptions · all reviewed" — printed on the workbook and rendered in the OK
+        colour on the costing screen. A model that recorded no assumptions is not a model somebody
+        reviewed; it is one that produced no assumptions to review, which is a state to look at.
+        """
+        return bool(self.rows) and not self.outstanding()
 
     def gate(self) -> str:
-        """What the workbook prints. The reference template's own words."""
+        """What the workbook prints. The reference template's own words, plus the third state it
+        did not have — a register with nothing in it is neither cleared nor outstanding."""
+        if not self.rows:
+            return "NOTHING RECORDED"
         return "CLEARED" if self.cleared() else "NOT CLEARED"
 
     def summary(self) -> str:
+        if not self.rows:
+            return ("no assumptions were recorded for this tender, so there is nothing here that "
+                    "has been reviewed")
         left = len(self.outstanding())
         return (f"{len(self.rows)} assumptions · all reviewed" if not left
                 else f"{len(self.rows)} assumptions · {left} not yet reviewed")

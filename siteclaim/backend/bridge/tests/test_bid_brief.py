@@ -171,10 +171,22 @@ class TestTheSignals:
         _save(conn, _register(), approved=True)
         assert bid.signals_for(SET)["review_approved"]["value"] is True
 
-    def test_a_tender_with_no_register_reports_zero_and_says_why(self, conn):
+    def test_a_tender_with_no_register_reports_unknown_and_says_why(self, conn):
+        """RE-ANCHORED 2026-08-11, disclosed: the pinned behaviour is deliberately changing.
+
+        This asserted `total == 0` with a source of "no review register yet". Zero is what a
+        register that WAS read and came out clean reports, and on the screen where bid or no-bid is
+        decided the two rendered identically — `warn` false, ordinary tone, only a 7.5px source line
+        distinguishing them. The two neighbouring signals in this same function
+        (`_deadline_signal`, `_coverage_signal`) already return the UNKNOWN sentinel plus a
+        `why_unknown` sentence; this one did not. It does now, which is why the assertion moves.
+        """
         signals = bid.signals_for("bid-brief-nothing-run")
-        assert signals["departures"]["total"] == 0
-        assert "no review register yet" in signals["departures"]["source"]
+        assert signals["departures"]["total"] == "unknown"
+        assert signals["departures"]["unresolved"] == "unknown"
+        assert signals["scope_gaps"]["gaps"] == "unknown"
+        assert "no review register has been assembled" in signals["departures"]["why_unknown"]
+        assert "the review register" in signals["departures"]["source"]
 
 
 class TestUnknownSaysUnknown:

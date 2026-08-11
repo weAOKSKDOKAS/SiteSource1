@@ -408,12 +408,23 @@ function SubmitPanel({
       detail: reviewApproved
         ? "the departures were signed off"
         : "the register is NOT approved — these terms are unread (Register tab)" },
-    { ok: Boolean(data.scope), label: "Scope frozen",
-      detail: data.scope ? "the scope of record is set" : "no scope of record yet (Scope tab)" },
+    // `data.scope` is the DRAFT; `data.gates.scope` is the approval. The step strip reads the gate
+    // and this checklist read the draft, so one screen said frozen while the other said waiting —
+    // and this is the one immediately above Submit.
+    { ok: Boolean(data.gates.scope), label: "Scope frozen",
+      detail: data.gates.scope
+        ? "the scope of record is approved"
+        : data.scope
+          ? "a scope is drafted but nobody has approved it (Scope tab)"
+          : "no scope of record yet (Scope tab)" },
     { ok: doc.price > 0, label: "Price present",
       detail: doc.price > 0 ? `${doc.price_str || money(doc.price)} from the estimate`
         : "the letter carries no price" },
-    { ok: true, label: "Confirmed departures & exclusions",
+    // NOT hardcoded true any more. A tick beside "Confirmed departures & exclusions" on a letter
+    // with zero of each said the same thing about a tender somebody worked through and one where
+    // the register was never read, on the last checklist before Submit. Zero of both is a state to
+    // look at, not one to tick.
+    { ok: departures > 0 || doc.exclusions.length > 0, label: "Confirmed departures & exclusions",
       detail: `${departures} confirmed departure(s), ${doc.exclusions.length} exclusion(s) in the letter` },
   ];
 

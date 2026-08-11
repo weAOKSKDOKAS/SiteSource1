@@ -153,19 +153,38 @@ export function BidTab({
               source={signals.review_approved.source}
               bad={!signals.review_approved.value}
             />
+            {/* "0 of 0" in the ordinary tone is what a register that WAS read and came out clean
+                looks like. With no register nothing is known about the pack's departures at all,
+                and on the screen where bid or no-bid is decided those two must not look alike. */}
             <Signal
               label="Departures"
-              value={`${signals.departures.unresolved} of ${signals.departures.total}`}
-              detail="unresolved on the register"
+              value={
+                signals.departures.total === "unknown"
+                  ? "unknown"
+                  : `${signals.departures.unresolved} of ${signals.departures.total}`
+              }
+              detail={
+                signals.departures.total === "unknown"
+                  ? signals.departures.why_unknown ?? ""
+                  : "unresolved on the register"
+              }
               source={signals.departures.source}
-              warn={signals.departures.unresolved > 0}
+              unknown={signals.departures.total === "unknown"}
+              warn={
+                signals.departures.unresolved !== "unknown" && signals.departures.unresolved > 0
+              }
             />
             <Signal
               label="Scope gaps"
-              value={String(signals.scope_gaps.gaps)}
-              detail={`${signals.scope_gaps.inputs_missing} input(s) the contract did not give us`}
+              value={signals.scope_gaps.gaps === "unknown" ? "unknown" : String(signals.scope_gaps.gaps)}
+              detail={
+                signals.scope_gaps.gaps === "unknown"
+                  ? signals.scope_gaps.why_unknown ?? ""
+                  : `${signals.scope_gaps.inputs_missing} input(s) the contract did not give us`
+              }
               source={signals.scope_gaps.source}
-              warn={signals.scope_gaps.gaps > 0}
+              unknown={signals.scope_gaps.gaps === "unknown"}
+              warn={signals.scope_gaps.gaps !== "unknown" && signals.scope_gaps.gaps > 0}
             />
             <Signal
               label="Coverage readiness"
