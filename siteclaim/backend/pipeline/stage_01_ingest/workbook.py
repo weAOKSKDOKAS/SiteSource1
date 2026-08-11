@@ -94,6 +94,129 @@ def _number(value) -> Optional[float]:
         return None
 
 
+# A bare "major.minor" reference, which is what a bill item number is once the letter variants and
+# the page furniture are out of the way.
+_MINOR_REF = re.compile(r"^(\d+)\.(\d+)$")
+
+
+def restore_dropped_zero(rendered: str, previous: str, *, from_number: bool) -> tuple[str, str]:
+    """Put back the trailing zero Excel discarded, where the SEQUENCE proves one was discarded.
+
+    THE DEFECT, measured on the real pack (CEDD ND/2025/04). Bill 1 of the PDF render carries 63
+    unique references, 1.1 … 1.63, no gaps and no duplicates. The same bill in the editable
+    workbook carries **58 unique references across 63 rows**::
+
+        r 96:  1.19  Servicing of core and sample store for the …    87  wk
+        r 98:  1.2   Handing over of core and sample store to …      -   item     <- this is 1.20
+        r141:  1.29  Provision                                       -   item
+        r143:  1.3   Maintenance                                     -   item     <- this is 1.30
+
+    Excel stored the reference as a NUMBER, so ``1.20`` came back as ``1.2``. Five decade
+    boundaries, five collisions with the real items 1.2 … 1.6 near the top of the bill — and two
+    genuinely different items then arrive carrying one key. Every index downstream is keyed on the
+    reference, so it collapses them and the total counts one line twice.
+
+    :func:`item_ref_of` already recovers this **where the cell's number format says so** — ``0.00``
+    means two decimals were printed. On the real file that evidence is absent, so the format is not
+    enough and something else has to decide.
+
+    WHY THE SEQUENCE DECIDES IT, and why it is not a guess. A bill sheet numbers its items in
+    ascending order; that is what a bill is. So a reference that goes BACKWARDS against the one
+    above it did not come from the document — ``1.2`` after ``1.19`` is not item 2 arriving late,
+    it is item 20 with a zero missing. Appending zeros until the sequence moves forward again is
+    then the only reconstruction consistent with the file, and the smallest one is taken.
+
+    A reference that moves FORWARD is left exactly alone, which is the case that matters most:
+    ``1.2`` after ``1.1`` is item 2, and rewriting it would invent a defect where there is none.
+    A repeat (``1.2`` after ``1.2``) is also left alone — that is a genuine duplicate and the
+    reader's own duplicate check owns it.
+
+    Returns ``(reference, note)``. The note is non-empty whenever the sequence went backwards,
+    whether or not it could be explained: an unexplained backwards jump is a fact about the client's
+    file that an estimator should see, not something to swallow.
+    """
+    if not from_number or not rendered or not previous:
+        return rendered, ""
+    now, before = _MINOR_REF.match(rendered), _MINOR_REF.match(previous)
+    if not now or not before or now.group(1) != before.group(1):
+        return rendered, ""
+    major, digits = now.group(1), now.group(2)
+    prior = int(before.group(2))
+    if int(digits) >= prior:
+        return rendered, ""
+    for zeros in (1, 2):
+        candidate = digits + ("0" * zeros)
+        if int(candidate) > prior:
+            restored = f"{major}.{candidate}"
+            return restored, (
+                f"item {restored} was stored as the number {rendered} — Excel drops a trailing "
+                f"zero — and read back as {rendered!r}, which would collide with the real item "
+                f"{rendered}. Restored from the sequence: it follows {previous}."
+            )
+    return rendered, (
+        f"item {rendered!r} follows {previous!r}, so the numbering goes backwards here. A bill "
+        f"numbers its items in order, and no dropped trailing zero explains this one. Kept exactly "
+        f"as printed — repairing a reference on a guess is how a priced row ends up under the "
+        f"wrong item."
+    )
+
+
+def compare_reference_sets(workbook_refs, render_refs) -> list[str]:
+    """The workbook's item references against the PDF render's. Reports; resolves nothing.
+
+    WHY THIS IS NOT BELT AND BRACES. The pack ships the same bill twice — `BQ/E-…xlsx` is the
+    editable workbook and `BQ/I-…pdf` is its render — and the split drops the render, correctly,
+    because pricing one bill twice is worse than reading it from the wrong one and a render can
+    establish neither a lump sum nor an Employer rate. But "the workbook wins" was applied to the
+    ITEM REFERENCE too, and the reference is the one thing the render carries BETTER: a PDF prints
+    what was typed, while Excel stores `1.20` as a number and hands back `1.2`.
+
+    Measured on CEDD ND/2025/04, Bill 1: the render carries 63 unique references over 63 rows; the
+    workbook carried 58 over the same 63. Five decade boundaries, five collisions, and the
+    deterministic path — the one nothing downstream doubts, because it "parses with zero model
+    calls" — was the one delivering a corrupted key.
+
+    :func:`restore_dropped_zero` repairs what the ordering proves. This is the independent check on
+    that repair, and on everything it cannot reach. A disagreement is not resolved here in either
+    file's favour: which document is right about a reference is a question about the client's pack,
+    and the estimator is the one who answers it.
+    """
+    book, render = set(workbook_refs or ()), set(render_refs or ())
+    if not book or not render:
+        return []
+    notes: list[str] = []
+    only_render = sorted(render - book, key=_ref_sort)
+    only_book = sorted(book - render, key=_ref_sort)
+    if only_render:
+        notes.append(
+            f"the PDF render of this bill carries {len(only_render)} reference(s) the workbook does "
+            f"not: {', '.join(only_render[:20])}"
+            + (" …" if len(only_render) > 20 else "")
+            + ". Excel stores an item number as a number and drops its trailing zero, so a "
+              "reference present in the render and absent from the workbook is usually a "
+              "corrupted key rather than a missing item."
+        )
+    if only_book:
+        notes.append(
+            f"the workbook carries {len(only_book)} reference(s) the PDF render does not: "
+            f"{', '.join(only_book[:20])}" + (" …" if len(only_book) > 20 else "")
+            + ". Same bill, different reference sets — one of the two files is wrong about an "
+              "item's identity, and nothing here decides which."
+        )
+    if not notes:
+        notes.append(f"the workbook and the PDF render agree on all {len(book)} item reference(s).")
+    return notes
+
+
+def _ref_sort(ref: str):
+    """Numeric where it can be, textual where it cannot. Only for readable note ordering."""
+    parts = str(ref).split(".", 1)
+    try:
+        return (0, int(parts[0]), float(f"0.{parts[1]}") if len(parts) > 1 else 0.0, str(ref))
+    except ValueError:
+        return (1, 0, 0.0, str(ref))
+
+
 def item_ref_of(cell, bill: str, on_note: Note = None) -> str:
     """The printed item reference, recovering the trailing zero Excel discarded.
 
@@ -144,6 +267,9 @@ def read_bill_sheet(sheet, on_note: Note = None) -> tuple[list[SorItem], str]:
     bill = m.group(1).lstrip("0") or m.group(1) if m else ""
     items: list[SorItem] = []
     stack: list[tuple[int, str]] = []          # (column, heading), outermost first
+    # The reference above this one, within THIS sheet. A bill numbers its items in order, so it is
+    # what tells a dropped trailing zero from an ordinary step. Per sheet, never across bills.
+    last_ref = ""
 
     for row in sheet.iter_rows(min_col=1, max_col=_COL_AMOUNT):
         cells = list(row)
@@ -155,7 +281,19 @@ def read_bill_sheet(sheet, on_note: Note = None) -> tuple[list[SorItem], str]:
         ):
             continue
 
-        ref = item_ref_of(cells[_COL_REF - 1], bill, on_note)
+        ref_cell = cells[_COL_REF - 1]
+        ref = item_ref_of(ref_cell, bill, on_note)
+        if ref:
+            # The number format is the FIRST evidence and the sequence is the second. Both are
+            # needed: on the real pack the format says nothing and only the order does.
+            ref, zero_note = restore_dropped_zero(
+                ref, last_ref,
+                from_number=isinstance(ref_cell.value, (int, float))
+                and not isinstance(ref_cell.value, bool),
+            )
+            if zero_note and on_note:
+                on_note(f"bill {bill}: {zero_note}" if bill else zero_note)
+            last_ref = ref
         if not ref:
             heading = _heading_level(cells)
             if heading:

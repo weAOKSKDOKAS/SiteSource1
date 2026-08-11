@@ -197,16 +197,26 @@ def test_a_literal_dash_is_not_rated_rather_than_unrated():
 
 # -- item numbers, recovered and reported but never repaired -------------------------------------
 def test_a_trailing_zero_excel_discarded_is_recovered_from_the_number_format():
-    """Stored as numbers, `1.20` reads back as `1.2`. The cell's own format is the evidence."""
+    """Stored as numbers, `1.20` reads back as `1.2`. The cell's own format is the evidence.
+
+    RE-ANCHORED 2026-08-11, disclosed. The second row was `1.3`, which asserted that a
+    General-format reference following `1.20` stays `1.3` — and a bill cannot contain that, because
+    a bill numbers its items in ascending order. `restore_dropped_zero` now reads exactly that
+    ordering as evidence, so the old fixture pinned a sequence the document it models cannot
+    produce. The subject of this test is unchanged and its load-bearing assertion is unchanged:
+    a `0.00`-formatted `1.20` still comes back `1.20`, and the second row is still General-format
+    and still taken verbatim. Only the impossible ordering is gone. See
+    `test_workbook_ref_sequence.py` for the rule the fixture collided with.
+    """
     def build(book):
         s = book.create_sheet("Bill No.1")
         _furniture(s, 1)
         s.append([1.20, "Twenty", None, None, 1, "nr", None, "=E3*G3"])
         s.cell(row=s.max_row, column=1).number_format = "0.00"
-        s.append([1.3, "Three", None, None, 1, "nr", None, "=E4*G4"])
+        s.append([1.21, "Twenty-one", None, None, 1, "nr", None, "=E4*G4"])
 
     refs = [i.item_ref for i in wb.read_workbook(_book(build)).items]
-    assert refs == ["1.20", "1.3"]
+    assert refs == ["1.20", "1.21"]
 
 
 def test_a_reference_stored_as_text_is_taken_verbatim():

@@ -49,6 +49,12 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+# The dropped-trailing-zero rule lives with the procurement workbook reader, which had the same
+# defect for the same reason and already owned the trailing-zero problem in `item_ref_of`. Imported
+# rather than repeated: two copies of one identity rule is exactly how the two readers would drift
+# apart on the reference that decides which item a rate belongs to.
+from pipeline.stage_01_ingest.workbook import restore_dropped_zero
+
 from client_boq.models import BillItem, ClientBill, GrandSummaryLine
 
 # Columns, fixed on every bill sheet of the reference workbook.
@@ -226,15 +232,29 @@ def _read_bill_sheet(sheet: Any, bill_no: str) -> tuple[list[BillItem], list[str
                 # spreadsheet never stores "2.2a" anywhere — the addendum's own wording ("item nos.
                 # 2.2a and 2.2b") is the concatenation, so it is rebuilt here. Unqualified, the bare
                 # "a" in Bill No.2 and the bare "a" in Bill No.3 would collide.
-                sub_ref = sub.group(1).lower()
+                sub_ref, zero_note = sub.group(1).lower(), ""
                 item_ref, full_ref = last_numeric_ref, f"{last_numeric_ref}{sub_ref}"
                 for parent in items:
                     if parent.full_ref == last_numeric_ref:
                         parent.is_parent = True
             else:
                 sub_ref = ""
-                item_ref = full_ref = raw_ref
-                last_numeric_ref = raw_ref
+                # THE SECOND EVIDENCE. `format_ref` above recovers a dropped trailing zero where
+                # the cell's number format says one was printed (`0.00`). On the real pack that
+                # evidence is absent — the reference cells are General — so `1.20` arrived as
+                # `1.2` and collided with the real item 1.2 twenty rows above it. Five decade
+                # boundaries, five collisions, two different items under one key. The sheet's own
+                # ordering is what remains, and it is decidable rather than a guess: a bill numbers
+                # its items in order, so a reference that goes backwards did not come from the
+                # document. Shared with the procurement reader, which had the same defect for the
+                # same reason.
+                restored, zero_note = restore_dropped_zero(
+                    raw_ref, last_numeric_ref,
+                    from_number=isinstance(cells.get(COL_REF), (int, float))
+                    and not isinstance(cells.get(COL_REF), bool),
+                )
+                item_ref = full_ref = restored
+                last_numeric_ref = restored
 
             qty, lump = None, False
             if isinstance(qty_cell, str) and qty_cell.strip() in DASH:
@@ -242,7 +262,7 @@ def _read_bill_sheet(sheet: Any, bill_no: str) -> tuple[list[BillItem], list[str
             else:
                 qty = _number(qty_cell)
 
-            item_notes = [ref_note] if ref_note else []
+            item_notes = [n for n in (ref_note, zero_note) if n]
             if qty is None and not lump and stranded:
                 qty, lump = stranded.get("qty"), stranded.get("lump", False)
                 unit_raw = unit_raw or stranded.get("unit", "")

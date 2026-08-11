@@ -115,30 +115,45 @@ def _bill_1(workbook: Any, rev: int) -> None:
     that rev 2 rewrites, and the item rev 2 inserts."""
     sheet = workbook.create_sheet("Bill No.1")
     _header(sheet, 1, "1", "General and Preliminaries")
-    _put(sheet, 5, 2, "SECTION 1 - PRELIMINARIES", caption=True)
-    _put(sheet, 7, 2, "Maintenance of Traffic Flow", caption=True)
+    _put(sheet, 3, 2, "SECTION 1 - PRELIMINARIES", caption=True)
+
+    # THE REFERENCE COLLISION, in the order the real bill prints it.
+    #
+    # Both of these hold the stored value 1.2. Under General it is item 1.2; under '0.00' it is
+    # item 1.20 — a different item at a different rate. In the real pack (CEDD ND/2025/04) the two
+    # are ~86 rows apart: 1.2 near the top of the bill, 1.20 after 1.19. That distance is not
+    # decoration. The reader recovers a dropped trailing zero from the sheet's own ORDERING when
+    # the number format is silent — a bill numbers its items in ascending order, so a reference
+    # that goes backwards did not come from the document — and an ordering of
+    # 1.5, 1.6, 1.16, 1.2, 1.20 is one no bill can print. Placed correctly, the fixture reproduces
+    # the trap AND the ordering that makes it decidable.
+    _put(sheet, 5, 2, "Transport for the Use of the Project Manager", caption=True)
+    _put(sheet, 6, 3, "Land transport for the use of the Project Manager ", caption=True)
+    _item(sheet, 7, 1.2, 4, "air-conditioned environmentally-friendly petrol ", 1, "nr.",
+          fmt="General")
+    _put(sheet, 8, 4, "private car vehicle with seating capacity of not less")
+    _put(sheet, 9, 4, " than 7 seats excluding driver")
+
+    _put(sheet, 11, 2, "Maintenance of Traffic Flow", caption=True)
     # THE caption rev 2 edits. Items 1.5-1.7 beneath it are never touched, yet their scope moves
     # from marine to land traffic, because General Preambles 2 makes a sub-heading part of the item.
-    _put(sheet, 9, 3, "Maintain land traffic flow" if rev >= 2 else "Maintain marine traffic flow",
+    _put(sheet, 12, 3, "Maintain land traffic flow" if rev >= 2 else "Maintain marine traffic flow",
          caption=True)
-    _item(sheet, 10, 1.5, 4, "Provision of measures", "-", "item", rate="-")
-    _item(sheet, 12, 1.6, 4, "Maintenance of measures", "-", "item ", rate="-")
+    _item(sheet, 13, 1.5, 4, "Provision of measures", "-", "item", rate="-")
+    _item(sheet, 15, 1.6, 4, "Maintenance of measures", "-", "item ", rate="-")
 
-    _put(sheet, 14, 2, "Photographs", caption=True)
+    _put(sheet, 17, 2, "Photographs", caption=True)
     # The stranded quantity: the caption carries it, the item row below does not.
-    _put(sheet, 15, 3, "Record photographs ", caption=True)
-    _put(sheet, 15, 5, 1)
-    _put(sheet, 15, 6, "nr.")
-    _item(sheet, 16, 1.16, 4, "8R size print", None, "")
+    _put(sheet, 18, 3, "Record photographs ", caption=True)
+    _put(sheet, 18, 5, 1)
+    _put(sheet, 18, 6, "nr.")
+    _item(sheet, 19, 1.16, 4, "8R size print", None, "")
 
-    _put(sheet, 18, 2, "Transport for the Use of the Project Manager", caption=True)
-    _put(sheet, 19, 3, "Land transport for the use of the Project Manager ", caption=True)
-    # 1.2 under General. Below, the SAME stored value under '0.00' is item 1.20 — a different item.
-    _item(sheet, 20, 1.2, 4, "air-conditioned environmentally-friendly petrol ", 1, "nr.",
-          fmt="General")
-    _put(sheet, 21, 4, "private car vehicle with seating capacity of not less")
-    _put(sheet, 22, 4, " than 7 seats excluding driver")
-    _item(sheet, 24, 1.2, 4, "operation and maintenance of the above", 122, "nr-wk", fmt="0.00")
+    # The other half of the collision, under its own repeat of the Transport captions — which is
+    # how the printed bill carries it, and which keeps this item's heading chain what it was.
+    _put(sheet, 21, 2, "Transport for the Use of the Project Manager", caption=True)
+    _put(sheet, 22, 3, "Land transport for the use of the Project Manager ", caption=True)
+    _item(sheet, 23, 1.2, 4, "operation and maintenance of the above", 122, "nr-wk", fmt="0.00")
 
     row = 26
     if rev >= 2:

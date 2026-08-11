@@ -659,9 +659,52 @@ def _read_confirmed_workbooks(bill: list, name: str, on_error=None):
                 "it from the wrong one, and a render can establish neither a lump sum nor an "
                 "Employer-fixed rate."
             ))
+            # NOT READ IS NOT THE SAME AS NOT CONSULTED. The render carries one thing better than
+            # the workbook does — the item REFERENCE. Excel stores `1.20` as a number and hands
+            # back `1.2`; a PDF prints what was typed. Measured on the reference pack, the render's
+            # Bill 1 has 63 unique references and the workbook's had 58 over the same 63 rows. So
+            # the reference sets are compared, and a disagreement is reported rather than resolved
+            # in the workbook's favour — which document is right about an item's identity is a
+            # question about the client's pack.
+            _compare_render_refs(spec, pdf_path, label, items, on_error)
             continue
         remaining.append((spec, pdf_path, ctx))
     return items, remaining
+
+
+def _compare_render_refs(spec, pdf_path: str, label: str, items: list, on_error) -> None:
+    """Read the dropped render's item references and set them beside the workbook's.
+
+    Best-effort by construction: a render that cannot be read is a check that did not run, not a
+    split that failed, so every failure here is noted and swallowed. The refs come from the same
+    inventory the PDF ingest path already uses, so this is a second READING of a document the
+    product can already read — not a second parser.
+    """
+    from pipeline.stage_01_ingest.ingest import _bq_item_inventory
+    from pipeline.stage_01_ingest.workbook import compare_reference_sets
+
+    try:
+        text = _part_text(spec, pdf_path)
+        if not text.strip():
+            _note(on_error, (
+                f"{label}: the render has no text layer, so the workbook's item references could "
+                f"not be checked against it."))
+            return
+        bills = {str(getattr(it, "section", "") or "").strip()
+                 for it in items if getattr(it, "section", "")}
+        render_refs = set(_bq_item_inventory(text, bills)) if bills else set()
+        if not render_refs:
+            _note(on_error, (
+                f"{label}: no item references could be read out of the render, so the workbook's "
+                f"were not checked against it."))
+            return
+        book_refs = {str(getattr(it, "item_ref", "") or "") for it in items}
+        for note in compare_reference_sets(book_refs - {""}, render_refs):
+            _note(on_error, f"{label}: {note}")
+    except Exception as exc:  # noqa: BLE001 — a check that cannot run must not sink the split
+        _note(on_error, (
+            f"{label}: the workbook's item references could not be checked against the render "
+            f"({exc}). The split is unaffected."))
 
 
 def _scope_from_items(items: list, name: str) -> ScopePackages:
