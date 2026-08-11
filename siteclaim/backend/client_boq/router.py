@@ -377,6 +377,16 @@ def _manifest_payload(manifest: SplitManifest) -> dict:
     # "0 of 0 pages" against a set where every page is present. It reports files instead — which is
     # the thing that actually exists — and says the split was never in question.
     is_folder = manifest.tier == folder_mod.TIER_FOLDER
+    # A TENDER PACK still inside its ZIP. `bridge.archive.plan_manifest` proposes one part per
+    # content file with the manifest's own `source_doc` empty and each part carrying its own —
+    # documented there as the shape `run_split` resolves with `part.source_doc or
+    # manifest.source_doc`. That shape is the contract, so it is what this reads.
+    #
+    # It matters because the two layouts are unpacked by different code: a binder is CUT by
+    # `/ingest/split`, and a pack is EXTRACTED by `/bridge/archive/extract`. Without this the
+    # screen would offer to slice pages out of a document that is still a zip entry.
+    is_archive = (not is_folder and not manifest.source_doc and bool(manifest.parts)
+                  and all(p.source_doc for p in manifest.parts))
     return {
         "set_id": manifest.set_id,
         "source_doc": manifest.source_doc,
@@ -384,7 +394,7 @@ def _manifest_payload(manifest: SplitManifest) -> dict:
         "tier": manifest.tier,
         "tier_reason": manifest.tier_reason,
         "approved": manifest.approved,
-        "layout": "folder" if is_folder else "binder",
+        "layout": "folder" if is_folder else "archive" if is_archive else "binder",
         "auto_approved": is_folder and manifest.approved,
         "file_count": len(manifest.parts) if is_folder else 0,
         "file_pages": sum(p.page_count() for p in manifest.parts) if is_folder else 0,

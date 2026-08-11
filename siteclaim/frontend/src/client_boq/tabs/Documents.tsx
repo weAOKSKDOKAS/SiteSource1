@@ -281,8 +281,18 @@ export function DocumentsTab({
       // Through runJob, not a bare call: in LIVE this returns `queued` and the work happens on a
       // pool thread. Reading the first response would appear to work offline and do nothing at
       // all with a real key.
-      await keep("Splitting the binder", async () => {
-        const cut = await runJob(() => api.split(data.setId), api.ingestStatus, (s) => onProgress?.(s));
+      // A TENDER PACK IS EXTRACTED, NOT CUT. `/ingest/split` slices page ranges out of one binder
+      // PDF; an archive-planned manifest's "parts" are still zip entries, and unpacking them is
+      // `/bridge/archive/extract` — a job on the same pool, reporting through the same strip,
+      // stoppable with the same STOP. Both run behind the SAME manifest gate, which is the point:
+      // a 232 MB pack passes exactly the gate a single document does.
+      const isArchive = data.manifest?.layout === "archive";
+      await keep(isArchive ? "Unpacking the tender pack" : "Splitting the binder", async () => {
+        const cut = await runJob(
+          () => (isArchive ? api.bridge.archiveExtract(data.setId) : api.split(data.setId)),
+          api.ingestStatus,
+          (s) => onProgress?.(s),
+        );
         onProgress?.(null);
         await onRefresh();
         // The ONE hop in this workflow that crosses no human gate. Splitting leaves the parts cut
@@ -607,7 +617,16 @@ export function DocumentsTab({
                   {manifest.auto_approved ? "NOTHING TO APPROVE" : "✓ MANIFEST APPROVED"}
                 </Chip>
                 <Button variant="outline" onClick={split} disabled={running}>
-                  {parts.length ? "Re-split from this manifest" : "Split into parts"}
+                  {/* A pack is unpacked, not sliced. Saying "split into parts" about a zip is the
+                      kind of wrong word that makes an operator hesitate over the one button they
+                      need. */}
+                  {manifest.layout === "archive"
+                    ? parts.length
+                      ? "Unpack again"
+                      : "Unpack the tender pack"
+                    : parts.length
+                      ? "Re-split from this manifest"
+                      : "Split into parts"}
                 </Button>
                 <Button variant="outline" onClick={reopen} disabled={running}>
                   Reopen

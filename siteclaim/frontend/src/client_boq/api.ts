@@ -3,6 +3,7 @@
 // exactly which gate refused and why, and rewriting them here would lose that.
 
 import type {
+  ArchiveUploadResponse,
   BenchmarkProject,
   BenchmarkSummary,
   BidReply,
@@ -707,6 +708,25 @@ export const api = {
   // --- the bridge: this review -> the procurement routing fork --------------
   // set_id IS the procurement run_ref, so every call here is keyed by the same id the desk uses.
   bridge: {
+    /** A ZIP of the whole tender pack. Streams to disk a chunk at a time on the server, checks the
+     *  uncompressed size from the central directory BEFORE extracting anything, and returns a
+     *  PROPOSED manifest. Extracts nothing — `archiveExtract` does that, after the same manifest
+     *  gate a single PDF passes.
+     *
+     *  This endpoint has existed and worked since it was written, and nothing in this application
+     *  ever called it: a dropped .zip was filtered out client-side with "Drop a PDF", so a 230 MB
+     *  pack produced a banner and no network request at all. */
+    archiveUpload(file: File, projectName = ""): Promise<ArchiveUploadResponse> {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("project_name", projectName);
+      return fetch(`${BRIDGE}/archive/upload`, { method: "POST", body: form }).then((r) =>
+        handle<ArchiveUploadResponse>(r),
+      );
+    },
+    /** Extract the approved pack, as a job on the same pool with the same STOP. 409s until the
+     *  manifest is approved. */
+    archiveExtract: (setId: string) => bpost<JobState>("/archive/extract", { set_id: setId }),
     /** Every part in the set, with which one(s) are PROPOSED as the priced bill. Proposing is not
      *  confirming: the category comes from an AI interpretation stage, so a human picks. 404s only
      *  when the set has no parts at all. */

@@ -340,14 +340,66 @@ export default function ClientBoqApp() {
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
 
+  /** A ZIP of the whole tender pack.
+   *
+   *  Deliberately not the binder path. `POST /client-boq/ingest/upload` calls `f.file.read()` on
+   *  every part, which undoes Starlette's spool-to-disk and holds roughly TWICE the payload
+   *  resident — measured at 852 MB RSS for a 241 MB folder. `/bridge/archive/upload` streams a
+   *  megabyte at a time, reads the ZIP's central directory without decompressing a byte, and
+   *  checks the UNCOMPRESSED total against the ceiling BEFORE opening any member — which is what
+   *  makes it a zip-bomb guard rather than a limit discovered too late.
+   *
+   *  It extracts nothing. What comes back is a PROPOSED manifest, saved unapproved, and the person
+   *  approves it on Documents through the same gate a single PDF passes. */
+  const uploadArchive = useCallback(
+    async (file: File) => {
+      setError(null);
+      const projectName = file.name.replace(/\.zip$/i, "");
+      const mb = Math.round(file.size / (1024 * 1024));
+      // The strip goes up before the send, not after: a 230 MB upload has no progress events to
+      // report (fetch exposes none), and an unresponsive page is the same thing as a broken one to
+      // whoever is watching it.
+      setJob({ kind: "archive", status: "running", stage: `sending ${mb} MB` });
+      try {
+        const report = await track(`Reading the ${projectName} pack`, () =>
+          api.bridge.archiveUpload(file, projectName),
+        );
+        setJob(null);
+        await loadSets();
+        setError(
+          `${report.entries} entries read (${Math.round(report.uncompressed_bytes / (1024 * 1024))} MB ` +
+            `unzipped) across ${report.folders.length} folders, proposing ${report.parts} part(s). ` +
+            `Nothing has been extracted yet — check the shape and approve the split, and the pack ` +
+            `is unpacked as a job you can watch and stop.`,
+        );
+        go({ kind: "set", setId: report.set_id, tab: "documents" });
+      } catch (e) {
+        setJob(null);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [loadSets, track],
+  );
+
   const uploadFiles = useCallback(
     async (files: File[]) => {
       // A new run makes the previous failure history. Cleared at the START, before the work, so
       // the banner never describes a run that has been superseded.
       setError(null);
+      // A ZIP of the whole pack takes the streaming archive route. This branch is the whole of
+      // defect 3: a dropped .zip used to be filtered out here and answered with "Drop a PDF" —
+      // a client-side banner, no request, no status code, no mention of archives — while
+      // `/bridge/archive/upload` sat there working, streaming to disk a chunk at a time and
+      // checking the uncompressed size before opening a member. The endpoint was never called by
+      // anything in this application.
+      const archives = files.filter((f) => f.name.toLowerCase().endsWith(".zip"));
+      if (archives.length) {
+        void uploadArchive(archives[0]);
+        return;
+      }
       const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
       if (!pdfs.length) {
-        setError("Drop a PDF — the binder is read as one document.");
+        setError("Drop a PDF binder, a ZIP of the whole tender pack, or the unzipped folder.");
         return;
       }
       const projectName = pdfs[0].name.replace(/\.pdf$/i, "");
@@ -368,7 +420,7 @@ export default function ClientBoqApp() {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [loadSets, track, noteJob],
+    [loadSets, track, noteJob, uploadArchive],
   );
 
   /** A folder that is already organised. Nothing is filtered to PDFs here: a workbook is routed
@@ -638,7 +690,8 @@ export default function ClientBoqApp() {
       <input
         ref={fileInput}
         type="file"
-        accept="application/pdf"
+        // The browse button was closed to archives the same way the drop handler was.
+        accept="application/pdf,.zip,application/zip"
         multiple
         className="hidden"
         onChange={(e) => {

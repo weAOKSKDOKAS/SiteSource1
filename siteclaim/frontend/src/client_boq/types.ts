@@ -904,8 +904,10 @@ export interface Manifest {
   tier: number;
   tier_reason: string;
   approved: boolean;
-  /** `binder` was split from one document; `folder` arrived already organised. */
-  layout?: "binder" | "folder";
+  /** How this set arrived, and therefore how it is unpacked. `binder` is CUT into page ranges by
+   *  `/ingest/split`; `folder` arrived already organised and needs no unpacking; `archive` is a
+   *  tender pack still inside its ZIP and is EXTRACTED by `/bridge/archive/extract`. */
+  layout?: "binder" | "folder" | "archive";
   /** True when the gate passed itself because there were no page ranges to confirm. */
   auto_approved?: boolean;
   file_count?: number;
@@ -2288,4 +2290,27 @@ export interface CompanySettings {
   company_address: string;
   contact_name: string;
   contact_number: string;
+}
+
+
+/**
+ * What a streamed tender-pack upload proposed. Nothing has been extracted at this point: the
+ * server read the ZIP's central directory, checked the UNCOMPRESSED total against the ceiling
+ * before opening any member, and saved a manifest UNAPPROVED. The human approves it through the
+ * same gate a single PDF passes, then extraction runs as a job.
+ */
+export interface ArchiveUploadResponse {
+  set_id: string;
+  name: string;
+  archive_bytes: number;
+  uncompressed_bytes: number;
+  entries: number;
+  content_files: number;
+  signature_files: number;
+  skipped_files: number;
+  /** Grouped by folder, because a 203-row gate is a wall. The person is checking the SHAPE. */
+  folders: { folder: string; files: number; category: string; bytes: number; names: string[] }[];
+  tier_reason: string;
+  parts: number;
+  manifest_approved: boolean;
 }
