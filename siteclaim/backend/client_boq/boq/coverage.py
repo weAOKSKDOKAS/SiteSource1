@@ -1009,8 +1009,73 @@ class CoverageEntry(BaseModel):
     ticked_by: str = ""
     ticked_at: Optional[str] = None
 
+    #: The build-up basis the person named as carrying this head, and what that name is worth.
+    #: A tick with no basis is a BELIEF — which is all a tick has ever been. A tick WITH one is a
+    #: link, and a link can be checked against the cost the item's rate is actually made of.
+    basis_key: str = ""
+    basis_label: str = ""
+    #: One of `ACCOUNTED_BY_COST`, `ASSERTED_ONLY`, `COST_NOT_IN_RATE`, `UNACCOUNTED`. Set by
+    #: :func:`account_for_cost`; empty until that has run, because a verdict nobody computed must
+    #: not read as one that came out clean.
+    accounting: str = ""
+
     def covered(self) -> bool:
         return self.ticked
+
+
+#: THE FOUR STATES OF AN OBLIGATION, once a tick can name the cost that discharges it.
+#:
+#: Under General Preambles ¶2 a rate is deemed to include everything the specification names for its
+#: item, and *"any item missed out from the item coverage shall not be measured"* — the work is
+#: still owed and cannot be claimed. So an obligation nobody has priced is not saved, it is given
+#: away, and the whole point of a coverage checklist is to make that visible BEFORE the tender goes
+#: in rather than on the first payment certificate.
+#:
+#: A tick alone could only ever say a person believed it. These four say what can be checked.
+ACCOUNTED_BY_COST = "accounted_by_cost"
+ASSERTED_ONLY = "asserted_only"
+COST_NOT_IN_RATE = "cost_not_in_rate"
+UNACCOUNTED = "unaccounted"
+
+ACCOUNTING_WORDS = {
+    ACCOUNTED_BY_COST: "carried by a cost this rate is actually built from",
+    ASSERTED_ONLY: "ticked, but no cost was named — this is somebody's word for it",
+    COST_NOT_IN_RATE: "claimed against a cost this rate does NOT draw on",
+    UNACCOUNTED: "nobody has said this rate carries it",
+}
+
+
+def account_for_cost(coverage: "ItemCoverage", *, bases: Optional[dict[str, str]] = None,
+                     drawn_on: Optional[set[str]] = None) -> "ItemCoverage":
+    """Classify every head against the cost this item's rate is actually made of. Pure; mutates
+    only the entries it was handed, and decides nothing a person has not already said.
+
+    ``bases`` is ``basis_key -> label`` for every basis in the build-up, so a named cost can be
+    printed in words rather than as a key. ``drawn_on`` is the set of basis keys THIS item's rate
+    draws on — from the item's own ``ItemMapping``, which is the live engine's answer to "where
+    does this rate's money come from".
+
+    The one that earns this function is :data:`COST_NOT_IN_RATE`. A head ticked against a basis the
+    rate does not draw on is an obligation claimed against money that is not in the number — and
+    that is checkable arithmetic, not a reader's memory. It is also invisible to every other check
+    here: the head is ticked, so it is "covered", and the rate is priced, so it is "priced".
+
+    Nothing is ever ticked or unticked by this. It reads what a person recorded and says what that
+    recording is worth.
+    """
+    labels = bases or {}
+    drawn = drawn_on or set()
+    for entry in coverage.entries:
+        entry.basis_label = labels.get(entry.basis_key, "")
+        if not entry.ticked:
+            entry.accounting = UNACCOUNTED
+        elif not entry.basis_key:
+            entry.accounting = ASSERTED_ONLY
+        elif entry.basis_key in drawn:
+            entry.accounting = ACCOUNTED_BY_COST
+        else:
+            entry.accounting = COST_NOT_IN_RATE
+    return coverage
 
 
 class ItemCoverage(BaseModel):
@@ -1045,6 +1110,62 @@ class ItemCoverage(BaseModel):
 
     def uncovered(self) -> list[CoverageEntry]:
         return [e for e in self.entries if not e.covered()]
+
+    # --- once `account_for_cost` has run -----------------------------------------------------
+    def accounted_by_cost(self) -> list[CoverageEntry]:
+        return [e for e in self.entries if e.accounting == ACCOUNTED_BY_COST]
+
+    def asserted_only(self) -> list[CoverageEntry]:
+        return [e for e in self.entries if e.accounting == ASSERTED_ONLY]
+
+    def cost_not_in_rate(self) -> list[CoverageEntry]:
+        """Heads claimed against a cost this rate does not draw on. The check nothing else makes.
+
+        Invisible to every other reading here: the head is ticked, so it counts as covered, and the
+        rate is priced, so it counts as priced. The obligation is real and the money is somewhere
+        else."""
+        return [e for e in self.entries if e.accounting == COST_NOT_IN_RATE]
+
+    def unaccounted(self) -> list[CoverageEntry]:
+        """Heads nobody has said this rate carries. NOT the same as "covered by other rates".
+
+        General Preambles ¶6 makes an unpriced obligation the other rates' problem for the life of
+        the contract, so this list is money, not paperwork."""
+        return [e for e in self.entries if e.accounting == UNACCOUNTED]
+
+    def accounting_problems(self) -> list[str]:
+        """The two states worth a sentence, worst first. Empty is only ever earned."""
+        out = [
+            f"{e.clause_ref or e.key}: {e.label} — claimed against {e.basis_label or e.basis_key!r}, "
+            f"which this rate does not draw on. The obligation is real and the money is somewhere "
+            f"else."
+            for e in self.cost_not_in_rate()
+        ]
+        out += [
+            f"{e.clause_ref or e.key}: {e.label} — nobody has said this rate carries it. General "
+            f"Preambles ¶6 makes it the other rates' problem for the life of the contract."
+            for e in self.unaccounted()
+        ]
+        return out
+
+    def accounting_summary(self) -> str:
+        """One line. Says nothing reassuring that is not true, and never says it about an empty
+        list — an item with no transcribed coverage has nothing to account for and must not read
+        as an item that accounted for everything."""
+        if self.no_list_for_section:
+            return f"no item-coverage list transcribed for Bill No.{self.no_list_for_section}"
+        if not self.entries:
+            return "no heads on this item, so there is nothing to account for"
+        if not any(e.accounting for e in self.entries):
+            return "the rate's cost has not been checked against these heads"
+        parts = [f"{len(self.accounted_by_cost())} carried by a named cost"]
+        if self.asserted_only():
+            parts.append(f"{len(self.asserted_only())} asserted without one")
+        if self.cost_not_in_rate():
+            parts.append(f"{len(self.cost_not_in_rate())} claimed against a cost NOT in this rate")
+        if self.unaccounted():
+            parts.append(f"{len(self.unaccounted())} accounted for by nobody")
+        return f"{self.total()} heads · " + " · ".join(parts)
 
     def summary(self) -> str:
         """The header line: `12 heads · 3 not covered`, or `12 heads · all covered`.
@@ -1237,6 +1358,9 @@ def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
             entry.ticked = bool(mark.get("ticked"))
             entry.ticked_by = mark.get("ticked_by", "")
             entry.ticked_at = mark.get("ticked_at")
+            # The cost the person named. Empty for every tick given before the column existed,
+            # which reads as "asserted, no cost named" — the honest reading of what a tick was.
+            entry.basis_key = mark.get("basis_key", "") or ""
         entries.append(entry)
 
     bill_mark = recorded.get(DEEMED_INCLUDED.key, {})
@@ -1244,7 +1368,8 @@ def coverage_for(item: BillItem, *, docmap: Optional[DocumentMap] = None,
         key=DEEMED_INCLUDED.key, label=DEEMED_INCLUDED.label,
         clause_ref=DEEMED_INCLUDED.clause_ref, scope=SCOPE_BILL,
         ticked=bool(bill_mark.get("ticked")), ticked_by=bill_mark.get("ticked_by", ""),
-        ticked_at=bill_mark.get("ticked_at"))
+        ticked_at=bill_mark.get("ticked_at"),
+        basis_key=bill_mark.get("basis_key", "") or "")
 
     # A TICK AGAINST A HEAD THAT IS NO LONGER HERE. It is never applied — `recorded.get(head.key)`
     # only reaches keys this item actually has — but silence would be wrong twice: the person who

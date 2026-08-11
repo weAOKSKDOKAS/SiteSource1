@@ -1692,6 +1692,12 @@ _DDL = [
         rev       INTEGER NOT NULL,
         full_ref  TEXT NOT NULL,                  -- the bill item, or '' for a bill-level tick
         head_key  TEXT NOT NULL,                  -- "smm.2.13.a", "ps.7.30S"
+        -- THE COST THAT DISCHARGES IT. A tick used to be a belief -- "my build-up carries this
+        -- head" -- and nothing could check it. Naming the build-up basis makes it a LINK, and a
+        -- link is checkable: a head claimed against a basis this item's rate does not draw on is
+        -- an obligation claimed against money that is not in the rate. Empty is the honest default
+        -- and is exactly what a tick meant before: asserted, with no cost named.
+        basis_key TEXT NOT NULL DEFAULT '',
         ticked    INTEGER NOT NULL DEFAULT 0,
         ticked_by TEXT NOT NULL DEFAULT '',
         ticked_at TEXT,
@@ -1896,4 +1902,22 @@ def init_tables(conn: sqlite3.Connection) -> None:
     for stmt in _DDL:
         conn.execute(stmt)
     _migrate_parts_to_revisions(conn)
+    _add_missing_columns(conn)
     conn.commit()
+
+
+#: Columns added to a table after it shipped. ``CREATE TABLE IF NOT EXISTS`` never alters an
+#: existing table, so a long-lived database sits on whatever shape it was created with — and this
+#: repo has no migration framework, so additive columns are applied by shape, idempotently, here.
+#: Additive only, and every one must carry a DEFAULT: a row written before the column existed has
+#: to read back as something honest rather than as NULL.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("client_boq_coverage_ticks", "basis_key", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, column, spec in _ADDED_COLUMNS:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if existing and column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")

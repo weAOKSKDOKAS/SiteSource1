@@ -4121,6 +4121,11 @@ class CoverageTickRequest(BaseModel):
     full_ref: str = ""          # "" ticks a bill-level head
     head_key: str
     ticked: bool = True
+    #: WHICH cost carries it — a build-up basis key. Optional, and a tick without one is still a
+    #: tick: it is exactly what every tick was before this field existed, a person's word for it.
+    #: Naming the cost is what makes the claim checkable, because the engine already knows which
+    #: bases THIS item's rate draws on and can say when the two disagree.
+    basis_key: str = ""
 
 
 class SweepCostRequest(BaseModel):
@@ -4161,6 +4166,12 @@ def get_item_coverage(set_id: str, full_ref: str, rev: Optional[int] = None) -> 
             "SELECT map_json FROM client_boq_docmaps WHERE set_id = ? ORDER BY source LIMIT 1",
             (set_id,),
         ).fetchone()
+        # THE COST THIS RATE IS ACTUALLY MADE OF. Running the whole costing here is not free, and
+        # it is the only way to answer the question honestly: the alternative is asking the person
+        # which basis carries a head and never checking the answer, which is where this started.
+        # A costing that cannot be built is reported as unknown, NEVER as "nothing to check" —
+        # absence reading as health is this codebase's recurring failure.
+        bases, drawn_on, costing_note = _bases_for_item(conn, set_id, bill.rev, full_ref)
     finally:
         conn.close()
 
@@ -4170,6 +4181,8 @@ def get_item_coverage(set_id: str, full_ref: str, rev: Optional[int] = None) -> 
 
     merged = {**ticks.get(full_ref, {}), **ticks.get("", {})}
     coverage = boq_coverage.coverage_for(item, docmap=docmap, ticks=merged)
+    if costing_note == "":
+        boq_coverage.account_for_cost(coverage, bases=bases, drawn_on=drawn_on)
     return {
         "set_id": set_id, "rev": bill.rev,
         "full_ref": full_ref, "description": item.description,
@@ -4191,7 +4204,49 @@ def get_item_coverage(set_id: str, full_ref: str, rev: Optional[int] = None) -> 
         # item by title, or nothing has been transcribed for this bill at all. They are three
         # different problems with three different fixes.
         "waiting_on": coverage.no_list_reason,
+        # WHAT THE RATE ACTUALLY PAYS FOR, set beside what it is obliged to carry. A tick used to
+        # be a belief and nothing could check it; naming the cost makes it a link, and a link
+        # against a basis this item's rate does not draw on is an obligation claimed against money
+        # that is not in the number. `bases` is offered so the choice is a pick, not a typed key.
+        "accounting": {
+            "summary": coverage.accounting_summary(),
+            "checked": costing_note == "",
+            "not_checked_because": costing_note,
+            "accounted_by_cost": [e.key for e in coverage.accounted_by_cost()],
+            "asserted_only": [e.key for e in coverage.asserted_only()],
+            "cost_not_in_rate": [e.key for e in coverage.cost_not_in_rate()],
+            "unaccounted": [e.key for e in coverage.unaccounted()],
+            "problems": coverage.accounting_problems(),
+            "drawn_on": sorted(drawn_on),
+            "bases": [{"key": key, "label": label} for key, label in sorted(bases.items())],
+        },
     }
+
+
+def _bases_for_item(conn, set_id: str, rev: int, full_ref: str) -> tuple[dict, set, str]:
+    """``(basis_key -> label, the keys THIS item's rate draws on, why it could not be worked out)``.
+
+    The live engine maps one bill item to at most one cost basis (`ItemMapping.basis_key`), plus a
+    laboratory buy rate or a preliminaries resource. All three are "where this rate's money comes
+    from", so all three count as drawn on — a head carried by the laboratory line is carried.
+
+    The third element is the honest-degradation half. A costing that cannot be built means the
+    check DID NOT RUN, which is a different state from "ran and found nothing wrong", and the
+    payload says which.
+    """
+    try:
+        parts = _costing(conn, set_id, rev)
+    except HTTPException as exc:
+        return {}, set(), (f"the costing model could not be built for this tender "
+                           f"({exc.detail}), so the rate's own cost could not be read")
+    except Exception as exc:  # noqa: BLE001 — a check that cannot run must not sink the screen
+        return {}, set(), (f"the costing model could not be built for this tender ({exc}), so the "
+                           f"rate's own cost could not be read")
+    bases = {row.key: row.label or row.key for row in parts["buildup"].rows}
+    mapping = next((m for m in parts["item_mappings"] if m.full_ref == full_ref), None)
+    drawn = {k for k in ((mapping.basis_key, mapping.lab_key, mapping.prelim_key) if mapping
+                         else ()) if k}
+    return bases, drawn, ""
 
 
 @router.post("/price/coverage/tick")
@@ -4205,7 +4260,7 @@ def post_coverage_tick(req: CoverageTickRequest, actor: str = Depends(_actor)) -
     try:
         bill = _bill_or_404(conn, req.set_id, req.rev)
         store.save_coverage_tick(conn, req.set_id, bill.rev, req.full_ref, req.head_key,
-                                 req.ticked, actor)
+                                 req.ticked, actor, req.basis_key)
         store.touch_set(conn, req.set_id, actor)
     finally:
         conn.close()

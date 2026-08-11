@@ -1082,7 +1082,7 @@ def load_coverage_ticks(conn: sqlite3.Connection, set_id: str, rev: int) -> dict
     """
     rows = conn.execute(
         """
-        SELECT full_ref, head_key, ticked, ticked_by, ticked_at
+        SELECT full_ref, head_key, basis_key, ticked, ticked_by, ticked_at
         FROM client_boq_coverage_ticks WHERE set_id = ? AND rev = ?
         """,
         (set_id, int(rev)),
@@ -1092,30 +1092,44 @@ def load_coverage_ticks(conn: sqlite3.Connection, set_id: str, rev: int) -> dict
         out.setdefault(row["full_ref"], {})[row["head_key"]] = {
             "ticked": bool(row["ticked"]), "ticked_by": row["ticked_by"],
             "ticked_at": row["ticked_at"],
+            # The cost basis the person named as discharging this head, or "" for a tick given
+            # before the column existed — which reads as "asserted, no cost named", exactly what a
+            # tick meant then.
+            "basis_key": row["basis_key"] if "basis_key" in row.keys() else "",
         }
     return out
 
 
 def save_coverage_tick(conn: sqlite3.Connection, set_id: str, rev: int, full_ref: str,
-                       head_key: str, ticked: bool, actor: str = "") -> None:
+                       head_key: str, ticked: bool, actor: str = "",
+                       basis_key: str = "") -> None:
     """Record that a person says their build-up does (or no longer does) carry this head.
 
     A machine cannot know what somebody put in their number, so there is no badge column here and no
     way for a model to write this row — the same structural refusal ``/review/approve`` makes for a
     clause verdict.
+
+    ``basis_key`` names the build-up basis that carries it, and is what turns the tick from a belief
+    into a link. Optional: a tick with no cost named is still a tick, and is exactly what every tick
+    was before the column existed. What it buys is that the claim becomes CHECKABLE — a head named
+    against a basis this item's rate does not draw on is an obligation claimed against money that is
+    not in the rate, and that is arithmetic rather than memory.
     """
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     conn.execute(
         """
         INSERT INTO client_boq_coverage_ticks
-            (set_id, rev, full_ref, head_key, ticked, ticked_by, ticked_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (set_id, rev, full_ref, head_key, basis_key, ticked, ticked_by, ticked_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(set_id, rev, full_ref, head_key) DO UPDATE SET
+            basis_key = excluded.basis_key,
             ticked = excluded.ticked, ticked_by = excluded.ticked_by,
             ticked_at = excluded.ticked_at
         """,
-        (set_id, int(rev), full_ref, head_key, 1 if ticked else 0,
+        # Unticking clears the basis with the name and the date: the link was part of the claim,
+        # and a withdrawn claim must not leave its evidence behind looking live.
+        (set_id, int(rev), full_ref, head_key, basis_key if ticked else "", 1 if ticked else 0,
          actor if ticked else "", now if ticked else None),
     )
     conn.commit()
