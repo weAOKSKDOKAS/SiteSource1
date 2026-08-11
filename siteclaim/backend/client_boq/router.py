@@ -3639,6 +3639,10 @@ def get_station_schedule(set_id: str) -> dict:
     ``bad_rows`` is the first thing the screen shows: a hole whose length does not equal its soil
     plus its rock has been misread, and no quantity derived from it means anything. They are named,
     never silently dropped and never repaired.
+
+    Three siblings say the things arithmetic cannot: ``unread_rows`` (a cell nobody could make out —
+    a blank is not a zero), ``empty_rows`` (a hole that drills no metres, invisible to every total)
+    and ``duplicate_names`` (a repeated station name, which the schedule's own index would swallow).
     """
     conn = store.get_conn()
     try:
@@ -3648,7 +3652,8 @@ def get_station_schedule(set_id: str) -> dict:
         conn.close()
     if schedule is None:
         return {"set_id": set_id, "stations": [], "trial_pits": [], "classes": {},
-                "bad_rows": [], "usable": False, "totals": {}, "meta": meta,
+                "bad_rows": [], "unread_rows": [], "empty_rows": [], "duplicate_names": [],
+                "problems": [], "usable": False, "totals": {}, "meta": meta,
                 "waiting_on": "the borehole details schedule has not been read yet"}
     return {
         "set_id": set_id,
@@ -3657,6 +3662,10 @@ def get_station_schedule(set_id: str) -> dict:
         "trial_pits": [p.model_dump() for p in schedule.trial_pits],
         "classes": classes,
         "bad_rows": schedule.bad_rows(),
+        "unread_rows": schedule.unread_rows(),
+        "empty_rows": schedule.empty_rows(),
+        "duplicate_names": schedule.duplicate_names(),
+        "problems": schedule.problems(),
         "usable": schedule.usable(),
         "totals": {
             "holes": schedule.hole_count(), "soil_m": schedule.soil_m(),
@@ -3787,7 +3796,12 @@ def post_station_schedule(req: StationScheduleRequest, actor: str = Depends(_act
     finally:
         conn.close()
     return {"set_id": req.set_id, "meta": meta,
-            "bad_rows": req.schedule.bad_rows(), "usable": req.schedule.usable()}
+            "bad_rows": req.schedule.bad_rows(),
+            "unread_rows": req.schedule.unread_rows(),
+            "empty_rows": req.schedule.empty_rows(),
+            "duplicate_names": req.schedule.duplicate_names(),
+            "problems": req.schedule.problems(),
+            "usable": req.schedule.usable()}
 
 
 @router.get("/site/{set_id}/derived")

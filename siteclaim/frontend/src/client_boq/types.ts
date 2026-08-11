@@ -154,6 +154,13 @@ export interface Station {
   piezometer: boolean;
   sheet: string;
   notes: string[];
+  /**
+   * Field names whose cell was on the sheet and could not be read. A blank is not a zero: soil,
+   * rock and hard metres are plain numbers defaulting to 0, and a soil-only hole legitimately
+   * carries 0 rock — so nothing downstream can tell a missing cell from a printed one unless the
+   * reader says so here. Empty on a schedule somebody typed.
+   */
+  unread: string[];
 }
 
 export interface TrialPit {
@@ -196,6 +203,14 @@ export interface StationScheduleResponse {
   classes: Record<string, StationClass>;
   /** A hole whose length is not its soil plus its rock has been misread. Named, never repaired. */
   bad_rows: string[];
+  /** A hole carrying a cell the reader could not make out. A blank is not a zero. */
+  unread_rows: string[];
+  /** A hole with no soil and no rock — it adds nothing to either total, so nothing else sees it. */
+  empty_rows: string[];
+  /** A station name appearing twice. The schedule is keyed on the name; the second one wins. */
+  duplicate_names: string[];
+  /** All four checks in one list, in that order. Empty means the take-off can be priced from. */
+  problems: string[];
   usable: boolean;
   totals: Partial<ScheduleTotals>;
   waiting_on?: string;

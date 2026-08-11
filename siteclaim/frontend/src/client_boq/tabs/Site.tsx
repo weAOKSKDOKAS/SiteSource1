@@ -11,6 +11,7 @@
 // whole purpose is looking things up.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { SetData } from "../App";
 import { api } from "../api";
 import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
@@ -277,6 +278,52 @@ function ScheduleRail({
         ))}
       </div>
 
+      {/*
+        The three things the arithmetic cannot see. A row only reaches `bad_rows` if somebody read
+        it — a cell nobody could make out, a hole that drills no metres, and a name read twice all
+        slide underneath that check, and each of them is what a MACHINE reading of the sheet
+        produces. Kept in its own block, and only when there is something in it.
+      */}
+      {schedule.unread_rows.length +
+        schedule.empty_rows.length +
+        schedule.duplicate_names.length >
+        0 && (
+        <div className="border-b border-cb-border p-3">
+          <SectionLabel>ROWS THAT ARE NOT SETTLED</SectionLabel>
+          {schedule.unread_rows.length > 0 && (
+            <RailLine
+              label="cells not read"
+              value={String(schedule.unread_rows.length)}
+              tone="bad"
+            />
+          )}
+          {schedule.empty_rows.length > 0 && (
+            <RailLine
+              label="holes with no metres"
+              value={String(schedule.empty_rows.length)}
+              tone="bad"
+            />
+          )}
+          {schedule.duplicate_names.length > 0 && (
+            <RailLine
+              label="names read twice"
+              value={String(schedule.duplicate_names.length)}
+              tone="bad"
+            />
+          )}
+          {[...schedule.unread_rows, ...schedule.empty_rows, ...schedule.duplicate_names].map(
+            (row) => (
+              <p
+                key={row}
+                className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark"
+              >
+                {row}
+              </p>
+            ),
+          )}
+        </div>
+      )}
+
       <div className="border-b border-cb-border p-3">
         <SectionLabel>AGAINST THE BILL</SectionLabel>
         {!derived?.checked_against_a_bill ? (
@@ -324,6 +371,24 @@ function ScheduleView({
   const head = "px-2 py-1.5 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint";
   const cell = "px-2 py-1 font-cb-mono text-[10px] text-cb-body";
 
+  /**
+   * One numeric cell, which refuses to print a number for a cell nobody could read.
+   *
+   * This is the whole point of `Station.unread` reaching the screen. Soil, rock and hard metres are
+   * plain numbers defaulting to 0, and a soil-only hole legitimately shows `—` for rock, so a
+   * missing cell and a printed one are indistinguishable once they are rendered. A reader that
+   * could not make out the soil column would otherwise put a confident `0.00` under SOIL, and
+   * nobody would ever look at it again.
+   */
+  const Cell = ({ station, field, children }: { station: Station; field: string; children: ReactNode }) =>
+    station.unread.includes(field) ? (
+      <td className={cx(cell, "text-right font-semibold text-cb-bad-dark")} title="not read off the sheet">
+        not read
+      </td>
+    ) : (
+      <td className={cx(cell, "text-right")}>{children}</td>
+    );
+
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       {derived && derived.divergences.length > 0 && (
@@ -360,13 +425,13 @@ function ScheduleView({
               )}
             >
               <td className={cx(cell, "font-semibold text-cb-ink-text")}>{s.station}</td>
-              <td className={cx(cell, "text-right")}>{fmt(s.easting)}</td>
-              <td className={cx(cell, "text-right")}>{fmt(s.northing)}</td>
-              <td className={cx(cell, "text-right")}>{fmt(s.ground_level_mpd)}</td>
-              <td className={cx(cell, "text-right")}>{formatNorm(s.soil_m)}</td>
-              <td className={cx(cell, "text-right")}>{s.rock_m ? formatNorm(s.rock_m) : "—"}</td>
-              <td className={cx(cell, "text-right")}>{s.standpipe ? "✓" : "—"}</td>
-              <td className={cx(cell, "text-right")}>{s.piezometer ? "✓" : "—"}</td>
+              <Cell station={s} field="easting">{fmt(s.easting)}</Cell>
+              <Cell station={s} field="northing">{fmt(s.northing)}</Cell>
+              <Cell station={s} field="ground_level_mpd">{fmt(s.ground_level_mpd)}</Cell>
+              <Cell station={s} field="soil_m">{formatNorm(s.soil_m)}</Cell>
+              <Cell station={s} field="rock_m">{s.rock_m ? formatNorm(s.rock_m) : "—"}</Cell>
+              <Cell station={s} field="standpipe">{s.standpipe ? "✓" : "—"}</Cell>
+              <Cell station={s} field="piezometer">{s.piezometer ? "✓" : "—"}</Cell>
             </tr>
           ))}
         </tbody>
