@@ -109,6 +109,13 @@ BANDS_ON_TRUNCATION = 4
 #: by guessing.
 BANDS_ENV = "SCHEDULE_READ_BANDS"
 
+#: How many times a band that TRUNCATED may be re-asked as its own two halves.
+#:
+#: 1 turns a failed quarter into two eighths, and only that quarter pays — the three that read are
+#: not re-read. 2 would go on to sixteenths. Beyond that a band is not too big, something else is
+#: wrong with it, and halving forever spends real money discovering that.
+SPLIT_DEPTH_ON_TRUNCATION = 1
+
 #: A ROW WITH NO NUMBER ON IT AT ALL is the shape of a reader that gave up politely: it returns the
 #: table's skeleton — the right number of rows, plausible station names — and fills in nothing.
 #: Measured on a live run, one provider returned 70 such rows for a sheet another read as 22 rows
@@ -699,12 +706,56 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                       cells_unread=sum(len(s.unread) for s in schedule.stations))
 
 
+def _split_failed_band(data: bytes, page: int, index: int, bands: int, *, client,
+                       demo_fixture: str, depth: int, exc: Exception):
+    """A truncated band, re-asked as its own two halves. ``None`` when that does not apply.
+
+    Returns ``(schedules, notes)`` — whatever the halves read, and a note for each half that still
+    failed. A half that fails is NOT split again beyond ``depth``: past a certain point a band is
+    not too big, something else is wrong with it, and halving forever would spend real money
+    discovering that.
+
+    Only a TRUNCATION is retried. A refusal, a validation error or a transport failure is not a
+    size problem, and re-asking half of it would cost a call to fail the same way.
+    """
+    if depth < 1 or not _truncated(exc):
+        return None
+    got: list[RawSchedule] = []
+    notes: list[str] = []
+    finer = bands * 2
+    for half in (index * 2, index * 2 + 1):
+        png = pdfops.render_band(data, page, half, finer, dpi=READ_DPI)
+        if not png:
+            notes.append(f"slice {index + 1} of {bands}, half {half % 2 + 1}, "
+                         f"could not be rendered")
+            continue
+        try:
+            got.append(_ask(client, png, demo_fixture,
+                            band=f"slice {half + 1} of {finer}, top to bottom"))
+        except Exception as inner:  # noqa: BLE001 — a half that fails is named, not fatal
+            deeper = _split_failed_band(data, page, half, finer, client=client,
+                                        demo_fixture=demo_fixture, depth=depth - 1, exc=inner)
+            if deeper is None:
+                notes.append(f"slice {index + 1} of {bands}, half {half % 2 + 1} "
+                             f"({half + 1} of {finer}), failed "
+                             f"({type(inner).__name__}: {inner})")
+                continue
+            got.extend(deeper[0])
+            notes.extend(deeper[1])
+    if not got and not notes:
+        return None
+    return got, notes
+
+
 def _read_in_bands(data: bytes, page: int, *, set_id: str, sheet: str, client,
-                   demo_fixture: str, bands: int, why: str, because: str = "") -> ReadReport:
+                   demo_fixture: str, bands: int, why: str, because: str = "",
+                   depth: int = SPLIT_DEPTH_ON_TRUNCATION) -> ReadReport:
     """The sheet in slices, after one call could not hold its answer.
 
     Every band is attempted even after one fails: the whole point of slicing is that a failure stops
-    being all-or-nothing, and abandoning the rest at the first error would give that back.
+    being all-or-nothing, and abandoning the rest at the first error would give that back. And a
+    band that fails on TRUNCATION is re-asked as its own two halves before it is given up on — see
+    :func:`_split_failed_band`.
     """
     parts: list[RawSchedule] = []
     failed: list[str] = []
@@ -717,7 +768,27 @@ def _read_in_bands(data: bytes, page: int, *, set_id: str, sheet: str, client,
             parts.append(_ask(client, png, demo_fixture,
                               band=f"slice {index + 1} of {bands}, top to bottom"))
         except Exception as exc:  # noqa: BLE001 — one bad slice must not lose the others
-            failed.append(f"slice {index + 1} of {bands} failed ({type(exc).__name__}: {exc})")
+            # ONE TRUNCATED BAND BECOMES TWO, AND ONLY IT PAYS.
+            #
+            # A band whose answer did not fit is asked again as its own two halves, rather than
+            # the whole sheet being re-cut or the band abandoned. The arithmetic makes this free:
+            # band `i` of `n` covers [i/n, (i+1)/n], and bands `2i` and `2i+1` of `2n` are exactly
+            # its two halves with the same overlap — so `render_band` needs no new geometry and
+            # the caller's de-duplication on station name already handles the seam.
+            #
+            # Not a budget change. The budget is measured not to be the constraint (a quarter-band
+            # is ~1,800-2,100 tokens against 16,000) and raising it is a written trap. This is the
+            # other half of the same finding: whatever consumed that one call, half as much of the
+            # sheet is a smaller ask for it.
+            halves = _split_failed_band(
+                data, page, index, bands, client=client, demo_fixture=demo_fixture,
+                depth=depth, exc=exc)
+            if halves is None:
+                failed.append(f"slice {index + 1} of {bands} failed ({type(exc).__name__}: {exc})")
+                continue
+            got, notes = halves
+            parts.extend(got)
+            failed.extend(notes)
 
     if not parts:
         return ReadReport(

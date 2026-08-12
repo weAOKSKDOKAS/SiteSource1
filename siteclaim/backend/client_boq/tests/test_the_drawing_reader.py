@@ -1249,3 +1249,131 @@ class TestHardMaterialIsNotAddedToTheLength:
         assert row.reconciles()
 
 
+class TestATruncatedBandIsHalvedRatherThanAbandoned:
+    """The last missing slice. Three of four bands read; one truncated and was given up on.
+
+    NOT A BUDGET CHANGE. A quarter-band's answer serialises to ~1,800-2,100 output tokens against a
+    16,000 ceiling, and the failing call reported `[thinking: 0 chars]` — so the tokens went
+    somewhere that is neither the answer nor a chain of thought, and a bigger ceiling buys more of
+    whatever that is. Raising it is a written trap. This is the other half of the same finding:
+    whatever consumed that one call, half as much of the sheet is a smaller ask.
+
+    THE GEOMETRY IS FREE. Band `i` of `n` covers [i/n, (i+1)/n]; bands `2i` and `2i+1` of `2n` are
+    exactly its two halves, with the same overlap. Verified as arithmetic below, so `render_band`
+    needs nothing new and the merge's de-duplication on station name already handles the seam.
+    """
+
+    class _OneBandTruncates:
+        """Band 2 of 4 will not fit; both of its halves will. The live shape, in miniature."""
+
+        def __init__(self, failing="slice 3 of 4"):
+            self.failing = failing
+            self.asked: list[str] = []
+
+        def complete_json(self, *, user="", **_kw):
+            import re
+
+            match = re.search(r"slice (\d+) of (\d+)", user)
+            label = f"slice {match.group(1)} of {match.group(2)}" if match else "whole sheet"
+            self.asked.append(label)
+            # The live sequence: the whole sheet does not fit, so it bands into four — and then
+            # one of those four does not fit either. Without the first truncation `read_sheet`
+            # never reaches the banding path at all.
+            if label in ("whole sheet", self.failing):
+                from pipeline.llm_client import CompletionTruncated
+
+                raise CompletionTruncated(
+                    "claude-sonnet-5 spent its whole 16,000-token budget on [thinking: 0 chars] "
+                    "and wrote no answer")
+            n = int(match.group(1)) if match else 0
+            return reader.RawSchedule.model_validate({"boreholes": [
+                {"station": f"CE19-ABH{n}{i}", "easting": 825184.31 + i, "northing": 838917.94,
+                 "soil_m": 29.9, "rock_m": 5.0, "hard_above_rockhead_m": 0.0, "length_m": 34.9}
+                for i in range(3)]})
+
+    def test_the_halves_cover_exactly_what_the_band_covered(self):
+        """The arithmetic the retry rests on, asserted rather than assumed."""
+        from client_boq.ingest import pdfops
+
+        for bands in (2, 4, 8):
+            for index in range(bands):
+                _t, _hb, top, bottom = pdfops.band_rects(842.0, index, bands)
+                lo = pdfops.band_rects(842.0, index * 2, bands * 2)
+                hi = pdfops.band_rects(842.0, index * 2 + 1, bands * 2)
+                assert lo[2] <= top + 1e-6, f"{index} of {bands}: the first half starts too late"
+                assert hi[3] >= bottom - 1e-6, f"{index} of {bands}: the second half ends too early"
+
+    def test_a_truncated_band_is_asked_again_as_two_eighths(self):
+        client = self._OneBandTruncates()
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert "slice 3 of 4" in client.asked, "the quarter was tried first"
+        assert "slice 5 of 8" in client.asked and "slice 6 of 8" in client.asked, (
+            "the failed quarter was not re-asked as its own two halves")
+
+    def test_only_the_failed_band_pays(self):
+        """The three that read are not re-read — that is the whole point of being surgical."""
+        client = self._OneBandTruncates()
+        reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        eighths = [a for a in client.asked if "of 8" in a]
+        assert sorted(eighths) == ["slice 5 of 8", "slice 6 of 8"]
+        assert client.asked.count("slice 1 of 4") == 1
+        assert client.asked.count("slice 4 of 4") == 1
+
+    def test_the_rows_from_the_halves_reach_the_take_off(self):
+        client = self._OneBandTruncates()
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        names = {s.station for s in report.schedule.stations}
+        assert any(n.startswith("CE19-ABH5") for n in names), "half one's rows are missing"
+        assert any(n.startswith("CE19-ABH6") for n in names), "half two's rows are missing"
+        assert report.bands_failed == [], "a band that was recovered must not still read as failed"
+
+    def test_a_half_that_also_fails_is_named_and_not_split_again(self):
+        """Past one level a band is not too big — something else is wrong with it, and halving
+        forever spends real money discovering that."""
+        class _BothHalvesTruncate(self._OneBandTruncates):
+            def complete_json(self, *, user="", **kw):
+                import re
+
+                match = re.search(r"slice (\d+) of (\d+)", user)
+                label = f"slice {match.group(1)} of {match.group(2)}" if match else "whole"
+                if "of 8" in label or label in ("whole", self.failing):
+                    self.asked.append(label)
+                    from pipeline.llm_client import CompletionTruncated
+
+                    raise CompletionTruncated("[thinking: 0 chars]")
+                return super().complete_json(user=user, **kw)
+
+        client = _BothHalvesTruncate()
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert not any("of 16" in a for a in client.asked), "it kept halving past the cap"
+        assert len(report.bands_failed) == 2, "both failed halves must be named"
+        assert all("half" in note for note in report.bands_failed)
+        assert report.read is True, "the other three quarters still read — a partial is a read"
+
+    def test_a_failure_that_is_not_truncation_is_not_halved(self):
+        """A refusal or a transport error is not a size problem, and re-asking half of it would
+        cost a call to fail the same way."""
+        class _Refuses(self._OneBandTruncates):
+            def complete_json(self, *, user="", **kw):
+                import re
+
+                match = re.search(r"slice (\d+) of (\d+)", user)
+                label = f"slice {match.group(1)} of {match.group(2)}" if match else "whole"
+                self.asked.append(label)
+                if label == "whole":
+                    from pipeline.llm_client import CompletionTruncated
+
+                    raise CompletionTruncated("[thinking: 0 chars]")
+                if label == self.failing:
+                    raise RuntimeError("the provider refused this image")
+                return super().complete_json(user=user, **kw)
+
+        client = _Refuses()
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert not any("of 8" in a for a in client.asked)
+        assert any("refused this image" in note for note in report.bands_failed)
+
+    def test_the_depth_is_one_by_default_and_is_a_constant(self):
+        assert reader.SPLIT_DEPTH_ON_TRUNCATION == 1
+
+
