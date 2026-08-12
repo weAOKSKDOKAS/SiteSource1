@@ -1166,7 +1166,11 @@ class PricedItem(BaseModel):
     lump: bool = False
     build_up: float = 0.0              # the cost of the resources, before any spread
     spread: float = 0.0                # this item's share of the no-line costs
-    cost: float = 0.0                  # build_up + spread
+    #: A cost the estimator routed ONTO this item on the sweep ("load onto 2.2b"). Its own field,
+    #: not folded into build_up, because a loading hidden inside the resource cost is precisely
+    #: what the working screen exists to expose.
+    loading: float = 0.0
+    cost: float = 0.0                  # build_up + spread + loading
     unit_rate: Optional[float] = None  # None for a lump item — the SMM prints "-" there
     amount: float = 0.0                # qty x unit_rate, or the lump amount
     rate_source: str = ""              # "built" | "carried" | "client" | "unpriced"
@@ -1192,6 +1196,9 @@ class PricedBill(BaseModel):
     spread: list[SpreadLine] = Field(default_factory=list)
     spread_total: float = 0.0
     spread_residue_ref: str = ""       # which item absorbed the rounding residue — named, not hidden
+    #: Σ of the routed-LOAD costs that actually landed on an item. Beside it, every routed loading
+    #: that could NOT land is a flag — never a silent drop.
+    loading_total: float = 0.0
     bill_totals: dict[str, float] = Field(default_factory=dict)   # bill_no -> total
     page_totals: dict[str, float] = Field(default_factory=dict)   # page_ref -> total
     total_build_up: float = 0.0

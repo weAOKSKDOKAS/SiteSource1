@@ -3665,7 +3665,8 @@ def get_priced_bill(set_id: str, rev: Optional[int] = None, margin_pct: float = 
         conn.close()
     build_ups, carried = _rate_inputs(stored)
     priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, margin_pct=margin_pct,
-                                    carried=carried, spread=sweep.spread_lines())
+                                    carried=carried, spread=sweep.spread_lines(),
+                                    loadings=sweep.loadings())
     return {"set_id": set_id, "rev": bill.rev, **priced.model_dump()}
 
 
@@ -3680,14 +3681,21 @@ def get_bill_checks(set_id: str, rev: Optional[int] = None, margin_pct: float = 
         rate_rows = rates_store.load(conn)
         pending = store.bill_review_pending(conn, set_id, bill.rev)
         sweep = store.load_sweep(conn, set_id, bill.rev)
+        checks_groups = store.load_hole_groups(conn, set_id, bill.rev)
     finally:
         conn.close()
     build_ups, carried = _rate_inputs(stored)
     priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, margin_pct=margin_pct,
-                                    carried=carried, spread=sweep.spread_lines())
+                                    carried=carried, spread=sweep.spread_lines(),
+                                    loadings=sweep.loadings())
     issued = {line.code: line.amount for line in bill.summary
               if line.client_inserted and line.code in {"B", "D", "E"} and line.amount is not None}
     flags = boq_checks.run_checks(priced, bill, issued_sums=issued, fee_pct=fee_pct)
+    # The platform money typed on the Site groups, until the per-class rig-move basis carries it
+    # (plan Phase 3). Computed here because the checks module is pure and the groups live in the
+    # store — same split as every other flag with a data dependency.
+    flags += boq_checks.platform_cost_unconsumed(
+        boq_groups.access_build_total(boq_groups.GroupPlan(groups=checks_groups)))
     return {
         "set_id": set_id, "rev": bill.rev,
         "tendered_total": priced.tendered_total,
@@ -4506,26 +4514,29 @@ class SweepCostRequest(BaseModel):
     reason: str = ""
 
 
-def _spread_share_of(bill, stored: dict, rate_rows: list, sweep, full_ref: str) -> float:
-    """This item's slice of the sweep pool, as the pricing engine itself computes it.
+def _pool_shares_of(bill, stored: dict, rate_rows: list, sweep, full_ref: str
+                    ) -> tuple[float, float]:
+    """``(spread_share, loading)`` for one item, as the pricing engine itself computes them.
 
     Not a second opinion: it prices the bill through ``price_bill`` and reads back the one item's
-    ``spread``, so the number on the trace is the number in the rate by construction rather than by
+    fields, so the numbers on the trace are the numbers in the rate by construction rather than by
     agreement. Pre-margin, because ``_allocate`` runs on build-up value before the factor is applied
     and the trace shows the margin as its own line further up the tree.
 
-    Cheap in the case that matters: an unspread pool costs nothing, because there is nothing to
-    allocate and the pricing run is skipped entirely.
+    Cheap in the case that matters: with nothing spread and nothing loaded there is nothing to
+    allocate, and the pricing run is skipped entirely.
     """
     spread = sweep.spread_lines()
-    if not spread:
-        return 0.0
+    loadings = sweep.loadings()
+    if not spread and not loadings:
+        return 0.0, 0.0
     build_ups, carried = _rate_inputs(stored)
-    priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, carried=carried, spread=spread)
+    priced = boq_pricing.price_bill(bill, build_ups, rates=rate_rows, carried=carried,
+                                    spread=spread, loadings=loadings)
     for entry in priced.items:
         if entry.full_ref == full_ref:
-            return entry.spread
-    return 0.0
+            return entry.spread, entry.loading
+    return 0.0, 0.0
 
 
 def _coverage_or_404(conn, set_id: str, rev: Optional[int], full_ref: str):
@@ -4675,7 +4686,7 @@ def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
         rate_rows = rates_store.load(conn)
     finally:
         conn.close()
-    spread_share = _spread_share_of(bill, rates, rate_rows, sweep, full_ref)
+    spread_share, loading = _pool_shares_of(bill, rates, rate_rows, sweep, full_ref)
 
     row = rates.get(full_ref)
     # A lump item's quantity is legitimately absent — SMM Corr. 1/2007 Part III ¶3 prints "-" in the
@@ -4699,6 +4710,7 @@ def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
         # away on every request: the endpoint could not show a penny of the pool.
         spread_share=spread_share,
         spread_total=sweep.spread_total(),
+        loading=loading,
     )
     return {
         "set_id": set_id, "rev": bill.rev, "full_ref": full_ref,

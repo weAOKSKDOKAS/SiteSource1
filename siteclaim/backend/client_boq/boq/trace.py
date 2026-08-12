@@ -127,7 +127,8 @@ def trace_rate(breakdown: RateBreakdown, *, description: str = "", unit: str = "
                groups: Optional[list[HoleGroup]] = None,
                schedule: Optional[StationSchedule] = None,
                divisor_cite: Optional[Citation] = None,
-               spread_share: float = 0.0, spread_total: float = 0.0) -> RateTrace:
+               spread_share: float = 0.0, spread_total: float = 0.0,
+               loading: float = 0.0) -> RateTrace:
     """Turn a priced item into a tree.
 
     ``spread_share`` is the item's slice of the sweep pool. It is shown as its **own line** rather
@@ -151,6 +152,14 @@ def trace_rate(breakdown: RateBreakdown, *, description: str = "", unit: str = "
             note=(f"this item's slice of the {spread_total:,.2f} you chose to spread on the sweep. "
                   f"It is inside the rate — it has to be, or the tender total is wrong — and it is "
                   f"on its own line so it is not hiding in the metres."),
+        ))
+    if loading:
+        cost_children.append(TraceNode(
+            label="loaded from the sweep", value=round(loading, 2), origin=FROM_PERSON,
+            owner=margin_owner,
+            note=(f"a cost you routed ONTO this item on the sweep (\"load onto {breakdown.full_ref}\"). "
+                  f"Inside the rate, on its own line — a loading hidden in the resource cost is "
+                  f"precisely what this screen exists to expose."),
         ))
     if margin_pct:
         cost_children.append(TraceNode(

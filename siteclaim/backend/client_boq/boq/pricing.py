@@ -97,6 +97,7 @@ def price_bill(
     spread: Optional[list[SpreadLine]] = None,
     margin_pct: float = 0.0,
     carried: Optional[dict[str, float]] = None,
+    loadings: Optional[dict[str, float]] = None,
 ) -> PricedBill:
     """Price every item of the bill.
 
@@ -108,6 +109,12 @@ def price_bill(
     rate_rows = rates if rates is not None else rates_mod.load_rates()
     spread_lines = list(spread or [])
     carried_rates = dict(carried or {})
+    # ``loadings`` — full_ref -> the cost an estimator routed ONTO that item on the sweep. Computed
+    # and DISPLAYED since the sweep existed (`UnbilledSweep.loadings()`), and never applied: a cost
+    # routed "load onto 2.2b" satisfied the settle gate — the app's only hard stop — and then
+    # reached nothing. Same defect class as the spread pool: the screen showed the money as
+    # handled, and the rate never carried it.
+    loading_of = dict(loadings or {})
     flags: list[EstimateFlag] = []
 
     # 1. the resource build-up for every item that has one, through the existing engine
@@ -129,10 +136,27 @@ def price_bill(
         lines: list[CostLine] = list(activities[item.full_ref].lines) if item.full_ref in activities else []
         build_up = build_up_cost.get(item.full_ref, 0.0)
         share = allocation.get(item.full_ref, 0.0)
-        cost = money(build_up + share)
+        loading = loading_of.pop(item.full_ref, 0.0)
+        # A loading lands only where the COST drives the rate — a built item. A carried rate is a
+        # deliberate carry-over the cost figure does not touch, so a loading added to `cost` there
+        # would read as applied while never reaching the amount: the exact lie this parameter
+        # exists to remove. Carried and unpriced targets are flagged below instead.
+        applies = item.full_ref in activities and not item.pre_priced
+        cost = money(build_up + share + (loading if applies else 0.0))
         source, unit_rate = RATE_UNPRICED, None
 
         if item.pre_priced:
+            if loading:
+                # GCT App C 2.2(vi): an altered client rate is reinstated at examination, so money
+                # loaded onto a pre-priced item is thrown away. Refused loudly, never silently
+                # absorbed into a figure the client will overwrite.
+                flags.append(EstimateFlag(
+                    kind="loading_unapplied", item_id=item.full_ref,
+                    message=(f"{money(loading):,.2f} was routed onto {item.full_ref} on the sweep, "
+                             f"but that item is priced by the client — GCT App C 2.2(vi) "
+                             f"reinstates the client's figure at examination, so money loaded "
+                             f"there is thrown away. Route it onto an item you price."),
+                ))
             # Bill 9 and item 8.2 arrive priced under the Pay for Safety Scheme. Altering them only
             # gets them reinstated (GCT App C 2.2(vi)), so they are carried through untouched.
             source = RATE_CLIENT
@@ -167,8 +191,32 @@ def price_bill(
             source = RATE_CARRIED
             unit_rate = money(carried_rates[item.full_ref])
             amount = unit_rate if item.lump else money((item.qty or 0) * unit_rate)
+            if loading:
+                # A carried rate is priced from the RATE, not the cost, so the loading cannot
+                # reach it without silently rewriting a figure somebody carried on purpose.
+                flags.append(EstimateFlag(
+                    kind="loading_unapplied", item_id=item.full_ref,
+                    message=(f"{money(loading):,.2f} was routed onto {item.full_ref} on the "
+                             f"sweep, but that item is priced at a carried rate the loading "
+                             f"cannot reach. Re-price the item from a build-up so the loading "
+                             f"lands, or re-route the cost."),
+                ))
         else:
             amount = 0.0
+            if loading:
+                # A loading needs a rate to live inside. Applying it to an item with no build-up
+                # and no carried rate would GIVE the item a rate made of the loading alone — the
+                # item's own work priced at nothing, silently, with the unpriced flag switched off
+                # by the very money that was meant to be on top of it.
+                flags.append(EstimateFlag(
+                    kind="loading_unapplied", item_id=item.full_ref,
+                    message=(f"{money(loading):,.2f} was routed onto {item.full_ref} on the "
+                             f"sweep, but that item has no rate for it to live inside — a rate "
+                             f"made of the loading alone would price the item's own work at "
+                             f"nothing. Price the item first; the loading lands with it."),
+                ))
+                cost = money(cost - loading)
+                loading = 0.0
             flags.append(EstimateFlag(
                 kind="unpriced_item", item_id=item.full_ref,
                 message=(f"{item.full_ref} has no rate. General Preambles 6: an item against which "
@@ -180,6 +228,7 @@ def price_bill(
         priced.append(PricedItem(
             full_ref=item.full_ref, bill_no=item.bill_no, description=item.description,
             unit=item.unit, qty=item.qty, lump=item.lump, build_up=build_up, spread=share,
+            loading=(loading if (applies and source == RATE_BUILT) else 0.0),
             cost=cost, unit_rate=unit_rate, amount=amount, rate_source=source, lines=lines,
         ))
 
@@ -192,9 +241,23 @@ def price_bill(
         page_totals[page] = money(page_totals.get(page, 0.0) + entry.amount)
         bill_totals[entry.bill_no] = money(bill_totals.get(entry.bill_no, 0.0) + entry.amount)
 
+    # Whatever is left in `loading_of` targeted an item the bill does not have at this revision —
+    # written under one identity, read under another (a revision renamed the item and the routing
+    # was not moved with it). Named, never dropped.
+    for ref, amount in sorted(loading_of.items()):
+        if amount:
+            flags.append(EstimateFlag(
+                kind="loading_unapplied", item_id=ref,
+                message=(f"{money(amount):,.2f} was routed onto {ref} on the sweep, and the bill "
+                         f"at this revision has no item {ref} — the routing points at nothing. "
+                         f"Either the reference was mistyped or a revision renamed the item; "
+                         f"re-route it on the sweep."),
+            ))
+
     return PricedBill(
         set_id=bill.set_id, rev=bill.rev, items=priced, spread=spread_lines,
         spread_total=spread_total, spread_residue_ref=residue_ref,
+        loading_total=money(sum(entry.loading for entry in priced)),
         bill_totals=bill_totals, page_totals=page_totals,
         total_build_up=money(sum(build_up_cost.values())),
         margin_pct=margin_pct,

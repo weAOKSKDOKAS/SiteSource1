@@ -114,6 +114,34 @@ def spread_reaches_the_rates(priced: PricedBill) -> list[EstimateFlag]:
     )]
 
 
+def platform_cost_unconsumed(total: float) -> list[EstimateFlag]:
+    """A platform cost typed on the groups that no engine consumes. The amount, named.
+
+    The Site Groups screen collects "platform build" per group (`HoleGroup.access_build_cost`) and
+    `groups.access_build_total()` sums it — and nothing in either pricing engine reads that sum.
+    An estimator who typed HK$120,000 of Class B platforms has recorded a judgement that reaches
+    no rate, no total and no tender, and every screen reads as if it were handled.
+
+        SMM S02 ¶2.08(h) puts access scaffolding in the item coverage for moving rigs, measured
+        per hole (¶2.03) — so it belongs inside the Class B rig-move rate, not nowhere.
+
+    A GUARD, not the wiring: routing it into a per-class rig-move basis is the basis-table
+    redesign (plan Phase 3), and must not happen as the side effect of a leak fix. Until then the
+    money is visible, which is the difference between a cost somebody will carry and one nobody
+    knows is missing.
+    """
+    if total <= 0:
+        return []
+    return [EstimateFlag(
+        kind="platform_cost_unconsumed", item_id="(groups)",
+        message=(f"{total:,.2f} of platform build cost is typed on the Site groups and nothing "
+                 f"prices it — it is in no rate and no total. SMM S02 ¶2.08(h) puts access "
+                 f"scaffolding in the moving-rigs item coverage, so make sure it is inside your "
+                 f"2.2b build-up, or route it as a cost on the sweep, until the engine carries "
+                 f"it itself."),
+    )]
+
+
 def orphan_priced_items(priced: PricedBill, bill: ClientBill) -> list[EstimateFlag]:
     """Priced lines whose reference is in no item of the client's bill.
 

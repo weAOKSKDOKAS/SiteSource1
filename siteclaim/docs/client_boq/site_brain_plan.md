@@ -1,0 +1,137 @@
+# The Site brain — plan of record
+
+*Written 2026-08-12, after a five-surface inventory sweep (wireframe handoff, chat, maps,
+operator journey, costing seams) and three decisions taken by the product owner. This is the
+document to read before building any of it, and the record of why each piece has the shape it
+has.*
+
+---
+
+## 1. The three decisions, taken and recorded
+
+Asked explicitly, answered explicitly, and every phase below is designed to them:
+
+1. **Chat reaches costing by propose-and-confirm.** Every Site discussion is persisted and
+   surfaced at pricing time. When a discussion concludes something that changes money, the AI
+   drafts it as a **proposed condition citing the discussion**; a person confirms it; the
+   deterministic engine prices it. The AI never writes the number. This is the same
+   propose-and-confirm channel every other surface already uses — the discussion becomes one more
+   *source* of proposals, never a second pricing path.
+2. **The brain is propose-only.** It reads everything, dispatches read/analyse/draft tasks to
+   subagents, and queues **proposed next actions with reasoning** — and every approval, verdict
+   and number stays a human click. It is structurally unable to open its own gates, exactly as
+   `DepartureProposal` has no status field.
+3. **Tender-side first.** v1 of the brain understands the client_boq side — legals/register,
+   scope, site + mapping, BQ/costing, conditions — and READS route/sourcing state without driving
+   procurement. The §4 boundary stays intact.
+
+A fourth decision taken here rather than asked, because the codebase already answers it: **DEMO
+stays fully offline.** The chat replays a canned transcript fixture; the brain's subagent calls
+each carry a `demo_fixture`; anything whose call shape cannot be fixture-replayed is absent in
+DEMO with an honest notice, never silently live.
+
+## 2. What the sweep found (the short version)
+
+The full findings are in the workflow transcript; what matters for the plan:
+
+- **The design handoff is mostly built.** The six-step flow, the gates, the authorship triad, the
+  Site screens, the sweep — all exist. The deltas that matter: the **§10 Derivation tree**
+  ("the component that matters most in the whole app") is not built; **MapCrop runs on
+  placeholder geometry** because sheet registrations are never persisted ("two typed coordinates
+  turn it on" — `boq/georef.py`); and the design specifies **no chat surface** — the chat is the
+  owner's addition on top of it.
+- **Two silent money leaks clear the app's only hard stop:**
+  - a cost routed **load onto 2.2b** satisfies the settle gate and is *never applied* —
+    `sweep.loadings()` is computed and displayed by two endpoints and `price_bill` has no
+    loadings parameter (same defect class as the spread pool closed in `edcb311`);
+  - a **platform cost typed on a group** (`Site.tsx` "platform build", `HoleGroup
+    .access_build_cost`) reaches no total — `groups.access_build_total()` has zero production
+    callers, while its own docstring cites SMM S02 ¶2.08(h) putting it in the rig-move item's
+    coverage.
+- **The chat exists but forgets.** `/costing/ask` is grounded, citation-checked, and can propose
+  a condition — but exchanges are not persisted, a confirmed condition does not cite the exchange
+  that spawned it, and a later question cannot see earlier discussions or recorded conditions.
+- **The map exists but is dark.** Access board, HK1980→WGS84, per-point links and the slippy map
+  are built; the georef math is written and tested and waits on a table and a two-marks form.
+  Vision photo observations are read and then discarded.
+- **Journey dead ends** (curl-only or button-less): RFI letter export/answers, register re-run,
+  unreadable-part upload, moving a hole between groups.
+
+## 3. The phases
+
+Ordered by blast radius, each one shippable alone. Phases 1–3 are pure closures of existing
+intent; 4–5 are the owner's new surfaces.
+
+### Phase 1 — stop the two leaks *(built with this document)*
+
+1. `price_bill` gains `loadings=` and applies routed-LOAD costs to their target item's cost —
+   the money an estimator explicitly routed reaching the rate it was routed to. A loading whose
+   target is missing or client-priced is a **flag**, never a silent drop (GCT App C 2.2(vi)
+   reinstates a client rate, so money loaded there is thrown away at examination).
+2. A **guard** for the platform cost: typed on groups, consumed by nothing → a named flag with
+   the amount and the clause, on the checks surface. The full wiring (a per-class rig-move basis
+   so 2.2a/2.2b price their own moves and the platform lands in the Class B basis) is **Phase 3**
+   work — it redesigns the basis table and must not be a side effect of a leak fix.
+
+### Phase 2 — the site log: discussions that feed costing *(built with this document)*
+
+The owner's chat ask, under decision 1. The pieces that already exist stay untouched — grounded
+`RawAnswer` with no numeric field, citation stripping, the sole-writer condition confirm. What is
+added:
+
+- `client_boq_site_log` — every ask exchange persisted: question, answer, citations, figures
+  used, stripped receipts, actor, timestamp. **The log is memory, not authority**: nothing prices
+  from it, and it never appears in a build-up.
+- **Provenance on the bridge**: a condition proposed from a discussion carries the log entry's id,
+  so a confirmed condition can answer "why do we believe this?" with the conversation that
+  decided it.
+- **The ground includes the past**: `_ground_for` gains the recorded conditions and recent log
+  entries, so a later discussion sees what was already discussed and decided — the "AI
+  understands what is happening on site" loop.
+- The Ask surface shows the persisted history per tender, and shows when a condition was born
+  from an exchange.
+
+### Phase 3 — the map earns its keep
+
+- Persist `SheetRegistration` (one table), the two-grid-marks entry form, and MapCrop goes live
+  on all 91 holes — the georef math is already written and tested.
+- The per-class rig-move basis: 2.2a and 2.2b price their own move counts; group platform costs
+  land in the Class B basis (SMM S02 ¶2.08(h), ¶2.03). The Phase 1 guard then goes quiet by
+  construction.
+- Route/access evidence: the road-access picker on the map; distances measured deterministically;
+  the model contributes at most the design's brass **hint** line ("▪road 40 m — a hint, not a
+  classification"), never a class. `proposed_class` stays empty by construction.
+
+### Phase 4 — the brain (propose-only, tender-side)
+
+Two layers, built in order:
+
+1. **The whole-tender ground** — a deterministic assembly of everything the tender knows:
+   register verdicts, part contexts, scope of record, site schedule + classes + groups,
+   recorded conditions + site log, bill + rates + sweep state, gate states, RFIs. Pure reads,
+   one module, no model. This pays for itself immediately (the chat's ground today is four
+   truncated sources) and is the substrate every subagent reads.
+2. **The orchestrator** — one strong model (the drawing-read stage pattern generalises: a
+   `STAGE_BRAIN` with its own provider/model setting) that reads the ground, dispatches
+   subagent reads (legals → register clauses; scope; site; BQ), and returns a **briefing**:
+   what it understands, what disagrees with what, and a queue of **proposed actions** — each
+   executable only through an existing gated endpoint by a person. It cannot call an approve
+   endpoint: the action queue stores *references to* endpoints, and the UI renders them as
+   buttons a human clicks. In DEMO it replays fixtures per subagent call.
+
+### Phase 5 — the dead-ends purge + the Derivation tree
+
+RFI export/answer surfaces, register re-run control, unreadable-part upload buttons, group
+membership moves — each a verified curl-only workaround today. Then §10's Derivation tree, the
+trust surface where an operator decides whether to believe a rate. The purge's filter is the
+design's own governing rule: *if two good estimators would get the same answer it is clerical —
+purge the friction; if they would disagree it is judgement — keep it.* Deliberate friction
+(no pre-filled verdicts, the BASIS textarea, the sweep's hard stop) stays.
+
+## 4. What must survive every phase
+
+The non-negotiables, restated so nobody discovers them by breaking one: no model writes a number,
+a verdict, or a gate flag; the approve endpoints stay the only writers; DEMO stays offline; the
+take-off stays a proposal until a person saves it; unread cells stay named, never zeroed;
+absence never reads as health; and the §4 product boundary holds until the owner explicitly
+relaxes it.
