@@ -1109,3 +1109,143 @@ def _sheet_pdf() -> bytes:
     data = doc.tobytes()
     doc.close()
     return data
+
+
+class TestTheColumnMappingCannotShiftAValue:
+    """A paid run put 6.0 metres of hard material into `rock_m` on 24 of 46 rows, and both causes
+    were in the prompt rather than in the crop.
+
+    MEASURED, ABH02. The drawing prints `ground 18.00 · rockhead -19.00 · length 30.00 · max 30.00
+    · soil 30.00 · HARD 6.0 · rock (blank)`. The reader returned ground and rockhead null, length,
+    max and soil correct, `hard_above_rockhead_m` unread, and **6.0 in `rock_m`**.
+
+    * The list named `EXPECTED LENGTH IN ROCK -> rock_m` and
+      `EXPECTED LENGTH IN ROCK/CORESTONE/BOULDER ABOVE ROCKHEAD -> hard_above_rockhead_m`. The
+      first is a STRICT PREFIX of the second, and the heading is printed wrapped over several
+      lines — so a model reading only its first line matched `rock_m` correctly, by our own rule.
+    * `ground_level_mpd` and `rockhead_level_mpd` had NO ENTRY AT ALL, so the model had to guess
+      the field names, and `TENTATIVE ROCKHEAD LEVEL` collides with `hard_above_rockhead_m` on the
+      word ROCKHEAD. Null on every GI/210 row while the sheet prints both.
+
+    The collision cannot be removed — those are the headings the drawing prints. What it can be is
+    DISAMBIGUATED, which is what these tests pin, together with the positional anchor that makes an
+    unreadable heading survivable.
+
+    Why it matters more than a missing row: the soil/rock split drives duration and therefore
+    price, and six metres classed as rock rather than corestone-above-rockhead prices very
+    differently. It only surfaced because `bad_rows` exists.
+    """
+
+    @staticmethod
+    def _mapping() -> dict:
+        import re
+
+        return dict((m.group(1).strip(), m.group(2)) for m in
+                    re.finditer(r"^\s*\d*\s*(.+?) -> (\w+)$", reader.INSTRUCTION, re.M))
+
+    def test_every_numeric_column_the_row_type_has_is_named(self):
+        """The defect that made two columns null on every row: a field the prompt never mentions
+        is a field the model has to guess the name of."""
+        mapped = set(self._mapping().values())
+        missing = [f for f in reader.NUMERIC_FIELDS if f not in mapped]
+        assert not missing, (
+            f"these numeric columns have no entry in the prompt's mapping, so the model is left to "
+            f"guess what to call them: {', '.join(missing)}")
+
+    def test_the_two_level_columns_are_named_by_their_printed_headings(self):
+        mapping = self._mapping()
+        assert mapping.get("APPROXIMATE GROUND LEVEL (mPD)") == "ground_level_mpd"
+        assert mapping.get("TENTATIVE ROCKHEAD LEVEL (mPD)") == "rockhead_level_mpd"
+
+    def test_any_heading_that_prefixes_another_is_disambiguated_in_words(self):
+        """The invariant that replaces "there must be no collision", which is not achievable — the
+        drawing prints those two headings and we do not get to rename its columns.
+
+        So where one heading is a prefix of another, the prompt has to SAY so and say what to do
+        about it. A list that merely contains both is the list that shifted the value.
+        """
+        mapping = self._mapping()
+        collisions = [(short, long) for short in mapping for long in mapping
+                      if short != long and long.startswith(short)]
+        assert collisions, "the fixture for this test is gone — re-derive it rather than deleting"
+        for short, long in collisions:
+            tail = long[len(short):].lstrip("/ ")
+            assert tail.split("/")[0] in reader.INSTRUCTION, (
+                f"{short!r} is a prefix of {long!r} and nothing in the prompt tells the model how "
+                f"to tell them apart")
+        assert "cannot read a whole heading" in reader.INSTRUCTION
+        assert "return null for both" in reader.INSTRUCTION, (
+            "a model that cannot tell two columns apart must say so, not pick one")
+
+    def test_the_columns_carry_a_printed_order(self):
+        """The positional anchor. With it, an illegible heading costs one cell; without it, it
+        moves every value to its right."""
+        mapping = self._mapping()
+        assert "LEFT TO RIGHT" in reader.INSTRUCTION
+        for n, field in ((5, "ground_level_mpd"), (9, "soil_m"),
+                         (10, "hard_above_rockhead_m"), (11, "rock_m")):
+            assert any(f" {n} " in line and field in line
+                       for line in reader.INSTRUCTION.splitlines()), \
+                f"column {n} ({field}) has no position in the printed order"
+        assert mapping["EXPECTED LENGTH IN ROCK/CORESTONE/BOULDER ABOVE ROCKHEAD"] == \
+            "hard_above_rockhead_m"
+        assert mapping["EXPECTED LENGTH IN ROCK"] == "rock_m"
+
+    def test_the_prompt_never_states_the_arithmetic_check(self):
+        """THE MODEL MUST NOT BE TOLD WHAT THE GATE TESTS.
+
+        `length ~= soil + rock` is the one check the reader does not perform and cannot influence,
+        and it is what caught this defect. A model given the formula can satisfy it — and a row
+        that reconciles because it was made to is indistinguishable from one that reconciles
+        because it was read.
+        """
+        prompt = (reader.SYSTEM + reader.INSTRUCTION).lower()
+        for leak in ("soil + rock", "soil+rock", "should add up", "must equal",
+                     "check that", "reconcile"):
+            assert leak not in prompt, f"the prompt tells the model the gate's rule: {leak!r}"
+
+
+class TestHardMaterialIsNotAddedToTheLength:
+    """`hard_above_rockhead_m` sits INSIDE the soil length, not beside it — so the row check is
+    `length ~= soil + rock` and adding hard to it would fail every correct row.
+
+    Worth a test rather than a comment, because the misread rows LOOK like the formula is wrong:
+    ABH02 came back `soil 30 + rock 6 = 36` against a length of 30, and the obvious repair is to
+    change the formula rather than the reading. Measured on the drawing, ABH02 prints length 30,
+    soil 30, HARD 6.0 and a BLANK rock column — 30 + 0 = 30, which reconciles.
+    """
+
+    @staticmethod
+    def _abh02(**kw):
+        from client_boq.boq.schedule import Station
+
+        base = {"station": "CE19-ABH02", "length_m": 30.0, "soil_m": 30.0,
+                "hard_above_rockhead_m": 6.0, "rock_m": 0.0}
+        base.update(kw)
+        return Station(**base)
+
+    def test_the_row_as_the_drawing_prints_it_reconciles(self):
+        row = self._abh02()
+        assert row.total_m == 30.0 and row.reconciles()
+        assert row.discrepancy() is None
+
+    def test_hard_material_is_excluded_from_the_total_on_purpose(self):
+        """It is rock, corestone or boulder met ABOVE the rockhead — inside the soil drilling. Add
+        it and 30 + 6 + 0 = 36 against a stated length of 30, on a row that is correct."""
+        row = self._abh02()
+        assert row.soil_m + row.hard_above_rockhead_m + row.rock_m == 36.0
+        assert row.length_m == 30.0
+        assert row.reconciles(), "the check must not be the sum that includes hard material"
+
+    def test_the_shifted_row_is_exactly_what_the_gate_caught(self):
+        shifted = self._abh02(hard_above_rockhead_m=0.0, rock_m=6.0)
+        assert not shifted.reconciles()
+        note = shifted.discrepancy()
+        assert "soil 30 + rock 6 = 36 m" in note and "length of 30 m" in note
+
+    def test_the_reference_row_from_the_module_docstring_still_holds(self):
+        """29.90 + 5.0 = 34.90, off the real sheet — the row this check was written against."""
+        row = self._abh02(length_m=34.9, soil_m=29.9, hard_above_rockhead_m=11.0, rock_m=5.0)
+        assert row.reconciles()
+
+
