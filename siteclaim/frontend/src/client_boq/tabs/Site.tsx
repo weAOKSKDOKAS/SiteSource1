@@ -989,6 +989,37 @@ function GroupEditor({
           soil {formatNorm(group.soil_m)} m · rock {formatNorm(group.rock_m)} m · deepest{" "}
           {formatNorm(group.deepest_m)} m
         </span>
+        {/* THE WAY BACK OUT. "+ Group" existed and this did not, so a group made by mistake — or
+            one whose holes turned out to drill differently — could only be worked around. The
+            backend has said `deleted` and returned its own note since the endpoint was written;
+            nothing on any screen called it.
+
+            Deleting a group KEEPS the classes its holes were given: a class is a judgement about
+            a hole, not about the group it happened to sit in. The confirm quotes that, because
+            the opposite is the reasonable thing to assume. */}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            if (!window.confirm(
+              `Delete ${group.label}? Its holes keep the class of site they were given — only the ` +
+              `grouping goes.`)) return;
+            void (async () => {
+              setBusy(true);
+              try {
+                await api.deleteGroup(setId, group.label.toLowerCase().replace(/\s+/g, "-"));
+                onSaved();
+              } catch (e) {
+                onError(e instanceof Error ? e.message : String(e));
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+          className="ml-auto flex-none font-cb-sans text-[10px] text-cb-bad-dark underline underline-offset-2 disabled:opacity-50"
+        >
+          Delete group
+        </button>
       </div>
 
       <div className="mt-4 grid gap-6 [grid-template-columns:minmax(220px,1fr)_minmax(220px,1fr)]">
