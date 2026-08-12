@@ -839,6 +839,13 @@ export interface LLMSettingsResponse {
   provider: string; // "" = auto
   /** Who reads the documents. "" falls through to EXTRACTION_PROVIDER, then to `provider`. */
   provider_ingest: string;
+  /** Who reads the DRAWING, and with which model. Its own question: the read runs once or twice a
+   *  tender, reads a legal-quality sheet, and the map, the access cards, the rig optimiser and the
+   *  check against Bill No.2 all rest on it — so the strongest model is worth its cost here and
+   *  nowhere else. `model_drawing` names a MODEL rather than a provider, which is the shape that
+   *  did not exist: every other model setting is per provider. Both "" fall through to ingest. */
+  provider_drawing: string;
+  model_drawing: string;
   model_anthropic: string;
   model_deepseek: string;
   model_openai: string;
@@ -854,6 +861,10 @@ export interface LLMSettingsResponse {
     model_deepseek: string;
     model_openai: string;
     model_ingest: string;
+    /** Resolved the same way the reader resolves it, so the screen shows what will actually
+     *  happen rather than what was typed. */
+    drawing_provider: string;
+    model_drawing: string;
   };
   rows: { key: string; value: string; updated_by: string; updated_at: string | null }[];
 }
@@ -2417,6 +2428,14 @@ export interface ScheduleReadResponse {
     bands: number;
     /** Slices that failed. Non-empty means the sheet is only PARTLY read. */
     bands_failed: string[];
+    /** One record per live call — provider, model, ms, in/out tokens. Empty in DEMO, which is the
+     *  honest answer: a demo run cost nothing. */
+    calls: { provider: string; model: string; ms: number; in: number | null; out: number | null }[];
+    seconds: number;
+    tokens_in: number;
+    tokens_out: number;
+    /** The model that actually read this sheet, "" in DEMO. */
+    model: string;
     /** The reader returned rows and put NO NUMBERS in them — the shape of a model that gave up
      *  politely. Empty when it did not. Distinct from `problem` (nothing came back) and from
      *  `cells_unread` (a count, not a verdict): this arrives with `read: true` and a plausible

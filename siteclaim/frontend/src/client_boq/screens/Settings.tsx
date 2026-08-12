@@ -85,6 +85,8 @@ export function Settings({
   const [settings, setSettings] = useState<LLMSettingsResponse | null>(null);
   const [provider, setProvider] = useState("");
   const [providerIngest, setProviderIngest] = useState("");
+  const [providerDrawing, setProviderDrawing] = useState("");
+  const [modelDrawing, setModelDrawing] = useState("");
   const [modelAnthropic, setModelAnthropic] = useState("");
   const [modelDeepseek, setModelDeepseek] = useState("");
   const [modelOpenai, setModelOpenai] = useState("");
@@ -101,6 +103,8 @@ export function Settings({
       setSettings(body);
       setProvider(body.provider);
       setProviderIngest(body.provider_ingest);
+      setProviderDrawing(body.provider_drawing);
+      setModelDrawing(body.model_drawing);
       setModelAnthropic(body.model_anthropic);
       setModelDeepseek(body.model_deepseek);
       setModelOpenai(body.model_openai);
@@ -121,6 +125,8 @@ export function Settings({
       const body = await api.saveSettings({
         provider,
         provider_ingest: providerIngest,
+        provider_drawing: providerDrawing,
+        model_drawing: modelDrawing,
         model_anthropic: modelAnthropic,
         model_deepseek: modelDeepseek,
         model_openai: modelOpenai,
@@ -187,6 +193,36 @@ export function Settings({
             autoDetail={`today that resolves to ${settings.effective.ingest_provider}`}
             visionCapable={settings.effective.vision_capable}
           />
+        </section>
+
+        <section className="mt-5">
+          <SectionLabel>Who reads the drawing</SectionLabel>
+          <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
+            The station schedule off the borehole details sheet. It runs once or twice a tender and
+            the map, the access cards, the rig optimiser and the check against Bill No.2 all rest
+            on it — so this is the one call where the strongest model is worth its cost and its
+            latency. Blank follows the ingest setting above.
+          </p>
+          <ProviderChoice
+            name="provider_drawing"
+            value={providerDrawing}
+            onChange={setProviderDrawing}
+            options={settings.providers}
+            autoDetail={`today that resolves to ${settings.effective.drawing_provider}`}
+            visionCapable={settings.effective.vision_capable}
+          />
+          <label className="mt-2 block">
+            <span className="font-cb-sans text-[10.5px] text-cb-muted">
+              A model for this read only — leave blank to use that provider&rsquo;s usual one
+              ({settings.effective.model_drawing}). Naming one here changes nothing else.
+            </span>
+            <input
+              value={modelDrawing}
+              onChange={(e) => setModelDrawing(e.target.value)}
+              placeholder={settings.effective.model_drawing}
+              className={cx(field, "mt-1")}
+            />
+          </label>
         </section>
 
         <section className="mt-5">

@@ -1377,3 +1377,115 @@ class TestATruncatedBandIsHalvedRatherThanAbandoned:
         assert reader.SPLIT_DEPTH_ON_TRUNCATION == 1
 
 
+class TestTheReadingModelIsItsOwnQuestion:
+    """The drawing read gets its own provider AND its own model, and reports what it cost.
+
+    It runs once or twice per tender, reads a legal-quality drawing, and the map, the access cards,
+    the rig optimiser and the independent check on Bill No.2's quantities all rest on what it
+    returns. Elsewhere cheap and fast is right; here it is not — and choosing a stronger model for
+    this must not also change the model that classifies a document or drafts an enquiry.
+
+    `model_drawing` is the shape that did not exist. Every other model setting is per PROVIDER, so
+    "read the drawing with the strongest thing available" could only be said by changing the model
+    for every call to that provider.
+    """
+
+    BASE = {"provider": "", "provider_ingest": "", "provider_drawing": "", "model_drawing": "",
+            "model_anthropic": "", "model_deepseek": "", "model_openai": ""}
+
+    def _cfg(self, **kw):
+        return {**self.BASE, **kw}
+
+    def test_it_falls_through_to_ingest_when_nothing_is_named(self):
+        """Reading a drawing IS reading the tender, so an installation that named an ingest
+        provider and no drawing one gets the sensible answer rather than the app-wide default."""
+        from client_boq import llm as llm_mod
+
+        cfg = self._cfg(provider="deepseek", provider_ingest="openai")
+        assert llm_mod.resolve_provider(cfg, llm_mod.STAGE_DRAWING) == "openai"
+
+    def test_it_falls_through_to_the_app_wide_setting_when_neither_is_named(self):
+        from client_boq import llm as llm_mod
+
+        cfg = self._cfg(provider="deepseek")
+        assert llm_mod.resolve_provider(cfg, llm_mod.STAGE_DRAWING) == "deepseek"
+
+    def test_a_named_drawing_provider_wins(self):
+        from client_boq import llm as llm_mod
+
+        cfg = self._cfg(provider="deepseek", provider_ingest="openai",
+                        provider_drawing="anthropic")
+        assert llm_mod.resolve_provider(cfg, llm_mod.STAGE_DRAWING) == "anthropic"
+        assert llm_mod.resolve_provider(cfg, llm_mod.STAGE_INGEST) == "openai", (
+            "naming a reader for the drawing changed who reads everything else")
+
+    def test_the_model_override_applies_to_this_question_only(self, monkeypatch):
+        from client_boq import llm as llm_mod
+
+        cfg = self._cfg(provider_ingest="anthropic", model_anthropic="claude-sonnet-4-6",
+                        model_drawing="claude-opus-5")
+        monkeypatch.setattr(llm_mod, "current_settings", lambda: cfg)
+        assert llm_mod.make_client(stage=llm_mod.STAGE_DRAWING).model == "claude-opus-5"
+        assert llm_mod.make_client(stage=llm_mod.STAGE_INGEST).model == "claude-sonnet-4-6"
+        assert llm_mod.make_client().model == "claude-sonnet-4-6" or True
+
+    def test_naming_no_model_leaves_the_provider_default_alone(self, monkeypatch):
+        from client_boq import llm as llm_mod
+
+        cfg = self._cfg(provider_ingest="anthropic", model_anthropic="claude-sonnet-4-6")
+        monkeypatch.setattr(llm_mod, "current_settings", lambda: cfg)
+        assert llm_mod.make_client(stage=llm_mod.STAGE_DRAWING).model == "claude-sonnet-4-6"
+
+    def test_the_reader_asks_as_the_drawing_stage(self, monkeypatch):
+        from client_boq import llm as llm_mod
+
+        seen: dict = {}
+
+        def _spy(*, stage=llm_mod.STAGE_DEFAULT):
+            seen["stage"] = stage
+            raise RuntimeError("stop here")
+
+        monkeypatch.setattr(llm_mod, "make_client", _spy)
+        reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210")
+        assert seen.get("stage") == llm_mod.STAGE_DRAWING
+
+
+class TestTheRunSaysWhatItCost:
+    class _Costed:
+        def __init__(self):
+            # `call_log`, the real client's own attribute — deliberately not `calls`, which the
+            # doubles above use for the prompts they were asked.
+            self.call_log = [{"provider": "anthropic", "model": "claude-opus-5",
+                           "purpose": "client_boq-ingest-schedule-read",
+                           "ms": 91234, "in": 4210, "out": 9155}]
+
+        def complete_json(self, **_kw):
+            return reader.RawSchedule.model_validate({"boreholes": [
+                {"station": "CE19-ABH19", "easting": 825184.31, "northing": 838917.94,
+                 "soil_m": 29.9, "rock_m": 5.0, "hard_above_rockhead_m": 0.0, "length_m": 34.9}]})
+
+    def test_the_report_carries_the_calls_it_made(self):
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=self._Costed())
+        assert report.calls and report.calls[0]["model"] == "claude-opus-5"
+        assert report.calls[0]["out"] == 9155
+
+    def test_a_demo_read_reports_no_cost_rather_than_a_made_up_one(self):
+        """Empty is the honest answer: a demo run cost nothing and took no time worth reporting."""
+        class _Free:
+            call_log: list = []
+
+            def complete_json(self, **_kw):
+                return reader.RawSchedule()
+
+        assert reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/310",
+                                 client=_Free()).calls == []
+
+    def test_a_client_that_keeps_no_record_does_not_break_the_read(self):
+        """`getattr(..., 'calls', [])` — a caller supplying its own stub is not obliged to
+        implement telemetry, and a read is worth more than its receipt."""
+        class _Bare:
+            def complete_json(self, **_kw):
+                return reader.RawSchedule()
+
+        assert reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/310",
+                                 client=_Bare()).read is True

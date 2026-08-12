@@ -489,12 +489,16 @@ export const api = {
   saveSettings: (body: {
     provider: string;
     provider_ingest?: string;
+    provider_drawing?: string;
+    model_drawing?: string;
     model_anthropic?: string;
     model_deepseek?: string;
     model_openai?: string;
   }) =>
     post<LLMSettingsResponse>("/settings", {
       provider_ingest: "",
+      provider_drawing: "",
+      model_drawing: "",
       model_anthropic: "",
       model_deepseek: "",
       model_openai: "",

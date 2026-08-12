@@ -300,6 +300,15 @@ class LLMClient:
         self._model_arg = model  # explicit model override, if any
         self.model = model or self._default_model()
         self._clients: dict = {}  # one lazily-built SDK client per provider (routing may switch)
+        #: One record per LIVE call made through this client — provider, model, ms, in/out tokens.
+        #:
+        #: Named `call_log` and not `calls`: several test doubles in this repo already keep a
+        #: list called `calls` holding the PROMPTS they were asked, and a reader duck-typing on
+        #: the name picked those up as telemetry. A name that two things answer to is a name that
+        #: reads the wrong one.
+        #: Never populated in DEMO (the fixture returns first), which is itself the honest answer:
+        #: a demo run cost nothing and took no time worth reporting.
+        self.call_log: list[dict] = []
         self._clients_lock = threading.Lock()  # guards lazy construction under concurrent chunk calls
 
     def _default_model(self) -> str:
@@ -412,8 +421,16 @@ class LLMClient:
     def _log_call(self, provider: str, model: str, purpose: str, ms: float, tokens: dict) -> None:
         """One line per live call to stdout (visibility for the fine-tuning phase), and a
         JSONL record when ``SITESOURCE_LLM_LOG`` names a file. Never raises — logging must
-        not break a call. DEMO_MODE never reaches here (it returns a fixture first)."""
+        not break a call. DEMO_MODE never reaches here (it returns a fixture first).
+
+        ALSO KEPT ON THE CLIENT, as ``call_log``. Comparing two providers on one sheet has been done
+        twice by hand from row counts and an afternoon each time; the evidence exists at this line
+        and simply had nowhere to go. A caller that wants to say what its run cost can now read it
+        back instead of parsing stdout.
+        """
         tin, tout = tokens.get("in"), tokens.get("out")
+        self.call_log.append({"provider": provider, "model": model, "purpose": purpose or "llm",
+                           "ms": round(ms), "in": tin, "out": tout})
         line = f"[llm] provider={provider} model={model} purpose={purpose or 'llm'} ms={ms:.0f}"
         if tin is not None or tout is not None:
             line += f" in={tin} out={tout}"

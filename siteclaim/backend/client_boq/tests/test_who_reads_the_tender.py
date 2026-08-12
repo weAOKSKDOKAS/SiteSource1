@@ -38,8 +38,15 @@ INGEST = pathlib.Path(llm_mod.__file__).parent / "ingest"
 
 
 class TestTheDrawingReaderAsksAsTheIngestStage:
-    def test_it_passes_the_ingest_stage(self, monkeypatch):
-        """The line that was wrong, tested at the line that was wrong."""
+    def test_it_passes_the_drawing_stage(self, monkeypatch):
+        """The line that was wrong, tested at the line that was wrong.
+
+        RE-ANCHORED 2026-08-12, disclosed. It asserted `STAGE_INGEST`; the reader now asks as
+        `STAGE_DRAWING`, which RESOLVES THROUGH ingest — so `EXTRACTION_PROVIDER` is still
+        honoured, which was the property this test existed for and which the next test pins
+        directly. The drawing gets its own stage because it is the one call where the strongest
+        model is worth its cost, and saying so must not change who classifies a document.
+        """
         seen: dict = {}
 
         def _spy(*, stage=llm_mod.STAGE_DEFAULT):
@@ -48,7 +55,17 @@ class TestTheDrawingReaderAsksAsTheIngestStage:
 
         monkeypatch.setattr(llm_mod, "make_client", _spy)
         report = reader.read_sheet(_one_page_pdf(), set_id="t", sheet="GI/210")
-        assert seen.get("stage") == llm_mod.STAGE_INGEST
+        assert seen.get("stage") == llm_mod.STAGE_DRAWING
+
+    def test_the_drawing_stage_still_honours_extraction_provider(self, monkeypatch):
+        """The property the re-anchor above must not have given up. A new stage that bypassed
+        `EXTRACTION_PROVIDER` would reintroduce the exact live defect this file was written for."""
+        monkeypatch.setattr(llm_mod, "current_settings", lambda: {
+            "provider": "", "provider_ingest": "", "provider_drawing": "", "model_drawing": "",
+            "model_anthropic": "", "model_deepseek": "", "model_openai": ""})
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "openai")
+        client = llm_mod.make_client(stage=llm_mod.STAGE_DRAWING)
+        assert client._route(images=["<base64>"]) == "openai"
 
     def test_a_client_that_cannot_be_built_is_reported_not_raised(self, monkeypatch):
         """`read_sheet` promises "never raises" in its own docstring, and did.
@@ -118,8 +135,26 @@ class TestExtractionProviderReachesTheImageCall:
             "text-only ingest call using the cheap default")
 
 
+#: Stage constants a call under `ingest/` may name. RE-ANCHORED 2026-08-12, disclosed: this was
+#: the single literal "STAGE_INGEST". `STAGE_DRAWING` is admitted because it RESOLVES THROUGH
+#: ingest, and the first test below proves that of each one rather than taking it on trust — so
+#: widening this list cannot become a way to smuggle in a stage that skips EXTRACTION_PROVIDER.
+STAGES_THAT_REACH_INGEST = ("STAGE_INGEST", "STAGE_DRAWING")
+
+
 class TestEveryIngestStageSaysSo:
     """The sweep. Two of four call sites were right and nothing made the other two follow."""
+
+    def test_every_named_stage_actually_reaches_extraction_provider(self, monkeypatch):
+        """The guard on the list above. A stage may only be admitted if it honours the setting."""
+        monkeypatch.setattr(llm_mod, "current_settings", lambda: {
+            "provider": "", "provider_ingest": "", "provider_drawing": "", "model_drawing": "",
+            "model_anthropic": "", "model_deepseek": "", "model_openai": ""})
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "openai")
+        for name in STAGES_THAT_REACH_INGEST:
+            stage = getattr(llm_mod, name)
+            assert llm_mod.make_client(stage=stage)._provider_arg == "openai", (
+                f"{name} is on the allowed list but does not honour EXTRACTION_PROVIDER")
 
     @staticmethod
     def _calls(path: pathlib.Path) -> list[tuple[int, bool]]:
@@ -133,7 +168,8 @@ class TestEveryIngestStageSaysSo:
             name = getattr(func, "attr", None) or getattr(func, "id", None)
             if name != "make_client":
                 continue
-            passes = any(kw.arg == "stage" and getattr(kw.value, "id", "") == "STAGE_INGEST"
+            passes = any(kw.arg == "stage"
+                         and getattr(kw.value, "id", "") in STAGES_THAT_REACH_INGEST
                          for kw in node.keywords)
             found.append((node.lineno, passes))
         return found

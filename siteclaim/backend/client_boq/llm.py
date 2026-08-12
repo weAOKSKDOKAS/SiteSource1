@@ -37,12 +37,31 @@ SETTING_PROVIDER_INGEST = "llm.provider.ingest"
 SETTING_MODEL_ANTHROPIC = "llm.model.anthropic"
 SETTING_MODEL_DEEPSEEK = "llm.model.deepseek"
 SETTING_MODEL_OPENAI = "llm.model.openai"
+
+# THE DRAWING READ IS ITS OWN QUESTION, and this is why it gets its own two settings rather than
+# sharing ingest's.
+#
+# It runs once or twice per tender, it reads a legal-quality drawing, and everything downstream —
+# the map, the access cards, the rig optimiser, the independent check on Bill No.2's quantities —
+# rests on what it returns. A wrong number here reads as confident and prices work. So it is the
+# one place where the strongest available model is worth its cost and its latency, and where that
+# choice should not also change the model that classifies a document or drafts an enquiry.
+#
+# `SETTING_MODEL_DRAWING` is the per-QUESTION part, and the shape that did not exist before: every
+# other model setting is per PROVIDER, so choosing a stronger model for the drawing meant choosing
+# it for every call to that provider. This one overrides the model for whichever provider the
+# drawing read resolves to, and nothing else.
+SETTING_PROVIDER_DRAWING = "llm.provider.drawing"
+SETTING_MODEL_DRAWING = "llm.model.drawing"
 PROVIDERS = ("", "anthropic", "deepseek", "openai")
 
 # Which stage is asking. Only ingest differs today; the constant exists so a call site says what it
 # is rather than passing a bare string nobody can grep for.
 STAGE_DEFAULT = ""
 STAGE_INGEST = "ingest"
+#: The station-schedule read. Falls through to ingest, then to the app-wide setting, so naming a
+#: reader is optional and an installation that names none behaves exactly as it did.
+STAGE_DRAWING = "drawing"
 
 # provider name -> the key `current_settings()` returns that model under.
 #
@@ -66,6 +85,8 @@ def current_settings() -> dict:
             "model_anthropic": store.get_setting(conn, SETTING_MODEL_ANTHROPIC, ""),
             "model_deepseek": store.get_setting(conn, SETTING_MODEL_DEEPSEEK, ""),
             "model_openai": store.get_setting(conn, SETTING_MODEL_OPENAI, ""),
+            "provider_drawing": store.get_setting(conn, SETTING_PROVIDER_DRAWING, ""),
+            "model_drawing": store.get_setting(conn, SETTING_MODEL_DRAWING, ""),
         }
     finally:
         conn.close()
@@ -78,6 +99,14 @@ def resolve_provider(cfg: dict, stage: str = STAGE_DEFAULT) -> Optional[str]:
     app-wide setting — so that naming a provider for document reading does not require also changing
     what the reasoning stages use.
     """
+    if stage == STAGE_DRAWING:
+        stored = (cfg.get("provider_drawing") or "").strip()
+        if stored:
+            return stored
+        # Falls through to ingest deliberately: reading a drawing IS reading the tender, so an
+        # installation that has named an ingest provider and not a drawing one gets the sensible
+        # answer rather than the app-wide default.
+        return resolve_provider(cfg, STAGE_INGEST)
     if stage == STAGE_INGEST:
         stored = (cfg.get("provider_ingest") or "").strip()
         if stored:
@@ -102,4 +131,10 @@ def make_client(*, stage: str = STAGE_DEFAULT) -> LLMClient:
     if provider:
         key = MODEL_KEY.get(provider)
         model = (cfg.get(key) or None) if key else None
+    # THE PER-QUESTION OVERRIDE, and it is last so it wins. `model_drawing` names a model rather
+    # than a provider, so it applies to whichever provider the drawing read resolved to — which is
+    # the whole point: "read the drawing with the strongest thing available" is a statement about
+    # this question, not about Anthropic.
+    if stage == STAGE_DRAWING and (cfg.get("model_drawing") or "").strip():
+        model = cfg["model_drawing"].strip()
     return LLMClient(provider=provider, model=model)

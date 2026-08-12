@@ -321,6 +321,12 @@ class ReadReport(BaseModel):
     #: a truncated answer, an operator asking, and a whole-sheet read that came back empty — and
     #: the headline used to state the first as though it were the only one.
     sliced_because: str = ""
+    #: WHAT THE RUN COST AND HOW LONG IT TOOK, per sheet. One entry per live call — provider,
+    #: model, ms, input and output tokens. Empty in DEMO, which is the honest answer there.
+    #:
+    #: Carried because comparing two providers on one sheet has been done twice by hand from row
+    #: counts, an afternoon each time. The evidence existed at `_log_call` and had nowhere to go.
+    calls: list[dict] = Field(default_factory=list)
     #: The reader returned rows and put no numbers in them. Empty when it did not.
     #:
     #: A SEPARATE FACT FROM `problem`, and it has to be. `problem` means nothing came back at all;
@@ -631,9 +637,15 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                                    "it has been looked at"))
 
     if client is None:
-        from client_boq.llm import STAGE_INGEST, make_client
+        from client_boq.llm import STAGE_DRAWING, make_client
 
-        # `stage=STAGE_INGEST`, and its absence here was a live-run defect. This read
+        # `stage=STAGE_DRAWING` — its own question, falling through to ingest and then to the
+        # app-wide setting, so an installation that names no reader behaves exactly as before.
+        # It is separate because this is the one call where the strongest model is worth its cost
+        # and its latency, and choosing it here must not also change the model that classifies a
+        # document or drafts an enquiry.
+        #
+        # The stage was absent entirely and that was a live-run defect. This read
         # `make_client()`, so `resolve_provider` never reached its ingest branch and
         # `EXTRACTION_PROVIDER` was skipped entirely — for the one call in the module that is
         # most obviously the ingest stage, reading a tender drawing. With nothing stored the
@@ -645,7 +657,7 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
         # and `make_client` reads the settings table to keep it — so an unreachable store threw
         # straight past the whole degrade-not-fail path below.
         try:
-            client = make_client(stage=STAGE_INGEST)
+            client = make_client(stage=STAGE_DRAWING)
         except Exception as exc:  # noqa: BLE001 — a client we cannot build is a gap that says so
             return ReadReport(
                 sheet=sheet,
@@ -703,6 +715,7 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
 
     schedule = to_schedule(raw, set_id=set_id, sheet=sheet)
     return ReadReport(schedule=schedule, sheet=sheet, read=True, gave_up=surrendered,
+                      calls=list(getattr(client, "call_log", []) or []),
                       cells_unread=sum(len(s.unread) for s in schedule.stations))
 
 
@@ -808,6 +821,7 @@ def _read_in_bands(data: bytes, page: int, *, set_id: str, sheet: str, client,
         f"on the station name.")
     return ReadReport(schedule=schedule, sheet=sheet, read=True, bands=bands, bands_failed=failed,
                       gave_up=surrendered, sliced_because=because,
+                      calls=list(getattr(client, "call_log", []) or []),
                       cells_unread=sum(len(s.unread) for s in schedule.stations))
 
 

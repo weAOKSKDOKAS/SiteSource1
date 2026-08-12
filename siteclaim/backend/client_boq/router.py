@@ -1357,6 +1357,14 @@ def delete_output_norm(key: str) -> dict:
 # ---------------------------------------------------------------------------
 class LLMSettings(BaseModel):
     provider: str = ""          # "" = auto (env routing) | anthropic | deepseek | openai
+    # THE DRAWING READ IS ITS OWN QUESTION. It runs once or twice per tender, reads a
+    # legal-quality drawing, and everything downstream rests on what it returns — so it is the one
+    # call where the strongest model is worth its cost and its latency, and picking it here must
+    # not also change the model that classifies a document or drafts an enquiry. `model_drawing`
+    # names a MODEL rather than a provider, which is the shape that did not exist: every other
+    # model setting is per provider.
+    provider_drawing: str = ""
+    model_drawing: str = ""
     # Who reads the documents. Separate because reading the tender is a different job from the
     # stages that reason about what was read, and it decides what all of them are looking at.
     # "" falls through to EXTRACTION_PROVIDER, then to `provider`.
@@ -1416,6 +1424,7 @@ def get_settings() -> dict:
 
     text_provider = cfg["provider"] or ("deepseek" if provider_key("deepseek") else "anthropic")
     ingest_provider = llm_mod.resolve_provider(cfg, llm_mod.STAGE_INGEST) or text_provider
+    drawing_provider = llm_mod.resolve_provider(cfg, llm_mod.STAGE_DRAWING) or ingest_provider
     return {
         **cfg,
         "company": company,
@@ -1433,6 +1442,12 @@ def get_settings() -> dict:
             "model_openai": cfg["model_openai"] or model_for_provider("openai"),
             "model_ingest": (cfg.get(llm_mod.MODEL_KEY.get(ingest_provider, ""))
                              or model_for_provider(ingest_provider)),
+            # WHO READS THE DRAWING, resolved the same way the reader resolves it — so the screen
+            # shows what will actually happen rather than what was typed.
+            "drawing_provider": drawing_provider,
+            "model_drawing": (cfg.get("model_drawing")
+                              or cfg.get(llm_mod.MODEL_KEY.get(drawing_provider, ""))
+                              or model_for_provider(drawing_provider)),
         },
         "rows": rows,
     }
@@ -1539,7 +1554,8 @@ def post_settings(req: LLMSettings, actor: str = Depends(_actor)) -> dict:
     stages construct their client per run, so nothing needs restarting. Procurement is not
     affected: this setting is read only by ``client_boq/llm.py``."""
     from client_boq import llm as llm_mod
-    for field, value in (("provider", req.provider), ("provider_ingest", req.provider_ingest)):
+    for field, value in (("provider", req.provider), ("provider_ingest", req.provider_ingest),
+                         ("provider_drawing", req.provider_drawing)):
         if value not in llm_mod.PROVIDERS:
             raise HTTPException(
                 status_code=422,
@@ -1552,6 +1568,8 @@ def post_settings(req: LLMSettings, actor: str = Depends(_actor)) -> dict:
         store.set_setting(conn, llm_mod.SETTING_MODEL_ANTHROPIC, req.model_anthropic.strip(), actor)
         store.set_setting(conn, llm_mod.SETTING_MODEL_DEEPSEEK, req.model_deepseek.strip(), actor)
         store.set_setting(conn, llm_mod.SETTING_MODEL_OPENAI, req.model_openai.strip(), actor)
+        store.set_setting(conn, llm_mod.SETTING_PROVIDER_DRAWING, req.provider_drawing, actor)
+        store.set_setting(conn, llm_mod.SETTING_MODEL_DRAWING, req.model_drawing.strip(), actor)
     finally:
         conn.close()
     return get_settings()
@@ -4064,6 +4082,15 @@ def post_read_station_schedule(
                          # reads as a verdict): this arrives with `read: true` and a plausible row
                          # count, which is the most reassuring thing on the response.
                          "gave_up": r.gave_up,
+                         # WHAT THIS SHEET COST AND HOW LONG IT TOOK. Provider comparison has been
+                         # done twice by hand from row counts; the reader carries its own evidence
+                         # now, so the next comparison is one run rather than an afternoon. Empty
+                         # in DEMO, which is the honest answer there.
+                         "calls": r.calls,
+                         "seconds": round(sum(c.get("ms") or 0 for c in r.calls) / 1000.0, 1),
+                         "tokens_in": sum(c.get("in") or 0 for c in r.calls),
+                         "tokens_out": sum(c.get("out") or 0 for c in r.calls),
+                         "model": next((c.get("model") for c in r.calls if c.get("model")), ""),
                          "partial": r.partial()}
                         for r in reports],
         "partial_sheets": [r.sheet for r in reports if r.partial()],
