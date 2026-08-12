@@ -2105,24 +2105,31 @@ def save_letter_artifact(ws: Workspace, tender_id: str, letter: LetterOfOffer) -
 # it, and only a confirmation writes the model. See the table comment in `models.py`.
 _CONDITION_COLUMNS = (
     "set_id, condition_id, text, note, created_by, created_at, proposed_path, proposed_value, "
-    "proposal_basis, proposal_source, status, decided_by, decided_at, applied_value"
+    "proposal_basis, proposal_source, status, decided_by, decided_at, applied_value, born_of_seq"
 )
 
 
 def save_condition(conn: sqlite3.Connection, set_id: str, condition_id: str, *, text: str,
-                   note: str = "", actor: str = "") -> dict:
-    """Record a condition. Idempotent on ``(set_id, condition_id)``; never touches the verdict."""
+                   note: str = "", actor: str = "", born_of_seq: int = 0) -> dict:
+    """Record a condition. Idempotent on ``(set_id, condition_id)``; never touches the verdict.
+
+    ``born_of_seq`` names the site-log discussion that concluded this condition — the provenance
+    that lets a confirmed condition answer "why do we believe this?" with the conversation. 0
+    means it was typed straight onto the register, which most are.
+    """
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     conn.execute(
         """
         INSERT INTO client_boq_conditions
-            (set_id, condition_id, text, note, created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (set_id, condition_id, text, note, created_by, created_at, born_of_seq)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(set_id, condition_id) DO UPDATE SET
-            text = excluded.text, note = excluded.note
+            text = excluded.text, note = excluded.note,
+            born_of_seq = CASE WHEN excluded.born_of_seq > 0
+                               THEN excluded.born_of_seq ELSE born_of_seq END
         """,
-        (set_id, condition_id, text, note, actor, now),
+        (set_id, condition_id, text, note, actor, now, born_of_seq),
     )
     conn.commit()
     return load_condition(conn, set_id, condition_id) or {}
@@ -2157,6 +2164,63 @@ def decide_condition(conn: sqlite3.Connection, set_id: str, condition_id: str, *
         (status, actor, now, applied_value, set_id, condition_id),
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# The site log — grounded discussions, persisted. Memory, not authority.
+# ---------------------------------------------------------------------------
+def save_ask_exchange(conn: sqlite3.Connection, set_id: str, *, question: str,
+                      payload: dict, actor: str = "") -> int:
+    """Persist one grounded exchange and return its per-set ``seq``.
+
+    ``payload`` is the validated answer's dict — the type with no field for a rate or a verdict —
+    so the log can never hold more authority than the response did. Everything is kept, including
+    ``stripped`` (what validation removed): a discussion that lost a citation on the way through
+    must read that way six months later too.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+
+    seq = (conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM client_boq_site_log WHERE set_id = ?",
+        (set_id,)).fetchone()[0])
+    conn.execute(
+        """
+        INSERT INTO client_boq_site_log
+            (set_id, seq, question, answer, cannot_answer, citations_json, figures_json,
+             proposes, stripped_json, asked_by, asked_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (set_id, seq, question, payload.get("answer", ""), payload.get("cannot_answer", ""),
+         _json.dumps(payload.get("citations", []), ensure_ascii=False),
+         _json.dumps(payload.get("figures", {}), ensure_ascii=False),
+         payload.get("proposes", ""),
+         _json.dumps(payload.get("stripped", []), ensure_ascii=False),
+         actor, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    return int(seq)
+
+
+def load_site_log(conn: sqlite3.Connection, set_id: str,
+                  limit: Optional[int] = None) -> list[dict]:
+    """The discussions, oldest first — the order a reader replays them in."""
+    import json as _json
+
+    rows = conn.execute(
+        "SELECT seq, question, answer, cannot_answer, citations_json, figures_json, proposes, "
+        "stripped_json, asked_by, asked_at FROM client_boq_site_log WHERE set_id = ? "
+        "ORDER BY seq", (set_id,)).fetchall()
+    out = []
+    for row in rows:
+        entry = dict(row)
+        for key in ("citations_json", "figures_json", "stripped_json"):
+            try:
+                entry[key.removesuffix("_json")] = _json.loads(entry.pop(key))
+            except (ValueError, TypeError):
+                entry[key.removesuffix("_json")] = None   # a corrupt blob is a gap, not a crash
+        out.append(entry)
+    return out[-limit:] if limit else out
 
 
 def load_condition(conn: sqlite3.Connection, set_id: str, condition_id: str) -> Optional[dict]:

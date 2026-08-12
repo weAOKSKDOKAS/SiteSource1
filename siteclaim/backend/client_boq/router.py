@@ -4956,6 +4956,8 @@ class ConditionRequest(BaseModel):
 
     set_id: str
     text: str
+    #: The site-log discussion this condition was born of, 0 for none — provenance, never a value.
+    born_of_seq: int = 0
     note: str = ""
     condition_id: str = ""          # blank mints one
 
@@ -5344,6 +5346,28 @@ def post_assumption_value(req: AssumptionValueRequest, actor: str = Depends(_act
 # ---------------------------------------------------------------------------
 # Conditions — a sentence somebody wrote down, mapped onto a knob by proposal
 # ---------------------------------------------------------------------------
+@router.get("/costing/{set_id}/log")
+def get_site_log(set_id: str) -> dict:
+    """Every grounded discussion on this tender, oldest first. A pure read.
+
+    Memory, not authority: nothing prices from this, and each entry still carries its `stripped`
+    list — a discussion that lost a citation on the way through reads that way here too.
+    """
+    conn = store.get_conn()
+    try:
+        entries = store.load_site_log(conn, set_id)
+        conditions = store.load_conditions(conn, set_id)
+    finally:
+        conn.close()
+    born = {row["born_of_seq"]: row["condition_id"] for row in conditions
+            if row.get("born_of_seq")}
+    for entry in entries:
+        # The forward link: which discussion went on to become a recorded condition. Derived at
+        # read time from the conditions' own provenance, never stored twice.
+        entry["became_condition"] = born.get(entry["seq"], "")
+    return {"set_id": set_id, "count": len(entries), "entries": entries}
+
+
 @router.get("/costing/{set_id}/conditions")
 def get_conditions(set_id: str) -> dict:
     """Every condition on this tender. Nothing is filtered — an unmapped one has to stay visible."""
@@ -5374,7 +5398,8 @@ def post_condition(req: ConditionRequest, actor: str = Depends(_actor)) -> dict:
     conn = store.get_conn()
     try:
         stored = store.save_condition(conn, req.set_id, condition_id, text=text,
-                                      note=req.note, actor=actor)
+                                      note=req.note, actor=actor,
+                                      born_of_seq=max(0, req.born_of_seq))
         parts = _costing_or_library(conn, req.set_id)
     finally:
         conn.close()
@@ -5685,7 +5710,7 @@ class AskRequest(BaseModel):
 
 
 @router.post("/costing/ask")
-def post_ask(req: AskRequest) -> dict:
+def post_ask(req: AskRequest, actor: str = Depends(_actor)) -> dict:
     """Ask a question about one tender, grounded in its own documents and its own numbers.
 
     The answer is constrained BY ITS SHAPE (see `boq/ask.py`): it may quote a figure the engine
@@ -5726,9 +5751,22 @@ def post_ask(req: AskRequest) -> dict:
 
     answer = boq_ask.validate(raw.model_dump() if hasattr(raw, "model_dump") else (raw or {}),
                               ground)
-    return {"set_id": req.set_id, "question": question, **answer.model_dump(),
-            "grounded_in": sorted(ground.sources),
-            "figures": {k: ground.figures[k] for k in answer.figures_used}}
+    payload = {**answer.model_dump(),
+               "figures": {k: ground.figures[k] for k in answer.figures_used}}
+    # PERSISTED, with who asked and when. The exchange used to live only in this response, so a
+    # discussion that decided something real was gone on refresh, a later question could not see
+    # it, and a condition born of it could not say so. The log stores the VALIDATED answer — the
+    # type with no field for a rate or a verdict — so memory can never hold more authority than
+    # the reply did.
+    conn = store.get_conn()
+    try:
+        log_seq = store.save_ask_exchange(conn, req.set_id, question=question,
+                                          payload=payload, actor=actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "question": question, **payload,
+            "log_seq": log_seq, "asked_by": actor,
+            "grounded_in": sorted(ground.sources)}
 
 
 def _ground_for(conn, set_id: str) -> "boq_ask.Ground":
@@ -5798,6 +5836,27 @@ def _ground_for(conn, set_id: str) -> "boq_ask.Ground":
         if photo["caption"] or photo["station"]:
             ground.sources[f"photo:{photo['filename']}"] = (
                 f"{photo['caption']}" + (f" (station {photo['station']})" if photo["station"] else ""))
+
+    # THE TENDER'S OWN MEMORY — the two sources that close the discussion loop. Without them a
+    # question asked on Tuesday could contradict what was decided on Monday and nobody would know:
+    # the answer could not see the recorded conditions OR the earlier discussions.
+    #
+    # A condition's STATUS travels with it, spelled out, because "confirmed" and "written down and
+    # rejected" are opposite facts that share a table. The log is condensed to the last entries and
+    # each is labelled a DISCUSSION — ground to reason from, never a clause to cite as authority.
+    for row in store.load_conditions(conn, set_id)[:40]:
+        status = {"confirmed": "CONFIRMED by " + (row.get("decided_by") or "someone"),
+                  "rejected": "REJECTED — do not rely on it"}.get(
+                      row.get("status") or "", "recorded, not yet decided")
+        ground.sources[f"condition:{row['condition_id']}"] = (
+            f"{row['text'][:400]} [{status}]"
+            + (f" (born of discussion #{row['born_of_seq']})" if row.get("born_of_seq") else ""))
+    for entry in store.load_site_log(conn, set_id, limit=12):
+        body = entry["answer"] or entry["cannot_answer"]
+        ground.sources[f"discussion:{entry['seq']}"] = (
+            f"{entry['asked_by'] or 'someone'} asked: {entry['question'][:300]} — the grounded "
+            f"answer was: {body[:600]}"
+            + (f" It suggested recording: {entry['proposes'][:200]}" if entry["proposes"] else ""))
     return ground
 
 

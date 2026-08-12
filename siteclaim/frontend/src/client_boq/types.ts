@@ -622,6 +622,24 @@ export interface PhotoReadResponse {
 
 /** A grounded answer. Deliberately has no field for a rate, a duration, a class or a verdict —
  *  there is nowhere to put the kind of answer a chat box would otherwise invent. */
+/** One persisted discussion. Everything the reply carried, including what validation stripped —
+ *  a discussion that lost a citation on the way through must read that way six months later. */
+export interface SiteLogEntry {
+  seq: number;
+  question: string;
+  answer: string;
+  cannot_answer: string;
+  citations: { source: string; quote: string }[] | null;
+  figures: Record<string, string> | null;
+  proposes: string;
+  stripped: string[] | null;
+  asked_by: string;
+  asked_at: string | null;
+  /** The condition this discussion went on to become, "" when it did not. Derived at read time
+   *  from the condition's own provenance. */
+  became_condition: string;
+}
+
 export interface AskResponse {
   set_id: string;
   question: string;
@@ -637,6 +655,9 @@ export interface AskResponse {
   /** What was removed on the way through. A fabricated citation reads exactly like a real one. */
   stripped: string[];
   grounded_in: string[];
+  /** This exchange's place in the tender's persisted site log. Memory, not authority. */
+  log_seq: number;
+  asked_by: string;
 }
 
 // --- the bid / no-bid decision (the tender's FIRST decision) ----------------

@@ -21,9 +21,9 @@
 // An answer with no citation is marked as a suggestion rather than a finding, by the backend, and
 // rendered that way here.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AskResponse } from "../types";
+import type { AskResponse, SiteLogEntry } from "../types";
 import { Button, Card, SectionLabel, cx } from "../ui";
 
 export function Ask({
@@ -40,13 +40,36 @@ export function Ask({
   const [reply, setReply] = useState<AskResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [recorded, setRecorded] = useState(false);
+  // THE TENDER REMEMBERS. Every exchange is persisted server-side, so a discussion that decided
+  // something real survives a refresh, later questions are grounded in it, and a condition can
+  // say which conversation it was born of.
+  const [log, setLog] = useState<SiteLogEntry[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .siteLog(setId)
+      .then((r) => live && setLog(r.entries))
+      .catch(() => live && setLog([]));   // 404 = no log yet; a failed read leaves history blank,
+    return () => {                        // and asking still works — the log is memory, not gate
+      live = false;
+    };
+  }, [setId, recorded]);
 
   const ask = async () => {
     if (!question.trim()) return;
     setBusy(true);
     setRecorded(false);
     try {
-      setReply(await api.ask(setId, question.trim()));
+      const r = await api.ask(setId, question.trim());
+      setReply(r);
+      setLog((prev) => [...prev, {
+        seq: r.log_seq, question: r.question, answer: r.answer,
+        cannot_answer: r.cannot_answer, citations: r.citations, figures: r.figures,
+        proposes: r.proposes, stripped: r.stripped, asked_by: r.asked_by,
+        asked_at: null, became_condition: "",
+      }]);
+      setQuestion("");
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -63,6 +86,36 @@ export function Ask({
         computed and it may not invent one; every claim carries a citation, and anything it could
         not source is stripped and shown below the answer.
       </p>
+
+      {log.length > 0 && (
+        <div className="mt-3 max-h-[300px] overflow-y-auto rounded-cb-card border border-cb-border bg-cb-surface">
+          {log.map((entry) => (
+            <div key={entry.seq} className="border-b border-cb-divider px-3 py-2 last:border-b-0">
+              <p className="font-cb-sans text-[10px] text-cb-muted">
+                <span className="font-cb-mono text-[9px] text-cb-faint">#{entry.seq}</span>{" "}
+                <span className="font-semibold text-cb-ink-text">
+                  {entry.asked_by || "someone"}
+                </span>{" "}
+                asked: {entry.question}
+              </p>
+              <p className="mt-1 font-cb-serif text-[11.5px] leading-[1.55] text-cb-body">
+                {entry.answer || entry.cannot_answer}
+              </p>
+              {entry.became_condition && (
+                <p className="mt-1 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                  ✓ BECAME CONDITION {entry.became_condition} — it is on the register below
+                </p>
+              )}
+              {(entry.stripped?.length ?? 0) > 0 && (
+                <p className="mt-1 font-cb-sans text-[9px] text-cb-bad-dark">
+                  {entry.stripped!.length} claim(s) were stripped from this answer for citing
+                  nothing that was supplied.
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="mt-2 flex items-start gap-2">
         <input
@@ -154,7 +207,7 @@ export function Ask({
                 <Button
                   onClick={async () => {
                     try {
-                      await api.addCondition(setId, reply.proposes);
+                      await api.addCondition(setId, reply.proposes, "", reply.log_seq);
                       setRecorded(true);
                       await onRecorded();
                     } catch (e) {

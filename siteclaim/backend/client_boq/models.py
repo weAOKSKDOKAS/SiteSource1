@@ -1548,6 +1548,30 @@ _DDL = [
         updated_at TEXT
     )
     """,
+    # THE SITE LOG — every grounded discussion about a tender, persisted.
+    #
+    # The chat existed and forgot: an exchange lived only in the response, a confirmed condition
+    # could not say which conversation decided it, and a later question could not see what was
+    # already discussed. The log is MEMORY, NOT AUTHORITY: nothing prices from it, no build-up
+    # cites it, and the answer type it stores still has no field for a rate or a verdict. What it
+    # buys is the loop the owner asked for — the AI seeing what was already said, and a condition
+    # answering "why do we believe this?" with the discussion that concluded it.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_site_log (
+        set_id         TEXT NOT NULL,
+        seq            INTEGER NOT NULL,            -- per-set ordinal, 1-based
+        question       TEXT NOT NULL,
+        answer         TEXT NOT NULL DEFAULT '',
+        cannot_answer  TEXT NOT NULL DEFAULT '',
+        citations_json TEXT NOT NULL DEFAULT '[]',
+        figures_json   TEXT NOT NULL DEFAULT '{}',  -- the engine figures the answer quoted
+        proposes       TEXT NOT NULL DEFAULT '',    -- the one action an answer may suggest
+        stripped_json  TEXT NOT NULL DEFAULT '[]',  -- what validation removed. Never silent.
+        asked_by       TEXT NOT NULL DEFAULT '',
+        asked_at       TEXT,
+        PRIMARY KEY (set_id, seq)
+    )
+    """,
     # The pricing schedule a live estimate is run FROM — quantities, resources and the margin.
     #
     # `/estimate/run` takes the schedule in its request body and DEMO supplies a fixture, so
@@ -1992,6 +2016,10 @@ def init_tables(conn: sqlite3.Connection) -> None:
 #: to read back as something honest rather than as NULL.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("client_boq_coverage_ticks", "basis_key", "TEXT NOT NULL DEFAULT ''"),
+    # Which site-log discussion a condition was born of. 0 = none (seq is 1-based), which is the
+    # honest default for every condition written before the log existed and every one typed
+    # straight onto the register.
+    ("client_boq_conditions", "born_of_seq", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

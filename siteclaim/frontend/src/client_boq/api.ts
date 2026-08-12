@@ -56,6 +56,7 @@ import type {
   PartsResponse,
   AccessBoardResponse,
   AskResponse,
+  SiteLogEntry,
   BidBrief,
   BidDecision,
   ConditionRow,
@@ -353,10 +354,13 @@ export const api = {
     post<AskResponse>("/costing/ask", { set_id: setId, question }),
   /** Record a condition AND ask the model which knob it moves. Recording is unconditional; the
    *  mapping is a proposal and writes nothing. */
-  addCondition: (setId: string, text: string, note = "") =>
+  /** The tender's persisted discussions, oldest first. */
+  siteLog: (setId: string) =>
+    get<{ set_id: string; count: number; entries: SiteLogEntry[] }>(`/costing/${setId}/log`),
+  addCondition: (setId: string, text: string, note = "", bornOfSeq = 0) =>
     post<{ condition: ConditionRow; proposal: Record<string, unknown>; awaiting: string }>(
       "/costing/conditions",
-      { set_id: setId, text, note },
+      { set_id: setId, text, note, born_of_seq: bornOfSeq },
     ),
   /** The ONLY call that writes the model from a condition. `value` overrides the proposal. */
   decideCondition: (setId: string, conditionId: string, status: string, value?: number) =>
