@@ -134,9 +134,54 @@ T = TypeVar("T", bound=BaseModel)
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
+#: The operator's override, or ``None`` for "whatever the environment says".
+#:
+#: WHY THIS IS NOT A ROW IN A TABLE. `client_boq/store.py:72` chooses WHICH DATABASE to open by
+#: calling :func:`demo_mode`, so a flag stored in `client_boq_settings` would be circular — you
+#: would have to know the mode to know which database to read the mode from, and the demo DB and
+#: the live DB would each hold their own answer. A process variable has no such problem, and every
+#: one of the 61 non-test call sites reads `demo_mode()` from inside a function, so a change takes
+#: effect on the next call without a restart.
+#:
+#: IT DOES NOT SURVIVE A RESTART, deliberately. The environment is the deployment's decision and
+#: this is the operator's; a process that comes back up returns to what it was deployed as, so a
+#: server cannot be left in demo by somebody who forgot. The UI says so rather than implying
+#: otherwise.
+_demo_override: Optional[bool] = None
+
+
 def demo_mode() -> bool:
-    """True when ``DEMO_MODE`` is set — read dynamically so tests can toggle it."""
+    """True when demo mode is on — the operator's override if there is one, else ``DEMO_MODE``.
+
+    Read dynamically, never cached, so tests can toggle it and so a mid-session change reaches
+    every stage on its next call.
+    """
+    if _demo_override is not None:
+        return _demo_override
     return os.getenv("DEMO_MODE", "").strip().lower() in _TRUTHY
+
+
+def set_demo_mode(on: Optional[bool]) -> bool:
+    """Override the environment for this process. ``None`` clears it. Returns the mode now in force.
+
+    THE ONE WRITER of the override, so there is a single place to look when the mode is not what
+    somebody expected. Deliberately takes a tri-state rather than a bool: "the operator has not
+    chosen" and "the operator chose demo" are different facts, and collapsing them would make
+    clearing the override impossible.
+    """
+    global _demo_override
+    _demo_override = None if on is None else bool(on)
+    return demo_mode()
+
+
+def demo_mode_source() -> str:
+    """Where the current mode came from: ``"operator"`` or ``"environment"``.
+
+    On the screen this is the difference between "somebody switched this" and "this is how it was
+    deployed", and an operator who opens the app mid-session cannot tell those apart from the mode
+    alone.
+    """
+    return "operator" if _demo_override is not None else "environment"
 
 
 def extraction_provider() -> str:

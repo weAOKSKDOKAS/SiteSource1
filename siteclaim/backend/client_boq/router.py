@@ -1438,6 +1438,86 @@ def get_settings() -> dict:
     }
 
 
+class ModeRequest(BaseModel):
+    """Demo or live. ``None`` clears the operator's override back to the deployment's default."""
+    demo: Optional[bool] = None
+    #: A person typing the word, because this decides whether a tender is a real tender and
+    #: whether an enquiry is a real email. Nothing about this should be one click.
+    confirm: str = ""
+
+
+def _mode_payload() -> dict:
+    """What mode the app is in, where that came from, and whether the other mode would work.
+
+    THE MISSING-KEY CHECK IS THE POINT of doing this here rather than at the first model call. In
+    demo there is no key to have, so nothing complains — and the first thing live mode does is a
+    document read, which is minutes into a job and looks like a failure of the tender rather than
+    of the configuration.
+    """
+    from pipeline.llm_client import (
+        PROVIDER_KEY_ENV,
+        demo_mode,
+        demo_mode_source,
+        provider_key,
+    )
+    from client_boq import llm as llm_mod
+
+    cfg = llm_mod.current_settings()
+    text_provider = cfg["provider"] or ("deepseek" if provider_key("deepseek") else "anthropic")
+    ingest = llm_mod.resolve_provider(cfg, llm_mod.STAGE_INGEST) or text_provider
+    needed = sorted({text_provider, ingest})
+    missing = [p for p in needed if not provider_key(p)]
+    return {
+        "demo": demo_mode(),
+        "source": demo_mode_source(),
+        # Says plainly that the switch is for this process. A restart returns to the deployment's
+        # own answer, which is the safe direction: nobody can leave a server in demo by forgetting.
+        "reverts_on_restart": True,
+        "env_default": os.getenv("DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"},
+        "providers_needed": needed,
+        "providers_missing": missing,
+        "live_ready": not missing,
+        "set_to_go_live": {p: list(PROVIDER_KEY_ENV.get(p, ())) for p in missing},
+        "blocked_because": ("" if not missing else
+                            f"live mode would call {' and '.join(missing)} and no key is set for "
+                            f"{'either' if len(missing) > 1 else 'it'}. Set "
+                            f"{' or '.join(n for p in missing for n in PROVIDER_KEY_ENV.get(p, ()))}"
+                            f" in siteclaim/backend/.env and restart, or pick a provider that has "
+                            f"a key on Settings."),
+    }
+
+
+@router.get("/mode")
+def get_mode() -> dict:
+    """Demo or live, and what it would take to change it. A pure read."""
+    return _mode_payload()
+
+
+@router.post("/mode")
+def post_mode(req: ModeRequest, actor: str = Depends(_actor)) -> dict:
+    """Switch the whole app between demo and live. **The only writer of the override.**
+
+    Refuses to go live with no key rather than letting the first model call discover it, and
+    refuses without the word typed — this decides whether outbound email is real, whether a tender
+    is a real tender, and whether a token is spent. Turning demo ON is never refused: going offline
+    is always safe, and a switch that can be hard to reach in the safe direction is a switch people
+    route around.
+    """
+    from pipeline.llm_client import set_demo_mode
+
+    if req.demo is False:
+        state = _mode_payload()
+        if not state["live_ready"]:
+            raise HTTPException(status_code=409, detail=state["blocked_because"])
+        if req.confirm.strip().upper() != "LIVE":
+            raise HTTPException(
+                status_code=409,
+                detail=("Going live means real API spend, real outbound email and real tenders. "
+                        "Type LIVE to confirm."))
+    set_demo_mode(req.demo)
+    return {**_mode_payload(), "changed_by": actor}
+
+
 @router.post("/company")
 def post_company(req: CompanySettings, actor: str = Depends(_actor)) -> dict:
     """Save the letterhead. Blank fields are allowed and stay blank — the offer letter renders a
@@ -1486,6 +1566,8 @@ def get_sets(include_archived: bool = False) -> dict:
     Archived tenders leave the shelf by default — the shelf is only what still needs work —
     and come back with ``?include_archived=true`` for the Archived screen.
     """
+    from pipeline.llm_client import demo_mode
+
     conn = store.get_conn()
     try:
         sets = store.list_sets(conn, include_archived=include_archived)
@@ -1493,7 +1575,18 @@ def get_sets(include_archived: bool = False) -> dict:
             _backfill_close_date(conn, entry)
     finally:
         conn.close()
-    return {"count": len(sets), "sets": sets}
+    # DEMO AND LIVE TENDERS CANNOT MIX, and the reason is structural rather than a filter: in demo
+    # `store.get_conn` opens a different DATABASE FILE (`store.py:72`), so this list is only ever
+    # one or the other. What it could not do until now is SAY which — and `set_id = tender_slug(
+    # name)`, so a demo tender and a live tender sharing a name share an id in two different files.
+    # Flipping the switch would then swap which one an open screen is showing, silently.
+    #
+    # Derived per read, never stored: a stored flag would say "demo" about a row in the live DB the
+    # moment somebody copied one across, which is exactly when you need it to be right.
+    demo = demo_mode()
+    for entry in sets:
+        entry["demo"] = demo
+    return {"count": len(sets), "sets": sets, "demo": demo}
 
 
 def _backfill_close_date(conn, entry: dict) -> None:

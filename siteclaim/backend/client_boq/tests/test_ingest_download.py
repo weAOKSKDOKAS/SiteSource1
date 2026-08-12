@@ -165,7 +165,12 @@ def test_downloading_a_set_that_was_never_split_404s(client):
 # ---------------------------------------------------------------------------
 def test_an_empty_installation_lists_nothing(client):
     body = client.get("/client-boq/sets").json()
-    assert body == {"count": 0, "sets": []}
+    # RE-ANCHORED 2026-08-12, disclosed. This was `body == {"count": 0, "sets": []}`, an exact
+    # match, and the payload gained a `demo` flag: `set_id = tender_slug(name)`, so a demo tender
+    # and a live tender sharing a name share an id in two different database files, and the shelf
+    # has to say which file it read. The subject of this test is the emptiness, not the key count.
+    assert body["count"] == 0 and body["sets"] == []
+    assert "demo" in body, "the shelf must say which of the two databases it is reading"
 
 
 def test_a_set_appears_with_its_part_count_and_gate_states(client):

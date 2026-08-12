@@ -807,6 +807,32 @@ export interface BandCalibration {
 }
 
 // --- app-wide settings (the AI model) --------------------------------------
+/** Demo or live, and what it would take to change it.
+ *
+ *  DEMO IS OFFLINE: no token is spent, no email is sent, and the tenders live in a different
+ *  database file from the live ones — so the two can never appear in one list. LIVE is real spend,
+ *  real outbound email and real tenders.
+ */
+export interface ModeResponse {
+  demo: boolean;
+  /** "operator" when somebody switched it here, "environment" when it is the deployment default.
+   *  A person opening the app mid-session cannot tell those apart from the mode alone. */
+  source: "operator" | "environment";
+  /** The override is a process variable, so a restart returns to `env_default`. Always true; it is
+   *  a field rather than an assumption so the screen can state it instead of implying it. */
+  reverts_on_restart: boolean;
+  env_default: boolean;
+  /** The providers live mode would actually call — the text one and the ingest one. */
+  providers_needed: string[];
+  /** Those with no API key set on the server. Empty means live would work. */
+  providers_missing: string[];
+  live_ready: boolean;
+  /** provider -> the environment variables that would satisfy it. */
+  set_to_go_live: Record<string, string[]>;
+  /** Why live is refused, in a sentence naming the variable. Empty when it is not. */
+  blocked_because: string;
+}
+
 export interface LLMSettingsResponse {
   /** The letterhead block, saved on the same screen. */
   company: CompanySettings;

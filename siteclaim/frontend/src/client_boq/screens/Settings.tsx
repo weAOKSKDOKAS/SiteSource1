@@ -8,8 +8,8 @@
 // server environment's default rather than "off".
 
 import { useEffect, useState } from "react";
-import { api } from "../api";
-import type { CompanySettings, LLMSettingsResponse } from "../types";
+import { api, readFailure } from "../api";
+import type { CompanySettings, LLMSettingsResponse, ModeResponse } from "../types";
 import { Button, SectionLabel, cx } from "../ui";
 
 /** What each provider is, in one line. Unknown names still render — the list comes from the
@@ -164,6 +164,8 @@ export function Settings({
           run, so a change here applies from the next run with nothing to restart.
         </p>
 
+        <ModeSwitch onError={onError} />
+
         {demoMode && (
           <div className="mt-3 rounded-cb-card border border-cb-brass-line bg-cb-brass-tint px-3 py-2 font-cb-sans text-[10.5px] leading-[1.5] text-cb-brass-text">
             The backend is in DEMO — no model is called at all, whatever is set here. The setting
@@ -302,5 +304,131 @@ export function Settings({
         </section>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Demo or live — the switch that decides whether any of this is real
+//
+// Deliberately not a toggle. Going live means real API spend, real outbound email and real
+// tenders, so it costs a typed word and refuses outright with no key configured. Going back to
+// demo is one click: offline is always safe, and a switch that is hard to reach in the safe
+// direction is a switch people route around.
+//
+// The mode is a PROCESS setting, not a stored one. `client_boq/store.py` picks which database to
+// open by asking what mode it is in, so a row in `client_boq_settings` would be circular — you
+// would have to know the mode to know which database to read the mode from. The panel says the
+// consequence out loud rather than letting somebody discover it after a restart.
+// ---------------------------------------------------------------------------
+function ModeSwitch({ onError }: { onError: (msg: string) => void }) {
+  const [mode, setMode] = useState<ModeResponse | null>(null);
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .mode()
+      .then(setMode)
+      .catch((e) => onError(readFailure(e)));
+  }, [onError]);
+
+  const switchTo = async (demo: boolean | null) => {
+    setBusy(true);
+    try {
+      const next = await api.setMode(demo, demo === false ? confirm : "");
+      setMode(next);
+      setConfirm("");
+      // A HARD RELOAD, not a re-render. The two modes read different DATABASE FILES, and
+      // `set_id` is derived from the tender's name — so a demo tender and a live tender sharing a
+      // name share an id. Every screen holding a tender is now holding one from the other file.
+      window.location.reload();
+    } catch (e) {
+      onError(readFailure(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!mode) return null;
+
+  return (
+    <section
+      className={cx(
+        "mt-4 rounded-cb-card border px-3 py-3",
+        mode.demo ? "border-cb-brass-line bg-cb-brass-tint" : "border-cb-navy-line bg-cb-panel",
+      )}
+    >
+      <SectionLabel>{mode.demo ? "DEMO — nothing here is real" : "LIVE — this is real"}</SectionLabel>
+      <p
+        className={cx(
+          "mt-1 font-cb-sans text-[10.5px] leading-[1.55]",
+          mode.demo ? "text-cb-brass-text" : "text-cb-body",
+        )}
+      >
+        {mode.demo
+          ? "No model is called, no email can be sent, no token is spent, and these tenders are in a separate database from your real ones."
+          : "Every reading stage calls a real model and spends real credit. Enquiries go to real addresses. Tenders here are your real tenders."}{" "}
+        {mode.source === "operator"
+          ? `Switched here, not deployed this way${
+              mode.reverts_on_restart
+                ? ` — a server restart returns it to ${mode.env_default ? "DEMO" : "LIVE"}.`
+                : "."
+            }`
+          : "This is how the server was started (the DEMO_MODE variable)."}
+      </p>
+
+      {mode.demo ? (
+        <div className="mt-2.5">
+          {!mode.live_ready ? (
+            // SAID HERE, not at the first model call — which is minutes into a job and looks like
+            // the tender failing rather than the configuration being absent.
+            <p className="font-cb-sans text-[10.5px] leading-[1.55] text-cb-bad-dark">
+              LIVE is not available: {mode.blocked_because}
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="type LIVE"
+                aria-label="Type LIVE to confirm going live"
+                className="w-[110px] rounded-cb-btn border border-cb-border bg-cb-warm px-2 py-1 font-cb-mono text-[11px] uppercase text-cb-ink-text placeholder:font-cb-sans placeholder:normal-case placeholder:text-cb-faint"
+              />
+              <Button
+                variant="outline"
+                disabled={busy || confirm.trim().toUpperCase() !== "LIVE"}
+                onClick={() => void switchTo(false)}
+              >
+                Go live
+              </Button>
+              <span className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+                Calls {mode.providers_needed.join(" and ")}. Spends real credit.
+              </span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <Button variant="outline" disabled={busy} onClick={() => void switchTo(true)}>
+            Switch to demo
+          </Button>
+          <span className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+            Offline immediately. Your live tenders stay where they are — demo reads a different
+            database.
+          </span>
+        </div>
+      )}
+
+      {mode.source === "operator" && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void switchTo(null)}
+          className="mt-2 font-cb-sans text-[9.5px] text-cb-muted underline underline-offset-2"
+        >
+          Use the server's own setting ({mode.env_default ? "DEMO" : "LIVE"}) instead
+        </button>
+      )}
+    </section>
   );
 }

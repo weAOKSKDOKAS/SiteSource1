@@ -438,16 +438,33 @@ export function GlobalBar({
         </span>
       )}
 
-      {/* Not decoration. DEMO means the uploaded files were never read and every finding on
-          screen came from a fixture — the one fact that changes how to read the whole app. */}
-      {demoMode && (
+      {/* ALWAYS SHOWN, BOTH WAYS. Not decoration, and no longer only visible in one of the two
+          modes: an absent chip used to mean "live", which is a fact stated by silence — and a
+          person who opens the app mid-session would have to know that to read it. Both modes now
+          say their own name.
+
+          Two existing tokens, no new colour. Amber is the app's warning/vision-OCR token and
+          already meant demo; navy is the deterministic-authority token, and live IS the real
+          thing. Clicking goes to Settings, where the switch is — the chip never switches
+          anything, because this decides whether an email is real. */}
+      <a
+        href="#/tender/settings"
+        title={
+          demoMode
+            ? "Offline demo: uploads were not read, all findings are canned, nothing is sent and no token is spent. Click to switch."
+            : "LIVE: real API spend, real outbound email, real tenders. Click to switch."
+        }
+        className="flex-none no-underline"
+      >
         <Chip
-          className="bg-cb-amber text-cb-on-brass"
-          title="Offline demo: uploads were not read and all findings are canned."
+          className={cx(
+            "cursor-pointer",
+            demoMode ? "bg-cb-amber text-cb-on-brass" : "bg-cb-navy-line text-cb-page",
+          )}
         >
-          DEMO — UPLOADS NOT READ
+          {demoMode ? "DEMO — NOTHING IS REAL" : "LIVE — REAL SPEND"}
         </Chip>
-      )}
+      </a>
 
       <span className="ml-auto flex flex-none items-center gap-2">{right}</span>
     </header>

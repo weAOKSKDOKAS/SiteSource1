@@ -41,6 +41,7 @@ import type {
   Highlight,
   JobState,
   LLMSettingsResponse,
+  ModeResponse,
   LetterResponse,
   LevelAllResponse,
   LevelUploadResult,
@@ -468,6 +469,20 @@ export const api = {
    *  disagree with the first with no way to tell which was right. It never prices. */
   previewGroup: (setId: string, group: Partial<HoleGroup>) =>
     post<GroupPreview>("/site/preview", { set_id: setId, group }),
+
+  // --- demo or live ---------------------------------------------------------
+  /** Which mode the whole app is in, where that came from, and what live would need.
+   *
+   *  Read this rather than `health().demo_mode` when the answer has to be current: the operator
+   *  can change it mid-session, and `health` is fetched once at start-up. */
+  mode: () => get<ModeResponse>("/mode"),
+  /** Switch the app. `demo: null` gives the decision back to the deployment's own default.
+   *
+   *  Going LIVE requires `confirm: "LIVE"` and a configured key, and the server refuses with a
+   *  409 naming the variable to set — going live decides whether outbound email is real and
+   *  whether a token is spent, so it is never one click. Going back to demo is never refused. */
+  setMode: (demo: boolean | null, confirm = "") =>
+    post<ModeResponse & { changed_by: string }>("/mode", { demo, confirm }),
 
   // --- app-wide settings (the AI model) -------------------------------------
   settings: () => get<LLMSettingsResponse>("/settings"),
