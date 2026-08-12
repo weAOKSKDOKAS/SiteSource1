@@ -139,7 +139,9 @@ class TestTheAnthropicPathNowRaises:
     def test_an_empty_answer_that_hit_the_ceiling_raises(self, monkeypatch):
         with pytest.raises(CompletionTruncated) as caught:
             self._call(monkeypatch, self._resp("", "max_tokens"))
-        assert "8000-token completion budget" in str(caught.value)
+        # RE-ANCHORED 2026-08-12, disclosed: the budget is thousands-separated now, so this reads
+        # "8,000-token budget". The subject of the test is that the ceiling is quoted at all.
+        assert "8,000-token budget" in str(caught.value)
 
     def test_it_reports_where_the_budget_actually_went(self, monkeypatch):
         """RE-ANCHORED 2026-08-11, disclosed. The message said the answer was "absent" and stopped
@@ -150,10 +152,60 @@ class TestTheAnthropicPathNowRaises:
         """
         with pytest.raises(CompletionTruncated) as caught:
             self._call(monkeypatch, self._resp("", "max_tokens"))
-        message = str(caught.value)
+        message = str(caught.value).lower()
         assert "no content blocks at all" in message
-        assert "if those tokens are in a text block" in message.lower()
-        assert "buys more thinking, not an answer" in message
+        assert "in a text block" in message
+        assert "buys more thinking" in message
+
+    def test_the_evidence_comes_before_the_advice(self, monkeypatch):
+        """RE-ANCHORED 2026-08-12, disclosed, and this is the assertion that replaces three
+        literals with the property they were standing in for.
+
+        The message carried the right evidence and carried it SECOND. Quoted in a report of the
+        second live run it came out as:
+
+            "claude-sonnet-5 used its entire 16000-token completion budget and returned no
+             answer..."
+
+        — the ellipsis swallowing the one fragment that chooses between the two opposite fixes. So
+        the block shape now leads, and what is pinned here is the ORDER rather than the wording:
+        a future rewrite may say it differently, but not later.
+        """
+        class _Thinking:
+            type = "thinking"
+            thinking = "x" * 4096
+
+        class _Resp:
+            content = [_Thinking()]
+            usage = None
+            stop_reason = "max_tokens"
+
+        message = ""
+        with pytest.raises(CompletionTruncated) as caught:
+            self._call(monkeypatch, _Resp())
+        message = str(caught.value)
+
+        evidence = message.index("thinking: 4,096 chars")
+        assert evidence < 80, (
+            f"the block shape starts {evidence} characters in — far enough back that a quoted "
+            f"first line loses it, which is exactly how this went missing before")
+        assert evidence < message.lower().index("bigger budget"), (
+            "the advice is printed before the evidence that chooses between the two halves of it")
+
+    def test_the_shape_survives_being_cut_to_one_line(self, monkeypatch):
+        """The real test of a diagnostic: truncate it the way a person quoting it would."""
+        class _Thinking:
+            type = "thinking"
+            thinking = "x" * 4096
+
+        class _Resp:
+            content = [_Thinking()]
+            usage = None
+            stop_reason = "max_tokens"
+
+        with pytest.raises(CompletionTruncated) as caught:
+            self._call(monkeypatch, _Resp())
+        assert "thinking" in str(caught.value)[:100]
 
     def test_a_thinking_block_is_named_and_sized(self, monkeypatch):
         """The distinguishing evidence. If the tokens are here, raising max_tokens is the wrong

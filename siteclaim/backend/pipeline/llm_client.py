@@ -435,10 +435,14 @@ class LLMClient:
             # the same reason: a misconfiguration must not be mistaken for an answer.
             if not content.strip() and getattr(choice, "finish_reason", None) == "length":
                 reasoning = getattr(choice.message, "reasoning_content", None) or ""
+                # The evidence first, same as the anthropic path — see the long note there. Here it
+                # is one number rather than a block map, because DeepSeek puts the whole chain of
+                # thought in one field.
                 raise CompletionTruncated(
-                    f"{model} used its entire {budget}-token completion budget on reasoning and "
-                    f"returned no answer ({len(reasoning)} chars of reasoning_content). "
-                    "Raise DEEPSEEK_MIN_MAX_TOKENS, or set DEEPSEEK_MODEL to a non-reasoning model."
+                    f"{model} spent its whole {budget:,}-token budget on "
+                    f"[reasoning_content: {len(reasoning):,} chars] and wrote no answer. "
+                    f"Raise DEEPSEEK_MIN_MAX_TOKENS, or set DEEPSEEK_MODEL to a non-reasoning "
+                    f"model."
                 )
             return content
 
@@ -513,10 +517,28 @@ class LLMClient:
             # string that was never the problem, and the corrective retry would re-send the same
             # budget and fail identically.
             if not content.strip() and getattr(choice, "finish_reason", None) == "length":
+                # WHERE THE BUDGET WENT, not an assertion about it. This message named reasoning as
+                # the cause without ever looking, which is the same guess the anthropic path was
+                # fixed to stop making — and it points at the opposite fix from the other case.
+                # OpenAI reports the split under `completion_tokens_details`; when it does not, the
+                # message says it does not rather than filling the gap in.
+                details = getattr(usage, "completion_tokens_details", None)
+                thought = getattr(details, "reasoning_tokens", None)
+                spent = tokens.get("out")
+                if thought is None:
+                    shape = "no reasoning-token split reported"
+                elif thought:
+                    shape = (f"reasoning: {thought:,} of "
+                             f"{f'{spent:,}' if spent is not None else 'an unreported number of'} "
+                             f"output tokens")
+                else:
+                    shape = "reasoning: 0 tokens — the budget went to an answer that was cut off"
                 raise CompletionTruncated(
-                    f"{model} used its entire {max_tokens}-token completion budget and returned no "
-                    f"answer. Raise the caller's max_tokens, or set OPENAI_MODEL to a model that "
-                    f"does not spend its budget reasoning."
+                    f"{model} spent its whole {max_tokens:,}-token budget on [{shape}] and wrote "
+                    f"no answer. IF THE REASONING COUNT IS HIGH the model is being paid to think "
+                    f"and a bigger budget buys more thinking — set OPENAI_MODEL to a model that "
+                    f"does not. IF IT IS ZERO OR UNREPORTED the answer was too big to write, so "
+                    f"ask for less or raise the caller's max_tokens."
                 )
             return content
 
@@ -585,15 +607,29 @@ class LLMClient:
                     body = getattr(block, "text", None) or getattr(block, "thinking", None) or ""
                     blocks[kind] = blocks.get(kind, 0) + len(str(body))
                 shape = (", ".join(f"{k}: {n:,} chars" for k, n in sorted(blocks.items()))
-                         or "no content blocks at all")
+                         or "NO CONTENT BLOCKS AT ALL")
                 spent = tokens.get("out")
+                # THE BLOCK SHAPE GOES FIRST, and that ordering is the whole point of this string.
+                #
+                # It was second, after the budget and the token count, and the first time this
+                # fired for real the report of it read:
+                #
+                #     "claude-sonnet-5 used its entire 16000-token completion budget and returned
+                #      no answer..."
+                #
+                # — with the shape inside the ellipsis. The one fragment that decides between the
+                # two opposite fixes was the fragment that got trimmed, so the next move could only
+                # be a guess, and the obvious guess (raise the ceiling) is the wrong one in one of
+                # the two cases. A diagnostic that survives only when quoted in full is a
+                # diagnostic that does not survive.
                 raise CompletionTruncated(
-                    f"{model} used its entire {max_tokens}-token completion budget and returned no "
-                    f"answer. Spent {spent if spent is not None else 'an unreported number of'} "
-                    f"output tokens on — {shape}. If those tokens are in a text block the answer "
-                    f"was too big to write, so ask for less or budget more; if they are anywhere "
-                    f"else, the model is being paid to think and a bigger budget buys more "
-                    f"thinking, not an answer."
+                    f"{model} spent its whole {max_tokens:,}-token budget on [{shape}] and wrote "
+                    f"no answer"
+                    f"{f' ({spent:,} output tokens)' if spent is not None else ''}. "
+                    f"IF THOSE TOKENS ARE IN A TEXT BLOCK the answer was too big to write, so ask "
+                    f"for less or budget more. IF THEY ARE ANYWHERE ELSE — a thinking block, or no "
+                    f"block at all — the model is being paid to think, and a bigger budget buys "
+                    f"more thinking rather than an answer."
                 )
             return text
 
