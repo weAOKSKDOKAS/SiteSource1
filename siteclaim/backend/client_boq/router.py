@@ -3999,13 +3999,74 @@ def post_parse_station_schedule(req: StationPasteRequest) -> dict:
     }
 
 
+def _set_drawing_files(set_id: str) -> list[tuple[str, bytes]]:
+    """The tender's own drawings, as ``(filename, bytes)`` — the same shape an upload arrives in.
+
+    THE READER COULD NOT SEE DRAWINGS THE APP ALREADY HELD. An archive ingest classifies `DRG/`
+    into parts with ``category == "drawings"`` (35 sheets on the reference pack), each with its cut
+    PDF on disk — and `/site/schedule/read` took only `UploadFile`s, so the Site importer asked the
+    operator to go find those same PDFs in a Downloads folder and upload them again. The bill
+    already had the fix (`/boq/import-from-set`); this is the drawing set's copy of it.
+
+    The name handed to the triage is the part's ``source_doc`` — the original filename, which is
+    what the register's sheet numbers match against. A binder-cut drawing part (one part, many
+    pages, one shared source name) will not match per-sheet numbers, and the triage then says so
+    honestly rather than guessing; uploading the loose sheets remains the way in for that shape.
+    Parts whose PDF is not on disk yet are skipped, never invented.
+    """
+    conn = store.get_conn()
+    try:
+        rows = store.load_parts(conn, set_id)
+    finally:
+        conn.close()
+    out: list[tuple[str, bytes]] = []
+    for spec, path, _context in rows:
+        if spec.category != "drawings" or not path:
+            continue
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            continue                     # a part whose file left the disk is a gap, not a crash
+        out.append(((spec.source_doc or spec.title or spec.part_id), data))
+    return out
+
+
+@router.get("/site/{set_id}/drawings")
+def get_site_drawings(set_id: str) -> dict:
+    """What this tender already holds that the drawing reader could open. A pure read.
+
+    Exists so the Site importer can offer "read from this tender's own drawings" only when there
+    are any — and say how many — instead of asking for an upload the server does not need.
+    """
+    conn = store.get_conn()
+    try:
+        rows = store.load_parts(conn, set_id)
+    finally:
+        conn.close()
+    names = [(spec.source_doc or spec.title or spec.part_id)
+             for spec, path, _context in rows
+             if spec.category == "drawings" and path]
+    return {
+        "set_id": set_id, "count": len(names), "names": names,
+        "waiting_on": ("" if names else
+                       "no ingested part is classified as a drawing — upload the schedule "
+                       "sheets and the register instead"),
+    }
+
+
 @router.post("/site/schedule/read")
 def post_read_station_schedule(
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] = File(default=[]),
     set_id: str = Form(...),
     bands: int = Form(0),
 ) -> dict:
     """Read the take-off off the borehole details drawing(s). Returns a proposal; **saves nothing.**
+
+    WITH NO FILES ATTACHED it reads the tender's OWN drawings — the parts an archive ingest already
+    classified as `drawings` and materialised on disk — so the ordinary case costs the operator one
+    click, not a trip to a Downloads folder for 35 PDFs the server already holds. An upload still
+    works exactly as before, and is the way in for a drawing that arrived outside the archive.
+    The register triage runs identically over both sources, so this costs no extra model call.
 
     Hand it the drawing folder — or just the schedule sheets and the register — and it works out
     which sheets carry a station table before opening any of them. That triage is free: the issuer
@@ -4027,16 +4088,32 @@ def post_read_station_schedule(
     totals against Bill No.2's own quantities.
     """
     uploads = [(f.filename or "drawing.pdf", f.file.read()) for f in files]
+    source = "upload" if uploads else "set"
     if not uploads:
-        raise HTTPException(status_code=400, detail="No drawings were uploaded.")
+        uploads = _set_drawing_files(set_id)
+    if not uploads:
+        raise HTTPException(
+            status_code=404,
+            detail=("No drawings were uploaded and this tender holds no ingested part classified "
+                    "as a drawing. Upload the schedule sheets (and the drawing register, if there "
+                    "is one) instead."))
 
     # The register, if one came with the drawings. Its text layer is the whole triage.
+    #
+    # `page_text(data, 1, 2)`, and the old argument was a live bug: this read `page_text(data, 1,
+    # 0)`, and that function's page range is `range(start-1, min(end, pages))` — with `end=0` an
+    # EMPTY range, so the register text was always "" and the register tier never fired. Every
+    # read, upload path included, silently ran on the weaker filename tier — which cannot tell a
+    # WORKING AREA coordinate sheet from a station schedule, because that difference lives only in
+    # the register's titles. (`has_text_layer` treats `end=0` as "all pages"; `page_text` does
+    # not. The mismatch is the trap.) Found by the first test that drove triage through this
+    # endpoint rather than calling `sheets.plan()` directly.
     register_text = ""
     register_name = ""
     for name, data in uploads:
         if not boq_pdfops.has_text_layer(data):
             continue
-        text = boq_pdfops.page_text(data, 1, 0)
+        text = boq_pdfops.page_text(data, 1, 2)
         if len(text.strip()) >= 500 and text.upper().count("GI") >= 3:
             register_text, register_name = text, name
             break
@@ -4061,6 +4138,11 @@ def post_read_station_schedule(
     schedule = boq_schedule_read.merge(reports, set_id=set_id)
     return {
         "set_id": set_id,
+        # WHERE THE SHEETS CAME FROM: "set" is the tender's own ingested drawings, "upload" is
+        # files attached to this request. Stated because the two can genuinely differ — an
+        # operator comparing a re-issued sheet against the ingested one needs to know which run
+        # was which.
+        "source": source,
         "schedule": schedule.model_dump(),
         "headline": _read_headline(plan, reports, schedule),
         "triage": {

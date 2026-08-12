@@ -406,11 +406,21 @@ export const api = {
   readStationSchedule(setId: string, files: File[]): Promise<ScheduleReadResponse> {
     const form = new FormData();
     form.append("set_id", setId);
+    // NO FILES MEANS THE TENDER'S OWN DRAWINGS. The archive ingest already classified DRG/ into
+    // parts and materialised each sheet on disk, so the ordinary case is one click — not a trip
+    // to a Downloads folder for 35 PDFs the server already holds. Attaching files still reads
+    // exactly those files, for a drawing that arrived outside the archive.
     for (const file of files) form.append("files", file);
     return fetch(`${ROOT}/site/schedule/read`, { method: "POST", body: form }).then((r) =>
       handle<ScheduleReadResponse>(r),
     );
   },
+  /** What the tender already holds that the reader could open — so the importer offers the
+   *  one-click path only when it exists, and says how many sheets it would look at. */
+  siteDrawings: (setId: string) =>
+    get<{ set_id: string; count: number; names: string[]; waiting_on: string }>(
+      `/site/${setId}/drawings`,
+    ),
   /** The writer that existed from the beginning and that nothing in this app ever called. */
   saveStationSchedule: (setId: string, schedule: StationScheduleShape, sourceSheet = "") =>
     post<{ set_id: string; usable: boolean; problems: string[] }>("/site/schedule", {

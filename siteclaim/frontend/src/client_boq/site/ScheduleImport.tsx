@@ -16,7 +16,7 @@
 // A soil cell that read "n/a" must not arrive as 0.00. It is shown as "not read", in red, and the
 // schedule refuses to be usable until somebody settles it.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import type { SchedulePasteResponse, ScheduleReadResponse, Station } from "../types";
 import { Button, SectionLabel, cx, formatNorm } from "../ui";
@@ -38,15 +38,30 @@ export function ScheduleImport({
   const [text, setText] = useState("");
   const [sheet, setSheet] = useState("");
   const [read, setRead] = useState<SchedulePasteResponse | null>(null);
+  // What the tender already holds. null = the lookup has not answered yet (the one-click path is
+  // simply not offered until it has — never a guess about drawings nobody counted).
+  const [held, setHeld] = useState<{ count: number; names: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [drawn, setDrawn] = useState<ScheduleReadResponse | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .siteDrawings(setId)
+      .then((r) => live && setHeld({ count: r.count, names: r.names }))
+      .catch(() => live && setHeld({ count: 0, names: [] }));
+    return () => {
+      live = false;
+    };
+  }, [setId]);
 
   /** Read it off the drawings instead of typing it.
    *
    *  Measured on the reference pack: the schedule sheets are flattened raster carrying 28
    *  characters of text — the title-block stamp — so reading one is a vision call. Working out
    *  WHICH sheets they are is free, because the issuer ships a drawing register and it is the one
-   *  document in the set with a real text layer. Give this the whole drawing folder.
+   *  document in the set with a real text layer. With NO files it reads the tender's own ingested
+   *  drawings; with files, exactly those files.
    *
    *  It reads BOTH: the engineering schedule and the environmental one, which are billed under
    *  different bills. Stopping at the first would under-read the tender, and every check
@@ -135,11 +150,34 @@ export function ScheduleImport({
 
         <div className="mt-5">
           <SectionLabel>READ IT OFF THE DRAWINGS</SectionLabel>
-          <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
-            Give it the whole drawing folder. It reads the drawing register to work out which
-            sheets carry a station table — that part costs nothing — and then reads those sheets.
-            There are usually two: the engineering boreholes and the environmental holes, which are
-            billed separately.
+          {/* THE APP ALREADY HOLDS THE DRAWINGS. On the reference pack the archive ingest
+              classified 35 DRG sheets and put every one on disk — and this screen used to ask
+              the operator to go find those same PDFs in a Downloads folder and upload them
+              again, with the button disabled until they did. One click now; upload stays below
+              for a drawing that arrived outside the archive. */}
+          {held && held.count > 0 && (
+            <div className="mt-1">
+              <p className="font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
+                This tender already holds {held.count} drawing{held.count === 1 ? "" : "s"} from
+                the ingest. The reader will use the drawing register to work out which sheets
+                carry a station table — that part costs nothing — and then read those sheets.
+                There are usually two: the engineering boreholes and the environmental holes,
+                which are billed separately.
+              </p>
+              <Button
+                variant="brass"
+                disabled={busy}
+                onClick={() => void readDrawings([])}
+                className="mt-2"
+              >
+                Read the schedule off this tender&rsquo;s drawings
+              </Button>
+            </div>
+          )}
+          <p className="mt-2 font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
+            {held && held.count > 0
+              ? "Or upload sheets that arrived outside the archive — a re-issued drawing, or a set that never went through ingest:"
+              : "Give it the whole drawing folder. It reads the drawing register to work out which sheets carry a station table — that part costs nothing — and then reads those sheets. There are usually two: the engineering boreholes and the environmental holes, which are billed separately."}
           </p>
           <input
             type="file"
