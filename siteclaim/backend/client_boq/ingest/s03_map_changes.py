@@ -19,7 +19,7 @@ from __future__ import annotations
 from client_boq.ingest import pdfops
 from client_boq.models import AddendumPlan, PartSpec, ProposedMapping
 from pipeline.llm_client import LLMClient, demo_mode
-from client_boq.llm import make_client
+from client_boq.llm import STAGE_INGEST, make_client
 
 
 def _unmatched(filename: str) -> ProposedMapping:
@@ -88,7 +88,10 @@ def plan_addendum(
     comes back unmatched for the human to map by hand, which is a slower gate but never a lost
     addendum.
     """
-    client = make_client()  # app-wide model setting applied here (client_boq/llm.py)
+    # `stage=STAGE_INGEST` for the same reason its siblings use it: this READS the tender.
+    # `pdfops.page_text` pulls the addendum letter and the head of every replacement, and
+    # `EXTRACTION_PROVIDER` is the setting that names who does that.
+    client = make_client(stage=STAGE_INGEST)
 
     if demo_mode():
         plan = client.complete_json(

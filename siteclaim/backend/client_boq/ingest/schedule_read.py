@@ -483,9 +483,26 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                                    "it has been looked at"))
 
     if client is None:
-        from client_boq.llm import make_client
+        from client_boq.llm import STAGE_INGEST, make_client
 
-        client = make_client()
+        # `stage=STAGE_INGEST`, and its absence here was a live-run defect. This read
+        # `make_client()`, so `resolve_provider` never reached its ingest branch and
+        # `EXTRACTION_PROVIDER` was skipped entirely — for the one call in the module that is
+        # most obviously the ingest stage, reading a tender drawing. With nothing stored the
+        # provider then came back `None`, and `_route` sends an image call with no explicit
+        # provider to `VISION_FALLBACK`. Confirmed live: `.env` said openai, the settings table
+        # was empty, and the failure named Anthropic.
+        #
+        # Guarded, because "never raises" is a promise this function makes in its own docstring
+        # and `make_client` reads the settings table to keep it — so an unreachable store threw
+        # straight past the whole degrade-not-fail path below.
+        try:
+            client = make_client(stage=STAGE_INGEST)
+        except Exception as exc:  # noqa: BLE001 — a client we cannot build is a gap that says so
+            return ReadReport(
+                sheet=sheet,
+                problem=(f"the reader could not be set up ({type(exc).__name__}: {exc}), so "
+                         f"nothing on this drawing has been looked at"))
 
     try:
         raw = _ask(client, png, demo_fixture)
