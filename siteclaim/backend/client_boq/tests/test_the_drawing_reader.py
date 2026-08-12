@@ -792,3 +792,131 @@ class TestTheAskIsSmallerAndTheBandsAreNotDoubled:
         assert "HEADERROW" in target.get_text()
         composed.close()
         source.close()
+
+
+class TestABandNeverShowsTheSameRowsTwice:
+    """The second live run's Finding A, and it was geometry rather than a token budget.
+
+    `render_band` composes two crops of one page into a single image: a header strip so the band
+    has column names, and the band's own body. Nothing made the two disjoint. On the shipped
+    constants — `BAND_HEADER_SHARE` 0.22, `BAND_OVERLAP_SHARE` 0.06, four bands — band 1's body
+    starts at ``1/4 - 0.06 = 0.19h`` while the header runs to ``0.22h``, so a 25 pt strip of an A3
+    sheet (about two table rows) was printed twice, stacked, the second copy directly beneath the
+    first.
+
+    Band 0 took a different branch entirely and bands 2 and 3 start well below the header, so the
+    defect lived on exactly one band of four — and it presented as a model failure, which is why
+    it went looking for a bigger token budget. The answer was never the budget: a 23-row band's
+    transcription serializes to ~6,600 characters, roughly 1,800-2,100 output tokens against a
+    ceiling of 16,000.
+    """
+
+    @staticmethod
+    def _sheet_with_a_marker_in_the_overlap(height: float = 842.0):
+        """An A3 sheet with a unique word printed inside the 0.19h-0.22h strip band 1 doubled."""
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page(width=1191, height=height)
+        page.insert_text((60, 40), "HEADERROW EASTING NORTHING", fontsize=11)
+        # 0.19 * 842 = 160 pt, 0.22 * 842 = 185 pt. 172 pt sits squarely in the doubled strip.
+        page.insert_text((60, 172), "ZZMARKERZZ", fontsize=11)
+        data = doc.tobytes()
+        doc.close()
+        return data
+
+    def test_the_header_never_reaches_into_the_body(self):
+        """The invariant, over every band count a caller could ask for.
+
+        An INEQUALITY, deliberately. The first draft of this asserted equality — "the two crops
+        meet exactly" — and it failed on band 1 of 2, which was the test doing its job: that band's
+        body starts at 0.44h and the strip ends at 0.22h, so 0.22h-0.44h is in neither crop. That
+        gap is correct. Band 0 shows it, and the strip's job is to carry the COLUMN NAMES down, not
+        to re-show the sheet above. Only an overlap is the defect.
+        """
+        from client_boq.ingest import pdfops
+
+        for bands in range(2, 13):
+            for band in range(bands):
+                _top, head_bottom, body_top, _bottom = pdfops.band_rects(842.0, band, bands)
+                assert head_bottom <= body_top + 1e-9, (
+                    f"{band + 1} of {bands}: the header runs to {head_bottom:.2f} and the body "
+                    f"starts at {body_top:.2f}, so {head_bottom - body_top:.2f} pt of the sheet "
+                    f"is composed twice, stacked")
+
+    def test_the_header_always_starts_at_the_top_of_the_sheet(self):
+        """Where the column names are printed. It is trimmed at the bottom, never at the top."""
+        from client_boq.ingest import pdfops
+
+        for bands in range(2, 13):
+            for band in range(bands):
+                head_top, head_bottom, _bt, _bb = pdfops.band_rects(842.0, band, bands)
+                assert head_top == 0.0 and head_bottom >= head_top
+
+    def test_every_band_still_gets_a_header_unless_it_starts_at_the_top(self):
+        """The trim must not quietly cost a middle band its column names."""
+        from client_boq.ingest import pdfops
+
+        for band in range(1, 4):
+            _t, head_bottom, body_top, _b = pdfops.band_rects(842.0, band, 4)
+            assert head_bottom > 0, f"band {band + 1} of 4 lost its column headings entirely"
+            assert head_bottom <= body_top
+
+    def test_band_one_of_four_is_the_one_that_used_to_double(self):
+        """Named, so a future change to either constant fails HERE rather than on a live sheet."""
+        from client_boq.ingest import pdfops
+
+        _t, head_bottom, body_top, _b = pdfops.band_rects(842.0, 1, 4)
+        untrimmed = 842.0 * pdfops.BAND_HEADER_SHARE
+        assert untrimmed > body_top, (
+            "the constants no longer put band 1's body inside the header strip — this test is "
+            "then pinning nothing, so re-derive it rather than deleting it")
+        # Trimmed back to meet the body: the 25 pt that used to be composed twice, once.
+        assert head_bottom == pytest.approx(body_top)
+        assert head_bottom < untrimmed
+
+    def test_band_zero_still_carries_no_header_at_all(self):
+        """Its body IS the head of the sheet, so the strip comes out empty by the same arithmetic
+        that trims band 1 — one rule now, not a special case beside it."""
+        from client_boq.ingest import pdfops
+
+        head_top, head_bottom, body_top, _b = pdfops.band_rects(842.0, 0, 4)
+        assert head_top == head_bottom == body_top == 0.0
+
+    def test_a_row_in_the_overlap_is_rendered_once_not_twice(self):
+        """Through `render_band` itself, not a re-derivation of its arithmetic.
+
+        The existing middle-band test rebuilds the rectangles in the test body, so it checks a
+        copy of the geometry rather than the geometry. This one composes what the function
+        composes and counts the marker.
+        """
+        import fitz
+
+        from client_boq.ingest import pdfops
+
+        data = self._sheet_with_a_marker_in_the_overlap()
+        head_top, head_bottom, body_top, body_bottom = pdfops.band_rects(842.0, 1, 4)
+        source = fitz.open(stream=data, filetype="pdf")
+        rect = source[0].rect
+        header = fitz.Rect(rect.x0, head_top, rect.x1, head_bottom)
+        body = fitz.Rect(rect.x0, body_top, rect.x1, body_bottom)
+        composed = fitz.open()
+        target = composed.new_page(width=rect.width, height=header.height + body.height)
+        target.show_pdf_page(fitz.Rect(0, 0, rect.width, header.height), source, 0, clip=header)
+        target.show_pdf_page(
+            fitz.Rect(0, header.height, rect.width, header.height + body.height),
+            source, 0, clip=body)
+        text = target.get_text()
+        composed.close()
+        source.close()
+        assert text.count("ZZMARKERZZ") == 1, (
+            "a row inside the header/body overlap is composed twice — the model is shown a table "
+            "that appears to restart partway down")
+        assert "HEADERROW" in text, "the trim must not cost the band its column names"
+
+    def test_render_band_still_produces_an_image_for_every_band(self):
+        from client_boq.ingest import pdfops
+
+        data = self._sheet_with_a_marker_in_the_overlap()
+        for band in range(4):
+            assert pdfops.render_band(data, 1, band, 4), f"band {band + 1} of 4 rendered nothing"

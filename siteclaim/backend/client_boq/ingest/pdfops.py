@@ -745,6 +745,40 @@ BAND_HEADER_SHARE = 0.22
 BAND_OVERLAP_SHARE = 0.06
 
 
+def band_rects(height: float, band: int, bands: int) -> tuple[float, float, float, float]:
+    """``(header_top, header_bottom, body_top, body_bottom)`` in points down the page. Pure.
+
+    Offsets from the top of the page, so a caller adds ``rect.y0``. Extracted from
+    :func:`render_band` so the invariant below can be asserted as **arithmetic**, with no PDF and
+    no rasteriser in the way — which is what the defect it guards actually was.
+
+    THE INVARIANT: ``header_bottom <= body_top``. **The two crops never overlap.** They are
+    composed one above the other into a single image, so a region in both is a region printed
+    twice, stacked, with the second copy directly beneath the first — a table that appears to
+    restart partway down.
+
+    A GAP between them is not a defect and must not be "fixed". Band 2 of 4 starts at 0.44h and
+    shows nothing of 0.22h-0.44h; it is not meant to, because band 1 covers that and the caller
+    de-duplicates. The strip exists to carry the COLUMN NAMES to a band, not to re-show the sheet
+    above it. Only the overlap is the error, which is why this is an inequality and not the
+    equality it was first written as.
+
+    Equality is the trimmed case — the body begins inside the header strip, so the strip is cut
+    back to meet it. Band 0 is its degenerate form: the body starts at the top of the sheet, the
+    strip comes out empty, and there is nothing to stack above it.
+    """
+    height = height or 1.0
+    if bands < 1 or band < 0 or band >= bands:
+        return (0.0, 0.0, 0.0, height)
+    overlap = height * BAND_OVERLAP_SHARE
+    step = height / bands
+    body_top = max(0.0, band * step - overlap)
+    body_bottom = min(height, (band + 1) * step + overlap)
+    # min(), not the raw share: the trim is what keeps the equality true. See render_band.
+    header_bottom = min(height * BAND_HEADER_SHARE, body_top)
+    return (0.0, header_bottom, body_top, body_bottom)
+
+
 def render_band(data: bytes, page: int, band: int, bands: int,
                 dpi: int = DEFAULT_RENDER_DPI) -> Optional[bytes]:
     """One horizontal slice of a page, with the sheet's header stacked above it. PNG or None.
@@ -760,7 +794,9 @@ def render_band(data: bytes, page: int, band: int, bands: int,
     * **The header travels with every band.** The column headings are printed once, at the top. A
       middle band on its own is a grid of numbers whose columns nobody can name, so the top
       ``BAND_HEADER_SHARE`` of the sheet is composed above each band's own slice — one image, two
-      crops, no model involved in deciding what a column means.
+      crops, no model involved in deciding what a column means. The strip is **trimmed to where
+      the body starts**, so the two crops never show the same rows twice; see the comment on the
+      rectangles below, which is where a real failure lived.
     * **Bands overlap.** A row cut in half by a boundary would otherwise be half-read twice or lost
       once. Each band reaches ``BAND_OVERLAP_SHARE`` into its neighbours so every row is whole
       somewhere, and the caller de-duplicates on the station name — first occurrence wins, as
@@ -783,20 +819,38 @@ def render_band(data: bytes, page: int, band: int, bands: int,
             source = doc[page - 1]
             rect = source.rect
             height = rect.height or 1.0
-            overlap = height * BAND_OVERLAP_SHARE
-            step = height / bands
-            top = max(rect.y0, rect.y0 + band * step - overlap)
-            bottom = min(rect.y1, rect.y0 + (band + 1) * step + overlap)
-            header = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + height * BAND_HEADER_SHARE)
-            body = fitz.Rect(rect.x0, top, rect.x1, bottom)
+            head_top, head_bottom, body_top, body_bottom = band_rects(height, band, bands)
+            body = fitz.Rect(rect.x0, rect.y0 + body_top, rect.x1, rect.y0 + body_bottom)
+
+            # THE HEADER STRIP IS TRIMMED TO WHERE THE BODY BEGINS, so the two crops never show
+            # the same rows twice. See `band_rects` for why that is an inequality and not an
+            # equality — a gap between them is correct, an overlap is not.
+            #
+            # Without the trim the two crops OVERLAP, and on the shipped constants that is not a
+            # corner case, it is band 1 of every four-band read:
+            #
+            #     BAND_HEADER_SHARE 0.22, BAND_OVERLAP_SHARE 0.06, bands 4
+            #     band 1 body top = 1/4 - 0.06 = 0.19h   header ends at 0.22h
+            #
+            # so 0.19h-0.22h — about 25 pt on A3, roughly two table rows — was composed twice,
+            # stacked adjacent, with the second copy immediately under the first. That is the
+            # picture of a table that restarts three rows in, which is not a picture of this
+            # sheet. Bands 2 and 3 start at 0.44h and 0.69h and never touched the header, so the
+            # defect lived on exactly one band and looked like a model problem.
+            #
+            # Trimming rather than skipping is what makes it correct for ANY band count: at eight
+            # bands the trimmed strip is thinner still, and nothing is lost, because everything
+            # below the trim line is in the body already.
+            header = fitz.Rect(rect.x0, rect.y0 + head_top, rect.x1, rect.y0 + head_bottom)
 
             # A BAND THAT ALREADY STARTS AT THE TOP DOES NOT NEED THE TOP STACKED ABOVE IT.
             # Band 0's body IS the head of the sheet, so composing the header strip above it
             # printed the table's heading twice and repeated the first rows underneath themselves.
             # At best that is a bigger image and a longer answer for nothing; at worst it asks the
             # model to make sense of a table that appears to restart. Either way it is not the
-            # picture the sheet is.
-            if body.y0 <= header.y0 + 0.5:
+            # picture the sheet is. With the trim above, this now reads as "the strip came out
+            # empty", which is the same condition stated as a measurement.
+            if header.height <= 0.5:
                 target_doc = fitz.open()
                 width = rect.width or 1.0
                 page_only = target_doc.new_page(width=width, height=body.height)
