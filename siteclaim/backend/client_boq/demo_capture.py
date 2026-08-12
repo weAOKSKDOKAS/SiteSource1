@@ -109,19 +109,39 @@ ACTOR_COLUMNS = re.compile(
     r"(_by|^actor|^owner_id|^approved_by|^updated_by|^confirmed_by|^ticked_by|^decided_by)$")
 PLACEHOLDER_ACTOR = "demo"
 
+#: One email pattern, used by BOTH the redactor and the refusal sweep. Two copies of a rule about
+#: what counts as an address is how one of them comes to disagree with the other, and the way that
+#: would present is an address the sweep tolerates and the redactor misses.
+#:
+#: THE TAIL IS `[\w-]+`, NOT `[\w.]+`, and that matters now that this string gets SUBSTITUTED. The
+#: greedy version matched "…@aecom.com." — including the sentence's full stop — so redacting with it
+#: took the clause's punctuation with the address. The constraint is that redaction touches the
+#: address and nothing else.
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+#: Addresses that are obviously not a real person's. Kept so a letter template reading
+#: "you@example.com" neither fails the sweep nor gets redacted — one list, so the two agree.
+ALLOWED_EMAIL = re.compile(r"@(example\.(com|org|net)|localhost)$", re.I)
+
+#: What a redacted address is replaced with. Deliberately not blank and deliberately not a
+#: plausible address: a reader of the capture must be able to see that something was removed,
+#: and no downstream parser should mistake it for a contact.
+EMAIL_PLACEHOLDER = "[email redacted]"
+
 #: What must never appear in a capture. Checked as a sweep over the serialised bundle rather than
 #: per column, because the risk is a blob: a register, a letter or an outputs row is JSON text and
 #: an address inside one would pass any column-name rule.
+#:
+#: The sweep runs AFTER redaction, so what it catches is what redaction could not handle — and the
+#: three below are deliberately not redactable. An address can appear innocently in a tender
+#: document; a key or a token cannot appear innocently anywhere, so finding one means something is
+#: wrong that quietly substituting a placeholder would hide.
 FORBIDDEN = (
-    # An email address that is not obviously a placeholder.
-    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"), "an email address"),
+    (EMAIL, "an email address"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{12,}"), "something shaped like an API key"),
     (re.compile(r"\bya29\.[A-Za-z0-9_-]{10,}"), "something shaped like a Google OAuth token"),
     (re.compile(r'"refresh_token"'), "a refresh token"),
 )
-#: Addresses that are obviously not a real person's. Kept so a letter template reading
-#: "you@example.com" does not fail the sweep.
-ALLOWED_EMAIL = re.compile(r"@(example\.(com|org|net)|localhost)$", re.I)
 
 BUNDLE_VERSION = 1
 
@@ -159,6 +179,75 @@ def export_set(conn: sqlite3.Connection, set_id: str) -> dict:
         if rows:
             bundle["tables"][table] = [_redact_row(r) for r in rows]
     return bundle
+
+
+def redact_addresses(bundle: dict) -> tuple[dict, dict]:
+    """Replace every real email address in the captured text. Returns ``(bundle, report)``.
+
+    WHY REDACT RATHER THAN REFUSE, found on the first real export. The sweep stopped on
+    ``ce19.aecom-atkinsrealis.jv@aecom.com`` and "remove it at source" did not apply: the address
+    is PRINTED IN THE TENDER — the consultant's address block on the Letter of Undertaking in
+    ``SCT/I-ND_2025_04-SCT_APP-0.pdf`` — and reached the register as part of the clause text that
+    was read. Editing the pack to satisfy an export would damage the one thing the capture is for,
+    which is being the real run.
+
+    So the address goes and the clause stays. The substitution replaces the matched span and
+    nothing around it: the sentence keeps its words, its punctuation and its length either side.
+
+    NOT SILENT, in two places. The count comes back for the operator to see, and a note is written
+    into the bundle itself — a person opening the JSON a year from now should be able to tell that
+    it was processed, without having to know that a tool like this exists.
+
+    Only addresses. Keys and tokens are left for the sweep to refuse, because an address can appear
+    innocently in a tender document and a credential cannot appear innocently anywhere; replacing
+    one with a placeholder would hide a real problem instead of solving it.
+    """
+    counts: dict[str, int] = {}
+    seen: set[str] = set()
+
+    def scrub(value):
+        if not isinstance(value, str) or "@" not in value:
+            return value
+
+        def one(match: re.Match) -> str:
+            found = match.group()
+            if ALLOWED_EMAIL.search(found):
+                return found            # a placeholder address is already what we would write
+            seen.add(found)
+            return EMAIL_PLACEHOLDER
+
+        return EMAIL.sub(one, value)
+
+    tables: dict = {}
+    for table, rows in bundle.get("tables", {}).items():
+        out_rows = []
+        hits = 0
+        for row in rows:
+            scrubbed = {}
+            for key, value in row.items():
+                new = scrub(value)
+                if isinstance(value, str) and new != value:
+                    # One `@` per address, so the drop in their count IS the number replaced —
+                    # and an allowed address keeps its own on both sides, so it does not count.
+                    hits += value.count("@") - new.count("@")
+                scrubbed[key] = new
+            out_rows.append(scrubbed)
+        tables[table] = out_rows
+        if hits:
+            counts[table] = hits
+    redacted = {**bundle, "tables": tables}
+    total = sum(counts.values())
+    if total:
+        # In the file as well as on the terminal. `offences()` cannot see this note (it holds no
+        # address) and `load_bundle` ignores it, so it costs nothing and says a great deal.
+        redacted["redactions"] = {
+            "emails": total,
+            "by_table": counts,
+            "note": (f"{total} email address(es) in the captured document text were replaced with "
+                     f"{EMAIL_PLACEHOLDER!r}. The surrounding clause is untouched. They were "
+                     f"printed in the tender documents, not operational data."),
+        }
+    return redacted, {"emails": total, "by_table": counts, "addresses": sorted(seen)}
 
 
 def offences(bundle: dict) -> list[str]:
@@ -231,14 +320,35 @@ def _cmd_export(args) -> int:
         print(f"no rows for set {args.set_id!r} — is the set id right, and is SITESOURCE_DB "
               f"pointing at the database that holds the run?", file=sys.stderr)
         return 1
+
+    # REDACT, THEN SWEEP, and the order is the whole safety argument. Redaction handles the one
+    # thing that appears innocently in a tender — an address printed in a document — and the sweep
+    # then runs over the RESULT, so anything redaction did not or could not handle still stops the
+    # export. A sweep that ran first would be reporting on a bundle that is not the one written.
+    bundle, redactions = redact_addresses(bundle)
+    if redactions["emails"]:
+        print(f"redacted {redactions['emails']} email address(es) found in the captured document "
+              f"text — the clauses around them are untouched:")
+        for table, n in sorted(redactions["by_table"].items()):
+            print(f"  {table}: {n}")
+        for address in redactions["addresses"]:
+            print(f"  was: {address}")
+
     bad = offences(bundle)
     if bad and not args.force:
         print("REFUSING TO WRITE — this capture contains things that must not ship:",
               file=sys.stderr)
         for note in bad:
             print(f"  {note}", file=sys.stderr)
-        print("\nRemove them at source and re-export. --force writes anyway, and is only for "
-              "checking what a capture would look like.", file=sys.stderr)
+        # NOT "remove them at source" any more, which was the advice and was wrong for the first
+        # real case: the address was printed in the tender pack, so the source was the document and
+        # editing it would have damaged the capture's fidelity to the run. Addresses are redacted
+        # above. What reaches here is what redaction deliberately does not touch — a key, a token —
+        # and for those the source really is the thing to fix.
+        print("\nEmail addresses in captured document text are redacted automatically; anything "
+              "listed above is NOT that. A credential does not appear innocently in a tender, so "
+              "find where it entered and fix that rather than masking it. --force writes anyway, "
+              "and is only for seeing what a capture would look like.", file=sys.stderr)
         return 2
     out = Path(args.out) if args.out else bundled_path()
     out.parent.mkdir(parents=True, exist_ok=True)

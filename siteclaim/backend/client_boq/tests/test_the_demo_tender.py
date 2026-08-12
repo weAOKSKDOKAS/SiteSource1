@@ -238,7 +238,15 @@ class TestLoadingIsGatedOnTheMode:
 
     def test_export_refuses_to_write_something_unsafe(self, tmp_path, monkeypatch, capsys):
         """The refusal is at WRITE time, so an unsafe capture never reaches a file somebody might
-        commit without looking."""
+        commit without looking.
+
+        RE-ANCHORED 2026-08-12, disclosed. This used an email address as its unsafe payload, and an
+        address is now REDACTED rather than refused — the first real export found one printed in
+        the tender pack itself, where "remove it at source" would have meant editing the documents.
+        So the payload is a credential, which redaction deliberately does not touch: an address can
+        appear innocently in a tender and a key cannot appear innocently anywhere. The redact-then-
+        refuse behaviour is pinned by TestTheSweepStillRunsAfterRedaction.
+        """
         db = tmp_path / "live.db"
         sqlite3.connect(str(db)).close()
         monkeypatch.setenv("SITESOURCE_DB", str(db))
@@ -246,7 +254,7 @@ class TestLoadingIsGatedOnTheMode:
         models.init_tables(conn)
         _a_tender(conn)
         conn.execute("INSERT INTO client_boq_letters (set_id, letter_json) VALUES (?,?)",
-                     ("nd-2025-04", json.dumps({"to": "buyer@a-real-firm.com.hk"})))
+                     ("nd-2025-04", json.dumps({"n": "sk-ant-api03-AbCdEfGhIjKlMnOpQr"})))
         conn.commit()
         conn.close()
 
@@ -269,3 +277,168 @@ class TestLoadingIsGatedOnTheMode:
         assert demo_capture.main(["export", "--set-id", "not-a-set", "--out", str(out)]) == 1
         assert not out.exists()
         assert "no rows for set" in capsys.readouterr().err
+
+
+class TestAnAddressPrintedInTheTenderIsRedactedNotRefused:
+    """The first real export refused, and "remove it at source" did not apply.
+
+    `ce19.aecom-atkinsrealis.jv@aecom.com` is PRINTED IN THE PACK — the consultant's address block
+    on the Letter of Undertaking in `SCT/I-ND_2025_04-SCT_APP-0.pdf` — and reached
+    `client_boq_review_registers` as part of the clause text that was read. It is document content,
+    not operational data, so editing the tender to satisfy an export would damage the one property
+    the capture exists for: being the real run.
+
+    Two constraints, both tested below: the redaction touches the ADDRESS and not the clause around
+    it, and the refusal sweep still runs AFTERWARDS so anything redaction did not handle still
+    stops the export.
+    """
+
+    REAL = "ce19.aecom-atkinsrealis.jv@aecom.com"
+
+    def _register(self, conn, text, set_id="nd-2025-04"):
+        conn.execute(
+            "INSERT INTO client_boq_review_registers (set_id, register_json) VALUES (?,?)",
+            (set_id, json.dumps({"items": [{"cited_text": text}]})))
+        conn.commit()
+        return demo_capture.export_set(conn, set_id)
+
+    def _text_back(self, bundle):
+        row = bundle["tables"]["client_boq_review_registers"][0]["register_json"]
+        return json.loads(row)["items"][0]["cited_text"]
+
+    def test_the_address_goes(self, conn):
+        _a_tender(conn)
+        bundle = self._register(conn, f"Address the Undertaking to {self.REAL} before tender close.")
+        out, report = demo_capture.redact_addresses(bundle)
+        assert self.REAL not in json.dumps(out)
+        assert report["emails"] == 1
+        assert report["addresses"] == [self.REAL]
+
+    def test_the_clause_stays(self, conn):
+        """The words either side, and the punctuation. Redaction is a substitution, not a cut."""
+        _a_tender(conn)
+        sentence = f"Address the Undertaking to {self.REAL}. Clause 12 then applies."
+        out, _ = demo_capture.redact_addresses(self._register(conn, sentence))
+        assert self._text_back(out) == (
+            "Address the Undertaking to [email redacted]. Clause 12 then applies.")
+
+    def test_the_full_stop_is_not_eaten(self, conn):
+        """The defect this was written against. The pattern's tail was `[\\w.]+`, which is greedy
+        over dots, so the match ran to "…@aecom.com." and substituting took the sentence's full
+        stop with it — cutting the clause, which is the thing that must not happen."""
+        _a_tender(conn)
+        out, _ = demo_capture.redact_addresses(
+            self._register(conn, f"Write to {self.REAL}. Then wait."))
+        assert self._text_back(out).endswith("[email redacted]. Then wait.")
+
+    def test_several_addresses_in_one_clause_all_go_and_are_counted(self, conn):
+        _a_tender(conn)
+        out, report = demo_capture.redact_addresses(self._register(
+            conn, f"Copy {self.REAL} and also qs.dept@some-consultant.com.hk on every notice."))
+        assert "@" not in self._text_back(out)
+        assert report["emails"] == 2
+        assert self._text_back(out) == (
+            "Copy [email redacted] and also [email redacted] on every notice.")
+
+    def test_a_placeholder_address_is_left_exactly_as_printed(self, conn):
+        """One rule for what counts as a real address, shared by the redactor and the sweep — so a
+        letter template reading you@example.com is neither redacted nor refused."""
+        _a_tender(conn)
+        out, report = demo_capture.redact_addresses(
+            self._register(conn, "Send to client@example.com for the demo."))
+        assert self._text_back(out) == "Send to client@example.com for the demo."
+        assert report["emails"] == 0
+
+    def test_the_bundle_says_it_was_redacted(self, conn):
+        """Not silent in the FILE either. Somebody opening the JSON a year from now should be able
+        to tell it was processed without knowing this tool exists."""
+        _a_tender(conn)
+        out, _ = demo_capture.redact_addresses(self._register(conn, f"To {self.REAL}."))
+        assert out["redactions"]["emails"] == 1
+        assert out["redactions"]["by_table"] == {"client_boq_review_registers": 1}
+        assert "clause is untouched" in out["redactions"]["note"]
+
+    def test_a_clean_capture_gains_no_note(self, conn):
+        """An unconditional note would make every capture look like it had something removed."""
+        _a_tender(conn)
+        out, report = demo_capture.redact_addresses(demo_capture.export_set(conn, "nd-2025-04"))
+        assert "redactions" not in out and report["emails"] == 0
+
+    def test_the_redacted_bundle_still_loads(self, conn, tmp_path):
+        """`load_bundle` must ignore the note rather than choke on an unknown top-level key."""
+        _a_tender(conn)
+        out, _ = demo_capture.redact_addresses(self._register(conn, f"To {self.REAL}."))
+        other = sqlite3.connect(str(tmp_path / "replay.db"))
+        try:
+            demo_capture.load_bundle(other, out)
+            got = other.execute(
+                "SELECT register_json FROM client_boq_review_registers").fetchone()[0]
+        finally:
+            other.close()
+        assert "[email redacted]" in got
+
+
+class TestTheSweepStillRunsAfterRedaction:
+    def test_a_redacted_capture_passes_the_sweep(self, conn):
+        _a_tender(conn)
+        conn.execute(
+            "INSERT INTO client_boq_review_registers (set_id, register_json) VALUES (?,?)",
+            ("nd-2025-04", json.dumps({"t": "to ce19.aecom-atkinsrealis.jv@aecom.com now"})))
+        conn.commit()
+        raw = demo_capture.export_set(conn, "nd-2025-04")
+        assert demo_capture.offences(raw), "the unredacted capture should still be refused"
+        out, _ = demo_capture.redact_addresses(raw)
+        assert demo_capture.offences(out) == []
+
+    def test_a_key_is_still_refused_after_redaction(self, conn):
+        """Redaction handles addresses ONLY. A credential cannot appear innocently in a tender, so
+        masking one would hide a real problem rather than solve it."""
+        _a_tender(conn)
+        conn.execute("INSERT INTO client_boq_letters (set_id, letter_json) VALUES (?,?)",
+                     ("nd-2025-04", json.dumps({"n": "key sk-ant-api03-AbCdEfGhIjKlMnOp"})))
+        conn.commit()
+        out, _ = demo_capture.redact_addresses(demo_capture.export_set(conn, "nd-2025-04"))
+        assert any("API key" in n for n in demo_capture.offences(out))
+
+    def test_the_cli_redacts_then_sweeps_and_says_how_many(self, tmp_path, monkeypatch, capsys):
+        """The order end to end, through the command an operator actually runs."""
+        db = tmp_path / "live.db"
+        sqlite3.connect(str(db)).close()
+        conn = sqlite3.connect(str(db))
+        models.init_tables(conn)
+        _a_tender(conn)
+        conn.execute(
+            "INSERT INTO client_boq_review_registers (set_id, register_json) VALUES (?,?)",
+            ("nd-2025-04", json.dumps({"t": "to ce19.aecom-atkinsrealis.jv@aecom.com before close"})))
+        conn.commit()
+        conn.close()
+        monkeypatch.setenv("SITESOURCE_DB", str(db))
+
+        out = tmp_path / "demo_tender.json"
+        assert demo_capture.main(["export", "--set-id", "nd-2025-04", "--out", str(out)]) == 0
+        printed = capsys.readouterr().out
+        assert "redacted 1 email address" in printed
+        assert "ce19.aecom-atkinsrealis.jv@aecom.com" in printed, "it must say WHAT it removed"
+        written = json.loads(out.read_text())
+        assert "aecom.com" not in json.dumps(written)
+        assert "before close" in json.dumps(written), "the clause survived"
+
+    def test_the_cli_still_refuses_what_redaction_does_not_handle(
+            self, tmp_path, monkeypatch, capsys):
+        db = tmp_path / "live.db"
+        sqlite3.connect(str(db)).close()
+        conn = sqlite3.connect(str(db))
+        models.init_tables(conn)
+        _a_tender(conn)
+        conn.execute("INSERT INTO client_boq_letters (set_id, letter_json) VALUES (?,?)",
+                     ("nd-2025-04", json.dumps({"n": "ya29.A0ARrdaM-longtokenvalue"})))
+        conn.commit()
+        conn.close()
+        monkeypatch.setenv("SITESOURCE_DB", str(db))
+
+        out = tmp_path / "demo_tender.json"
+        assert demo_capture.main(["export", "--set-id", "nd-2025-04", "--out", str(out)]) == 2
+        assert not out.exists()
+        err = capsys.readouterr().err
+        assert "OAuth" in err
+        assert "redacted automatically" in err, "it must not still say 'remove it at source'"
