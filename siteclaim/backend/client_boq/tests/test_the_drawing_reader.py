@@ -920,3 +920,192 @@ class TestABandNeverShowsTheSameRowsTwice:
         data = self._sheet_with_a_marker_in_the_overlap()
         for band in range(4):
             assert pdfops.render_band(data, 1, band, 4), f"band {band + 1} of 4 rendered nothing"
+
+
+class TestAReaderThatGivesUpPolitely:
+    """Surrender must not read as success — including when nothing raised.
+
+    MEASURED on a live run of the same sheet, two providers. One returned **70 rows with every
+    numeric cell null** — no easting, no northing, no ground level, no rockhead — and came back
+    `read=True, bands=1`. The other returned 22 rows with correct coordinates and levels and five
+    real arithmetic findings. The first looked like the fuller take-off.
+
+    Nothing downstream was fooled: 350 unread cells reach `unread_rows()` and `usable()` is False.
+    But slicing was reachable only through `CompletionTruncated`, so a model that ERRORS got a
+    second chance and a model that politely surrendered did not — and the reader is the only thing
+    in the chain that can still do something about it.
+    """
+
+    @staticmethod
+    def _hollow_rows(n: int) -> dict:
+        """The shape of the failure: names, and not one number."""
+        return {"boreholes": [{"station": f"CE19-ABH{i:02d}", "kind": "BH"} for i in range(n)]}
+
+    @staticmethod
+    def _real_rows(n: int) -> dict:
+        return {"boreholes": [
+            {"station": f"CE19-ABH{i:02d}", "kind": "BH", "easting": 835412.75 + i,
+             "northing": 819336.42, "soil_m": 29.9, "rock_m": 5.0, "hard_above_rockhead_m": 0.0}
+            for i in range(n)]}
+
+    def test_rows_with_no_number_on_them_at_all_are_named(self):
+        raw = reader.RawSchedule.model_validate(self._hollow_rows(70))
+        assert reader.gave_up(raw)
+        assert "70 of 70 rows" in reader.gave_up(raw)
+        assert "outlined and did not read" in reader.gave_up(raw)
+
+    def test_a_real_reading_is_not_flagged(self):
+        assert reader.gave_up(reader.RawSchedule.model_validate(self._real_rows(70))) == ""
+
+    def test_the_environmental_sheet_shape_is_not_a_surrender(self):
+        """GI/310 is four columns and a sentence — no levels, no lengths, no soil/rock split. It
+        still carries a coordinate on every row, which is what keeps it out of this."""
+        raw = reader.RawSchedule.model_validate({"boreholes": [
+            {"station": f"CE19-EBH{i:02d}", "kind": "BH", "easting": 835180.2 + i,
+             "northing": 819402.1,
+             "termination": "~6M BELOW EXISTING GROUND LEVEL OR +11MPD, WHICHEVER IS LOWER"}
+            for i in range(9)]})
+        assert reader.gave_up(raw) == ""
+
+    def test_a_handful_of_bad_rows_on_a_small_sheet_is_not_a_surrender(self):
+        """Below `HOLLOW_MIN_ROWS` the share means nothing — two of three is a small sheet."""
+        raw = reader.RawSchedule.model_validate({"boreholes": [
+            {"station": "A"}, {"station": "B"},
+            {"station": "C", "easting": 1.0, "soil_m": 2.0}]})
+        assert reader.gave_up(raw) == ""
+
+    def test_the_threshold_is_a_share_and_can_be_moved(self):
+        mixed = {"boreholes": ([{"station": f"H{i}"} for i in range(6)]
+                               + [{"station": f"R{i}", "easting": 1.0} for i in range(4)])}
+        raw = reader.RawSchedule.model_validate(mixed)
+        assert reader.gave_up(raw, share=0.5)          # 6 of 10 is over half
+        assert reader.gave_up(raw, share=0.8) == ""    # and under four fifths
+
+    def test_the_numeric_columns_are_read_off_the_row_type(self):
+        """A list would be one more place to forget, and forgetting it shrinks what 'gave up' means."""
+        assert "easting" in reader.NUMERIC_FIELDS and "rock_m" in reader.NUMERIC_FIELDS
+        assert "depth_in_soil_m" in reader.NUMERIC_FIELDS, "trial-pit columns count too"
+        assert "station" not in reader.NUMERIC_FIELDS and "termination" not in reader.NUMERIC_FIELDS
+        assert "standpipe" not in reader.NUMERIC_FIELDS, "a tick is not a measurement"
+
+
+class TestSurrenderTriggersASecondLook:
+    class _Client:
+        """Hollow on the whole sheet, real on every slice — the case the retry exists for."""
+
+        def __init__(self, sliced_rows: int = 6):
+            self.calls = 0
+            self.sliced_rows = sliced_rows
+
+        def complete_json(self, *, user="", **_kw):
+            self.calls += 1
+            if "THIS IMAGE IS A SLICE" in user:
+                return reader.RawSchedule.model_validate(
+                    TestAReaderThatGivesUpPolitely._real_rows(self.sliced_rows))
+            return reader.RawSchedule.model_validate(
+                TestAReaderThatGivesUpPolitely._hollow_rows(40))
+
+    class _AlwaysHollow(_Client):
+        def complete_json(self, *, user="", **_kw):
+            self.calls += 1
+            return reader.RawSchedule.model_validate(
+                TestAReaderThatGivesUpPolitely._hollow_rows(40))
+
+    def test_a_hollow_whole_sheet_is_re_read_in_slices(self, monkeypatch):
+        monkeypatch.delenv(reader.BANDS_ENV, raising=False)
+        client = self._Client()
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert client.calls == 5, "one whole-sheet call, then four slices"
+        assert report.bands == 4
+        assert report.schedule.stations, "the slices' rows are what survives"
+        assert report.schedule.stations[0].easting is not None
+        assert "no number on them" in report.gave_up
+        assert "which did read" in report.gave_up
+
+    def test_the_headline_leads_with_the_surrender_when_slicing_did_not_help(self, monkeypatch):
+        """A row count is the most reassuring thing on that line, and it is what a surrender gets
+        right. So it must not be the first thing said."""
+        monkeypatch.delenv(reader.BANDS_ENV, raising=False)
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210",
+                                   client=self._AlwaysHollow())
+        assert report.gave_up and "THE READER DID NOT READ IT" in report.headline()
+        assert "count of outlines" in report.headline()
+        assert reader.BANDS_ENV in report.headline(), "the headline says how to try again"
+
+    def test_slicing_that_also_gives_up_keeps_the_cheaper_reading(self, monkeypatch):
+        """A second empty answer is evidence about the provider, not about the sheet — so it does
+        not buy a different take-off, and the surrender is still carried."""
+        monkeypatch.delenv(reader.BANDS_ENV, raising=False)
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210",
+                                   client=self._AlwaysHollow())
+        assert report.bands == 1, "the whole-sheet reading is kept; it cost one call"
+        assert report.gave_up and "which did read" not in report.gave_up
+
+    def test_the_take_off_is_not_usable_either_way(self, monkeypatch):
+        monkeypatch.delenv(reader.BANDS_ENV, raising=False)
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210",
+                                   client=self._AlwaysHollow())
+        assert report.schedule.usable() is False
+        assert len(report.schedule.unread_rows()) == 40
+
+
+class TestSlicingCanBeAsked_For:
+    """Request (1): force the split, to try a provider on smaller pieces."""
+
+    class _Counter:
+        def __init__(self):
+            self.whole = 0
+            self.slices = 0
+
+        def complete_json(self, *, user="", **_kw):
+            if "THIS IMAGE IS A SLICE" in user:
+                self.slices += 1
+            else:
+                self.whole += 1
+            return reader.RawSchedule.model_validate(
+                TestAReaderThatGivesUpPolitely._real_rows(4))
+
+    def test_the_environment_forces_a_band_count(self, monkeypatch):
+        monkeypatch.setenv(reader.BANDS_ENV, "3")
+        client = self._Counter()
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert client.whole == 0, "the whole-sheet attempt is skipped when slices were asked for"
+        assert client.slices == 3 and report.bands == 3
+        assert "sliced on request" in report.headline()
+
+    def test_the_argument_beats_the_environment(self, monkeypatch):
+        """One sheet both ways in one session; the variable is for a whole run."""
+        monkeypatch.setenv(reader.BANDS_ENV, "4")
+        client = self._Counter()
+        reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client, bands=2)
+        assert client.slices == 2 and client.whole == 0
+
+    def test_one_band_pins_a_single_call_and_disables_slicing(self, monkeypatch):
+        """The other direction: measure the whole-sheet read without the retry confusing it."""
+        monkeypatch.setenv(reader.BANDS_ENV, "1")
+        client = TestSurrenderTriggersASecondLook._AlwaysHollow()
+        report = reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert client.calls == 1 and report.bands == 1
+        assert report.gave_up, "pinned to one call, and still says the read failed"
+
+    def test_junk_in_the_variable_is_ignored_rather_than_fatal(self, monkeypatch):
+        monkeypatch.setenv(reader.BANDS_ENV, "four")
+        client = self._Counter()
+        reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert client.whole == 1 and client.slices == 0, "unparseable falls back to adaptive"
+
+    def test_unset_is_the_behaviour_that_shipped(self, monkeypatch):
+        monkeypatch.delenv(reader.BANDS_ENV, raising=False)
+        client = self._Counter()
+        reader.read_sheet(_sheet_pdf(), set_id="t", sheet="GI/210", client=client)
+        assert client.whole == 1 and client.slices == 0
+
+
+def _sheet_pdf() -> bytes:
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open()
+    page = doc.new_page(width=1191, height=842)
+    page.insert_text((60, 40), "STATION EASTING NORTHING", fontsize=11)
+    data = doc.tobytes()
+    doc.close()
+    return data

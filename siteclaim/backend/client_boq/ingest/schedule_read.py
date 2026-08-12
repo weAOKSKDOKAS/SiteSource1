@@ -60,6 +60,7 @@ reading, it trusts the arithmetic.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -95,6 +96,33 @@ READ_MAX_TOKENS = 16_000
 #: where today a single failure zeroes 91 rows. Derived from a real truncation rather than guessed
 #: up front, so a small sheet still costs exactly one call.
 BANDS_ON_TRUNCATION = 4
+
+#: FORCE A BAND COUNT, for trying one provider against another on the same sheet.
+#:
+#: ``0`` or unset keeps the adaptive behaviour: one call, then slices only if that call could not
+#: hold its answer. ``1`` pins it to a single call and never slices. ``2`` or more slices EVERY
+#: sheet at that count without attempting the whole sheet first.
+#:
+#: It exists because the adaptive path can only be triggered by a failure, so there was no way to
+#: ask "does this model do better on a quarter of the sheet?" without editing the module. That is a
+#: question about a live provider, and a question you cannot ask is a question that gets answered
+#: by guessing.
+BANDS_ENV = "SCHEDULE_READ_BANDS"
+
+#: A ROW WITH NO NUMBER ON IT AT ALL is the shape of a reader that gave up politely: it returns the
+#: table's skeleton — the right number of rows, plausible station names — and fills in nothing.
+#: Measured on a live run, one provider returned 70 such rows for a sheet another read as 22 rows
+#: with correct coordinates and levels.
+#:
+#: The share, not the count, because sheets differ in size. Half is deliberately not marginal: a
+#: legitimate sheet has SOME numbers on most rows, and GI/310 — four columns and a sentence — still
+#: carries an easting and a northing on every row, so it never trips this.
+HOLLOW_SHARE_ENV = "SCHEDULE_READ_HOLLOW_SHARE"
+HOLLOW_SHARE = 0.5
+
+#: Below this many rows the share means nothing and the check stays quiet — two hollow rows out of
+#: three is a small sheet with two bad rows, not a reader that gave up.
+HOLLOW_MIN_ROWS = 4
 
 #: What the model must not be allowed to leave out silently. These three have no way to say
 #: "unknown" on `Station` — they are plain floats defaulting to 0.0 — so a `None` from the reader
@@ -265,6 +293,17 @@ class ReadReport(BaseModel):
     #: schedule above, and these say what is missing from it — which is the difference between a
     #: take-off that is short and a take-off nobody knows is short.
     bands_failed: list[str] = Field(default_factory=list)
+    #: WHY the sheet was sliced, in a few words, for the headline. There are three triggers now —
+    #: a truncated answer, an operator asking, and a whole-sheet read that came back empty — and
+    #: the headline used to state the first as though it were the only one.
+    sliced_because: str = ""
+    #: The reader returned rows and put no numbers in them. Empty when it did not.
+    #:
+    #: A SEPARATE FACT FROM `problem`, and it has to be. `problem` means nothing came back at all;
+    #: this means something came back that is the right SHAPE and carries no reading. The second is
+    #: the more dangerous of the two, because it arrives with `read=True` and a plausible row
+    #: count — so it is stated rather than left to be inferred from `cells_unread`.
+    gave_up: str = ""
 
     def partial(self) -> bool:
         return bool(self.read and self.bands_failed)
@@ -281,8 +320,16 @@ class ReadReport(BaseModel):
             parts.append(f"{len(schedule.trial_pits)} trial pit(s)")
         head = f"{self.sheet}: read {' and '.join(parts)}"
         if self.bands > 1:
-            head += (f" from {self.bands - len(self.bands_failed)} of {self.bands} slices "
-                     f"(one call could not hold the whole sheet)")
+            head += f" from {self.bands - len(self.bands_failed)} of {self.bands} slices"
+            if self.sliced_because:
+                head += f" ({self.sliced_because})"
+        # FIRST, above every other tail. A row count is the most reassuring thing on this line and
+        # it is exactly what a surrendered read gets right — 70 rows and not one number in them
+        # reads as a fuller take-off than 22 rows that were actually transcribed.
+        if self.gave_up:
+            return (f"{head}, BUT THE READER DID NOT READ IT: {self.gave_up}. The row count above "
+                    f"is a count of outlines. Try another provider, or slice the sheet with "
+                    f"{BANDS_ENV}, before trusting anything here.")
         if self.bands_failed:
             return (f"{head}. THIS SHEET IS ONLY PARTLY READ — "
                     f"{'; '.join(self.bands_failed)}. Whatever rows those slices carried are "
@@ -411,6 +458,82 @@ def _ask(client, png: bytes, demo_fixture: str, *, band: str = "") -> RawSchedul
     )
 
 
+def _numeric_fields() -> tuple[str, ...]:
+    """Every ``float`` column on :class:`RawStation`, read off the model rather than listed.
+
+    A new column added to the row type is covered the day it is added. A list here would be one
+    more place to forget, and forgetting it would silently shrink what "gave up" means.
+    """
+    out = []
+    for name, info in RawStation.model_fields.items():
+        args = getattr(info.annotation, "__args__", ()) or (info.annotation,)
+        if any(arg is float for arg in args):
+            out.append(name)
+    return tuple(out)
+
+
+NUMERIC_FIELDS = _numeric_fields()
+
+
+def hollow(row: RawStation) -> bool:
+    """A row carrying no number at all — not one coordinate, level, length or depth.
+
+    Not the same as a row with gaps. A real row on the engineering sheet has eleven numbers and a
+    real row on the environmental sheet has two; a row with **zero** is a row the reader wrote the
+    shape of and did not read.
+    """
+    return all(getattr(row, name) is None for name in NUMERIC_FIELDS)
+
+
+def gave_up(raw: RawSchedule, *, share: Optional[float] = None) -> str:
+    """Did the reader return the table's skeleton and fill in nothing? The sentence, or ``""``.
+
+    **THE FAILURE THAT LOOKS LIKE A SUCCESS**, and the reason this exists. Slicing was reachable
+    only through `CompletionTruncated`, so a model that errors gets a second chance and a model
+    that politely surrenders does not. Measured on a live run of the same sheet: one provider
+    returned 70 rows with every numeric cell null — no easting, no northing, no ground level, no
+    rockhead — and it came back `read=True, bands=1`, indistinguishable at a glance from a sheet
+    that simply had little on it. The other read 22 rows with correct coordinates and levels.
+
+    Nothing downstream was fooled: 350 unread cells reach `unread_rows()` and `usable()` is False.
+    But the READER was, and it is the only thing in the chain that can still do something about it.
+
+    Deterministic, and it never looks at the values — only at whether there are any. There is no
+    judgement here about whether a number is *right*; that is the arithmetic's job, twice over.
+    """
+    rows = list(raw.boreholes) + list(raw.trial_pits)
+    if len(rows) < HOLLOW_MIN_ROWS:
+        return ""
+    limit = HOLLOW_SHARE if share is None else share
+    empty = [row for row in rows if hollow(row)]
+    if len(empty) / len(rows) <= limit:
+        return ""
+    return (f"{len(empty)} of {len(rows)} rows came back with no number on them at all — no "
+            f"coordinate, level, length or depth. That is the shape of a table the reader outlined "
+            f"and did not read, not a sheet with little on it")
+
+
+def _env_int(name: str, default: int) -> int:
+    """An int from the environment, ignoring anything that is not one. Never raises."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _truncated(exc: Exception) -> bool:
     """Did the answer run out of room, as opposed to being wrong?
 
@@ -456,6 +579,7 @@ def _merge_raw(parts: list[RawSchedule]) -> RawSchedule:
 def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                client=None, demo_fixture: str = "cases/client_boq/station_schedule_read.json",
                bands_on_truncation: int = BANDS_ON_TRUNCATION,
+               bands: Optional[int] = None,
                ) -> ReadReport:
     """Read one schedule drawing. Returns a proposal; stores nothing; never raises.
 
@@ -504,10 +628,24 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                 problem=(f"the reader could not be set up ({type(exc).__name__}: {exc}), so "
                          f"nothing on this drawing has been looked at"))
 
+    # FORCED, when an operator has asked for it. Two or more slices every sheet, without the
+    # whole-sheet attempt — the only way to ask "is this provider better on a quarter of the
+    # table?" without editing this file. `1` pins a single call and disables slicing entirely.
+    #
+    # The argument wins over the environment so one sheet can be tried both ways in one session;
+    # the environment is for a whole run. Neither is a decision about the take-off — both only
+    # change how many times the sheet is looked at.
+    forced = _env_int(BANDS_ENV, 0) if bands is None else int(bands)
+    if forced >= 2:
+        return _read_in_bands(data, page, set_id=set_id, sheet=sheet, client=client,
+                              demo_fixture=demo_fixture, bands=forced,
+                              why=f"{BANDS_ENV}={forced} — sliced on request, not on a failure",
+                              because="sliced on request")
+
     try:
         raw = _ask(client, png, demo_fixture)
     except Exception as exc:  # noqa: BLE001 — a failed read is a gap that says so
-        if not _truncated(exc) or bands_on_truncation < 2:
+        if not _truncated(exc) or bands_on_truncation < 2 or forced == 1:
             return ReadReport(
                 sheet=sheet,
                 problem=(f"reading the drawing failed ({type(exc).__name__}: {exc})"
@@ -515,15 +653,37 @@ def read_sheet(data: bytes, *, set_id: str, sheet: str, page: int = 1,
                          f"the sheet's answer did not fit in one call and it could not be sliced "
                          f"({exc})"))
         return _read_in_bands(data, page, set_id=set_id, sheet=sheet, client=client,
-                              demo_fixture=demo_fixture, bands=bands_on_truncation, why=str(exc))
+                              demo_fixture=demo_fixture, bands=bands_on_truncation, why=str(exc),
+                              because="one call could not hold the whole sheet")
+
+    # SLICING ON THE RESULT, not only on an exception.
+    #
+    # A reader that gives up politely — the table's skeleton, every number null — never raised, so
+    # it never reached the retry above and its failure passed as a partial success. Measured live:
+    # 70 rows, not one coordinate, `read=True, bands=1`, against 22 correct rows from the other
+    # provider on the same sheet. Surrender reading as success is this codebase's recurring shape;
+    # here the reader is the one component still able to do something about it.
+    surrendered = gave_up(raw, share=_env_float(HOLLOW_SHARE_ENV, HOLLOW_SHARE))
+    if surrendered and bands_on_truncation >= 2 and forced != 1:
+        retried = _read_in_bands(data, page, set_id=set_id, sheet=sheet, client=client,
+                                 demo_fixture=demo_fixture, bands=bands_on_truncation,
+                                 why=surrendered,
+                                 because="the whole-sheet read came back with no numbers in it")
+        # The slices are only worth having if they read something the whole sheet did not. If they
+        # gave up too, the FIRST reading is kept — it has as many rows and cost one call — and the
+        # surrender is carried on the report either way, because a second empty answer is evidence
+        # about the provider rather than about the sheet.
+        if retried.read and not retried.gave_up:
+            return retried.model_copy(update={
+                "gave_up": f"{surrendered}. Re-read in {retried.bands} slices, which did read."})
 
     schedule = to_schedule(raw, set_id=set_id, sheet=sheet)
-    return ReadReport(schedule=schedule, sheet=sheet, read=True,
+    return ReadReport(schedule=schedule, sheet=sheet, read=True, gave_up=surrendered,
                       cells_unread=sum(len(s.unread) for s in schedule.stations))
 
 
 def _read_in_bands(data: bytes, page: int, *, set_id: str, sheet: str, client,
-                   demo_fixture: str, bands: int, why: str) -> ReadReport:
+                   demo_fixture: str, bands: int, why: str, because: str = "") -> ReadReport:
     """The sheet in slices, after one call could not hold its answer.
 
     Every band is attempted even after one fails: the whole point of slicing is that a failure stops
@@ -548,12 +708,18 @@ def _read_in_bands(data: bytes, page: int, *, set_id: str, sheet: str, client,
             problem=(f"the sheet's answer did not fit in one call ({why}), and none of its "
                      f"{bands} slices could be read either"))
 
-    schedule = to_schedule(_merge_raw(parts), set_id=set_id, sheet=sheet)
+    merged = _merge_raw(parts)
+    # The same verdict on the sliced reading as on the whole-sheet one, computed HERE so there is
+    # one implementation of it. Slicing does not make a surrender stop being one — it just moves
+    # the evidence from "this sheet is hard" to "this provider will not read it".
+    surrendered = gave_up(merged, share=_env_float(HOLLOW_SHARE_ENV, HOLLOW_SHARE))
+    schedule = to_schedule(merged, set_id=set_id, sheet=sheet)
     schedule.notes.append(
-        f"one call could not hold this sheet's answer, so it was read in {bands} slices "
-        f"({bands - len(failed)} of them successfully). Rows near a slice boundary are read twice "
-        f"by design and de-duplicated on the station name.")
+        f"this sheet was read in {bands} slices ({bands - len(failed)} of them successfully) "
+        f"because {why}. Rows near a slice boundary are read twice by design and de-duplicated "
+        f"on the station name.")
     return ReadReport(schedule=schedule, sheet=sheet, read=True, bands=bands, bands_failed=failed,
+                      gave_up=surrendered, sliced_because=because,
                       cells_unread=sum(len(s.unread) for s in schedule.stations))
 
 

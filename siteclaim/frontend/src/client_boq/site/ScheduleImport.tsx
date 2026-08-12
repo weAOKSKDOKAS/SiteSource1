@@ -157,7 +157,9 @@ export function ScheduleImport({
             <div
               className={cx(
                 "mt-2 rounded-cb-btn border px-2.5 py-2",
-                drawn.partial_sheets.length || drawn.sheets_read.some((s) => !s.read)
+                drawn.partial_sheets.length ||
+                drawn.surrendered_sheets?.length ||
+                drawn.sheets_read.some((s) => !s.read)
                   ? "border-cb-bad-line bg-cb-bad-tint"
                   : "border-cb-border bg-cb-tint",
               )}
@@ -170,10 +172,12 @@ export function ScheduleImport({
                   key={s.sheet}
                   className={cx(
                     "mt-1 font-cb-sans text-[9.5px] leading-[1.5]",
-                    // A PARTLY-READ SHEET IS NOT A READ SHEET. `read` is true for both, because
-                    // some rows did come back — so the partial case has to be as loud as a
-                    // failure, or a take-off short by twenty holes reads as a success.
-                    !s.read || s.partial ? "text-cb-bad-dark" : "text-cb-muted",
+                    // A PARTLY-READ SHEET IS NOT A READ SHEET, and neither is one whose rows
+                    // carry no numbers. `read` is true for all three, because rows did come
+                    // back — so both failures have to be as loud as an outright one, or a
+                    // take-off short by twenty holes (or full of empty outlines) reads as a
+                    // success. Measured live: 70 hollow rows looked fuller than 22 real ones.
+                    !s.read || s.partial || s.gave_up ? "text-cb-bad-dark" : "text-cb-muted",
                   )}
                 >
                   {s.headline}

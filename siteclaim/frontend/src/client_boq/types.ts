@@ -2391,12 +2391,22 @@ export interface ScheduleReadResponse {
     bands: number;
     /** Slices that failed. Non-empty means the sheet is only PARTLY read. */
     bands_failed: string[];
+    /** The reader returned rows and put NO NUMBERS in them — the shape of a model that gave up
+     *  politely. Empty when it did not. Distinct from `problem` (nothing came back) and from
+     *  `cells_unread` (a count, not a verdict): this arrives with `read: true` and a plausible
+     *  row count, which is the most reassuring thing on the response. */
+    gave_up: string;
     /** True when some slices came back and some did not — rows are missing and no total on this
      *  sheet is the sheet's total. */
     partial: boolean;
   }[];
   /** Sheets that are only partly read, by number. The loudest thing on this response. */
   partial_sheets: string[];
+  /** Sheets where the reader outlined the table and read none of it. */
+  surrendered_sheets: string[];
+  /** How many slices were asked for — 0 is adaptive. Echoed back so a provider comparison can say
+   *  which run was whole-sheet and which was quartered. */
+  bands_requested: number;
   cells_unread: number;
   bad_rows: string[];
   unread_rows: string[];

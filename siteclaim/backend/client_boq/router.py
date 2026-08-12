@@ -3892,6 +3892,7 @@ def post_parse_station_schedule(req: StationPasteRequest) -> dict:
 def post_read_station_schedule(
     files: list[UploadFile] = File(...),
     set_id: str = Form(...),
+    bands: int = Form(0),
 ) -> dict:
     """Read the take-off off the borehole details drawing(s). Returns a proposal; **saves nothing.**
 
@@ -3940,8 +3941,11 @@ def post_read_station_schedule(
                 problem=("the register lists this sheet but its file was not among the drawings "
                          "uploaded")))
             continue
+        # `bands` per request, so one sheet can be tried whole and then in slices against two
+        # providers without a restart or an edit. 0 keeps the adaptive default; the module reads
+        # `SCHEDULE_READ_BANDS` when nothing is passed here.
         reports.append(boq_schedule_read.read_sheet(
-            data, set_id=set_id, sheet=f"{entry.number}"))
+            data, set_id=set_id, sheet=f"{entry.number}", bands=bands or None))
 
     schedule = boq_schedule_read.merge(reports, set_id=set_id)
     return {
@@ -3962,9 +3966,18 @@ def post_read_station_schedule(
                          # one call could not hold the answer; `bands_failed` non-empty means the
                          # sheet is only PARTLY read and no total on it is the sheet's total.
                          "bands": r.bands, "bands_failed": r.bands_failed,
+                         # THE READER RETURNED ROWS AND PUT NO NUMBERS IN THEM. Distinct from
+                         # `problem` (nothing came back) and from `cells_unread` (a count nobody
+                         # reads as a verdict): this arrives with `read: true` and a plausible row
+                         # count, which is the most reassuring thing on the response.
+                         "gave_up": r.gave_up,
                          "partial": r.partial()}
                         for r in reports],
         "partial_sheets": [r.sheet for r in reports if r.partial()],
+        "surrendered_sheets": [r.sheet for r in reports if r.gave_up],
+        # How the sheet was sliced, echoed back — a provider comparison is worthless if you cannot
+        # tell which run was whole-sheet and which was quartered.
+        "bands_requested": bands,
         "cells_unread": sum(r.cells_unread for r in reports),
         "bad_rows": schedule.bad_rows(),
         "unread_rows": schedule.unread_rows(),
