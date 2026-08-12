@@ -34,6 +34,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from client_boq.models import NullTolerant
+
 DEMO_FIXTURE = "cases/client_boq/tender_answer.json"
 
 SYSTEM = """You answer a question about ONE construction tender, using ONLY the ground supplied.
@@ -59,7 +61,7 @@ RULES YOU MUST NOT BREAK:
    person to accept or ignore — never write as though it has been recorded."""
 
 
-class Citation(BaseModel):
+class Citation(NullTolerant):
     """Where a claim came from. Validated against the ground actually supplied."""
 
     source: str = ""
@@ -85,7 +87,7 @@ class Answer(BaseModel):
         return bool(self.cannot_answer) or not self.citations
 
 
-class RawAnswer(BaseModel):
+class RawAnswer(NullTolerant):
     """Exactly the fields the model is asked for — it does not get to write `stripped`."""
 
     answer: str = ""

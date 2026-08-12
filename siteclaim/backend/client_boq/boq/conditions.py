@@ -32,6 +32,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from client_boq.boq.model import INPUT_SPECS, CostingModel
+from client_boq.models import NullTolerant
 
 DEMO_FIXTURE = "cases/client_boq/condition_mapping.json"
 
@@ -54,7 +55,7 @@ RULES YOU MUST NOT BREAK:
 5. You are proposing. A person confirms or rejects. Never write as if the change is made."""
 
 
-class RawConditionMapping(BaseModel):
+class RawConditionMapping(NullTolerant):
     """EXACTLY what the model is asked for, and nothing else.
 
     A separate type from :class:`ConditionProposal` on purpose. That one carries ``checked`` — what

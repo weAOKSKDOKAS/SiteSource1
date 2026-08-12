@@ -5445,7 +5445,7 @@ def post_read_site_photos(set_id: str) -> dict:
     return {"set_id": set_id, **payload}
 
 
-class _RawPhotoRead(BaseModel):
+class _RawPhotoRead(models.NullTolerant):
     """Exactly what the vision call is asked for. It does not get to write `problems`."""
 
     observations: list[dict] = Field(default_factory=list)

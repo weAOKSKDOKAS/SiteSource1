@@ -25,11 +25,83 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # A raw uploaded file as the module receives it, matching the main app's ingest tuple shape
 # ``(filename, content_type, bytes)`` so ``pipeline.documents.extract_document`` can be reused.
 RawUpload = tuple[str, Optional[str], bytes]
+
+#: Sentinel for "the key is not in the payload at all", which needs no coercion — an absent key
+#: already falls back to the field's default. ``None`` cannot serve as this sentinel, because an
+#: absent key and a key holding null are precisely the two cases being told apart.
+_PRESENT = object()
+
+
+class NullTolerant(BaseModel):
+    """A model-facing type on which an explicit ``null`` means "there is none", not "reject this".
+
+    WHAT THIS IS FOR, measured on the live pack. GI/210's borehole table has no TERMINATION
+    REQUIREMENT column — that column is on GI/310 only — so the reader correctly returned
+    ``"termination": null``. The field was a plain ``str``, pydantic validates a payload as ONE
+    object, and rejecting that one key **discarded forty-seven correctly-read boreholes and
+    twenty-one trial pits**, including the ground levels, the rockheads and the soil/rock split
+    the model had plainly read. A second slice went the same way.
+
+    A DEFAULT DOES NOT HELP. ``field: str = ""`` makes the key safe to OMIT and does nothing at all
+    when the key is present holding ``null``, which is the case a model actually produces: asked
+    for a field the document has no answer for, it writes the key with a null rather than dropping
+    it. So the tolerance has to be about the VALUE, not about the key.
+
+    THE COERCION, and its limits:
+
+    * ``str`` field, value ``null``  ->  ``""``
+    * ``list`` field, value ``null`` ->  ``[]``      (a model saying "there are none")
+    * anything else                  ->  left alone, and it still raises
+
+    Numbers and booleans are deliberately excluded. ``PartSpec.start`` is an ``int``: a part with no
+    start page is not a part, and quietly turning that null into ``0`` would invent page 0 rather
+    than refuse a broken split. On the reader's own row type the numeric fields are ``Optional``
+    instead, because there ``None`` has to stay distinguishable from ``0.0`` — a zero depth is a
+    real measurement. Text is different: every consumer of these fields already treats ``""`` as
+    absent, because ``""`` was always their default.
+
+    ``Optional[str]`` fields are untouched — they already accept ``None`` and mean it.
+
+    SIX FIELDS ACROSS THE MODULE STILL REJECT A NULL, and each is deliberate rather than missed —
+    swept 2026-08-12 by validating ``{field: None}`` against every model-facing type:
+
+        PartSpec.n, .start, .end, .rev   a part with no page numbers is not a part
+        PartSpec.scanned                 a MEASUREMENT from `pdfops`; `False` would assert that a
+                                         page nobody checked has a text layer
+        PartContext.readable             also a measurement, and `s02_interpret` overwrites the
+                                         model's value on every path (trap 9). Coercing it to
+                                         either bool would state something nobody looked at
+
+    The rule for adding to that list: coerce where the blank is what every consumer already reads
+    as "there is none"; refuse where a blank would be a claim.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _an_explicit_null_is_an_absence(cls, data):
+        if not isinstance(data, dict):
+            return data
+        patched: Optional[dict] = None
+        for name, info in cls.model_fields.items():
+            if data.get(name, _PRESENT) is not None:
+                continue
+            annotation = info.annotation
+            blank: object
+            if annotation is str:
+                blank = ""
+            elif getattr(annotation, "__origin__", None) is list:
+                blank = []
+            else:
+                continue        # numeric, boolean, nested model: a null there is still an error
+            if patched is None:
+                patched = dict(data)
+            patched[name] = blank
+        return patched if patched is not None else data
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +276,7 @@ class OutlineNode(BaseModel):
     depth: int = 1
 
 
-class PartSpec(BaseModel):
+class PartSpec(NullTolerant):
     """One part of a split document set. ``start``/``end`` are 1-based INCLUSIVE physical
     pages of the source PDF — the contract between the planning call and the splitter."""
 
@@ -263,7 +335,7 @@ class InspectReport(BaseModel):
     draft: SplitManifest = Field(default_factory=SplitManifest)
 
 
-class PlannedSplit(BaseModel):
+class PlannedSplit(NullTolerant):
     """The planning call's output — a REFINEMENT of the deterministic draft, not a fresh
     invention. The model renames, categorises, merges and splits the draft's parts; code
     then validates the arithmetic and performs the cut. Deliberately carries no approval
@@ -273,7 +345,7 @@ class PlannedSplit(BaseModel):
     notes: str = ""               # why it departed from the draft, for the human at the gate
 
 
-class ChangeEntry(BaseModel):
+class ChangeEntry(NullTolerant):
     """One row of an addendum's OWN change table, as printed in the addendum letter.
 
     Advisory only. Tender Addendum No.1 of the reference package states its remarks are
@@ -287,7 +359,7 @@ class ChangeEntry(BaseModel):
     description: str = ""
 
 
-class ProposedMapping(BaseModel):
+class ProposedMapping(NullTolerant):
     """Which existing part an uploaded replacement document supersedes."""
 
     filename: str = ""
@@ -296,7 +368,7 @@ class ProposedMapping(BaseModel):
     reason: str = ""
 
 
-class AddendumPlan(BaseModel):
+class AddendumPlan(NullTolerant):
     """The planning call's read of an addendum: what it says it changed, and which of our parts
     each replacement file supersedes. Proposal only — the human gate commits the revisions."""
 
@@ -347,7 +419,7 @@ class RFIBatch(BaseModel):
     items: list[RFIItem] = Field(default_factory=list)
 
 
-class RFILetterDraft(BaseModel):
+class RFILetterDraft(NullTolerant):
     """The AI's contribution to a query letter: covering prose only.
 
     The questions themselves are the human's words, reproduced verbatim, and the numbering and
@@ -375,7 +447,7 @@ RULE_KINDS = (
 )
 
 
-class StrategyFlag(BaseModel):
+class StrategyFlag(NullTolerant):
     """A tender condition that changes how the bid should be run.
 
     Quoted, never paraphrased, and always cited: the whole value is that a human can check it
@@ -402,7 +474,7 @@ BADGE_USER = "user"
 SCOPE_BADGES = (BADGE_AI, BADGE_USER)
 
 
-class PartContext(BaseModel):
+class PartContext(NullTolerant):
     """The interpreted context for one part — the structured twin of its markdown card.
     ``readable`` false means we could not read it; the card says so rather than guessing."""
 
@@ -446,7 +518,7 @@ class PartContext(BaseModel):
 # ===========================================================================
 # REVIEW workflow handoffs
 # ===========================================================================
-class ClauseItem(BaseModel):
+class ClauseItem(NullTolerant):
     """One structured item read out of the document set — a contract clause or scope line.
     ``clause_id`` is the stable identity s08 verifies citations against."""
 
@@ -459,7 +531,7 @@ class ClauseItem(BaseModel):
     part_id: str = ""             # the ingest part this clause came from ("" when not split)
 
 
-class ParsedDocumentSet(BaseModel):
+class ParsedDocumentSet(NullTolerant):
     """REVIEW s01 output, and the shared parsed-document store the estimate reads too. Persisted at
     ``artifacts/client_boq/parsed.json``."""
 
@@ -474,7 +546,7 @@ class ParsedDocumentSet(BaseModel):
         return {c.clause_id: c for c in self.clauses if c.clause_id}
 
 
-class ContextSummary(BaseModel):
+class ContextSummary(NullTolerant):
     """REVIEW s02 — the structured commercial-risk summary from the review doc (AI draft, human-
     reviewed). Draft only; no verdicts."""
 
@@ -486,7 +558,7 @@ class ContextSummary(BaseModel):
     clarifications: list[str] = Field(default_factory=list)           # items to clarify or exclude
 
 
-class DepartureProposal(BaseModel):
+class DepartureProposal(NullTolerant):
     """REVIEW s03 **AI output item** — a proposal only. Deliberately carries NO status/verdict field,
     so the model cannot write a decision value. The AI proposes the matched ``criterion_id`` (or ""
     for a clause that matches nothing), extracts the threshold ``extracted_value`` where the criterion
@@ -502,7 +574,7 @@ class DepartureProposal(BaseModel):
     proposed_position: str = ""       # draft
 
 
-class DepartureProposalSet(BaseModel):
+class DepartureProposalSet(NullTolerant):
     """The wrapper the AI returns for s03 (fixture field ``departures``). One proposal per clause the
     AI read; ``criterion_id == ""`` marks a clause that matched nothing (becomes ``uncovered``)."""
 
@@ -611,7 +683,7 @@ class DepartureRegister(BaseModel):
 
 
 # --- slice-2 handoffs -------------------------------------------------------
-class ScopeAlignmentFinding(BaseModel):
+class ScopeAlignmentFinding(NullTolerant):
     """s04 AI-proposed scope finding. ``contract_ref``/``cited_text`` let it flow through s08 citation
     verification like any line; ``priced`` records whether the AI thinks the item was priced."""
 
@@ -622,11 +694,11 @@ class ScopeAlignmentFinding(BaseModel):
     priced: Optional[bool] = None
 
 
-class ScopeAlignmentSet(BaseModel):
+class ScopeAlignmentSet(NullTolerant):
     findings: list[ScopeAlignmentFinding] = Field(default_factory=list)
 
 
-class ProgramFinding(BaseModel):
+class ProgramFinding(NullTolerant):
     """s05 AI-proposed program risk. Numeric fields (when the AI extracts them) feed the DETERMINISTIC
     recompute — the AI never computes the exposure itself."""
 
@@ -642,7 +714,7 @@ class ProgramFinding(BaseModel):
     recomputed_value: str = ""        # set by the deterministic recompute, never by the AI
 
 
-class ProgramFindingSet(BaseModel):
+class ProgramFindingSet(NullTolerant):
     findings: list[ProgramFinding] = Field(default_factory=list)
 
 
@@ -707,7 +779,7 @@ class CitationCheck(BaseModel):
 # ===========================================================================
 # ESTIMATE workflow handoffs (unchanged from scaffold — stages remain stubs)
 # ===========================================================================
-class ScopeReviewNote(BaseModel):
+class ScopeReviewNote(NullTolerant):
     """One scope note. ``kind`` is one of inclusion | exclusion | ambiguity | conflict | assumption
     (estimating doc step 1). ``source`` distinguishes the AI draft from deterministically-injected
     register context (``register``)."""
@@ -717,7 +789,7 @@ class ScopeReviewNote(BaseModel):
     source: str = "draft"             # "draft" | "register"
 
 
-class ScopeReviewResult(BaseModel):
+class ScopeReviewResult(NullTolerant):
     """ESTIMATE s01 output (AI draft + injected register context). ``summary`` is the scope statement;
     it is what an ``amended_summary`` at the scope gate overrides. Draft only — no verdicts, no numbers."""
 
@@ -1143,7 +1215,7 @@ class LetterMeta(BaseModel):
     validity_days: int = 90
 
 
-class LetterDraft(BaseModel):
+class LetterDraft(NullTolerant):
     """The AI-DRAFTED parts of the offer letter (the only parts a model writes). Seeded from the
     approved scope. Everything else — price, header fields, the pricing-schedule table, and the
     confirmed-departure Appendix A bullets — is injected by code."""

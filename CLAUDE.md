@@ -372,6 +372,31 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
    `backend/conftest.py` now sets `SITESOURCE_SKIP_DOTENV=1` before pytest imports any test module,
    and `api.py` honours it. If you add config that `api.py` reads at import, add it to the list
    there too. Related to trap 1c: the environment is not the subject of the test.
+12. **A `null` FROM A MODEL IS NOT A MISSING KEY, AND A DEFAULT ONLY FIXES THE SECOND.**
+   `field: str = ""` makes the key safe to OMIT and does nothing when the key is present holding
+   `null` — and the key-present-holding-null is what a model actually writes when you ask it for
+   something the document has no answer for. Pydantic validates a payload as ONE object, so that
+   single null discards every sibling row. Measured 2026-08-11: GI/210's boreholes have no
+   TERMINATION column (it is on GI/310 only), the reader correctly returned `"termination": null`,
+   and **47 boreholes and 21 trial pits were thrown away** with their ground levels, rockheads and
+   soil/rock splits intact in the response. Every model-facing type in `client_boq` now inherits
+   `models.NullTolerant` — `null` on a `str` becomes `""`, on a `list` becomes `[]`. Six numeric
+   and boolean fields still refuse, deliberately and by name: a blank that every consumer already
+   reads as "there is none" is tolerable, a blank that would be a *claim* (page 0, "not scanned")
+   is not. `test_a_null_is_not_a_rejection.py` sweeps the whole surface and fails on a new type.
+13. **BEFORE RAISING A TOKEN BUDGET, MEASURE WHERE THE TOKENS WENT.** The sequel to trap 10, and
+   the same instinct being wrong for a second reason. A vision read of a 91-row schedule blew a
+   16,000-token ceiling twice and looked exactly like an answer too big to write. It was not: the
+   answer serializes to ~29,400 chars ≈ 8,200–9,200 output tokens for the WHOLE sheet, and the
+   failing slices were quarter-sheets. The real cause was geometry — `pdfops.render_band` composed
+   a header strip that overlapped the band's own body, so band 1 of 4 showed a 25 pt strip of the
+   sheet twice, stacked, and the model was handed a table that appeared to restart three rows in.
+   Bands 0, 2 and 3 were unaffected, so the defect lived on one band of four and presented as a
+   model problem. `band_rects` is now a pure function with the invariant `header_bottom <=
+   body_top`, asserted as arithmetic over every band count. **`CompletionTruncated` leads with the
+   block shape** (`[thinking: 4,096 chars]`, `[NO CONTENT BLOCKS AT ALL]`) precisely so the
+   fragment that chooses between "budget more" and "stop paying for thinking" survives being
+   quoted — the first real report of this failure elided it into an ellipsis.
 
 ## 9. Working agreements on this branch
 
