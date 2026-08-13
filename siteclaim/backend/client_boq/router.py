@@ -175,6 +175,8 @@ _WORKFLOW_STAGES: dict[str, list[str]] = {
     "ingest": ["reading", "inspecting", "planning", "saving"],
     "split": ["splitting", "interpreting", "ingested"],
     "archive": ["reading", "extracting", "recording", "ingested"],   # bridge/archive.py
+    # The drawing read reports per SHEET, and how many sheets triage found is not known
+    # until it has run — so it names its stages dynamically and carries no fixed list.
     "review": ["ingesting", "summarising", "matching", "scope", "program", "cashflow",
                "assembling", "verifying", "locating"],
     "brain": ["grounding", "reading", "proposing"],
@@ -4176,21 +4178,40 @@ def post_read_station_schedule(
     plan = boq_sheets.plan(register_text, [name for name, _ in uploads])
     by_name = dict(uploads)
     reports: list = []
-    for entry in plan.sheets:
-        data = by_name.get(entry.filename)
-        if data is None:
-            reports.append(boq_schedule_read.ReadReport(
-                sheet=entry.number,
-                problem=("the register lists this sheet but its file was not among the drawings "
-                         "uploaded")))
-            continue
-        # `bands` per request, so one sheet can be tried whole and then in slices against two
-        # providers without a restart or an edit. 0 keeps the adaptive default; the module reads
-        # `SCHEDULE_READ_BANDS` when nothing is passed here.
-        reports.append(boq_schedule_read.read_sheet(
-            data, set_id=set_id, sheet=f"{entry.number}", bands=bands or None))
 
-    schedule = boq_schedule_read.merge(reports, set_id=set_id)
+    # PROGRESS, on a request that blocks for a QUARTER OF AN HOUR. A vision read of these sheets
+    # took ~17 minutes on the first live run, and this endpoint returned only at the end — so the
+    # operator watched a spinner with no way to tell reading from hung. The response shape is
+    # deliberately unchanged (every caller and test still reads the same dict); instead the run
+    # registers an ordinary job and stamps its stage per sheet, and the browser polls the job
+    # endpoints it already has while the POST is still in flight.
+    job_id = jobs.JOBS.create("drawing", set_id=set_id)
+    jobs.JOBS.mark_running(job_id, f"triaged {len(plan.sheets)} sheet(s)")
+    try:
+        for n, entry in enumerate(plan.sheets, start=1):
+            jobs.JOBS.update(job_id, stage=f"reading {entry.number} ({n} of {len(plan.sheets)})",
+                             done=n - 1, total=len(plan.sheets))
+            data = by_name.get(entry.filename)
+            if data is None:
+                reports.append(boq_schedule_read.ReadReport(
+                    sheet=entry.number,
+                    problem=("the register lists this sheet but its file was not among the "
+                             "drawings uploaded")))
+                continue
+            # `bands` per request, so one sheet can be tried whole and then in slices against two
+            # providers without a restart or an edit. 0 keeps the adaptive default; the module
+            # reads `SCHEDULE_READ_BANDS` when nothing is passed here.
+            reports.append(boq_schedule_read.read_sheet(
+                data, set_id=set_id, sheet=f"{entry.number}", bands=bands or None))
+
+        schedule = boq_schedule_read.merge(reports, set_id=set_id)
+    except Exception as exc:
+        # The job carries the failure too, or a watcher polling it would see a run that simply
+        # stopped reporting — which reads as hung rather than failed.
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+        raise
+    jobs.JOBS.update(job_id, status="done", stage="merged",
+                     done=len(plan.sheets), total=len(plan.sheets))
     return {
         "set_id": set_id,
         # WHERE THE SHEETS CAME FROM: "set" is the tender's own ingested drawings, "upload" is

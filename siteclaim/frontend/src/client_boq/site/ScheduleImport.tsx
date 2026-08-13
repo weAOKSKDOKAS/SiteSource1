@@ -42,6 +42,8 @@ export function ScheduleImport({
   // simply not offered until it has — never a guess about drawings nobody counted).
   const [held, setHeld] = useState<{ count: number; names: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Which sheet the read is on right now — "" when nothing is running. */
+  const [progress, setProgress] = useState("");
   const [drawn, setDrawn] = useState<ScheduleReadResponse | null>(null);
 
   useEffect(() => {
@@ -70,6 +72,31 @@ export function ScheduleImport({
   const readDrawings = useCallback(
     async (files: File[]) => {
       setBusy(true);
+      setProgress("triaging the drawing register…");
+      // THE READ BLOCKS FOR MINUTES — ~17 on the first live run, one vision call per sheet — and
+      // this screen showed a spinner that could not tell reading from hung. The POST still
+      // returns the whole report; the run also stamps an ordinary job as it goes, so polling the
+      // live-jobs endpoint alongside the request says which sheet it is on right now.
+      let watching = true;
+      const watch = async () => {
+        while (watching) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (!watching) break;
+          try {
+            const live = await api.liveJobs(setId);
+            const drawing = live.jobs.find((j) => j.kind === "drawing" && j.status === "running");
+            if (drawing?.stage) {
+              setProgress(
+                drawing.total
+                  ? `${drawing.stage} · sheet ${(drawing.done ?? 0) + 1} of ${drawing.total}`
+                  : drawing.stage);
+            }
+          } catch {
+            /* a poll that fails says nothing about the read — keep the last stage on screen */
+          }
+        }
+      };
+      void watch();
       try {
         const report = await api.readStationSchedule(setId, files);
         setDrawn(report);
@@ -100,6 +127,8 @@ export function ScheduleImport({
       } catch (e) {
         onError(e instanceof Error ? e.message : String(e));
       } finally {
+        watching = false;
+        setProgress("");
         setBusy(false);
       }
     },
@@ -150,6 +179,24 @@ export function ScheduleImport({
 
         <div className="mt-5">
           <SectionLabel>READ IT OFF THE DRAWINGS</SectionLabel>
+          {/* WHAT IT IS DOING RIGHT NOW. One vision call per sheet, minutes each — without this
+              the screen could not tell reading from hung, and the honest answer is on the
+              server the whole time. */}
+          {busy && (
+            <div
+              role="status"
+              className="mt-1.5 rounded-cb-card border border-cb-brass-line bg-cb-brass-tint px-3 py-2"
+            >
+              <p className="font-cb-mono text-[10px] font-semibold text-cb-brass-text">
+                {progress || "reading…"}
+              </p>
+              <p className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.5] text-cb-brass-text">
+                A sheet is one vision call and can take several minutes — the sheets are flattened
+                raster, so the table is read cell by cell from the image. Leaving this screen does
+                not stop the read; the result is a proposal you look at before anything is saved.
+              </p>
+            </div>
+          )}
           {/* THE APP ALREADY HOLDS THE DRAWINGS. On the reference pack the archive ingest
               classified 35 DRG sheets and put every one on disk — and this screen used to ask
               the operator to go find those same PDFs in a Downloads folder and upload them
