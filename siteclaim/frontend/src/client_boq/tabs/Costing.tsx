@@ -188,6 +188,8 @@ export function Costing({
           </div>
         </section>
 
+        <ClassSplit data={data} setId={setId} onChanged={load} onError={onError} />
+
         {/* ---- the rates ---- */}
         <section className="mt-6">
           <SectionLabel>
@@ -621,6 +623,100 @@ function AssumptionLine({
         </p>
       )}
     </div>
+  );
+}
+
+/** The one-click switch onto the per-class rig-move bases.
+ *
+ *  SMM S02 ¶2.06 measures moves "in different Classes of site" as different items, and the bill
+ *  does (2.2a × 80, 2.2b × 11) — but the default proposal pools them into one per-move figure,
+ *  which is the pinned, honest default until somebody decides otherwise. This is that decision:
+ *  it points the two items at the DERIVED class bases through the ordinary override channel, at
+ *  which point the set-up days partition by the billed counts and the platform builds typed on
+ *  the Site groups land inside the Class B rate (¶2.08(h)) instead of sitting flagged on checks. */
+function ClassSplit({
+  data,
+  setId,
+  onChanged,
+  onError,
+}: {
+  data: CostingResponse;
+  setId: string;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const byRef = new Map(data.priced.rows.map((row) => [row.full_ref, row]));
+  const entries = Object.entries(data.class_refs).filter(([, ref]) => byRef.has(ref));
+  if (entries.length < 2) return null; // one pooled move item — there is no split to offer
+
+  const splitOn = entries.some(
+    ([cls, ref]) => byRef.get(ref)!.basis_key === `setup_move_${cls.toLowerCase()}`,
+  );
+
+  const setSplit = async (on: boolean) => {
+    setBusy(true);
+    try {
+      for (const [cls, ref] of entries) {
+        await api.setItemBasis(setId, ref,
+          on ? { basis_key: `setup_move_${cls.toLowerCase()}` } : {});
+      }
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-6">
+      <SectionLabel>RIG MOVES BY CLASS OF SITE</SectionLabel>
+      <div className="mt-2 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2.5">
+        <p className="font-cb-sans text-[10.5px] leading-[1.6] text-cb-body">
+          The bill prices the moves per class (
+          {entries.map(([cls, ref]) => `${ref} × ${data.class_counts[cls] ?? "?"} Class ${cls}`)
+            .join(" · ")}
+          ).{" "}
+          {splitOn ? (
+            <>
+              They are priced <strong>per class</strong>: the set-up days partition by those
+              counts
+              {data.platform_cost_b > 0 && (
+                <>
+                  , and {money(data.platform_cost_b)} of platform builds sits inside the Class B
+                  rate — SMM S02 ¶2.08(h) puts access scaffolding in the moving-rigs coverage
+                </>
+              )}
+              .
+            </>
+          ) : (
+            <>
+              Both currently share one pooled per-move figure — the honest default until you
+              decide otherwise.
+              {data.platform_cost_b > 0 && (
+                <>
+                  {" "}{money(data.platform_cost_b)} of platform builds typed on the Site groups
+                  is waiting for the Class B rate to carry it (SMM S02 ¶2.08(h)) and is flagged
+                  until something does.
+                </>
+              )}
+            </>
+          )}
+        </p>
+        <div className="mt-2">
+          {splitOn ? (
+            <Button disabled={busy} onClick={() => void setSplit(false)}>
+              Back to one pooled rate
+            </Button>
+          ) : (
+            <Button variant="brass" disabled={busy} onClick={() => void setSplit(true)}>
+              Price the moves per class of site
+            </Button>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

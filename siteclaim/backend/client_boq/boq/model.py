@@ -189,8 +189,9 @@ DIVISOR_STANDING_H = "standing_hours"
 DIVISOR_CONTRACT_MONTHS = "contract_months"
 DIVISOR_QTY = "qty"                     # the driver's own quantity — a material's own count
 DIVISOR_NONE = "none"                   # a lump: the amount is the rate
+DIVISOR_CLASS_HOLES = "class_holes"     # the holes of THIS row's class of site (per-class rig moves)
 DIVISORS = (DIVISOR_SOIL_M, DIVISOR_ROCK_M, DIVISOR_HOLES, DIVISOR_STANDING_H,
-            DIVISOR_CONTRACT_MONTHS, DIVISOR_QTY, DIVISOR_NONE)
+            DIVISOR_CONTRACT_MONTHS, DIVISOR_QTY, DIVISOR_NONE, DIVISOR_CLASS_HOLES)
 
 # Which derived material quantity a DRIVER_MATERIAL row consumes.
 MATERIAL_TUBES = "soil_tubes"
@@ -220,6 +221,36 @@ class ItemBasis(BaseModel):
     unit_cost_key: str = ""             # which model input supplies the unit cost
     components: list[FixedComponent] = Field(default_factory=list)   # for DRIVER_FIXED
     note: str = ""
+    #: "" = the row pools every hole (today's behaviour). "A"/"B" = the row prices only the rig
+    #: moves of that class of site — its work-day share and its divisor are that class's hole
+    #: count, and the Class B row is where the platform builds land (SMM S02 ¶2.08(h): access
+    #: scaffolding is in the moving-rigs item coverage; ¶2.03: moves are measured per hole).
+    site_class: str = ""
+
+
+def class_variants(basis: ItemBasis) -> list[ItemBasis]:
+    """The per-class variants of a set-up/move basis — DERIVED, never stored.
+
+    Derived so that every model that can price a rig move can price it per class of site,
+    including models saved before the field existed. They enter ``basis_index`` (so an item can
+    be pointed at one) but not ``basis_rows`` (so nothing changes until one is actually claimed
+    — the default proposal keeps mapping 2.2a and 2.2b to the pooled row, exactly as pinned).
+    """
+    if basis.driver != DRIVER_SETUP_DAYS or basis.site_class:
+        return []
+    return [
+        basis.model_copy(update={
+            "key": f"{basis.key}_{cls.lower()}",
+            "label": f"{basis.label} — Class {cls} of site",
+            "divisor": DIVISOR_CLASS_HOLES,
+            "site_class": cls,
+            "note": (f"The Class {cls} share of the set-up work-days, divided by the Class {cls} "
+                     f"hole count." + (" Carries the platform builds — SMM S02 ¶2.08(h) puts "
+                                       "access scaffolding in the moving-rigs item coverage."
+                                       if cls == "B" else "")),
+        })
+        for cls in ("A", "B")
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +365,15 @@ class CostingModel(BaseModel):
         return {row.key: row for row in self.laboratory}
 
     def basis_index(self) -> dict[str, ItemBasis]:
-        return {row.key: row for row in self.basis_rows}
+        """Every basis an item can be pointed at: the declared rows, plus the derived per-class
+        variants of any set-up/move row. The variants are in the index (claimable) without being
+        in ``basis_rows`` (evaluated) — the build emits them only when one is actually claimed,
+        so pointing an item at one is the whole act of switching the split on."""
+        index = {row.key: row for row in self.basis_rows}
+        for row in self.basis_rows:
+            for variant in class_variants(row):
+                index.setdefault(variant.key, variant)
+        return index
 
     def placeholder_for(self, item_unit: str) -> Optional[PlaceholderRate]:
         """The stand-in for a line measured this way, or the catch-all, or nothing.

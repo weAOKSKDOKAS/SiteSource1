@@ -3682,6 +3682,11 @@ def get_bill_checks(set_id: str, rev: Optional[int] = None, margin_pct: float = 
         pending = store.bill_review_pending(conn, set_id, bill.rev)
         sweep = store.load_sweep(conn, set_id, bill.rev)
         checks_groups = store.load_hole_groups(conn, set_id, bill.rev)
+        station_classes = store.load_station_classes(conn, set_id)
+        _criteria, class_refs = store.load_site_criteria(conn, set_id)
+        costing_model = boq_model.effective(store.load_library_model(conn),
+                                            store.load_set_model(conn, set_id))
+        costing_state = store.load_costing_state(conn, set_id, bill.rev)
     finally:
         conn.close()
     build_ups, carried = _rate_inputs(stored)
@@ -3696,11 +3701,22 @@ def get_bill_checks(set_id: str, rev: Optional[int] = None, margin_pct: float = 
     # `unpriced_item`. Merging just that kind keeps the two surfaces symmetric without
     # double-counting the kinds both already emit.
     flags += [f for f in priced.flags if f.kind == "loading_unapplied"]
-    # The platform money typed on the Site groups, until the per-class rig-move basis carries it
-    # (plan Phase 3). Computed here because the checks module is pure and the groups live in the
-    # store — same split as every other flag with a data dependency.
-    flags += boq_checks.platform_cost_unconsumed(
-        boq_groups.access_build_total(boq_groups.GroupPlan(groups=checks_groups)))
+    # The platform money typed on the Site groups, NET of what the active wiring actually
+    # carries — so the guard goes quiet by construction, not by decree, when the money truly
+    # lands in a rate. Two honest routes exist and both are netted:
+    #   * the per-class rig-move basis (engine 2): active the moment any item is pointed at a
+    #     derived class variant, at which point the Class-B platform total is inside the Class B
+    #     move rate (SMM S02 ¶2.08(h)) — platforms typed on non-B groups stay flagged, because
+    #     a Class A move must not carry a platform it does not need;
+    #   * a sweep cost routed LOAD onto a rig-move item (engine 1's manual route, the interim
+    #     path the guard's own message points at).
+    class_keys = {v.key for b in costing_model.basis_rows for v in boq_model.class_variants(b)}
+    overrides = costing_state["mapping"].get("items") or {}
+    split_active = any((o.get("basis_key") or "") in class_keys for o in overrides.values())
+    platform_total = boq_groups.access_build_total(boq_groups.GroupPlan(groups=checks_groups))
+    consumed = _class_b_platform_total(checks_groups, station_classes) if split_active else 0.0
+    consumed += sum(v for k, v in sweep.loadings().items() if k in set(class_refs.values()))
+    flags += boq_checks.platform_cost_unconsumed(max(0.0, round(platform_total - consumed, 2)))
     return {
         "set_id": set_id, "rev": bill.rev,
         "tendered_total": priced.tendered_total,
@@ -5112,6 +5128,25 @@ def _apply_model_path(model: boq_model.CostingModel, path: str, value: float) ->
     raise HTTPException(status_code=422, detail=f"{path!r} is not a path this model can be changed at.")
 
 
+def _class_b_platform_total(groups, classes: dict) -> float:
+    """The platform money that belongs in the Class B rig-move basis: builds typed on groups whose
+    EFFECTIVE class is B — stored, or inferred from a single shared station class, the same rule
+    ``GET /site/{set_id}/groups`` applies. A platform typed on a Class A group is NOT consumed
+    (a Class A move must not carry a platform it does not need) and stays flagged on the checks
+    surface rather than being absorbed."""
+    total = 0.0
+    for group in groups:
+        cls = group.access_class
+        if not cls:
+            assigned = {classes.get(name, {}).get("access_class", "") for name in group.stations}
+            assigned.discard("")
+            if len(assigned) == 1:
+                cls = next(iter(assigned))
+        if cls == "B":
+            total += group.access_build_cost
+    return total
+
+
 def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
     """Run the whole engine for one tender. The single path everything else here goes through."""
     bill = _bill_or_404(conn, set_id, rev)
@@ -5144,7 +5179,18 @@ def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
     quantities = mapping.quantities()
     programme = boq_programme.derive(quantities, model)
     spread = boq_buildup.build_spread(programme, model)
-    buildup = boq_buildup.build(programme, model, spread)
+    # THE PER-CLASS RIG-MOVE WIRING (plan Phase 3). `active_keys` is what the items actually
+    # claim after overrides; pointing 2.2a/2.2b at the derived class variants (the one-click act
+    # on the Costing screen) is what switches the split on. The counts are the BILL's own 80/11
+    # — the only external check on the estimator's classification — and the Class B platform
+    # total rides in so ¶2.08(h) money lands inside the Class B move rate, never Class A's.
+    active_keys = {entry.basis_key for entry in item_mappings if entry.basis_key}
+    _criteria, class_refs = store.load_site_criteria(conn, set_id)
+    class_counts = {k: float(v) for k, v in _billed_class_counts(bill, class_refs).items()}
+    platform_b = _class_b_platform_total(store.load_hole_groups(conn, set_id, bill.rev),
+                                         store.load_station_classes(conn, set_id))
+    buildup = boq_buildup.build(programme, model, spread, active_keys=active_keys,
+                                class_counts=class_counts, platform_cost_b=platform_b)
     priced = boq_costing.price(bill, model, programme, buildup, item_mappings,
                                submitted=state["submitted"])
 
@@ -5167,6 +5213,8 @@ def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
         "mapping": mapping, "item_mappings": item_mappings, "programme": programme,
         "spread": spread, "buildup": buildup, "priced": priced, "register": register,
         "billed_standing_hours": billed_standing, "conservation": balance,
+        "class_refs": class_refs, "class_counts": class_counts,
+        "platform_cost_b": platform_b,
     }
 
 
@@ -5284,6 +5332,12 @@ def get_costing(set_id: str, rev: Optional[int] = None) -> dict:
         "optimiser": boq_optimiser.optimise(programme, parts["model"]).model_dump(),
         "buildup": parts["buildup"].model_dump(),
         "priced": parts["priced"].model_dump(),
+        # The per-class rig-move wiring, for the screen's one-click switch: which bill items carry
+        # the Class A / Class B moves (the set's class_refs), the billed counts, and the platform
+        # money that lands in the Class B basis the moment the split is on.
+        "class_refs": parts["class_refs"],
+        "class_counts": parts["class_counts"],
+        "platform_cost_b": parts["platform_cost_b"],
         # THE CONSERVATION CHECK. `priced.total` is a number; this says whether it is the cost of
         # the work. A basis nothing claims is cost given away (GP ¶6); a basis whose claimants do
         # not sum to its divisor is cost recovered twice. Reported beside the total, never applied

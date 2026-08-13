@@ -599,6 +599,9 @@ export interface PricedRow {
   behaviour: string;
   /** The arithmetic behind a proposed rate, in words — "Site vehicle at HK$3,500/week × 122". */
   working: string;
+  /** Which build-up basis prices this line ("" when a lab/prelim/typed rate does instead).
+   *  The per-class rig-move switch reads it to know whether the split is on. */
+  basis_key: string;
   prelim_key: string;
   note: string;
 }
@@ -860,6 +863,14 @@ export interface CostingResponse extends ModelDeclarations {
     problems: string[];
   };
   register: { rows: AssumptionRow[]; gate: string; summary: string; outstanding: number };
+  /** Which bill items carry the Class A / Class B rig moves (e.g. {"A": "2.2a", "B": "2.2b"}) —
+   *  the switch's targets for pricing the moves per class of site. */
+  class_refs: Record<string, string>;
+  /** The billed hole count per class — the bill's own numbers, the divisor of each class rate. */
+  class_counts: Record<string, number>;
+  /** The platform builds typed on effective-Class-B Site groups. Lands inside the Class B move
+   *  rate the moment the split is on (SMM S02 ¶2.08(h)); flagged on checks until then. */
+  platform_cost_b: number;
 }
 
 /** The arithmetic under the Groups screen. Days and the blend, never a rate. */

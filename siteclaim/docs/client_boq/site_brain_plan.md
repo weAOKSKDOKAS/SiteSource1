@@ -91,7 +91,7 @@ added:
 - The Ask surface shows the persisted history per tender, and shows when a condition was born
   from an exchange.
 
-### Phase 3 — the map earns its keep
+### Phase 3 — the map earns its keep *(built with this document; decisions recorded below)*
 
 - Persist `SheetRegistration` (one table), the two-grid-marks entry form, and MapCrop goes live
   on all 91 holes — the georef math is already written and tested.
@@ -101,6 +101,29 @@ added:
 - Route/access evidence: the road-access picker on the map; distances measured deterministically;
   the model contributes at most the design's brass **hint** line ("▪road 40 m — a hint, not a
   classification"), never a class. `proposed_class` stays empty by construction.
+
+**Decisions taken in the build (3a/3b):**
+
+1. **Sheet membership is computed by coordinates, never by name.** `Station.sheet` holds the
+   SCHEDULE sheet the row was read from (GI/210); registrations are of the SITE-PLAN sheets
+   (GI/201…). The two name families never intersect, so `access.board()` takes
+   `located_stations` (computed via `georef.sheet_for`) and the old `located_sheets` name
+   intersection is kept only for a caller that genuinely registered a schedule sheet.
+2. **The class bases are DERIVED, not stored** (`model.class_variants`): present in
+   `basis_index` so an item can be pointed at one, absent from `basis_rows` so nothing changes
+   until one is claimed. This makes the feature available to every model ever saved, keeps the
+   pinned default proposal byte-identical, and makes pointing 2.2a/2.2b at the variants (one
+   click on the Costing screen) the entire activation act.
+3. **The split is a partition and evaluates BOTH classes.** Claiming one variant still emits the
+   other — the class nobody claimed holds real work-days and must flag on conservation as
+   unclaimed rather than vanish. Class counts are the BILL's (80/11), because the divisor must
+   equal the claiming item's quantity for conservation to balance.
+4. **The platform joins only the Class B row, and only while the split is active.** Folding it
+   into the pooled row would price Class A moves as if they needed platforms. A platform typed
+   on an effective-Class-A group is never absorbed and stays flagged.
+5. **The Phase-1 guard nets per-surface consumption, not a stored boolean:** the Class-B
+   platform total when the split is active, plus any sweep cost routed LOAD onto a rig-move ref
+   (the guard's own suggested interim route). Quiet means the remainder is genuinely 0.00.
 
 ### Phase 4 — the brain (propose-only, tender-side)
 

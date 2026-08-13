@@ -54,6 +54,7 @@ from pydantic import BaseModel, Field
 from client_boq.boq.model import (
     CHARGE_CONTRACT_DAY,
     CHARGE_RIG_DAY,
+    DIVISOR_CLASS_HOLES,
     DIVISOR_CONTRACT_MONTHS,
     DIVISOR_HOLES,
     DIVISOR_NONE,
@@ -75,6 +76,7 @@ from client_boq.boq.model import (
     MATERIAL_TUBES,
     CostingModel,
     ItemBasis,
+    class_variants,
 )
 from client_boq.boq.programme import Programme
 
@@ -195,12 +197,37 @@ class Buildup(BaseModel):
 
 
 def build(programme: Programme, model: CostingModel,
-          spread: Optional[Spread] = None) -> Buildup:
-    """Sheet 04 — allocate the spread and the materials to each kind of bill item."""
+          spread: Optional[Spread] = None, *,
+          active_keys: Optional[set[str]] = None,
+          class_counts: Optional[dict[str, float]] = None,
+          platform_cost_b: float = 0.0) -> Buildup:
+    """Sheet 04 — allocate the spread and the materials to each kind of bill item.
+
+    ``active_keys`` is the set of basis keys the bill's items actually claim (after any human
+    overrides). When it names a per-class variant of a set-up/move row, that row is EVALUATED AS
+    ITS TWO CLASS VARIANTS instead of as one pool — both of them, because the split is a
+    partition: the class an estimator did not point an item at still holds real work-days, and
+    an unclaimed class row flags on conservation rather than vanishing. With no variant claimed
+    (the default), nothing here changes: one pooled row, exactly as before.
+
+    ``class_counts`` are the BILLED per-class hole counts ({"A": 80, "B": 11} on the reference
+    contract) — the bill's own numbers, because the divisor must match the claiming item's
+    quantity for conservation to balance. ``platform_cost_b`` joins the Class B row's cost
+    (SMM S02 ¶2.08(h)); it is ignored while the split is inactive, because folding it into the
+    pooled row would price Class A moves as if they too needed platforms.
+    """
     spread = spread or build_spread(programme, model)
     result = Buildup()
+    active = set(active_keys or ())
 
     for basis in model.basis_rows:
+        variants = class_variants(basis)
+        if variants and any(v.key in active for v in variants):
+            for variant in variants:
+                result.rows.append(_row(variant, programme, model, spread,
+                                        class_counts=class_counts,
+                                        platform_cost_b=platform_cost_b))
+            continue
         result.rows.append(_row(basis, programme, model, spread))
 
     result.total_direct_cost = sum(r.total_cost for r in result.rows)
@@ -223,7 +250,8 @@ def build(programme: Programme, model: CostingModel,
 
 
 def _row(basis: ItemBasis, programme: Programme, model: CostingModel,
-         spread: Spread) -> BuildupRow:
+         spread: Spread, *, class_counts: Optional[dict[str, float]] = None,
+         platform_cost_b: float = 0.0) -> BuildupRow:
     rig_day = spread.cost_per_rig_day
     quantities = programme.quantities
     row = BuildupRow(key=basis.key, label=basis.label, driver=basis.driver, note=basis.note)
@@ -232,11 +260,31 @@ def _row(basis: ItemBasis, programme: Programme, model: CostingModel,
         kind = {DRIVER_SOIL_DAYS: "soil", DRIVER_ROCK_DAYS: "rock",
                 DRIVER_SETUP_DAYS: "setup"}[basis.driver]
         row.quantity = programme.scaled_days(kind)
+        if basis.site_class:
+            # A PARTITION of the set-up days, never an addition: the two class rows' quantities
+            # sum to exactly what the pooled row held, by the class share of the hole count.
+            counts = class_counts or {}
+            denominator = quantities.holes or sum(counts.values())
+            share = (counts.get(basis.site_class, 0.0) / denominator) if denominator else 0.0
+            row.quantity *= share
         row.unit_cost = rig_day
         row.total_cost = row.quantity * rig_day
         row.derivation = (f"{row.quantity:,.1f} work-days × {rig_day:,.2f} per rig-day "
                           f"(the split scaled by {programme.allocation:.4f} so it sums to the "
                           f"banded total)")
+        if basis.site_class:
+            counts = class_counts or {}
+            row.derivation = (
+                f"the Class {basis.site_class} share — {counts.get(basis.site_class, 0.0):g} of "
+                f"{quantities.holes or sum(counts.values()):g} holes — of the set-up days: "
+                + row.derivation)
+        if basis.site_class == "B" and platform_cost_b:
+            row.total_cost += platform_cost_b
+            row.derivation += (
+                f" + {platform_cost_b:,.2f} platform builds, typed on the Site groups. They land "
+                f"HERE because SMM S02 ¶2.08(h) puts access scaffolding in the moving-rigs item "
+                f"coverage and ¶2.03 measures moves per hole — a Class A move must not carry a "
+                f"platform it does not need.")
 
     elif basis.driver == DRIVER_STANDING_DAYS:
         hours_per_day = model.value("hours_per_day", 8.0) or 8.0
@@ -309,7 +357,8 @@ def _row(basis: ItemBasis, programme: Programme, model: CostingModel,
         row.problem = f"{basis.label!r} uses driver {basis.driver!r}, which the engine does not know."
         return row
 
-    row.divisor, row.divisor_name = _divisor(basis, programme, model, row.quantity)
+    row.divisor, row.divisor_name = _divisor(basis, programme, model, row.quantity,
+                                             class_counts=class_counts)
     if basis.divisor == DIVISOR_NONE:
         # A lump: the amount is the rate (SMM Corr. 1/2007 Part III ¶3).
         row.cost_per_unit = row.total_cost
@@ -323,8 +372,9 @@ def _row(basis: ItemBasis, programme: Programme, model: CostingModel,
 
 
 def _divisor(basis: ItemBasis, programme: Programme, model: CostingModel,
-             own_qty: float) -> tuple[float, str]:
+             own_qty: float, *, class_counts: Optional[dict[str, float]] = None) -> tuple[float, str]:
     quantities = programme.quantities
+    counts = class_counts or {}
     return {
         DIVISOR_SOIL_M: (quantities.soil_m, "soil metres"),
         DIVISOR_ROCK_M: (quantities.rock_and_hard_m, "rock and hard-material metres"),
@@ -333,4 +383,9 @@ def _divisor(basis: ItemBasis, programme: Programme, model: CostingModel,
         DIVISOR_CONTRACT_MONTHS: (model.value("contract_period_months"), "contract months"),
         DIVISOR_QTY: (own_qty, "its own quantity"),
         DIVISOR_NONE: (1.0, "nothing — it is a lump"),
+        # The billed hole count of THIS row's class — the bill's own number, so the divisor
+        # matches the claiming item's quantity and conservation balances by construction. Zero
+        # (class unknown to the bill) falls to the zero-divisor refusal: unpriced, never guessed.
+        DIVISOR_CLASS_HOLES: (counts.get(basis.site_class, 0.0),
+                              f"Class {basis.site_class or '?'} holes"),
     }.get(basis.divisor, (0.0, basis.divisor))
