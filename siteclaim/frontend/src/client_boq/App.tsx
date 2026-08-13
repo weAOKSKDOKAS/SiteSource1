@@ -37,6 +37,7 @@ import { DocumentsTab } from "./tabs/Documents";
 import { BidTab } from "./tabs/Bid";
 import { BrainTab } from "./tabs/Brain";
 import { Boundary } from "./Boundary";
+import { TenderChat } from "./TenderChat";
 import { CloseoutTab } from "./tabs/Closeout";
 import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
@@ -830,6 +831,9 @@ function SetView({
   docTarget: { partId: string; page: number } | null;
   onDocTargetUsed: () => void;
 }) {
+  /** The tender chat, per folder. Scoped to this set by construction — the log and the
+   *  ground are both keyed on it, so two tenders cannot bleed into one another. */
+  const [chatOpen, setChatOpen] = useState(false);
   const [data, setData] = useState<SetData | null>(null);
 
   const [opened, setOpened] = useState<Set<TabId>>(() => new Set<TabId>([tab]));
@@ -1131,6 +1135,32 @@ function SetView({
         )}
         </Boundary>
       </main>
+
+      {/* THE TENDER'S CHAT — one conversation per folder, floating over every step so a question
+          about the register can be asked while looking at the price. Memory is scoped to the set
+          by construction: the log is keyed on it, and so is the ground an answer may rest on. */}
+      {data && (
+        <>
+          <button
+            type="button"
+            onClick={() => setChatOpen((v) => !v)}
+            title="Ask about this tender — answers come only from its own ground"
+            className={cx(
+              "cb-press fixed bottom-4 right-4 z-30 flex items-center gap-2 rounded-cb-pill px-4 py-2.5 font-cb-sans text-[11.5px] font-semibold shadow-[0_2px_12px_rgba(12,26,40,.22)]",
+              chatOpen ? "bg-cb-panel text-cb-body" : "bg-cb-brass text-cb-on-brass",
+            )}
+          >
+            {chatOpen ? "Hide the chat" : "Ask about this tender"}
+          </button>
+          <TenderChat
+            setId={data.setId}
+            tenderName={data.name}
+            open={chatOpen}
+            onClose={() => setChatOpen(false)}
+            onError={onError}
+          />
+        </>
+      )}
 
       {panel?.kind === "rfi" && data && (
         <RfiPanel
