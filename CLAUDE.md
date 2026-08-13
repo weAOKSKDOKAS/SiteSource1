@@ -411,6 +411,26 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
    by OWNER (`fitz`/`Image`/`ZipFile` take no encoding) so a `path.open()` — text mode by default
    — cannot inherit their exemption. Same family as traps 1c and 11: **the environment is not the
    subject of the test, and a test that only passes in one environment has not been run.**
+15. **A TYPESCRIPT TYPE THAT HIDES A `null` IS A CRASH THE COMPILER WAS ASKED NOT TO FIND.**
+   Trap 12 from the other side, found live on 2026-08-13. `Station.length_m` is
+   `Optional[float] = None` in `boq/schedule.py` and was declared `length_m: number` in
+   `types.ts`. Read from GI/210 — which prints no tentative borehole length, the same missing
+   column as trap 12 — every station arrived with `"length_m": null`, and the Holes view's
+   `formatNorm(station.length_m)` fell through `Number.isInteger(null)` to `null.toFixed(4)`:
+   **the whole screen stopped drawing**. And that screen is where the map SENDS you — clicking a
+   hole pin calls `setView("holes")` — so the map's one interaction led straight into it and was
+   reported separately as a broken button. **One null, two bug reports.**
+   The compiler could not have caught it: it checks code against the types it is *given*, and
+   these interfaces are hand-written while the wire is never consulted. **A type that lies is
+   worse than no type**, because it converts a question the compiler would have asked into one
+   nobody asks. Four fields were lying (`Station.length_m`/`max_boring_m`,
+   `TrialPit.max_depth_m`/`depth_in_soil_m`);
+   `client_boq/tests/test_a_null_the_screen_cannot_see_is_a_white_screen.py` now pairs every
+   pydantic model with its interface by name and fails on the fifth. It **reports its own
+   coverage** (48 of 216 interfaces pair; the rest are hand-written for ad-hoc endpoint dicts and
+   are genuinely not covered) rather than letting a shrinking match rate read as a clean sweep.
+   The fix is always to make the TYPE honest and let `tsc` find the call sites — **never `?? 0`**:
+   a length that was never printed is a blank, and zero is a claim that the hole has no depth.
 
 ## 9. Working agreements on this branch
 

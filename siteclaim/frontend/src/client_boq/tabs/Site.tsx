@@ -764,8 +764,18 @@ function HoleTile({
   onSelect: () => void;
   onSetClass: (accessClass: string) => void;
 }) {
+  // ARRIVING FROM THE MAP HAS TO LAND SOMEWHERE YOU CAN SEE. Clicking a pin sets this station
+  // and switches to this view, and with a hundred holes in the grid the picked one is usually
+  // forty rows down — so the handoff looked like a button that did nothing. `nearest` scrolls
+  // only when the tile is actually off-screen, so clicking a tile you can already see is still.
+  const tile = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selected) tile.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selected]);
+
   return (
     <div
+      ref={tile}
       onClick={onSelect}
       className={cx(
         "cb-row flex cursor-pointer flex-col gap-1.5 rounded-cb-card border p-2",
@@ -784,8 +794,17 @@ function HoleTile({
       <div className="font-cb-mono text-[10px] font-semibold text-cb-ink-text">
         {station.station}
       </div>
-      <div className="font-cb-mono text-[9px] text-cb-muted">
-        {formatNorm(station.length_m)} m ·{" "}
+      {/* A tentative length is a COLUMN THE DRAWING MAY NOT HAVE — GI/210 prints none — so it
+          arrives null, and null prints as a blank. Filling it with soil+rock would read as a
+          printed length, and filling it with 0 would read as a hole with no depth; both are
+          claims about a cell nobody saw. */}
+      <div
+        className="font-cb-mono text-[9px] text-cb-muted"
+        title={station.length_m === null
+          ? "No tentative borehole length is printed for this hole on the drawing."
+          : undefined}
+      >
+        {station.length_m === null ? "— m" : `${formatNorm(station.length_m)} m`} ·{" "}
         {station.rock_m ? `${formatNorm(station.rock_m)} m rock` : "soil only"}
       </div>
       {/* The design's brass hint line: "▪road 40 m". A hint, not a classification — the number

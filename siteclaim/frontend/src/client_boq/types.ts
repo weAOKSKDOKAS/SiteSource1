@@ -149,8 +149,10 @@ export interface Station {
   northing: number | null;
   ground_level_mpd: number | null;
   rockhead_level_mpd: number | null;
-  length_m: number;
-  max_boring_m: number;
+  /** `null` when the drawing has no such column, which is ordinary — GI/210 carries no
+   *  TERMINATION and no tentative length. A blank is NOT a zero-metre hole. */
+  length_m: number | null;
+  max_boring_m: number | null;
   soil_m: number;
   hard_above_rockhead_m: number;
   rock_m: number;
@@ -173,8 +175,9 @@ export interface TrialPit {
   northing: number | null;
   ground_level_mpd: number | null;
   depth_m: number;
-  max_depth_m: number;
-  depth_in_soil_m: number;
+  /** Both `null` when the schedule does not print that column — a blank, not a zero. */
+  max_depth_m: number | null;
+  depth_in_soil_m: number | null;
   sheet: string;
 }
 
