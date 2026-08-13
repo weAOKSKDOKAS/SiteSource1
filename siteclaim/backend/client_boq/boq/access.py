@@ -77,6 +77,10 @@ class Evidence(BaseModel):
     external: bool = False
     available: bool = True
     unavailable_reason: str = ""
+    #: A measured figure in words, when the evidence IS a number rather than a link — the
+    #: road-distance line's "410 m straight line to 'Track head'". Deterministic arithmetic
+    #: only; never a model's sentence.
+    note: str = ""
 
 
 class ClusterEvidence(BaseModel):
@@ -127,8 +131,20 @@ def _metres_between(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(dx, dy)
 
 
+def nearest_road_point(lat: float, lon: float,
+                       road_points: list[dict]) -> Optional[tuple[dict, float]]:
+    """The nearest picked road-access point and the straight-line metres to it. None when nobody
+    has picked one — absence stays absence, never a guessed roadside."""
+    best: Optional[tuple[dict, float]] = None
+    for point in road_points or []:
+        metres = _metres_between((lat, lon), (point["lat"], point["lon"]))
+        if best is None or metres < best[1]:
+            best = (point, metres)
+    return best
+
+
 def _evidence_for(set_id: str, label: str, lat: float, lon: float, *, has_drawing: bool,
-                  providers: dict) -> list[Evidence]:
+                  providers: dict, road_points: Optional[list[dict]] = None) -> list[Evidence]:
     google = providers.get("google", {})
     keyed = bool(google.get("key_present"))
     ref = f"/client-boq/site/{set_id}/access/still?lat={lat:.6f}&lon={lon:.6f}"
@@ -150,14 +166,7 @@ def _evidence_for(set_id: str, label: str, lat: float, lon: float, *, has_drawin
         Evidence(kind=EVIDENCE_STREET_VIEW, label=EVIDENCE_LABEL[EVIDENCE_STREET_VIEW],
                  url=f"{ref}&kind=street_view" if keyed else "", available=keyed,
                  unavailable_reason="" if keyed else f"Street View {NO_KEY}"),
-        Evidence(kind=EVIDENCE_ROAD_DISTANCE, label=EVIDENCE_LABEL[EVIDENCE_ROAD_DISTANCE],
-                 url="", available=False,
-                 unavailable_reason=("Road distance needs a Google key AND a road to measure to. "
-                                     "Neither the origin nor the destination is chosen yet — the "
-                                     "nearest road is a judgement, not a lookup."
-                                     if not keyed else
-                                     "Pick the road access point on the map and this measures to "
-                                     "it. Until somebody picks one there is nothing to measure.")),
+        _road_distance_evidence(lat, lon, keyed=keyed, road_points=road_points or []),
     ]
     # `label` is used as-is by the card, and the imagery one is in-app, so it carries no URL. The
     # ordering is the declaration's, not the dict's.
@@ -165,10 +174,43 @@ def _evidence_for(set_id: str, label: str, lat: float, lon: float, *, has_drawin
     return sorted(items, key=lambda e: order.get(e.kind, 99))
 
 
+def _road_distance_evidence(lat: float, lon: float, *, keyed: bool,
+                            road_points: list[dict]) -> Evidence:
+    """Three honest states, in order of what exists.
+
+    A picked point makes the STRAIGHT-LINE figure available with no key and no network — the
+    judgement (where the site is entered from) was the person's click; the metres are arithmetic.
+    The BY-ROAD figure stays a separate, keyed concern and is named as missing rather than
+    approximated by the crow's number pretending otherwise.
+    """
+    nearest = nearest_road_point(lat, lon, road_points)
+    if nearest is not None:
+        point, metres = nearest
+        which = f" ({point['label']})" if point.get("label") else ""
+        more = len(road_points) - 1
+        return Evidence(
+            kind=EVIDENCE_ROAD_DISTANCE, label=EVIDENCE_LABEL[EVIDENCE_ROAD_DISTANCE],
+            url="", available=True,
+            note=(f"{metres:,.0f} m straight line to the picked access point{which}"
+                  + (f" — nearest of {more + 1}" if more else "")
+                  + ("" if keyed else
+                     ". By-road metres would need a Google key; the straight line does not.")))
+    return Evidence(
+        kind=EVIDENCE_ROAD_DISTANCE, label=EVIDENCE_LABEL[EVIDENCE_ROAD_DISTANCE],
+        url="", available=False,
+        unavailable_reason=("Road distance needs a Google key AND a road to measure to. "
+                            "Neither the origin nor the destination is chosen yet — the "
+                            "nearest road is a judgement, not a lookup."
+                            if not keyed else
+                            "Pick the road access point on the map and this measures to "
+                            "it. Until somebody picks one there is nothing to measure."))
+
+
 def board(schedule: StationSchedule, *, set_id: str, radius_m: float = 250.0,
           classes: Optional[dict[str, str]] = None,
           located_sheets: Optional[set[str]] = None,
-          located_stations: Optional[set[str]] = None) -> AccessBoard:
+          located_stations: Optional[set[str]] = None,
+          road_points: Optional[list[dict]] = None) -> AccessBoard:
     """Assemble the access board: the proximity clusters, and the evidence for each.
 
     ``classes`` is what people have ALREADY decided, station → class, read only so a card can show
@@ -218,7 +260,8 @@ def board(schedule: StationSchedule, *, set_id: str, radius_m: float = 250.0,
             soil_m=group.soil_m, rock_m=group.rock_m, deepest_m=group.deepest_m,
             decided=decided,
             evidence=_evidence_for(set_id, group.label, lat, lon,
-                                   has_drawing=has_drawing, providers=out.providers),
+                                   has_drawing=has_drawing, providers=out.providers,
+                                   road_points=road_points),
         )
         if spread > radius_m:
             item.notes.append(

@@ -28,7 +28,7 @@ export interface MapPoint {
   lon: number;
   label: string;
   /** Drives the pin's colour. "" means nobody has decided, which is the state that matters. */
-  tone: "undecided" | "a" | "b" | "c";
+  tone: "undecided" | "a" | "b" | "c" | "road";
   count?: number;
 }
 
@@ -78,6 +78,9 @@ const TONE_FILL: Record<MapPoint["tone"], string> = {
   a: "var(--color-cb-ok)",
   b: "var(--color-cb-amber)",
   c: "var(--color-cb-bad)",
+  // A person's picked road-access point — dark ink so it reads as a fixture of the site, not
+  // one of the classification hues (which would make a pick look like a verdict).
+  road: "var(--color-cb-ink)",
 };
 
 export function SlippyMap({
@@ -87,6 +90,8 @@ export function SlippyMap({
   attribution,
   selected,
   onSelect,
+  onPick,
+  picking = false,
   height = 420,
   caption,
 }: {
@@ -96,6 +101,10 @@ export function SlippyMap({
   attribution: string;
   selected?: string | null;
   onSelect?: (id: string) => void;
+  /** A click (not a drag, not a marker) resolved to coordinates — the road-access picker's
+   *  input. Only fires while `picking` is on, so an ordinary pan can never place a point. */
+  onPick?: (lat: number, lon: number) => void;
+  picking?: boolean;
   height?: number;
   caption?: string;
 }) {
@@ -103,6 +112,9 @@ export function SlippyMap({
   const [size, setSize] = useState({ w: 640, h: height });
   const [view, setView] = useState<{ z: number; lat: number; lon: number } | null>(null);
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
+  // Where the pointer went down and whether it moved since — a pick is a click, and a click is
+  // a press that did not travel. 4px of slack forgives a shaky hand without eating a pan.
+  const press = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const [tilesSeen, setTilesSeen] = useState(0);
 
   useEffect(() => {
@@ -196,19 +208,40 @@ export function SlippyMap({
         style={{ height }}
         className={cx(
           "relative w-full select-none overflow-hidden rounded-t-cb-card bg-cb-panel",
-          drag ? "cursor-grabbing" : "cursor-grab",
+          picking ? "cursor-crosshair" : drag ? "cursor-grabbing" : "cursor-grab",
         )}
         onPointerDown={(e) => {
           (e.target as Element).setPointerCapture?.(e.pointerId);
           setDrag({ x: e.clientX, y: e.clientY });
+          press.current = { x: e.clientX, y: e.clientY, moved: false };
         }}
         onPointerMove={(e) => {
           if (!drag) return;
+          if (press.current &&
+              Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) > 4) {
+            press.current.moved = true;
+          }
           pan(e.clientX - drag.x, e.clientY - drag.y);
           setDrag({ x: e.clientX, y: e.clientY });
         }}
-        onPointerUp={() => setDrag(null)}
-        onPointerLeave={() => setDrag(null)}
+        onPointerUp={(e) => {
+          setDrag(null);
+          const p = press.current;
+          press.current = null;
+          if (!picking || !onPick || !p || p.moved) return;
+          const rect = box.current?.getBoundingClientRect();
+          if (!rect) return;
+          const at = unproject(
+            (origin.x + (e.clientX - rect.left)) / TILE,
+            (origin.y + (e.clientY - rect.top)) / TILE,
+            centre.z,
+          );
+          onPick(at.lat, at.lon);
+        }}
+        onPointerLeave={() => {
+          setDrag(null);
+          press.current = null;
+        }}
         onWheel={(e) => {
           const rect = box.current?.getBoundingClientRect();
           zoomBy(e.deltaY < 0 ? 1 : -1, rect ? { x: e.clientX - rect.left, y: e.clientY - rect.top } : undefined);

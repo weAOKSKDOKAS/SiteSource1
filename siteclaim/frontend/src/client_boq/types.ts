@@ -394,6 +394,29 @@ export interface Evidence {
   external: boolean;
   available: boolean;
   unavailable_reason: string;
+  /** A measured figure in words, when the evidence IS a number rather than a link — the road
+   *  distance's "410 m straight line to the picked access point". Deterministic only. */
+  note: string;
+}
+
+/** A person's click on the map: where the site is entered from. The judgement carries a name;
+ *  every distance that follows is arithmetic. */
+export interface RoadPoint {
+  point_id: string;
+  label: string;
+  lat: number;
+  lon: number;
+  picked_by: string;
+  picked_at: string | null;
+}
+
+export interface RoadResponse {
+  set_id: string;
+  points: RoadPoint[];
+  /** Station → straight-line metres to the NEAREST picked point. A station with no coordinates
+   *  has no entry — absence, not zero. */
+  station_m: Record<string, number>;
+  waiting_on: string;
 }
 
 export interface ClusterEvidence {

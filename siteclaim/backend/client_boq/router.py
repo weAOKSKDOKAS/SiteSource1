@@ -3898,6 +3898,7 @@ def get_access_board(set_id: str, radius_m: float = 250.0) -> dict:
         schedule, _meta = store.load_station_schedule(conn, set_id)
         classes = store.load_station_classes(conn, set_id) if schedule else {}
         registrations = store.load_sheet_registrations(conn, set_id) if schedule else []
+        board_road_points = store.load_road_points(conn, set_id) if schedule else []
     finally:
         conn.close()
     if schedule is None:
@@ -3914,7 +3915,7 @@ def get_access_board(set_id: str, radius_m: float = 250.0) -> dict:
     board = boq_access.board(
         schedule, set_id=set_id, radius_m=radius_m,
         classes={name: (row.get("access_class") or "") for name, row in classes.items()},
-        located_stations=located_stations)
+        located_stations=located_stations, road_points=board_road_points)
     return {"set_id": set_id, **board.model_dump()}
 
 
@@ -4603,6 +4604,92 @@ def delete_sheet_registration(set_id: str, sheet: str) -> dict:
     finally:
         conn.close()
     return {"set_id": set_id, "sheet": sheet, "deleted": True}
+
+
+class RoadPointRequest(BaseModel):
+    """A person's click on the map: where the site is entered from. The judgement is theirs (and
+    named); every distance that follows is arithmetic."""
+    set_id: str
+    point_id: str = ""      # blank = the server assigns the next free "road-N"
+    label: str = ""
+    lat: float
+    lon: float
+
+
+@router.post("/site/road-point")
+def post_road_point(req: RoadPointRequest, actor: str = Depends(_actor)) -> dict:
+    """Pick (or move) a road-access point. Refuses a point outside Hong Kong by name — the same
+    guard the still proxy applies, because a mistyped coordinate would put every distance on the
+    tender quietly wrong."""
+    if not boq_hk1980.in_hong_kong(req.lat, req.lon):
+        raise HTTPException(
+            status_code=422,
+            detail=f"({req.lat:.5f}, {req.lon:.5f}) is not in Hong Kong. A road-access point off "
+                   f"the map would make every measured distance wrong; nothing was saved.")
+    conn = store.get_conn()
+    try:
+        existing = {p["point_id"] for p in store.load_road_points(conn, req.set_id)}
+        point_id = req.point_id.strip()
+        if not point_id:
+            n = 1
+            while f"road-{n}" in existing:
+                n += 1
+            point_id = f"road-{n}"
+        store.save_road_point(conn, req.set_id, point_id, label=req.label.strip(),
+                              lat=req.lat, lon=req.lon, actor=actor)
+    finally:
+        conn.close()
+    return {"set_id": req.set_id, "point_id": point_id, "label": req.label.strip(),
+            "lat": req.lat, "lon": req.lon, "picked_by": actor}
+
+
+@router.delete("/site/{set_id}/road-point/{point_id}")
+def delete_road_point(set_id: str, point_id: str) -> dict:
+    conn = store.get_conn()
+    try:
+        existing = {p["point_id"] for p in store.load_road_points(conn, set_id)}
+        if point_id not in existing:
+            raise HTTPException(status_code=404, detail=f"No road-access point {point_id!r}.")
+        store.delete_road_point(conn, set_id, point_id)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "point_id": point_id, "deleted": True}
+
+
+@router.get("/site/{set_id}/road")
+def get_road_distances(set_id: str) -> dict:
+    """The picked road-access points and the straight-line metres from every located station to
+    the nearest one — the number behind the Holes tiles' brass hint line.
+
+    Deterministic end to end: the points are a person's clicks with names on them, the conversion
+    is HK1980→WGS84 in-repo, and the metres are flat-earth arithmetic (fine across a site; Hong
+    Kong is 50 km wide). No key, no network, works identically in DEMO. A station with no
+    coordinates simply has no entry — absence, not zero.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+        points = store.load_road_points(conn, set_id)
+    finally:
+        conn.close()
+    if schedule is None:
+        return {"set_id": set_id, "points": [], "station_m": {},
+                "waiting_on": "the borehole details schedule has not been read yet"}
+    station_m: dict[str, float] = {}
+    if points:
+        for stn in schedule.stations:
+            if stn.easting is None or stn.northing is None:
+                continue
+            lat, lon = boq_hk1980.to_wgs84(stn.easting, stn.northing)
+            nearest = boq_access.nearest_road_point(lat, lon, points)
+            if nearest is not None:
+                station_m[stn.station] = round(nearest[1], 0)
+    return {
+        "set_id": set_id, "points": points, "station_m": station_m,
+        "waiting_on": ("" if points else
+                       "no road-access point is picked yet — pick one on the MAP view and every "
+                       "hole gets its distance by arithmetic"),
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -90,6 +90,8 @@ import type {
   StationScheduleShape,
   GeorefResponse,
   SheetRegistrationShape,
+  RoadPoint,
+  RoadResponse,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -406,6 +408,15 @@ export const api = {
   deleteRegistration: (setId: string, sheet: string) =>
     del<{ set_id: string; sheet: string; deleted: boolean }>(
       `/site/${setId}/registration?sheet=${encodeURIComponent(sheet)}`),
+  /** The picked road-access points and every located station's straight-line metres to the
+   *  nearest — the number behind the Holes tiles' brass hint. Deterministic; no key. */
+  road: (setId: string) => get<RoadResponse>(`/site/${setId}/road`),
+  pickRoadPoint: (setId: string, lat: number, lon: number, label = "", pointId = "") =>
+    post<RoadPoint & { set_id: string }>("/site/road-point",
+      { set_id: setId, point_id: pointId, label, lat, lon }),
+  deleteRoadPoint: (setId: string, pointId: string) =>
+    del<{ set_id: string; point_id: string; deleted: boolean }>(
+      `/site/${setId}/road-point/${pointId}`),
   /** Read a pasted table into a PROPOSED schedule. Saves nothing — see `saveStationSchedule`. */
   parseStationSchedule: (setId: string, text: string, sourceSheet = "") =>
     post<SchedulePasteResponse>("/site/schedule/parse", {

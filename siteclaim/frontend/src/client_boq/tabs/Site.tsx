@@ -27,6 +27,7 @@ import type {
   GroupPreview,
   GroupsResponse,
   HoleGroup,
+  RoadResponse,
   Station,
   StationScheduleResponse,
 } from "../types";
@@ -68,6 +69,7 @@ export function SiteTab({
   const [groups, setGroups] = useState<GroupsResponse | null>(null);
   const [derived, setDerived] = useState<DerivedResponse | null>(null);
   const [georef, setGeoref] = useState<GeorefResponse | null>(null);
+  const [road, setRoad] = useState<RoadResponse | null>(null);
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
@@ -98,6 +100,7 @@ export function SiteTab({
       // operator to re-type marks that are already there.
       setDerived(s.stations.length ? await optional("derived", api.derived(data.setId)) : null);
       setGeoref(s.stations.length ? await optional("georef", api.georef(data.setId)) : null);
+      setRoad(s.stations.length ? await optional("road", api.road(data.setId)) : null);
       setFailed(failures);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -261,6 +264,7 @@ export function SiteTab({
             schedule={schedule}
             georef={georef}
             georefFailed={failed.georef}
+            roadM={road?.station_m ?? null}
             classOf={classOf}
             onSetClass={(s, c) => void setClass(s, c)}
             selected={selected}
@@ -656,6 +660,7 @@ function HolesView({
   schedule,
   georef,
   georefFailed,
+  roadM,
   classOf,
   onSetClass,
   selected,
@@ -665,6 +670,9 @@ function HolesView({
   schedule: StationScheduleResponse;
   georef: GeorefResponse | null;
   georefFailed?: string;
+  /** Station → straight-line metres to the nearest picked road-access point. Null = none picked
+   *  (or the read failed) — the hint line simply does not render; never a guessed figure. */
+  roadM: Record<string, number> | null;
   classOf: (station: string) => string;
   onSetClass: (station: string, accessClass: string) => void;
   selected: string | null;
@@ -701,6 +709,7 @@ function HolesView({
             setId={setId}
             station={s}
             crop={georef?.crops[s.station] ?? null}
+            roadM={roadM?.[s.station] ?? null}
             accessClass={classOf(s.station)}
             decidedBy={schedule.classes[s.station]?.decided_by ?? ""}
             selected={selected === s.station}
@@ -723,6 +732,7 @@ function HoleTile({
   setId,
   station,
   crop,
+  roadM,
   accessClass,
   decidedBy,
   selected,
@@ -732,6 +742,7 @@ function HoleTile({
   setId: string;
   station: Station;
   crop: GeorefCrop | null;
+  roadM: number | null;
   accessClass: string;
   decidedBy: string;
   selected: boolean;
@@ -762,6 +773,18 @@ function HoleTile({
         {formatNorm(station.length_m)} m ·{" "}
         {station.rock_m ? `${formatNorm(station.rock_m)} m rock` : "soil only"}
       </div>
+      {/* The design's brass hint line: "▪road 40 m". A hint, not a classification — the number
+          is arithmetic from a person's picked access point, it is optional (absent point =
+          absent line), and the tile is designed so you can classify from the picture alone. */}
+      {roadM !== null && (
+        <div className="font-cb-sans text-[9px] font-semibold text-cb-brass-text">
+          <span
+            className="mr-1 inline-block h-[7px] w-[7px] rounded-[1px] align-middle"
+            style={{ background: "var(--color-cb-brass)" }}
+          />
+          road {formatNorm(roadM)} m
+        </div>
+      )}
       <div className="flex items-center gap-1.5">
         <Segmented value={accessClass} options={CLASS_OPTIONS} onChange={onSetClass} />
         {accessClass === "C" && (

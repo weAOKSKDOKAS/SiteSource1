@@ -1774,6 +1774,25 @@ _DDL = [
         PRIMARY KEY (set_id, sheet)
     )
     """,
+    # A ROAD-ACCESS POINT — where a person says the site is entered from: a gate, a track head,
+    # a lay-by. Picked on the map, few per set. The distance from any hole to the nearest picked
+    # point is then pure arithmetic (flat-earth metres over WGS84 — fine across a site), which is
+    # exactly the design's boundary: "the nearest road is a judgement, not a lookup", so the
+    # JUDGEMENT (where access is) is a person's click with a name on it, and the NUMBER is
+    # deterministic. No model writes here; `picked_by` is the same accountability claim as a
+    # station class's `decided_by`.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_road_points (
+        set_id    TEXT NOT NULL,
+        point_id  TEXT NOT NULL,
+        label     TEXT NOT NULL DEFAULT '',
+        lat       REAL NOT NULL,
+        lon       REAL NOT NULL,
+        picked_by TEXT NOT NULL DEFAULT '',
+        picked_at TEXT,
+        PRIMARY KEY (set_id, point_id)
+    )
+    """,
     # The SWEEP — costs the contract makes yours that no bill item asks for.
     #
     # This is the app's only hard stop, and the table is why. General Preambles ¶6: "Items against

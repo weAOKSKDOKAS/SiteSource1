@@ -19,8 +19,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { AccessBoardResponse, ClusterEvidence, Evidence } from "../types";
-import { Card, SectionLabel, WaitingOn, cx } from "../ui";
+import type { AccessBoardResponse, ClusterEvidence, Evidence, RoadResponse } from "../types";
+import { Button, Card, SectionLabel, WaitingOn, cx } from "../ui";
 import { SlippyMap } from "./SlippyMap";
 import type { MapPoint } from "./SlippyMap";
 
@@ -44,10 +44,16 @@ export function AccessMap({
 }) {
   const [board, setBoard] = useState<AccessBoardResponse | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [road, setRoad] = useState<RoadResponse | null>(null);
+  // The picker is ARMED, never ambient: an ordinary pan or a mis-click must not place the point
+  // every distance on the tender is measured from.
+  const [picking, setPicking] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      setBoard(await api.accessBoard(setId));
+      const [b, r] = await Promise.all([api.accessBoard(setId), api.road(setId)]);
+      setBoard(b);
+      setRoad(r);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     }
@@ -58,8 +64,8 @@ export function AccessMap({
   }, [load]);
 
   const points: MapPoint[] = useMemo(
-    () =>
-      (board?.clusters ?? []).map((c) => ({
+    () => [
+      ...(board?.clusters ?? []).map((c) => ({
         id: c.label,
         lat: c.lat,
         lon: c.lon,
@@ -67,7 +73,28 @@ export function AccessMap({
         tone: TONE_FOR(c),
         count: c.holes,
       })),
-    [board],
+      ...(road?.points ?? []).map((p) => ({
+        id: `road:${p.point_id}`,
+        lat: p.lat,
+        lon: p.lon,
+        label: `${p.label || p.point_id} — road access, picked by ${p.picked_by || "someone"}`,
+        tone: "road" as const,
+      })),
+    ],
+    [board, road],
+  );
+
+  const pick = useCallback(
+    async (lat: number, lon: number) => {
+      try {
+        await api.pickRoadPoint(setId, lat, lon);
+        setPicking(false);
+        await load();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [setId, load, onError],
   );
 
   if (!board) {
@@ -118,8 +145,55 @@ export function AccessMap({
           attribution={basemap.attribution}
           selected={selected}
           onSelect={(id) => setSelected((s) => (s === id ? null : id))}
-          caption="Brass = unclassed · green A · amber B · red C. Click a cluster for its evidence."
+          onPick={(lat, lon) => void pick(lat, lon)}
+          picking={picking}
+          caption={
+            picking
+              ? "Click where the site is entered from — a gate, a track head. Pan still works; only a clean click places the point."
+              : "Brass = unclassed · green A · amber B · red C · dark = road access. Click a cluster for its evidence."
+          }
         />
+      </div>
+
+      {/* The road-access point: a person's judgement about WHERE, so every distance can be
+          arithmetic. The picker is a mode, entered on purpose and left on the first pick. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button
+          variant={picking ? undefined : "brass"}
+          onClick={() => setPicking((v) => !v)}
+        >
+          {picking ? "Cancel picking" : "Pick a road-access point"}
+        </Button>
+        {(road?.points ?? []).map((p) => (
+          <span
+            key={p.point_id}
+            className="flex items-center gap-1.5 rounded-cb-pill border border-cb-border bg-cb-page px-2.5 py-1 font-cb-mono text-[9px] text-cb-ink-text"
+          >
+            ● {p.label || p.point_id}
+            <span className="text-cb-faint">{p.picked_by}</span>
+            <button
+              type="button"
+              title="Remove this point — the distances measured from it go with it."
+              onClick={async () => {
+                try {
+                  await api.deleteRoadPoint(setId, p.point_id);
+                  await load();
+                } catch (e) {
+                  onError(e instanceof Error ? e.message : String(e));
+                }
+              }}
+              className="cb-press text-cb-bad-dark"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        {(road?.points ?? []).length === 0 && !picking && (
+          <span className="font-cb-sans text-[9.5px] text-cb-muted">
+            None picked — the road-distance evidence stays dark until somebody says where the
+            site is entered from.
+          </span>
+        )}
       </div>
 
       {board.problems.length > 0 && (
@@ -287,6 +361,10 @@ function EvidenceLine({ item }: { item: Evidence }) {
           >
             {still ? "hide" : "fetch"}
           </button>
+        ) : item.note ? (
+          // The evidence IS a number: the measured road distance. Mono, because a machine
+          // computed it — from a point a person picked.
+          <span className="font-cb-mono text-[9.5px] text-cb-ink-text">{item.note}</span>
         ) : (
           <span className="font-cb-sans text-[9px] text-cb-faint">on the map above</span>
         )}

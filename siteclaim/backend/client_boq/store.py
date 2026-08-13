@@ -939,6 +939,44 @@ def delete_sheet_registration(conn: sqlite3.Connection, set_id: str, sheet: str)
     conn.commit()
 
 
+def load_road_points(conn: sqlite3.Connection, set_id: str) -> list[dict]:
+    """Every picked road-access point, stable order. Empty list = nobody has picked one, which is
+    the state the access board's road-distance evidence names rather than hides."""
+    rows = conn.execute(
+        """
+        SELECT point_id, label, lat, lon, picked_by, picked_at
+        FROM client_boq_road_points WHERE set_id = ? ORDER BY point_id
+        """,
+        (set_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_road_point(conn: sqlite3.Connection, set_id: str, point_id: str, *,
+                    label: str = "", lat: float, lon: float, actor: str = "") -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_road_points (set_id, point_id, label, lat, lon, picked_by, picked_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, point_id) DO UPDATE SET
+            label = excluded.label, lat = excluded.lat, lon = excluded.lon,
+            picked_by = excluded.picked_by, picked_at = excluded.picked_at
+        """,
+        (set_id, point_id, label, float(lat), float(lon), actor, now),
+    )
+    conn.commit()
+
+
+def delete_road_point(conn: sqlite3.Connection, set_id: str, point_id: str) -> None:
+    conn.execute(
+        "DELETE FROM client_boq_road_points WHERE set_id = ? AND point_id = ?",
+        (set_id, point_id),
+    )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # The costing model — the library's, and a tender's own copy of it
 # ---------------------------------------------------------------------------
