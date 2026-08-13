@@ -469,6 +469,24 @@ export interface WhatIfResponse {
   waiting_on: string;
 }
 
+/** The result of pressing the button under a preview. The press IS the confirmation — no model
+ *  reaches the apply endpoint, and it writes through the register's own three writers, so the
+ *  trail is indistinguishable from a mapping confirmed line by line. `was` comes back because
+ *  putting it back is the same call with the old number. */
+export interface WhatIfApplyResponse {
+  set_id: string;
+  rev: number;
+  applied: boolean;
+  path: string;
+  value: number;
+  /** The value it held before, as it read on screen. Undo is this number, sent back. */
+  was: string;
+  condition_id: string;
+  by: string;
+  after: Record<string, number>;
+  note: string;
+}
+
 /** A person's click on the map: where the site is entered from. The judgement carries a name;
  *  every distance that follows is arithmetic. */
 export interface RoadPoint {

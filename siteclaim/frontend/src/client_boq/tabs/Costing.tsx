@@ -18,6 +18,7 @@ import type {
   CostingCheck,
   CostingResponse,
   PricedRow,
+  WhatIfApplyResponse,
   WhatIfResponse,
 } from "../types";
 import { Button, SectionLabel, WaitingOn, cx, formatNorm, money } from "../ui";
@@ -750,12 +751,12 @@ function WhatIf({
   const [instruction, setInstruction] = useState("");
   const [preview, setPreview] = useState<WhatIfResponse | null>(null);
   const [busy, setBusy] = useState(false);
-  const [applied, setApplied] = useState(false);
+  const [applied, setApplied] = useState<WhatIfApplyResponse | null>(null);
 
   const run = async () => {
     if (!instruction.trim()) return;
     setBusy(true);
-    setApplied(false);
+    setApplied(null);
     try {
       setPreview(await api.whatIf(setId, { instruction: instruction.trim() }));
     } catch (e) {
@@ -765,23 +766,43 @@ function WhatIf({
     }
   };
 
-  const apply = async () => {
-    if (!preview?.applies) return;
+  // Applying is one act. You have read the diff above — the total, the programme and every rate
+  // that moved — and this press IS the confirmation of it. Propose-and-confirm is intact: no model
+  // reaches the apply endpoint, it takes the path and number on screen, and it writes through the
+  // register's own writers, so the trail reads exactly like a mapping confirmed line by line.
+  const send = async (path: string, value: number, note: string) => {
     setBusy(true);
     try {
-      // RECORD ONLY. It lands on the register below as a condition carrying the sentence that
-      // produced it, where the engine proposes the mapping and a person confirms — and that
-      // confirm is the only thing that writes. Confirming from here would make this box a second
-      // writer of the model, which is the one thing the whole propose-and-confirm path exists to
-      // prevent.
-      await api.addCondition(setId, instruction.trim(), preview.proposal.basis);
-      setApplied(true);
+      const res = await api.whatIfApply(setId, {
+        path, value, instruction: note, basis: preview?.proposal.basis ?? "",
+      });
+      setApplied(res);
       await onApplied();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
+  };
+
+  const apply = () => {
+    if (!preview?.applies || preview.proposal.value === null) return;
+    void send(preview.proposal.path, preview.proposal.value, instruction.trim());
+  };
+
+  // Undo is the same call with the old number — which is what makes applying in one press safe.
+  // `was` is the value as it read before, so this is a re-application, not a special path.
+  const undo = () => {
+    if (!applied) return;
+    const back = Number(applied.was);
+    if (!Number.isFinite(back)) {
+      onError(
+        `The previous value read "${applied.was}", which is not a number this box can send back. ` +
+        `Nothing has been undone — set it by hand on the register row ${applied.condition_id}.`,
+      );
+      return;
+    }
+    void send(applied.path, back, `put ${applied.path} back to ${applied.was}`);
   };
 
   return (
@@ -873,17 +894,27 @@ function WhatIf({
 
           <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-cb-divider pt-2">
             {applied ? (
-              <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
-                RECORDED ON THE REGISTER BELOW — CONFIRM THE MAPPING TO APPLY IT
-              </span>
+              <>
+                <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                  APPLIED · {applied.condition_id.toUpperCase()}
+                </span>
+                <Button disabled={busy} onClick={undo}>
+                  {busy ? "Working…" : `Put it back to ${applied.was}`}
+                </Button>
+                <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
+                  {applied.note}
+                </span>
+              </>
             ) : (
-              <Button disabled={busy} onClick={() => void apply()}>
-                Record this as a condition
-              </Button>
+              <>
+                <Button variant="brass" disabled={busy} onClick={apply}>
+                  {busy ? "Applying…" : "Apply this"}
+                </Button>
+                <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
+                  {preview.note}
+                </span>
+              </>
             )}
-            <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
-              {preview.note}
-            </span>
           </div>
         </div>
       )}

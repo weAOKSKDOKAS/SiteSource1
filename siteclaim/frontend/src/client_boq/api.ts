@@ -94,6 +94,7 @@ import type {
   RoadsResponse,
   PositionsResponse,
   BriefingResponse,
+  WhatIfApplyResponse,
   WhatIfResponse,
   WorkingBill,
   BillChecksResponse,
@@ -338,9 +339,17 @@ export const api = {
       ...keys,
     }),
   /** Price the tender as if something were different. CHANGES NOTHING — say what you want to
-   *  assume and see the diff; applying is the ordinary record-then-confirm act. */
+   *  assume and see the diff before deciding anything. */
   whatIf: (setId: string, body: { instruction?: string; path?: string; value?: number }) =>
     post<WhatIfResponse>("/costing/what-if", { set_id: setId, ...body }),
+  /** Apply the change just previewed. The press is the confirmation: a person read the diff and
+   *  chose. It lands on the register through the register's own writers — condition, proposal,
+   *  verdict — so it audits like any other confirmed mapping, and `was` comes back so undo is
+   *  this same call with the old number. */
+  whatIfApply: (
+    setId: string,
+    body: { path: string; value: number; instruction?: string; basis?: string },
+  ) => post<WhatIfApplyResponse>("/costing/what-if/apply", { set_id: setId, ...body }),
   /** The deliverable: eight sheets with their formulas intact, so it still calculates in Excel. */
   costingWorkbookUrl: (setId: string) => `${ROOT}/costing/${setId}/workbook.xlsx`,
   /** Type a rate over the rounded proposal. `null` puts the proposal back. */

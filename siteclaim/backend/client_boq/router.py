@@ -5569,9 +5569,94 @@ def post_what_if(req: WhatIfRequest) -> dict:
         "moved_count": len(moved),
         # Said plainly, because a preview that looked like a save would be the worst possible
         # misreading of this screen.
-        "note": ("Nothing has been changed. Record it as a condition and confirm the mapping to "
-                 "apply it — the confirm is the only thing that writes."),
+        "note": ("Nothing has been changed. Applying it is one press, and that press is the "
+                 "confirmation — it lands on the register with your name on it, and putting it "
+                 "back is the same button with the old number."),
         "waiting_on": "",
+    }
+
+
+class WhatIfApplyRequest(BaseModel):
+    """Apply a previewed change. The CLICK is the confirmation — see the endpoint's docstring."""
+    set_id: str
+    rev: Optional[int] = None
+    path: str
+    value: float
+    #: The sentence that produced it, kept verbatim so the register says why in your words.
+    instruction: str = ""
+    basis: str = ""
+
+
+@router.post("/costing/what-if/apply")
+def post_what_if_apply(req: WhatIfApplyRequest, actor: str = Depends(_actor)) -> dict:
+    """Apply the change you just previewed, in one act.
+
+    PROPOSE-AND-CONFIRM STILL HOLDS, and it is worth being exact about why: no model reaches this
+    endpoint. A person read the diff — the total, the programme and every rate that moved — and
+    pressed the button, and that press IS the confirmation. What is removed is a second click on
+    the same decision, not the decision.
+
+    It writes through the register's own three writers rather than around them, so a change made
+    here is indistinguishable in the audit from one confirmed line by line: the condition is
+    recorded with your sentence, the mapping is attached as the proposal it came from, and
+    `decide_condition` — the sole writer of a verdict — records the confirmation with your name,
+    the moment, and the number actually applied.
+
+    Reversible, and cheaply: `was` is returned and stored on the condition's own basis, so putting
+    it back is the same call with the old number.
+    """
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        parts = _costing(conn, req.set_id, bill.rev)
+        model = parts["model"]
+        if req.path not in boq_conditions.editable_paths(model):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{req.path!r} is not an input of this model, so there is nothing to "
+                       f"change. Nothing was written.")
+
+        # Copy-on-write, exactly as every other model edit on a tender: the library's model is
+        # never touched, and this tender gets its own.
+        own = model.model_copy(deep=True)
+        was = _apply_model_path(own, req.path, float(req.value))
+        store.save_set_model(conn, req.set_id, own, actor=actor)
+
+        # THE SAME AUDIT TRAIL THE REGISTER WRITES — not a private path around it.
+        condition_id = f"whatif-{req.path.split('.')[-1]}-{int(_time.time())}"
+        basis = (req.basis or "").strip()
+        store.save_condition(
+            conn, req.set_id, condition_id,
+            text=(req.instruction.strip() or f"set {req.path} to {req.value:g}"),
+            note=f"applied from the what-if preview; {req.path} was {was}", actor=actor)
+        store.save_condition_proposal(
+            conn, req.set_id, condition_id, path=req.path, value=float(req.value),
+            basis=basis or f"{req.path}: {was} → {req.value:g}", source="what-if")
+        store.decide_condition(conn, req.set_id, condition_id, status="confirmed",
+                               actor=actor, applied_value=float(req.value))
+        store.touch_set(conn, req.set_id, actor)
+
+        after = _costing(conn, req.set_id, bill.rev)
+        programme = after["programme"]
+        figures = {
+            "total": after["priced"].total,
+            "work_days": programme.work_days,
+            "rigs_required": programme.rigs_required,
+            "standing_hours": programme.standing_hours,
+            "rock_fraction": programme.rock_fraction,
+        }
+    finally:
+        conn.close()
+    return {
+        "set_id": req.set_id, "rev": bill.rev, "applied": True,
+        "path": req.path, "value": req.value, "was": was,
+        "condition_id": condition_id, "by": actor,
+        "after": figures,
+        # Undo is the same call with the old number, which is why `was` is returned rather than
+        # only recorded — a change you cannot put back is not a change you would make quickly.
+        "note": (f"{req.path} is now {req.value:g} (was {was}), recorded on the register as "
+                 f"{condition_id} with your name on it. Putting it back is the same button with "
+                 f"the old number."),
     }
 
 

@@ -10,8 +10,10 @@ Both figures come from `_costing`, the single path the real screens use, so the 
 is the total you get: a preview computed by a second, simpler routine would eventually disagree
 with the real one, and then the number a person accepted would not be the number they got.
 
-Applying stays the ordinary propose-and-confirm act — record the condition, confirm the mapping —
-and the confirm is the only writer. These tests pin that the preview alone changes nothing.
+Applying is now one act — you read the diff and press the button, and that press IS the
+confirmation; it writes through the register's own writers, so the audit is unchanged. See
+`test_applying_a_what_if_leaves_a_trail.py`. These tests pin the other half: the preview alone
+changes nothing.
 """
 
 from __future__ import annotations
