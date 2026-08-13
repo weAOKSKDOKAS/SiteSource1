@@ -220,6 +220,68 @@ export interface StationScheduleResponse {
   waiting_on?: string;
 }
 
+/** One printed grid cross, read off the sheet: its coordinates as printed, its position as page
+ *  fractions (0–1, so the registration survives re-render at any DPI). */
+export interface GridMark {
+  easting: number;
+  northing: number;
+  x: number;
+  y: number;
+  label: string;
+}
+
+/** Two grid marks and where the sheet lives. Typed once per site-plan sheet; every station on it
+ *  follows by arithmetic — the georef module refuses (with named problems) rather than
+ *  approximating, which is what licenses the CSS crop trick. */
+export interface SheetRegistrationShape {
+  sheet: string;
+  part_id: string;
+  page: number;
+  marks: GridMark[];
+}
+
+export interface GeorefSheet {
+  sheet: string;
+  part_id: string;
+  page: number;
+  usable: boolean;
+  /** "" = two typed numbers are a proposal until somebody has looked at the sheet beside them. */
+  confirmed_by: string;
+  problems: string[];
+  marks: GridMark[];
+  stations_on: number;
+}
+
+/** One station's tile: which sheet contains it (by coordinates, never nearest-match) and the
+ *  crop box MapCrop turns into a CSS transform. */
+export interface GeorefCrop {
+  sheet: string;
+  part_id: string;
+  page: number;
+  box: {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    centre_x: number;
+    centre_y: number;
+    window_m: number;
+    clipped: boolean;
+  };
+}
+
+export interface GeorefResponse {
+  set_id: string;
+  window_m: number;
+  waiting_on: string;
+  stations: string[];
+  sheets: GeorefSheet[];
+  crops: Record<string, GeorefCrop>;
+  /** Located stations that land on no registered sheet — named, never given a tile of the
+   *  wrong place. */
+  unplaced: string[];
+}
+
 /** The schedule as it goes back to the server — the shape `POST /site/schedule` accepts. */
 export interface StationScheduleShape {
   set_id: string;

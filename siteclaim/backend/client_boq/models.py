@@ -1755,6 +1755,25 @@ _DDL = [
         PRIMARY KEY (set_id, rev, group_id)
     )
     """,
+    # A SHEET REGISTRATION — two printed grid marks, typed once per site-plan sheet, and every
+    # station on it follows by arithmetic (boq/georef.py). No rev column: a registration is a
+    # property of a drawing part, and a re-issued sheet arrives as a part revision whose
+    # re-registration overwrites this row — the same "a re-read lands unconfirmed" rule as the
+    # station schedule. `confirmed_by` mirrors that schedule's flag exactly: '' = two typed
+    # numbers are a proposal until somebody has looked at the sheet beside them, and editing a
+    # mark clears it (confirm is not sticky).
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_sheet_registrations (
+        set_id            TEXT NOT NULL,
+        sheet             TEXT NOT NULL,               -- "60740338/GI/201"
+        registration_json TEXT NOT NULL DEFAULT '{}',  -- a serialised SheetRegistration
+        confirmed_by      TEXT NOT NULL DEFAULT '',
+        confirmed_at      TEXT,
+        updated_by        TEXT NOT NULL DEFAULT '',
+        updated_at        TEXT,
+        PRIMARY KEY (set_id, sheet)
+    )
+    """,
     # The SWEEP — costs the contract makes yours that no bill item asks for.
     #
     # This is the app's only hard stop, and the table is why. General Preambles ¶6: "Items against

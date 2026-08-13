@@ -46,7 +46,8 @@ from pipeline.workspace import Workspace
 
 if TYPE_CHECKING:  # imported lazily at call sites — client_boq.boq pulls in the whole costing engine,
     from client_boq.boq.criteria import SiteCriteria   # and store has no business loading it to
-    from client_boq.boq.groups import HoleGroup        # save a row
+    from client_boq.boq.georef import SheetRegistration  # save a row
+    from client_boq.boq.groups import HoleGroup
     from client_boq.boq.model import CostingModel
     from client_boq.boq.outputs import OutputBook
     from client_boq.boq.schedule import StationSchedule
@@ -879,6 +880,61 @@ def delete_hole_group(conn: sqlite3.Connection, set_id: str, rev: int, group_id:
     conn.execute(
         "UPDATE client_boq_station_classes SET group_id = '' WHERE set_id = ? AND group_id = ?",
         (set_id, group_id),
+    )
+    conn.commit()
+
+
+def load_sheet_registrations(conn: sqlite3.Connection, set_id: str) -> list["SheetRegistration"]:
+    """Every registered sheet for a set, in a stable order. A stored-but-broken registration is
+    returned too — georef refuses to crop from it and names why, and hiding it here would turn
+    that refusal into a silent absence."""
+    from client_boq.boq.georef import SheetRegistration
+    rows = conn.execute(
+        """
+        SELECT registration_json, confirmed_by FROM client_boq_sheet_registrations
+        WHERE set_id = ? ORDER BY sheet
+        """,
+        (set_id,),
+    ).fetchall()
+    out = []
+    for row in rows:
+        if not row["registration_json"] or row["registration_json"] == "{}":
+            continue
+        registration = SheetRegistration.model_validate_json(row["registration_json"])
+        # The column is authoritative, the same way the station schedule's is: the JSON blob may
+        # carry whatever confirmed_by it was saved with, but confirm-not-sticky lives in the row.
+        registration.confirmed_by = row["confirmed_by"]
+        out.append(registration)
+    return out
+
+
+def save_sheet_registration(conn: sqlite3.Connection, set_id: str,
+                            registration: "SheetRegistration", *,
+                            confirmed: bool = False, actor: str = "") -> None:
+    """Upsert one sheet's registration. Confirm is not sticky — editing a mark re-saves with
+    confirmed=False, because the thing somebody checked is no longer the thing on the screen."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_sheet_registrations
+            (set_id, sheet, registration_json, confirmed_by, confirmed_at, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, sheet) DO UPDATE SET
+            registration_json = excluded.registration_json,
+            confirmed_by = excluded.confirmed_by, confirmed_at = excluded.confirmed_at,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        """,
+        (set_id, registration.sheet, registration.model_dump_json(),
+         actor if confirmed else "", now if confirmed else None, actor, now),
+    )
+    conn.commit()
+
+
+def delete_sheet_registration(conn: sqlite3.Connection, set_id: str, sheet: str) -> None:
+    conn.execute(
+        "DELETE FROM client_boq_sheet_registrations WHERE set_id = ? AND sheet = ?",
+        (set_id, sheet),
     )
     conn.commit()
 

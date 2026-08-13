@@ -21,6 +21,9 @@ import { Photos } from "../site/Photos";
 import { ScheduleImport } from "../site/ScheduleImport";
 import type {
   DerivedResponse,
+  GeorefCrop,
+  GeorefResponse,
+  GridMark,
   GroupPreview,
   GroupsResponse,
   HoleGroup,
@@ -38,7 +41,7 @@ import {
   formatNorm,
 } from "../ui";
 
-type View = "schedule" | "map" | "photos" | "holes" | "groups" | "import";
+type View = "schedule" | "map" | "photos" | "holes" | "groups" | "sheets" | "import";
 
 const CLASS_OPTIONS = [
   { value: "A", label: "A", title: "Reachable by road, or by hand without a temporary platform." },
@@ -64,6 +67,7 @@ export function SiteTab({
   const [schedule, setSchedule] = useState<StationScheduleResponse | null>(null);
   const [groups, setGroups] = useState<GroupsResponse | null>(null);
   const [derived, setDerived] = useState<DerivedResponse | null>(null);
+  const [georef, setGeoref] = useState<GeorefResponse | null>(null);
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
@@ -89,8 +93,11 @@ export function SiteTab({
       setSchedule(s);
       setGroups(g);
       // A derivation needs a schedule; asking for one before there is a take-off is a 404 that
-      // means "not yet", not "broken".
+      // means "not yet", not "broken". The georef read rides the same rule — and its failure is
+      // named, because a tile silently showing "no grid marks" over a failed read would tell an
+      // operator to re-type marks that are already there.
       setDerived(s.stations.length ? await optional("derived", api.derived(data.setId)) : null);
+      setGeoref(s.stations.length ? await optional("georef", api.georef(data.setId)) : null);
       setFailed(failures);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -202,6 +209,7 @@ export function SiteTab({
               { value: "photos" as View, label: "PHOTOS" },
               { value: "holes" as View, label: "HOLES" },
               { value: "groups" as View, label: "GROUPS" },
+              { value: "sheets" as View, label: "SHEETS" },
               { value: "import" as View, label: "IMPORT" },
             ]}
             onChange={setView}
@@ -249,11 +257,22 @@ export function SiteTab({
           />
         ) : view === "holes" ? (
           <HolesView
+            setId={data.setId}
             schedule={schedule}
+            georef={georef}
+            georefFailed={failed.georef}
             classOf={classOf}
             onSetClass={(s, c) => void setClass(s, c)}
             selected={selected}
             onSelect={setSelected}
+          />
+        ) : view === "sheets" ? (
+          <SheetsView
+            setId={data.setId}
+            georef={georef}
+            parts={data.parts?.parts ?? []}
+            onChanged={() => void load()}
+            onError={onError}
           />
         ) : (
           <GroupsView
@@ -633,13 +652,19 @@ function ClassRail({
 }
 
 function HolesView({
+  setId,
   schedule,
+  georef,
+  georefFailed,
   classOf,
   onSetClass,
   selected,
   onSelect,
 }: {
+  setId: string;
   schedule: StationScheduleResponse;
+  georef: GeorefResponse | null;
+  georefFailed?: string;
   classOf: (station: string) => string;
   onSetClass: (station: string, accessClass: string) => void;
   selected: string | null;
@@ -661,13 +686,21 @@ function HolesView({
           ]}
           onChange={setOnly}
         />
+        {georefFailed && (
+          <span className="ml-auto font-cb-sans text-[9.5px] text-cb-bad-dark">
+            The sheet registrations could not be read: {georefFailed}. The tiles below say "no
+            grid marks" about a read that failed, not about the sheets.
+          </span>
+        )}
       </div>
 
       <div className="grid gap-2 p-3 [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))]">
         {shown.map((s) => (
           <HoleTile
             key={s.station}
+            setId={setId}
             station={s}
+            crop={georef?.crops[s.station] ?? null}
             accessClass={classOf(s.station)}
             decidedBy={schedule.classes[s.station]?.decided_by ?? ""}
             selected={selected === s.station}
@@ -687,14 +720,18 @@ function HolesView({
 }
 
 function HoleTile({
+  setId,
   station,
+  crop,
   accessClass,
   decidedBy,
   selected,
   onSelect,
   onSetClass,
 }: {
+  setId: string;
   station: Station;
+  crop: GeorefCrop | null;
   accessClass: string;
   decidedBy: string;
   selected: boolean;
@@ -709,9 +746,15 @@ function HoleTile({
         selected ? "border-cb-brass bg-cb-selected" : "border-cb-border bg-cb-page",
       )}
     >
-      {/* No registration is persisted yet, so this shows what it is waiting for rather than a
-          decorative square somebody might classify a hole from. */}
-      <MapCrop src={null} box={null} size={96} className="self-center" />
+      {/* One render per sheet, cropped 91 ways in CSS — the crop is this station's, from the
+          sheet whose grid CONTAINS its coordinates. Null still renders the honest waiting
+          state, never a decorative square somebody might classify a hole from. */}
+      <MapCrop
+        src={crop ? api.pageUrl(setId, crop.part_id, crop.page) : null}
+        box={crop?.box ?? null}
+        size={96}
+        className="self-center"
+      />
       <div className="font-cb-mono text-[10px] font-semibold text-cb-ink-text">
         {station.station}
       </div>
@@ -730,6 +773,254 @@ function HoleTile({
       {decidedBy && (
         <div className="font-cb-mono text-[7.5px] text-cb-faint">{decidedBy}</div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sheets — two grid marks per site-plan sheet, and every hole follows by arithmetic
+// ---------------------------------------------------------------------------
+const EMPTY_MARK: GridMark = { easting: 0, northing: 0, x: 0, y: 0, label: "" };
+
+function SheetsView({
+  setId,
+  georef,
+  parts,
+  onChanged,
+  onError,
+}: {
+  setId: string;
+  georef: GeorefResponse | null;
+  parts: { part_id: string; title: string; pages: string }[];
+  onChanged: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [sheet, setSheet] = useState("");
+  const [partId, setPartId] = useState(parts[0]?.part_id ?? "");
+  const [page, setPage] = useState(1);
+  const [marks, setMarks] = useState<[GridMark, GridMark]>([{ ...EMPTY_MARK }, { ...EMPTY_MARK }]);
+  // Which mark the next click on the page places. Coordinates are TYPED (they are printed on the
+  // sheet); the page position is a click — nobody can reasonably type a fraction.
+  const [arming, setArming] = useState<0 | 1>(0);
+  const [saved, setSaved] = useState<{ usable: boolean; problems: string[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const setMark = (i: 0 | 1, patch: Partial<GridMark>) =>
+    setMarks((prev) => {
+      const next: [GridMark, GridMark] = [{ ...prev[0] }, { ...prev[1] }];
+      next[i] = { ...next[i], ...patch };
+      return next;
+    });
+
+  const placeByClick = (e: React.MouseEvent<HTMLImageElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    setMark(arming, { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 });
+    setArming(arming === 0 ? 1 : 0);
+  };
+
+  const save = async (confirm: boolean) => {
+    setBusy(true);
+    try {
+      const reply = await api.saveRegistration(
+        setId, { sheet: sheet.trim(), part_id: partId, page, marks: [...marks] }, confirm);
+      setSaved(reply);
+      onChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const edit = (row: GeorefResponse["sheets"][number]) => {
+    setSheet(row.sheet);
+    setPartId(row.part_id);
+    setPage(row.page);
+    if (row.marks.length >= 2) setMarks([{ ...row.marks[0] }, { ...row.marks[1] }]);
+    setSaved(null);
+  };
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <SectionLabel>REGISTERED SHEETS</SectionLabel>
+      <p className="mt-1 max-w-[640px] font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
+        Read the coordinates printed beside any two grid crosses on a site-plan sheet, click where
+        each cross sits on the page, and every station on that sheet follows by arithmetic. A
+        mistyped coordinate is caught by the scale check and named — never averaged away.
+      </p>
+
+      {(georef?.sheets ?? []).length === 0 && (
+        <p className="mt-2 font-cb-sans text-[10.5px] text-cb-muted">None yet.</p>
+      )}
+      {(georef?.sheets ?? []).map((row) => (
+        <div
+          key={row.sheet}
+          className="mt-2 flex flex-wrap items-center gap-2 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2"
+        >
+          <span className="font-cb-mono text-[10px] font-semibold text-cb-ink-text">{row.sheet}</span>
+          <span className="font-cb-mono text-[9px] text-cb-muted">
+            {row.part_id} · p{row.page}
+          </span>
+          {row.usable ? (
+            <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+              {row.stations_on} STATION(S) ON THIS SHEET
+            </span>
+          ) : (
+            <span className="font-cb-sans text-[9.5px] text-cb-bad-dark">{row.problems[0]}</span>
+          )}
+          <span className="font-cb-mono text-[8.5px] text-cb-faint">
+            {row.confirmed_by ? `confirmed ${row.confirmed_by}` : "not confirmed"}
+          </span>
+          <span className="ml-auto flex gap-1.5">
+            <Button onClick={() => edit(row)}>Edit</Button>
+            <Button
+              onClick={async () => {
+                try {
+                  await api.deleteRegistration(setId, row.sheet);
+                  onChanged();
+                } catch (e) {
+                  onError(e instanceof Error ? e.message : String(e));
+                }
+              }}
+            >
+              Remove
+            </Button>
+          </span>
+        </div>
+      ))}
+
+      {(georef?.unplaced ?? []).length > 0 && (
+        <p className="mt-2 max-w-[640px] font-cb-sans text-[9.5px] leading-[1.5] text-cb-amber">
+          {georef!.unplaced.length} located station(s) land on no registered sheet:{" "}
+          {georef!.unplaced.slice(0, 8).join(", ")}
+          {georef!.unplaced.length > 8 ? " …" : ""}. They keep their honest empty tiles rather
+          than a crop of the wrong place.
+        </p>
+      )}
+
+      <div className="mt-4 border-t border-cb-border pt-3">
+        <SectionLabel>REGISTER A SHEET</SectionLabel>
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-0.5">
+            <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">SHEET NO.</span>
+            <input
+              value={sheet}
+              onChange={(e) => setSheet(e.target.value)}
+              placeholder="60740338/GI/201"
+              className="w-44 rounded-cb-btn border border-cb-border bg-cb-warm px-2 py-1 font-cb-mono text-[10.5px] text-cb-ink-text"
+            />
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">PART</span>
+            <select
+              value={partId}
+              onChange={(e) => setPartId(e.target.value)}
+              className="rounded-cb-btn border border-cb-border bg-cb-warm px-2 py-1 font-cb-sans text-[10.5px] text-cb-ink-text"
+            >
+              {parts.map((p) => (
+                <option key={p.part_id} value={p.part_id}>
+                  {p.part_id} · {p.title} ({p.pages})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-0.5">
+            <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">PAGE</span>
+            <input
+              type="number"
+              min={1}
+              value={page}
+              onChange={(e) => setPage(Math.max(1, Math.round(Number(e.target.value) || 1)))}
+              className="w-16 rounded-cb-btn border border-cb-border bg-cb-warm px-2 py-1 font-cb-mono text-[10.5px] text-cb-ink-text"
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-3">
+          {([0, 1] as const).map((i) => (
+            <div
+              key={i}
+              className={cx(
+                "rounded-cb-card border p-2.5",
+                arming === i ? "border-cb-brass bg-cb-selected" : "border-cb-border bg-cb-page",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => setArming(i)}
+                className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text"
+              >
+                MARK {i === 0 ? "A" : "B"} {arming === i ? "— NEXT CLICK PLACES IT" : "— click to arm"}
+              </button>
+              <div className="mt-1.5 flex gap-2">
+                <label className="flex flex-col gap-0.5">
+                  <span className="font-cb-mono text-[8px] text-cb-faint">EASTING</span>
+                  <input
+                    type="number"
+                    value={marks[i].easting || ""}
+                    onChange={(e) => setMark(i, { easting: Number(e.target.value) || 0 })}
+                    className="w-24 rounded-cb-btn border border-cb-border bg-cb-warm px-2 py-1 font-cb-mono text-[10px]"
+                  />
+                </label>
+                <label className="flex flex-col gap-0.5">
+                  <span className="font-cb-mono text-[8px] text-cb-faint">NORTHING</span>
+                  <input
+                    type="number"
+                    value={marks[i].northing || ""}
+                    onChange={(e) => setMark(i, { northing: Number(e.target.value) || 0 })}
+                    className="w-24 rounded-cb-btn border border-cb-border bg-cb-warm px-2 py-1 font-cb-mono text-[10px]"
+                  />
+                </label>
+              </div>
+              <div className="mt-1 font-cb-mono text-[8.5px] text-cb-muted">
+                on page: {marks[i].x || marks[i].y ? `${marks[i].x}, ${marks[i].y}` : "click the sheet below"}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {partId && (
+          <div className="mt-3 max-w-[720px] overflow-hidden rounded-cb-card border border-cb-border">
+            <img
+              src={api.pageUrl(setId, partId, page)}
+              alt={`page ${page} of ${partId}`}
+              onClick={placeByClick}
+              className="w-full cursor-crosshair"
+            />
+          </div>
+        )}
+
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            variant="brass"
+            disabled={busy || !sheet.trim() || !partId}
+            onClick={() => void save(false)}
+          >
+            Save the registration
+          </Button>
+          <Button disabled={busy || !sheet.trim() || !partId} onClick={() => void save(true)}>
+            Save &amp; confirm — I checked the sheet
+          </Button>
+        </div>
+
+        {saved && (
+          <div className="mt-2">
+            {saved.usable ? (
+              <p className="font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                USABLE — the stations on this sheet now have tiles on HOLES
+              </p>
+            ) : (
+              saved.problems.map((p) => (
+                <p key={p} className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark">
+                  {p}
+                </p>
+              ))
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -88,6 +88,8 @@ import type {
   ScheduleReadResponse,
   StationScheduleResponse,
   StationScheduleShape,
+  GeorefResponse,
+  SheetRegistrationShape,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -394,6 +396,16 @@ export const api = {
 
   // --- the take-off (Site) --------------------------------------------------
   stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),
+  /** Every registered sheet and one crop per located station — the Holes tiles' whole data need. */
+  georef: (setId: string) => get<GeorefResponse>(`/site/${setId}/georef`),
+  /** Save one sheet's two grid marks. The response names a mistyped coordinate immediately —
+   *  a broken registration is stored problems-visible and crops nothing. */
+  saveRegistration: (setId: string, registration: SheetRegistrationShape, confirm = false) =>
+    post<{ set_id: string; sheet: string; usable: boolean; problems: string[]; confirmed_by: string }>(
+      "/site/registration", { set_id: setId, registration, confirm }),
+  deleteRegistration: (setId: string, sheet: string) =>
+    del<{ set_id: string; sheet: string; deleted: boolean }>(
+      `/site/${setId}/registration?sheet=${encodeURIComponent(sheet)}`),
   /** Read a pasted table into a PROPOSED schedule. Saves nothing — see `saveStationSchedule`. */
   parseStationSchedule: (setId: string, text: string, sourceSheet = "") =>
     post<SchedulePasteResponse>("/site/schedule/parse", {

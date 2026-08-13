@@ -167,11 +167,19 @@ def _evidence_for(set_id: str, label: str, lat: float, lon: float, *, has_drawin
 
 def board(schedule: StationSchedule, *, set_id: str, radius_m: float = 250.0,
           classes: Optional[dict[str, str]] = None,
-          located_sheets: Optional[set[str]] = None) -> AccessBoard:
+          located_sheets: Optional[set[str]] = None,
+          located_stations: Optional[set[str]] = None) -> AccessBoard:
     """Assemble the access board: the proximity clusters, and the evidence for each.
 
     ``classes`` is what people have ALREADY decided, station → class, read only so a card can show
     how much of itself is still open. Nothing here writes one.
+
+    ``located_stations`` is the set of stations that land on a registered, usable site-plan sheet
+    — computed by COORDINATES (``georef.sheet_for``), not by name. ``located_sheets`` matches on
+    ``Station.sheet``, which is the SCHEDULE sheet the row was read from (GI/210), a different
+    family from the site-plan sheets registrations are of (GI/201…) — so name intersection alone
+    never lights the drawing evidence. Both are kept: names for a caller that genuinely registered
+    the schedule sheet, coordinates for the real case.
     """
     decided_by_station = classes or {}
     out = AccessBoard(radius_m=radius_m, providers=provider_config())
@@ -201,7 +209,8 @@ def board(schedule: StationSchedule, *, set_id: str, radius_m: float = 250.0,
                 decided.get(decided_by_station.get(name, "") or "", 0) + 1)
 
         sheets = {index[n].sheet for n in group.stations if n in index and index[n].sheet}
-        has_drawing = bool(located_sheets and sheets & located_sheets)
+        has_drawing = (bool(located_sheets and sheets & located_sheets)
+                       or bool(located_stations and set(group.stations) & located_stations))
 
         item = ClusterEvidence(
             label=group.label, stations=list(group.stations), holes=group.hole_count,

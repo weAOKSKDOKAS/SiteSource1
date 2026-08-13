@@ -3881,18 +3881,24 @@ def get_access_board(set_id: str, radius_m: float = 250.0) -> dict:
     try:
         schedule, _meta = store.load_station_schedule(conn, set_id)
         classes = store.load_station_classes(conn, set_id) if schedule else {}
+        registrations = store.load_sheet_registrations(conn, set_id) if schedule else []
     finally:
         conn.close()
     if schedule is None:
         return {"set_id": set_id, "clusters": [], "radius_m": radius_m, "unlocated": [],
                 "problems": [], "providers": boq_hk1980.provider_config(),
                 "waiting_on": "the borehole details schedule has not been read yet"}
+    # Which stations land on a registered, usable site-plan sheet — by COORDINATES, because
+    # Station.sheet is the SCHEDULE sheet (GI/210) and registrations are of the site-plan
+    # sheets (GI/201…): the two name families never intersect.
+    located_stations = {
+        s.station for s in schedule.stations
+        if s.easting is not None and s.northing is not None
+        and boq_georef.sheet_for(s.easting, s.northing, registrations) is not None}
     board = boq_access.board(
         schedule, set_id=set_id, radius_m=radius_m,
         classes={name: (row.get("access_class") or "") for name, row in classes.items()},
-        # Registrations are not persisted yet, so no sheet is located and the drawing crop reports
-        # what it is waiting for. The moment they are, this set fills and the cards light up.
-        located_sheets=set())
+        located_stations=located_stations)
     return {"set_id": set_id, **board.model_dump()}
 
 
@@ -4463,24 +4469,124 @@ def get_georef(set_id: str, sheet: str = "", window_m: float = boq_georef.DEFAUL
     there is no image pipeline here and none is needed — the placement is arithmetic over two
     printed grid marks, which is a ruler rather than a guess.
 
-    Registrations are not persisted yet, so this reports what it is waiting for rather than
-    inventing marks. Two typed coordinates turn it on.
+    ``crops`` is ONE map, station → {sheet, part_id, page, box}, across every registered sheet:
+    each located station is assigned to the sheet that CONTAINS its coordinates
+    (``georef.sheet_for``), never nearest-match, so a hole off every registered sheet stays in
+    ``unplaced`` by name rather than getting a tile of the wrong place. A stored-but-broken
+    registration is listed with its problems and contributes zero crops — georef refuses to
+    approximate and this endpoint does not help it.
     """
     conn = store.get_conn()
     try:
         schedule = _schedule_or_404(conn, set_id)
+        registrations = store.load_sheet_registrations(conn, set_id)
     finally:
         conn.close()
-    registration = boq_georef.SheetRegistration(sheet=sheet)
+    located = [s for s in schedule.stations if s.easting is not None and s.northing is not None]
+
+    crops: dict[str, dict] = {}
+    unplaced: list[str] = []
+    for stn in located:
+        home = boq_georef.sheet_for(stn.easting, stn.northing, registrations)
+        if home is None:
+            unplaced.append(stn.station)
+            continue
+        box = home.crop(stn.easting, stn.northing, window_m=window_m)
+        crops[stn.station] = {
+            "sheet": home.sheet, "part_id": home.part_id, "page": home.page,
+            "box": {**box.model_dump(), "clipped": box.clipped},
+        }
+
+    sheets = []
+    for registration in registrations:
+        plot = boq_georef.plot(schedule, registration) if registration.usable() else None
+        sheets.append({
+            "sheet": registration.sheet, "part_id": registration.part_id,
+            "page": registration.page, "usable": registration.usable(),
+            "confirmed_by": registration.confirmed_by,
+            "problems": registration.problems(),
+            "marks": [m.model_dump() for m in registration.marks],
+            "stations_on": len(plot.on_sheet()) if plot else 0,
+        })
+
+    # The per-`sheet` block keeps the original contract: what THIS sheet's registration holds,
+    # or an empty one saying exactly what it needs.
+    asked = next((r for r in registrations if r.sheet == sheet), None) if sheet else None
+    probe = asked or boq_georef.SheetRegistration(sheet=sheet)
     return {
         "set_id": set_id, "sheet": sheet, "window_m": window_m,
-        "registration": registration.model_dump(),
-        "problems": registration.problems(),
-        "waiting_on": ("two printed grid marks from this sheet — read the coordinates beside any "
+        "registration": probe.model_dump(),
+        "problems": probe.problems(),
+        "waiting_on": ("" if any(r.usable() for r in registrations) else
+                       "two printed grid marks from this sheet — read the coordinates beside any "
                        "two grid crosses and the other eighty-nine holes follow by arithmetic"),
-        "stations": [s.station for s in schedule.stations
-                     if s.easting is not None and s.northing is not None],
+        "stations": [s.station for s in located],
+        "sheets": sheets,
+        "crops": crops,
+        "unplaced": unplaced,
     }
+
+
+class SheetRegistrationRequest(BaseModel):
+    """Two typed grid marks and where the sheet lives. `confirm` mirrors the schedule's flag:
+    it is an act with a name on it, and it is refused (not silently absorbed) on a registration
+    georef cannot use — confirming a ruler that refuses to measure means nothing."""
+    set_id: str
+    registration: boq_georef.SheetRegistration
+    confirm: bool = False
+
+
+@router.post("/site/registration")
+def post_sheet_registration(req: SheetRegistrationRequest, actor: str = Depends(_actor)) -> dict:
+    """Save one sheet's registration. The response carries the registration's own problems, so a
+    mistyped coordinate is named the moment it is typed — the 2% isotropy check catches a bad
+    mark instead of averaging it away. A broken registration IS stored (problems-visible, zero
+    crops), the same save-then-refuse honesty as the station schedule."""
+    registration = req.registration
+    if not registration.sheet.strip():
+        raise HTTPException(status_code=422, detail="Name the sheet the marks were read from.")
+    if not registration.part_id.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Name the part that holds this sheet — the render every crop points at needs "
+                   "it (pick the part, then the page the sheet is on).")
+    conn = store.get_conn()
+    try:
+        parts = store.load_parts(conn, req.set_id)
+        spec = next((p for p, _path, _ctx in parts if p.part_id == registration.part_id), None)
+        if spec is None:
+            raise HTTPException(status_code=404,
+                                detail=f"No part {registration.part_id!r} on this set.")
+        if not (spec.start <= registration.page <= spec.end):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Page {registration.page} is outside part {registration.part_id} "
+                       f"({spec.start}–{spec.end}, source-document numbering).")
+        problems = registration.problems()
+        store.save_sheet_registration(conn, req.set_id, registration,
+                                      confirmed=req.confirm and not problems, actor=actor)
+    finally:
+        conn.close()
+    return {
+        "set_id": req.set_id, "sheet": registration.sheet,
+        "usable": registration.usable(), "problems": problems,
+        "confirmed_by": actor if (req.confirm and not problems) else "",
+    }
+
+
+@router.delete("/site/{set_id}/registration")
+def delete_sheet_registration(set_id: str, sheet: str) -> dict:
+    """Remove one sheet's registration. `sheet` is a query parameter because drawing numbers
+    carry slashes ("60740338/GI/201") and a path segment cannot."""
+    conn = store.get_conn()
+    try:
+        existing = {r.sheet for r in store.load_sheet_registrations(conn, set_id)}
+        if sheet not in existing:
+            raise HTTPException(status_code=404, detail=f"No registration for sheet {sheet!r}.")
+        store.delete_sheet_registration(conn, set_id, sheet)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "sheet": sheet, "deleted": True}
 
 
 # ---------------------------------------------------------------------------
