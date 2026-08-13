@@ -36,6 +36,7 @@ import { Team } from "./screens/Team";
 import { DocumentsTab } from "./tabs/Documents";
 import { BidTab } from "./tabs/Bid";
 import { BrainTab } from "./tabs/Brain";
+import { Boundary } from "./Boundary";
 import { CloseoutTab } from "./tabs/Closeout";
 import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
@@ -1051,7 +1052,13 @@ function SetView({
           </p>
         </div>
       )}
+      {/* THE WHITE SCREEN, ENDED. A render error inside one tab used to unmount the whole
+          application — shell, strip, rail and all — leaving a blank page and the real message in
+          a console nobody had open. Keyed on the tab so moving to another step clears it, and
+          scoped INSIDE <main> so the shell survives and you can navigate away from the screen
+          that broke. */}
       <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <Boundary key={tab ?? "none"} label={tab ?? "this screen"} onReset={() => void refresh()}>
         {loading && !data ? (
           <WaitingOn title="Opening the set…">
             Reading the manifest, the parts and whatever has been run since.
@@ -1122,6 +1129,7 @@ function SetView({
           // own explicit branch above, exactly as `offer` now has one.
           <CloseoutTab data={data} onError={onError} onRefresh={refresh} />
         )}
+        </Boundary>
       </main>
 
       {panel?.kind === "rfi" && data && (

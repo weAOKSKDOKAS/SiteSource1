@@ -243,6 +243,7 @@ export function SiteTab({
           <AccessMap
             setId={data.setId}
             onError={onError}
+            classOf={classOf}
             onFocusStation={(station) => {
               // The map assembles evidence; the class is decided on HOLES. Sending the reader
               // there with the hole already picked is the whole handoff.

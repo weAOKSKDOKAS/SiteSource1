@@ -399,6 +399,25 @@ export interface Evidence {
   note: string;
 }
 
+/** One station in both coordinate worlds, with a keyless map link. `in_hong_kong` false is a
+ *  coordinate REFUSED into the list, never a pin drawn confidently in the wrong country. */
+export interface StationPosition {
+  station: string;
+  easting: number;
+  northing: number;
+  lat: number;
+  lon: number;
+  in_hong_kong: boolean;
+  maps_url: string;
+}
+
+export interface PositionsResponse {
+  set_id: string;
+  positions: StationPosition[];
+  problems: string[];
+  waiting_on?: string;
+}
+
 /** A person's click on the map: where the site is entered from. The judgement carries a name;
  *  every distance that follows is arithmetic. */
 export interface RoadPoint {

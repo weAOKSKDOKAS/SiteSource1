@@ -92,6 +92,9 @@ export function SlippyMap({
   onSelect,
   onPick,
   picking = false,
+  onZoom,
+  fullscreen = false,
+  onFullscreen,
   height = 420,
   caption,
 }: {
@@ -105,6 +108,11 @@ export function SlippyMap({
    *  input. Only fires while `picking` is on, so an ordinary pan can never place a point. */
   onPick?: (lat: number, lon: number) => void;
   picking?: boolean;
+  /** The current zoom, reported so a caller can decide what to plot at this scale — the map
+   *  owns the view, the caller owns the meaning of what is on it. */
+  onZoom?: (z: number) => void;
+  fullscreen?: boolean;
+  onFullscreen?: (next: boolean) => void;
   height?: number;
   caption?: string;
 }) {
@@ -135,6 +143,25 @@ export function SlippyMap({
   }, [fingerprint]);
 
   const centre = view ?? { z: 11, lat: 22.35, lon: 114.15 };
+
+  // Report the scale, so the caller can swap cluster circles for individual holes. Effect, not
+  // an inline call: firing a parent setState during render is the classic loop.
+  useEffect(() => {
+    onZoom?.(centre.z);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centre.z]);
+
+  // Escape leaves fullscreen. A map that fills the screen with no way out but the mouse is a
+  // trap on a keyboard.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onFullscreen?.(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen, onFullscreen]);
+
   const origin = useMemo(() => {
     const c = project(centre.lat, centre.lon, centre.z);
     return { x: c.x * TILE - size.w / 2, y: c.y * TILE - size.h / 2 };
@@ -202,12 +229,20 @@ export function SlippyMap({
   };
 
   return (
-    <div className="rounded-cb-card border border-cb-border bg-cb-page">
+    <div
+      className={cx(
+        "rounded-cb-card border border-cb-border bg-cb-page",
+        // Fullscreen is a fixed overlay rather than the Fullscreen API: it keeps the app's own
+        // chrome and Escape handling, and it cannot leave the page in a state the browser owns.
+        fullscreen && "fixed inset-0 z-50 flex flex-col rounded-none border-0",
+      )}
+    >
       <div
         ref={box}
-        style={{ height }}
+        style={fullscreen ? undefined : { height }}
         className={cx(
-          "relative w-full select-none overflow-hidden rounded-t-cb-card bg-cb-panel",
+          "relative w-full select-none overflow-hidden bg-cb-panel",
+          fullscreen ? "flex-1" : "rounded-t-cb-card",
           picking ? "cursor-crosshair" : drag ? "cursor-grabbing" : "cursor-grab",
         )}
         onPointerDown={(e) => {
@@ -314,6 +349,16 @@ export function SlippyMap({
           >
             FIT
           </button>
+          {onFullscreen && (
+            <button
+              type="button"
+              title={fullscreen ? "Leave fullscreen (Esc)" : "Fill the screen with the map"}
+              onClick={() => onFullscreen(!fullscreen)}
+              className="cb-press h-6 w-6 rounded-cb-btn border border-cb-border bg-cb-page font-cb-mono text-[11px] font-semibold text-cb-ink-text"
+            >
+              {fullscreen ? "✕" : "⛶"}
+            </button>
+          )}
         </div>
 
         {tilesSeen === 0 && (

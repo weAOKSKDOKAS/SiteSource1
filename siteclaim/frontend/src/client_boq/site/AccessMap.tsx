@@ -19,8 +19,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { AccessBoardResponse, ClusterEvidence, Evidence, RoadResponse } from "../types";
-import { Button, Card, SectionLabel, WaitingOn, cx } from "../ui";
+import type {
+  AccessBoardResponse,
+  ClusterEvidence,
+  Evidence,
+  RoadResponse,
+  StationPosition,
+} from "../types";
+import { usePersisted } from "../chrome";
+import { Button, Card, SectionLabel, Segmented, WaitingOn, cx } from "../ui";
 import { SlippyMap } from "./SlippyMap";
 import type { MapPoint } from "./SlippyMap";
 
@@ -36,24 +43,43 @@ export function AccessMap({
   setId,
   onError,
   onFocusStation,
+  classOf,
 }: {
   setId: string;
   onError: (msg: string) => void;
   /** Sends the reader to the HOLES view with this station picked — where classifying happens. */
   onFocusStation?: (station: string) => void;
+  /** The class a person gave each hole, for colouring per-hole pins. Read only: this screen
+   *  assembles evidence and proposes nothing, and a pin's colour is a person's decision
+   *  rendered, never one the map made. */
+  classOf?: (station: string) => string;
 }) {
   const [board, setBoard] = useState<AccessBoardResponse | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [road, setRoad] = useState<RoadResponse | null>(null);
+  // EVERY HOLE, INDIVIDUALLY. The map plotted one pin per proximity cluster, so a site whose
+  // holes chain within the 250 m clustering radius drew ONE circle reading "99" and the
+  // per-point map link opened the cluster's centroid. The coordinates were never missing —
+  // `/site/{set}/positions` has returned every station separately all along and nothing asked.
+  const [positions, setPositions] = useState<StationPosition[]>([]);
   // The picker is ARMED, never ambient: an ordinary pan or a mis-click must not place the point
   // every distance on the tender is measured from.
   const [picking, setPicking] = useState(false);
+  const [zoom, setZoom] = useState(11);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [perHole, setPerHole] = usePersisted<"auto" | "holes" | "clusters">(
+    `siteMapPins.${setId}`, "auto");
 
   const load = useCallback(async () => {
     try {
-      const [b, r] = await Promise.all([api.accessBoard(setId), api.road(setId)]);
+      const [b, r, p] = await Promise.all([
+        api.accessBoard(setId),
+        api.road(setId),
+        api.positions(setId).catch(() => ({ positions: [] as StationPosition[] })),
+      ]);
       setBoard(b);
       setRoad(r);
+      setPositions(p.positions ?? []);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     }
@@ -63,16 +89,33 @@ export function AccessMap({
     void load();
   }, [load]);
 
+  // AUTO: individual holes once the view is close enough that 99 pins are readable rather than
+  // a smear; the cluster circles below that. A site is looked at both ways and neither is the
+  // right answer at every scale — so the choice is also manual, and remembered per tender.
+  const showHoles =
+    perHole === "holes" || (perHole === "auto" && zoom >= 15 && positions.length > 0);
+
   const points: MapPoint[] = useMemo(
     () => [
-      ...(board?.clusters ?? []).map((c) => ({
-        id: c.label,
-        lat: c.lat,
-        lon: c.lon,
-        label: `${c.label} — ${c.holes} hole(s)${c.decided?.[""] ? `, ${c.decided[""]} unclassed` : ""}`,
-        tone: TONE_FOR(c),
-        count: c.holes,
-      })),
+      ...(showHoles
+        ? positions.map((p) => ({
+            id: p.station,
+            lat: p.lat,
+            lon: p.lon,
+            label: `${p.station} — ${p.easting.toFixed(0)}E ${p.northing.toFixed(0)}N`
+              + (classOf?.(p.station) ? ` · class ${classOf(p.station)}` : " · unclassed"),
+            // The pin carries the class a PERSON gave this hole — the same brass-means-undecided
+            // rule the cluster circles use, at the grain the decision is actually made on.
+            tone: ((classOf?.(p.station) || "").toLowerCase() || "undecided") as MapPoint["tone"],
+          }))
+        : (board?.clusters ?? []).map((c) => ({
+            id: c.label,
+            lat: c.lat,
+            lon: c.lon,
+            label: `${c.label} — ${c.holes} hole(s)${c.decided?.[""] ? `, ${c.decided[""]} unclassed` : ""}`,
+            tone: TONE_FOR(c),
+            count: c.holes,
+          }))),
       ...(road?.points ?? []).map((p) => ({
         id: `road:${p.point_id}`,
         lat: p.lat,
@@ -81,7 +124,7 @@ export function AccessMap({
         tone: "road" as const,
       })),
     ],
-    [board, road],
+    [board, road, positions, showHoles, classOf],
   );
 
   const pick = useCallback(
@@ -144,15 +187,45 @@ export function AccessMap({
           labelTiles={basemap.label_tiles}
           attribution={basemap.attribution}
           selected={selected}
-          onSelect={(id) => setSelected((s) => (s === id ? null : id))}
+          onSelect={(id) => {
+            // A per-hole pin sends you where the class is decided; a cluster opens its card.
+            if (showHoles && !id.startsWith("road:") && onFocusStation) onFocusStation(id);
+            else setSelected((s) => (s === id ? null : id));
+          }}
           onPick={(lat, lon) => void pick(lat, lon)}
           picking={picking}
+          onZoom={setZoom}
+          fullscreen={fullscreen}
+          onFullscreen={setFullscreen}
+          height={fullscreen ? undefined : 420}
           caption={
             picking
               ? "Click where the site is entered from — a gate, a track head. Pan still works; only a clean click places the point."
-              : "Brass = unclassed · green A · amber B · red C · dark = road access. Click a cluster for its evidence."
+              : showHoles
+                ? `Every hole, individually — ${positions.length} placed. Brass = unclassed · green A · amber B · red C · dark = road access. Click a hole to class it.`
+                : "Brass = unclassed · green A · amber B · red C · dark = road access. Click a cluster for its evidence — zoom in for individual holes."
           }
         />
+      </div>
+
+      {/* WHAT THE PINS MEAN, chosen rather than inferred. One pin per cluster is right when you
+          are looking at where a site is; one pin per hole is right when you are deciding which
+          hole needs a platform. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Segmented
+          value={perHole}
+          options={[
+            { value: "auto" as const, label: "AUTO" },
+            { value: "holes" as const, label: `EVERY HOLE (${positions.length})` },
+            { value: "clusters" as const, label: `CLUSTERS (${board.clusters.length})` },
+          ]}
+          onChange={setPerHole}
+        />
+        <span className="font-cb-mono text-[9px] text-cb-faint">
+          {showHoles
+            ? "one pin per borehole, from its own coordinates"
+            : `one pin per proximity cluster · zoom ${zoom}${perHole === "auto" ? " — individual holes at 15+" : ""}`}
+        </span>
       </div>
 
       {/* The road-access point: a person's judgement about WHERE, so every distance can be

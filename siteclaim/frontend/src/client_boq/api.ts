@@ -91,6 +91,7 @@ import type {
   SheetRegistrationShape,
   RoadPoint,
   RoadResponse,
+  PositionsResponse,
   BriefingResponse,
   WorkingBill,
   BillChecksResponse,
@@ -403,6 +404,10 @@ export const api = {
 
   // --- the take-off (Site) --------------------------------------------------
   stationSchedule: (setId: string) => get<StationScheduleResponse>(`/site/${setId}/schedule`),
+  /** EVERY STATION INDIVIDUALLY, in WGS84, with its own map link. The map plotted one pin per
+   *  proximity CLUSTER, so a site whose holes chain within the clustering radius drew a single
+   *  circle reading "99" — the per-hole coordinates were never missing, nothing asked for them. */
+  positions: (setId: string) => get<PositionsResponse>(`/site/${setId}/positions`),
   /** Every registered sheet and one crop per located station — the Holes tiles' whole data need. */
   georef: (setId: string) => get<GeorefResponse>(`/site/${setId}/georef`),
   /** Save one sheet's two grid marks. The response names a mistyped coordinate immediately —
