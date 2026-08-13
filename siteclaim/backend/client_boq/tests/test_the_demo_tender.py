@@ -215,7 +215,8 @@ class TestLoadingIsGatedOnTheMode:
 
         path = tmp_path / "bundle.json"
         path.write_text(json.dumps(
-            {"version": demo_capture.BUNDLE_VERSION, "set_id": "s", "tables": {}}))
+            {"version": demo_capture.BUNDLE_VERSION, "set_id": "s", "tables": {}}),
+            encoding="utf-8")
         llm_client.set_demo_mode(False)
         try:
             code = demo_capture.main(["load", "--path", str(path)])
@@ -419,7 +420,7 @@ class TestTheSweepStillRunsAfterRedaction:
         printed = capsys.readouterr().out
         assert "redacted 1 email address" in printed
         assert "ce19.aecom-atkinsrealis.jv@aecom.com" in printed, "it must say WHAT it removed"
-        written = json.loads(out.read_text())
+        written = json.loads(out.read_text(encoding="utf-8"))
         assert "aecom.com" not in json.dumps(written)
         assert "before close" in json.dumps(written), "the clause survived"
 

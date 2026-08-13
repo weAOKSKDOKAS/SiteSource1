@@ -54,7 +54,7 @@ def test_link_benchmark_records_the_capture(tmp_path):
 
 def test_ensure_unified_table_matches_schema(tmp_path):
     a = sqlite3.connect(":memory:")
-    a.executescript(Path("db/schema.sql").read_text())
+    a.executescript(Path("db/schema.sql").read_text(encoding="utf-8"))
     b = sqlite3.connect(":memory:")
     uproject.ensure_unified_table(b)
     ca = [(r[1], r[2], r[3]) for r in a.execute("PRAGMA table_info(unified_projects)")]

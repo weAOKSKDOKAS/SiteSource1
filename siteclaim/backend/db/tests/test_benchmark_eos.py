@@ -66,7 +66,7 @@ def test_attach_replaces_not_appends(tmp_path):
 def test_ensure_benchmark_tables_project_eos_matches_schema(tmp_path):
     # The migrated (IF NOT EXISTS) project_eos must match schema.sql column-for-column.
     a = sqlite3.connect(":memory:")
-    a.executescript(Path("db/schema.sql").read_text())
+    a.executescript(Path("db/schema.sql").read_text(encoding="utf-8"))
     b = sqlite3.connect(":memory:")
     bench.ensure_benchmark_tables(b)
     ca = [(r[1], r[2], r[3]) for r in a.execute("PRAGMA table_info(project_eos)")]
@@ -78,7 +78,7 @@ def test_ensure_benchmark_tables_project_outcomes_matches_schema(tmp_path):
     # The tender-outcome's own slot must migrate to the same shape schema.sql builds — the same
     # parity guarantee project_eos already has.
     a = sqlite3.connect(":memory:")
-    a.executescript(Path("db/schema.sql").read_text())
+    a.executescript(Path("db/schema.sql").read_text(encoding="utf-8"))
     b = sqlite3.connect(":memory:")
     bench.ensure_benchmark_tables(b)
     ca = [(r[1], r[2], r[3]) for r in a.execute("PRAGMA table_info(project_outcomes)")]

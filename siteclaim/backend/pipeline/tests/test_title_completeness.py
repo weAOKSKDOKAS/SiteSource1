@@ -221,7 +221,7 @@ def test_a_persisted_index_is_completed_on_read_without_a_re_split(tmp_path):
                           spec_section_title="Environmental Ground", text_layer=True, page_count=20)
     save_doc_index(ws, "nd-2025-04", [_index_entry(), stale])
 
-    on_disk = json.loads((tmp_path / "nd-2025-04.json").read_text())
+    on_disk = json.loads((tmp_path / "nd-2025-04.json").read_text(encoding="utf-8"))
     assert [d for d in on_disk if d["filename"] == "PS28.pdf"][0]["spec_section_title"] == \
         "Environmental Ground", "the file is untouched — the repair happens on read"
 

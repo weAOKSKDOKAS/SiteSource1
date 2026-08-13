@@ -68,7 +68,7 @@ def test_ensure_routing_table_matches_schema(tmp_path):
     a = sqlite3.connect(":memory:")
     from pathlib import Path
 
-    a.executescript(Path("db/schema.sql").read_text())
+    a.executescript(Path("db/schema.sql").read_text(encoding="utf-8"))
     b = sqlite3.connect(":memory:")
     routing.ensure_routing_table(b)
     ca = [(r[1], r[2], r[3]) for r in a.execute("PRAGMA table_info(package_routes)")]

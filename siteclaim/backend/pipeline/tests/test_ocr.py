@@ -151,7 +151,7 @@ def test_not_a_pdf_raises():
 # -- tesseract binary resolution (config over PATH) ------------------------
 def test_find_tesseract_prefers_the_configured_path_when_it_exists(tmp_path, monkeypatch):
     exe = tmp_path / "tesseract"
-    exe.write_text("#!/bin/sh\n")
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setenv("TESSERACT_CMD", str(exe))
     assert ocr._find_tesseract() == str(exe)
 
@@ -165,7 +165,7 @@ def test_find_tesseract_falls_through_a_missing_configured_path(monkeypatch):
 def test_find_tesseract_uses_the_first_existing_platform_default(tmp_path, monkeypatch):
     monkeypatch.delenv("TESSERACT_CMD", raising=False)
     good = tmp_path / "tess"
-    good.write_text("x")
+    good.write_text("x", encoding="utf-8")
     monkeypatch.setattr(ocr, "_platform_candidates", lambda: ["/no/such/one", str(good)])
     assert ocr._find_tesseract() == str(good)
 

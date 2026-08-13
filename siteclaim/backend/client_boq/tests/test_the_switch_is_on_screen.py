@@ -93,7 +93,12 @@ class TestTheOverrideItself:
             if "tests" in path.parts or path.name.startswith("test_"):
                 continue
             try:
-                tree = ast.parse(path.read_text())
+                # Explicit encoding: without it `read_text()` uses the platform default, which
+                # on Windows is cp1252 and cannot decode the typographic quotes and em dashes
+                # this source is written in — so the sweep died where the code is written and
+                # passed only on Linux. See the guard in
+                # `test_a_guard_must_run_on_the_machine_that_wrote_the_code.py`.
+                tree = ast.parse(path.read_text(encoding="utf-8"))
             except SyntaxError:
                 continue
             # Walk only the module's own top level, and do not descend into a def or a class body:

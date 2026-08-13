@@ -159,7 +159,14 @@ class TestEveryIngestStageSaysSo:
     @staticmethod
     def _calls(path: pathlib.Path) -> list[tuple[int, bool]]:
         """Every `make_client(...)` in a module: (line number, does it pass stage=STAGE_INGEST)."""
-        tree = ast.parse(path.read_text())
+        # ENCODING IS EXPLICIT BECAUSE THIS SWEEP READS SOURCE. `read_text()` with no encoding
+        # uses the PLATFORM default — cp1252 on Windows — and this repo's source is full of
+        # typographic quotes and em dashes (`”` is E2 80 9D in UTF-8, and 0x9D is undefined in
+        # cp1252). So the guard raised UnicodeDecodeError on the developer's own machine while
+        # passing in CI on Linux: a guard that cannot run where the code is written is not
+        # guarding. Every source read in this repo names its encoding — see
+        # `test_a_guard_must_run_on_the_machine_that_wrote_the_code.py`, which sweeps for it.
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         found = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):

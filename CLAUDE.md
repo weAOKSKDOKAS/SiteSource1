@@ -397,6 +397,20 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
    block shape** (`[thinking: 4,096 chars]`, `[NO CONTENT BLOCKS AT ALL]`) precisely so the
    fragment that chooses between "budget more" and "stop paying for thinking" survives being
    quoted — the first real report of this failure elided it into an ellipsis.
+14. **A TEXT READ WITH NO `encoding=` IS A WINDOWS-ONLY FAILURE, AND THE GUARDS WERE THE VICTIMS.**
+   `open(p)` and `Path.read_text()` use the PLATFORM default — UTF-8 on Linux, **cp1252 on
+   Windows**. This repo's source is written with typographic quotes and em dashes (`”` is
+   `E2 80 9D`; byte `0x9D` is undefined in cp1252), so three AST sweeps that read source
+   — `test_the_switch_is_on_screen.py` and both `TestEveryIngestStageSaysSo` tests — died on the
+   developer's own machine with `UnicodeDecodeError: 'charmap' codec can't decode byte 0x9d`
+   while passing in CI. Measured: `client_boq/ingest/pdfops.py` (the tree the ingest sweep walks)
+   and 7 of 187 non-test modules are genuinely undecodable as cp1252, so this was never
+   theoretical. **A guard that cannot run where the code is written is a guard nobody runs.**
+   Twelve sites were fixed; `client_boq/tests/test_a_guard_must_run_on_the_machine_that_wrote_the_code.py`
+   now sweeps the whole backend for the class and fails on the thirteenth. Note its allow-list is
+   by OWNER (`fitz`/`Image`/`ZipFile` take no encoding) so a `path.open()` — text mode by default
+   — cannot inherit their exemption. Same family as traps 1c and 11: **the environment is not the
+   subject of the test, and a test that only passes in one environment has not been run.**
 
 ## 9. Working agreements on this branch
 

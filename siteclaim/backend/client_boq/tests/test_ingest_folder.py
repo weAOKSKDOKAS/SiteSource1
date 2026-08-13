@@ -477,7 +477,11 @@ class TestPickingTheBill:
     def test_a_path_that_climbs_out_of_the_set_is_refused(self, client, tmp_path):
         """Refused, not trimmed — a traversal attempt is not a typo."""
         set_id = self._upload(client, self._three_bills(tmp_path))
-        for attempt in ("../../../etc/passwd.xlsx", "/etc/passwd.xlsx", "C:\secrets.xlsx"):
+        # RAW STRING, and the value is unchanged: `"\s"` is not a valid escape, so Python already
+        # read it as a literal backslash-s — while emitting a DeprecationWarning that becomes a
+        # SyntaxError in a later version. A Windows path in a traversal test is exactly the string
+        # that must not quietly change meaning under the interpreter.
+        for attempt in ("../../../etc/passwd.xlsx", "/etc/passwd.xlsx", r"C:\secrets.xlsx"):
             resp = client.post(f"{BASE}/boq/{set_id}/import-from-set",
                                json={"relative_path": attempt})
             assert resp.status_code == 422, attempt

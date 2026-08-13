@@ -101,7 +101,7 @@ def test_find_by_route_is_idempotent_key(tmp_path):
 @pytest.mark.parametrize("table", ["estimate_projects", "estimate_items"])
 def test_ensure_estimate_tables_match_schema(table):
     a = sqlite3.connect(":memory:")
-    a.executescript(Path("db/schema.sql").read_text())
+    a.executescript(Path("db/schema.sql").read_text(encoding="utf-8"))
     b = sqlite3.connect(":memory:")
     est.ensure_estimate_tables(b)
     ca = [(r[1], r[2], r[3]) for r in a.execute(f"PRAGMA table_info({table})")]
