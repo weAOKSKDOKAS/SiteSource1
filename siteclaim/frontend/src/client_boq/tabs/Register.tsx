@@ -24,6 +24,7 @@ import type {
   Highlight,
   JobState,
   LocationVerdict,
+  RFIBatchRow,
   RFIItem,
   RegisterSource,
 } from "../types";
@@ -104,6 +105,7 @@ export function RegisterTab({
   const [negotiating, setNegotiating] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [rfis, setRfis] = useState<RFIItem[]>([]);
+  const [batches, setBatches] = useState<RFIBatchRow[]>([]);
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [criteriaRows, setCriteriaRows] = useState<Criterion[]>([]);
   const [busy, setBusy] = useState(false);
@@ -142,8 +144,16 @@ export function RegisterTab({
     if (!data.setId) return;
     api
       .rfis(data.setId)
-      .then((r) => setRfis(r.items))
-      .catch(() => setRfis([]));
+      .then((r) => {
+        setRfis(r.items);
+        // The BATCHES were fetched and dropped here, which made every sent letter unreachable —
+        // the only opener passed batchId:null. The rail below now lists them.
+        setBatches(r.batches);
+      })
+      .catch(() => {
+        setRfis([]);
+        setBatches([]);
+      });
     api
       .revisions(data.setId)
       .then((r) => setDocuments(r.documents))
@@ -609,28 +619,49 @@ export function RegisterTab({
           </RailBlock>
 
           <RailBlock title="RFIS / BATCHES">
-            {rfis.length === 0 ? (
+            {rfis.length === 0 && batches.length === 0 ? (
               <p className="px-2 py-1 font-cb-sans text-[10px] leading-[1.5] text-cb-faint">
                 No questions raised yet. Dismissing a line lets you write what you will ask for
                 instead, and queue it here.
               </p>
             ) : (
-              <button
-                type="button"
-                onClick={() => onOpenPanel?.({ kind: "rfi", batchId: null })}
-                className="cb-press flex w-full items-center gap-2 rounded-cb-btn bg-cb-ink px-2 py-1.5 text-left"
-              >
-                <span className="flex-none text-cb-brass">●</span>
-                <span className="flex-1 truncate font-cb-sans text-[11px] font-semibold text-white">
-                  Current build
-                </span>
-                <span className="flex-none whitespace-nowrap font-cb-mono text-[9px] text-cb-dim">
-                  ACTIVE
-                </span>
-                <span className="flex-none rounded-cb-chip bg-cb-brass px-1.5 font-cb-mono text-[9px] font-semibold text-cb-on-brass">
-                  {rfis.filter((r) => r.status === "draft").length}
-                </span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => onOpenPanel?.({ kind: "rfi", batchId: null })}
+                  className="cb-press flex w-full items-center gap-2 rounded-cb-btn bg-cb-ink px-2 py-1.5 text-left"
+                >
+                  <span className="flex-none text-cb-brass">●</span>
+                  <span className="flex-1 truncate font-cb-sans text-[11px] font-semibold text-white">
+                    Current build
+                  </span>
+                  <span className="flex-none whitespace-nowrap font-cb-mono text-[9px] text-cb-dim">
+                    ACTIVE
+                  </span>
+                  <span className="flex-none rounded-cb-chip bg-cb-brass px-1.5 font-cb-mono text-[9px] font-semibold text-cb-on-brass">
+                    {rfis.filter((r) => r.status === "draft").length}
+                  </span>
+                </button>
+                {/* The sent history — each row opens the batch read-only, with its letter and
+                    per-question answer recording. These were fetched and dropped before, which
+                    made every exported letter unreachable from the screen that produced it. */}
+                {batches.map((batch) => (
+                  <button
+                    key={batch.batch_id}
+                    type="button"
+                    onClick={() => onOpenPanel?.({ kind: "rfi", batchId: batch.batch_id })}
+                    className="cb-row mt-1 flex w-full items-center gap-2 rounded-cb-btn px-2 py-1.5 text-left"
+                  >
+                    <span className="flex-none text-cb-muted">○</span>
+                    <span className="flex-1 truncate font-cb-sans text-[10.5px] font-medium text-cb-body">
+                      {batch.ref || batch.batch_id}
+                    </span>
+                    <span className="flex-none whitespace-nowrap font-cb-mono text-[9px] text-cb-faint">
+                      {batch.sent_at?.slice(5, 10)} · {batch.items.length}
+                    </span>
+                  </button>
+                ))}
+              </>
             )}
           </RailBlock>
 
@@ -698,6 +729,37 @@ export function RegisterTab({
               {open.length} need a verdict
             </div>
           </div>
+          {/* The re-run, reachable WITH a register on screen — it was curl-only once one
+              existed, though re-running after an addendum (or to include the deferred
+              specifications) is a designed use. The confirm states the backend's own
+              consequences: verdicts are carried onto the lines they were about; a line the
+              re-read no longer produces loses its verdict, is named in the run notes, and
+              re-opens the gate. */}
+          <label className="flex flex-none items-center gap-1.5 font-cb-sans text-[10px] text-cb-muted">
+            <input
+              type="checkbox"
+              checked={includeSpecs}
+              onChange={(e) => setIncludeSpecs(e.target.checked)}
+            />
+            include specifications
+          </label>
+          <Button
+            disabled={busy || running}
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Re-run the review over this set?\n\nYour verdicts are carried onto the " +
+                    "lines they were about. Any line the re-read no longer produces loses its " +
+                    "verdict, is named in the run notes, and re-opens the register gate — " +
+                    "everything approved after it would need approving again.",
+                )
+              ) {
+                void runReview();
+              }
+            }}
+          >
+            Re-run the review
+          </Button>
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as SortMode)}

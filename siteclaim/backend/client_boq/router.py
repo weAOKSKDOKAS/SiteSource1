@@ -4423,6 +4423,17 @@ def post_hole_group(req: HoleGroupRequest, actor: str = Depends(_actor)) -> dict
                 conn, req.set_id, station,
                 access_class=existing.get(station, {}).get("access_class", ""),
                 group_id=req.group_id, actor=actor)
+        # A station REMOVED from the group (a move, or an ungroup) must not keep pointing at it.
+        # Membership authority is the group's own station list; this secondary link exists for
+        # per-station reads, and a stale one would double-count the hole the moment anything
+        # trusted it. The class is untouched, as everywhere: classifying a hole and deciding
+        # which spread works it are two different acts.
+        members = set(group.stations)
+        for station, row in existing.items():
+            if row.get("group_id") == req.group_id and station not in members:
+                store.save_station_class(
+                    conn, req.set_id, station,
+                    access_class=row.get("access_class", ""), group_id="", actor=actor)
         store.touch_set(conn, req.set_id, actor)
     finally:
         conn.close()

@@ -59,6 +59,70 @@ export function Panel({
   );
 }
 
+/** Record the client's answer to one sent question. Nothing pre-filled — an answer is the
+ *  CLIENT's words, and `carried by` is the document that brought them ("Tender Addendum No. 1"),
+ *  not a person. Recording changes no document: if the reply arrived as an addendum, that
+ *  addendum still goes through the Documents upload and its change-mapping gate. */
+function AnswerForm({
+  busy,
+  onRecord,
+}: {
+  busy: boolean;
+  onRecord: (answer: string, answeredBy: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [answeredBy, setAnsweredBy] = useState("");
+
+  if (!open) {
+    return (
+      <div className="mt-2">
+        <p className="font-cb-sans text-[10.5px] leading-[1.45] text-cb-brass-text">
+          No answer yet. Until one arrives this is priced on our own conservative assumption,
+          and the freeze gate will make that assumption explicit.
+        </p>
+        <Button className="mt-1.5" onClick={() => setOpen(true)}>
+          Record the client's answer
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 rounded-cb-chip border border-cb-border bg-cb-warm p-2">
+      <SectionLabel>THE CLIENT'S ANSWER — THEIR WORDS</SectionLabel>
+      <textarea
+        value={answer}
+        onChange={(e) => setAnswer(e.target.value)}
+        rows={3}
+        className="mt-1 w-full rounded-cb-btn border border-cb-border-strong bg-white px-2 py-1.5 font-cb-serif text-[11.5px] leading-[1.5] text-cb-ink-text"
+      />
+      <label className="mt-1.5 flex items-center gap-2">
+        <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">CARRIED BY</span>
+        <input
+          value={answeredBy}
+          onChange={(e) => setAnsweredBy(e.target.value)}
+          placeholder="e.g. Tender Addendum No. 1"
+          className="flex-1 rounded-cb-btn border border-cb-border-strong bg-white px-2 py-1 font-cb-sans text-[10.5px] text-cb-ink-text"
+        />
+      </label>
+      <div className="mt-2 flex items-center gap-2">
+        <Button
+          variant="brass"
+          disabled={busy || !answer.trim()}
+          onClick={() => onRecord(answer.trim(), answeredBy.trim())}
+        >
+          Record it
+        </Button>
+        <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
+          Recording an answer changes no document. If it arrived as an addendum, upload the
+          addendum on Documents — the change-mapping gate is what revises pages.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+
 // ---------------------------------------------------------------------------
 // Frames 04 / 05 — the RFI build
 // ---------------------------------------------------------------------------
@@ -79,6 +143,11 @@ export function RfiPanel({
   const [items, setItems] = useState<RFIItem[]>([]);
   const [ref, setRef] = useState("");
   const [busy, setBusy] = useState(false);
+  // THE LETTER SURVIVES THE EXPORT. `send()` used to await the response and throw the rendered
+  // markdown away — the one artifact the whole panel exists to produce, reachable afterwards
+  // only by curl. Now it is shown, copyable and saveable, here.
+  const [letter, setLetter] = useState<string | null>(null);
+  const [showLetter, setShowLetter] = useState(false);
 
   const load = () =>
     api
@@ -91,6 +160,16 @@ export function RfiPanel({
 
   useEffect(() => {
     void load();
+    // A sent batch carries its letter — fetch it so the history is the letter, not a summary.
+    if (batchId !== null) {
+      api
+        .rfiBatch(setId, batchId)
+        .then((b) => setLetter(b.markdown))
+        .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)));
+    } else {
+      setLetter(null);
+      setShowLetter(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setId, batchId]);
 
@@ -118,10 +197,26 @@ export function RfiPanel({
   async function send() {
     setBusy(true);
     try {
-      await api.sendRfiBatch(setId, ref, shown.map((i) => i.rfi_id));
+      const reply = await api.sendRfiBatch(setId, ref, shown.map((i) => i.rfi_id));
+      // Keep the panel open ON the letter: closing blind was the dead end. Nothing has been
+      // transmitted — this is the draft a person sends.
+      setLetter(reply.markdown);
+      setShowLetter(true);
       await load();
       onChanged();
-      onClose();
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recordAnswer(rfiId: string, answer: string, answeredBy: string) {
+    setBusy(true);
+    try {
+      await api.answerRfi(setId, rfiId, answer, answeredBy);
+      await load();
+      onChanged();
     } catch (e: unknown) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -160,6 +255,39 @@ export function RfiPanel({
           <Tally label="SENT" value={shown.length} className="text-cb-ink-text" />
           <Tally label="ANSWERED" value={answered.length} className="text-cb-ok" />
           <Tally label="STILL OPEN" value={stillOpen.length} className="text-cb-amber" />
+        </div>
+      )}
+
+      {letter !== null && (
+        <div className="mb-3 rounded-[5px] border border-cb-border bg-white p-[11px_13px]">
+          <div className="flex items-center gap-2">
+            <SectionLabel>THE QUERY LETTER</SectionLabel>
+            <span className="ml-auto flex gap-2">
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard?.writeText(letter)}
+                className="cb-press font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2"
+              >
+                copy
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLetter((v) => !v)}
+                className="cb-press font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2"
+              >
+                {showLetter ? "hide" : "show"}
+              </button>
+            </span>
+          </div>
+          {showLetter && (
+            <pre className="mt-2 max-h-[300px] overflow-y-auto whitespace-pre-wrap font-cb-mono text-[10px] leading-[1.55] text-cb-ink-text">
+              {letter}
+            </pre>
+          )}
+          <p className="mt-1.5 font-cb-sans text-[9.5px] leading-[1.45] text-cb-muted">
+            Nothing has been transmitted — this is the draft you send, on your own letterhead,
+            by your own channel.
+          </p>
         </div>
       )}
 
@@ -229,10 +357,12 @@ export function RfiPanel({
                 </div>
               )}
               {sent && !item.answer && (
-                <p className="mt-2 font-cb-sans text-[10.5px] leading-[1.45] text-cb-brass-text">
-                  No answer yet. Until one arrives this is priced on our own conservative
-                  assumption, and the freeze gate will make that assumption explicit.
-                </p>
+                <AnswerForm
+                  busy={busy}
+                  onRecord={(answer, answeredBy) =>
+                    void recordAnswer(item.rfi_id, answer, answeredBy)
+                  }
+                />
               )}
             </div>
           ))}

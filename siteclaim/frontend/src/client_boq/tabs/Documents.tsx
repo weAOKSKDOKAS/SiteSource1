@@ -721,11 +721,14 @@ export function DocumentsTab({
             ordered.map((part) => (
               <ContextCard
                 key={part.part_id}
+                setId={data.setId}
+                allParts={parts}
                 part={part}
                 context={contexts[part.part_id]}
                 selected={part.part_id === selected}
                 onSelect={() => setSelected(part.part_id)}
                 onReinterpret={() => reinterpret(part.part_id)}
+                onRevised={() => void onRefresh()}
                 busy={reading === part.part_id}
                 editing={editingCard === part.part_id}
                 onEdit={() => setEditingCard(part.part_id)}
@@ -771,12 +774,180 @@ export type LocateResult =
   | "pending"
   | { verdict: "located" | "unverifiable" | "not_located"; page: number | null; note: string };
 
+/** The unread card's way out — the flow its own copy always promised. Upload a readable copy,
+ *  see which held part the server proposes it supersedes ("wrong? change the mapping before
+ *  approving — the page numbers everything cites depend on it"), then APPROVE as a distinct
+ *  act. Nothing commits until then; each approved file becomes a NEW revision (Rev 0 survives
+ *  Rev 1), and everything the revision re-opened is rendered loudly, never summarised away. */
+function UploadReadableCopy({
+  setId,
+  partId,
+  allParts,
+  onRevised,
+}: {
+  setId: string;
+  partId: string;
+  allParts: PartRow[];
+  onRevised: () => void;
+}) {
+  const [proposal, setProposal] = useState<Awaited<ReturnType<typeof api.ingestDocument>> | null>(null);
+  const [mappings, setMappings] = useState<{ filename: string; part_id: string }[]>([]);
+  const [applied, setApplied] = useState<Awaited<ReturnType<typeof api.approveChanges>> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+  const fileInput = useRef<HTMLInputElement | null>(null);
+
+  const propose = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setBusy(true);
+    setProblem("");
+    try {
+      const reply = await api.ingestDocument(setId, Array.from(files), "correction");
+      setProposal(reply);
+      // The server's proposal, with any file it could not place defaulted to THIS part — the
+      // person clicked upload on this card, which is a statement of intent the server lacked.
+      const proposed = new Map(reply.mappings.map((m) => [m.filename, m.part_id]));
+      setMappings([
+        ...reply.mappings,
+        ...reply.unmatched
+          .filter((f) => !proposed.has(f))
+          .map((filename) => ({ filename, part_id: partId })),
+      ]);
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approve = async () => {
+    if (!proposal) return;
+    setBusy(true);
+    setProblem("");
+    try {
+      const reply = await api.approveChanges(setId, proposal.doc_id, mappings);
+      setApplied(reply);
+      setProposal(null);
+      onRevised();
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span onClick={(e) => e.stopPropagation()} className="flex flex-wrap items-center gap-2">
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/pdf"
+        multiple
+        className="hidden"
+        onChange={(e) => void propose(e.target.files)}
+      />
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => fileInput.current?.click()}
+        className="cb-press font-cb-sans text-[10.5px] font-medium text-cb-brass-text underline underline-offset-2"
+      >
+        {busy ? "Working…" : "Upload a readable copy"}
+      </button>
+
+      {proposal && (
+        <span className="basis-full rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint p-2">
+          <span className="block font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-brass-text">
+            PROPOSED MAPPING — NOTHING IS COMMITTED YET
+          </span>
+          {mappings.map((m, i) => (
+            <span key={m.filename} className="mt-1 flex items-center gap-2">
+              <span className="truncate font-cb-mono text-[9.5px] text-cb-ink-text">
+                {m.filename}
+              </span>
+              <span className="font-cb-sans text-[9.5px] text-cb-muted">supersedes</span>
+              <select
+                value={m.part_id}
+                onChange={(e) =>
+                  setMappings((prev) =>
+                    prev.map((row, j) => (j === i ? { ...row, part_id: e.target.value } : row)))
+                }
+                className="rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 font-cb-sans text-[9.5px]"
+              >
+                {allParts.map((p) => (
+                  <option key={p.part_id} value={p.part_id}>
+                    {p.part_id} · {p.title}
+                  </option>
+                ))}
+              </select>
+            </span>
+          ))}
+          {proposal.advisory && (
+            <span className="mt-1 block font-cb-sans text-[9px] leading-[1.45] text-cb-brass-text">
+              {proposal.advisory}
+            </span>
+          )}
+          <span className="mt-1.5 flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || mappings.length === 0}
+              onClick={() => void approve()}
+              className="cb-press rounded-cb-btn bg-cb-ink px-3 py-1 font-cb-sans text-[10px] font-semibold text-white"
+            >
+              Approve — apply as new revisions
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setProposal(null)}
+              className="cb-press font-cb-sans text-[10px] text-cb-muted"
+            >
+              cancel
+            </button>
+          </span>
+        </span>
+      )}
+
+      {applied && (
+        <span className="basis-full rounded-cb-chip border border-cb-border bg-cb-page p-2">
+          <span className="block font-cb-sans text-[10px] leading-[1.5] text-cb-body">
+            Applied: {applied.revised.map((r) => `${r.part_id} → rev ${r.rev}`).join(", ") || "nothing"}.
+            {" "}Read the part again (⟳) so the new pages get a card.
+          </span>
+          {applied.reopened_register_items.length > 0 && (
+            <span className="mt-1 block font-cb-sans text-[9.5px] leading-[1.5] text-cb-amber">
+              ⚠ Register line(s) {applied.reopened_register_items.join(", ")} cited the replaced
+              pages and are back to undecided — re-decide them on the Register.
+            </span>
+          )}
+          {applied.overtaken_queries.length > 0 && (
+            <span className="mt-1 block font-cb-sans text-[9.5px] leading-[1.5] text-cb-amber">
+              ⚠ Open quer{applied.overtaken_queries.length === 1 ? "y" : "ies"} overtaken:{" "}
+              {applied.overtaken_queries.join("; ")}
+            </span>
+          )}
+        </span>
+      )}
+
+      {problem && (
+        <span className="basis-full font-cb-sans text-[9.5px] leading-[1.45] text-cb-bad-dark">
+          {problem}
+        </span>
+      )}
+    </span>
+  );
+}
+
+
 function ContextCard({
+  setId,
+  allParts,
   part,
   context,
   selected,
   onSelect,
   onReinterpret,
+  onRevised,
   busy,
   editing,
   onEdit,
@@ -785,11 +956,16 @@ function ContextCard({
   locations,
   onLocate,
 }: {
+  setId: string;
+  /** Every part on the set — the mapping selector's options when a correction lands. */
+  allParts: PartRow[];
   part: PartRow;
   context: PartContext | undefined;
   selected: boolean;
   onSelect: () => void;
   onReinterpret: () => void;
+  /** A revision was applied — parts and contexts must re-read. */
+  onRevised: () => void;
   busy: boolean;
   editing: boolean;
   onEdit: () => void;
@@ -899,14 +1075,12 @@ function ContextCard({
           <IconButton title="Editing page bounds is not built yet" disabled>
             ✎
           </IconButton>
-          <button
-            type="button"
-            disabled
-            title="Uploading a replacement lands with the addendum panel"
-            className="font-cb-sans text-[10.5px] text-cb-disabled"
-          >
-            Upload a readable copy
-          </button>
+          <UploadReadableCopy
+            setId={setId}
+            partId={part.part_id}
+            allParts={allParts}
+            onRevised={onRevised}
+          />
           <button
             type="button"
             onClick={onSelect}

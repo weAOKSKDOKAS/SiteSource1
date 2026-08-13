@@ -1402,8 +1402,9 @@ export interface RFIBatchRow {
   batch_id: string;
   ref: string;
   sent_at: string;
-  letter_md?: string;
-  items: RFIItem[];
+  /** The member QUESTION IDS — `GET /rfi/{set_id}` sends ids, not full items. The full items
+   *  (and the letter) come from `api.rfiBatch`, which is the sent-batch panel's read. */
+  items: string[];
 }
 
 export interface RFIsResponse {

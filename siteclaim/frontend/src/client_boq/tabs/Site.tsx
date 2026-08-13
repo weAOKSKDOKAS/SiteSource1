@@ -1219,6 +1219,7 @@ function GroupsView({
           key={current.label}
           setId={setId}
           group={current}
+          allGroups={groups?.groups ?? []}
           sources={groups?.sources[current.label] ?? {}}
           onSaved={onChanged}
           onError={onError}
@@ -1231,12 +1232,16 @@ function GroupsView({
 function GroupEditor({
   setId,
   group,
+  allGroups,
   sources,
   onSaved,
   onError,
 }: {
   setId: string;
   group: HoleGroup;
+  /** Every group on the set — the move targets. Membership authority is the group's OWN station
+   *  list, so a move must rewrite BOTH groups or the hole is counted twice. */
+  allGroups: HoleGroup[];
   sources: Record<string, { source: "book" | "yours" | "missing"; book_value: number | null }>;
   onSaved: () => void;
   onError: (msg: string) => void;
@@ -1278,6 +1283,32 @@ function GroupEditor({
     setBusy(true);
     try {
       await api.saveGroup(setId, group.label.toLowerCase().replace(/\s+/g, "-"), draft);
+      onSaved();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const slugOf = (label: string) => label.toLowerCase().replace(/\s+/g, "-");
+
+  /** Move one hole to `targetLabel`, or ungroup it (null). TWO writes on a move — the source
+   *  group loses it, the target gains it — because the group's own station list is the
+   *  membership authority and a one-sided write double-counts the hole. */
+  const moveStation = async (station: string, targetLabel: string | null) => {
+    setBusy(true);
+    try {
+      const source = { ...draft, stations: draft.stations.filter((s) => s !== station) };
+      await api.saveGroup(setId, slugOf(group.label), source);
+      if (targetLabel !== null) {
+        const target = allGroups.find((g) => g.label === targetLabel);
+        if (target) {
+          await api.saveGroup(setId, slugOf(target.label),
+            { ...target, stations: [...target.stations, station] });
+        }
+      }
+      setDraft(source);
       onSaved();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1334,6 +1365,52 @@ function GroupEditor({
         >
           Delete group
         </button>
+      </div>
+
+      {/* MEMBERSHIP — the judgement the group IS, editable at last. Moving a hole rewrites BOTH
+          groups' station lists (the group's own list is the membership authority; one-sided
+          writes double-count the hole in every count and reconciliation), the totals re-derive
+          server-side on save, and the class is untouched — classifying a hole and deciding
+          which spread works it are two different acts. */}
+      <div className="mt-3">
+        <SectionLabel>STATIONS — {draft.stations.length}</SectionLabel>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {draft.stations.map((station) => (
+            <span
+              key={station}
+              className="flex items-center gap-1.5 rounded-cb-pill border border-cb-border bg-cb-page px-2 py-0.5 font-cb-mono text-[9px] text-cb-ink-text"
+            >
+              {station}
+              <select
+                value=""
+                disabled={busy}
+                title="Move this hole to another group, or ungroup it. Its class stays."
+                onChange={(e) => {
+                  const target = e.target.value;
+                  if (target === "") return;
+                  void moveStation(station, target === "·ungroup" ? null : target);
+                }}
+                className="rounded-cb-btn border-0 bg-transparent font-cb-sans text-[9px] text-cb-brass-text"
+              >
+                <option value="">move ▾</option>
+                {allGroups
+                  .filter((g) => g.label !== group.label)
+                  .map((g) => (
+                    <option key={g.label} value={g.label}>
+                      → {g.label}
+                    </option>
+                  ))}
+                <option value="·ungroup">ungroup — back to unassigned</option>
+              </select>
+            </span>
+          ))}
+          {draft.stations.length === 0 && (
+            <span className="font-cb-sans text-[10px] text-cb-muted">
+              No holes left — a group of nothing prices nothing. Delete it, or move holes in from
+              another group.
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 grid gap-6 [grid-template-columns:minmax(220px,1fr)_minmax(220px,1fr)]">

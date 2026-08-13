@@ -74,7 +74,6 @@ import type {
   ProjectDashboard,
   ProjectEOS,
   ProjectSummary,
-  RFIBatchRow,
   RFIItem,
   RFIsResponse,
   RateRowFull,
@@ -419,6 +418,38 @@ export const api = {
     del<{ set_id: string; point_id: string; deleted: boolean }>(
       `/site/${setId}/road-point/${pointId}`),
 
+  // --- corrections & addenda (the change-mapping gate) ------------------------
+  /** Propose replacement pages. COMMITS NOTHING: the response maps each file onto the held part
+   *  it would supersede and stops at the change-mapping gate — `approveChanges` is the act. */
+  ingestDocument(setId: string, files: File[], kind = "correction", ref = ""): Promise<{
+    set_id: string; doc_id: string; kind: string; ref: string; seq: number; letter: string;
+    changes: unknown[]; mappings: { filename: string; part_id: string }[];
+    unmatched: string[]; notes: string[]; advisory: string; requires_gate: boolean;
+  }> {
+    const form = new FormData();
+    form.append("set_id", setId);
+    form.append("kind", kind);
+    form.append("ref", ref);
+    for (const file of files) form.append("files", file);
+    return fetch(`${ROOT}/ingest/document`, {
+      method: "POST", body: form, headers: actorHeaders(),
+    }).then((r) =>
+      handle<{
+        set_id: string; doc_id: string; kind: string; ref: string; seq: number; letter: string;
+        changes: unknown[]; mappings: { filename: string; part_id: string }[];
+        unmatched: string[]; notes: string[]; advisory: string; requires_gate: boolean;
+      }>(r));
+  },
+  /** The gate: each approved replacement becomes a NEW revision (Rev 0 survives Rev 1). The
+   *  response names every register line the revision re-opened — render it, never summarise. */
+  approveChanges: (setId: string, docId: string,
+                   mappings: { filename: string; part_id: string }[]) =>
+    post<{ set_id: string; doc_id: string; revised: { part_id: string; rev: number;
+           title: string }[]; reopened_register_items: number[];
+           overtaken_queries: string[]; note: string }>("/ingest/changes/approve", {
+      set_id: setId, doc_id: docId, mappings,
+    }),
+
   // --- the brain ------------------------------------------------------------
   /** Run the brain. Propose-only by construction: the result carries screen references a person
    *  clicks through — it cannot approve, decide, price or classify anything. */
@@ -722,11 +753,30 @@ export const api = {
   withdrawRfi: (setId: string, rfiId: string) =>
     del<{ set_id: string; rfi: RFIItem; open_queries: number }>(`/rfi/${setId}/${rfiId}`),
   /** Batch the queued questions into one numbered letter and mark them sent. */
+  /** Marks the chosen drafts sent and returns the rendered letter. NOTHING IS TRANSMITTED —
+   *  the markdown is a draft for a human to send, and the response's declared shape now matches
+   *  what the backend actually returns (the old `letter_md` key never existed; it was latent
+   *  only because the caller discarded the response). */
   sendRfiBatch: (setId: string, ref: string, rfiIds: string[]) =>
-    post<{ set_id: string; batch: RFIBatchRow; letter_md: string }>("/rfi/batch", {
+    post<{ set_id: string; batch_id: string; ref: string; count: number; markdown: string;
+           open_queries: number }>("/rfi/batch", {
       set_id: setId,
       ref,
       rfi_ids: rfiIds,
+    }),
+  /** One sent batch, with its letter. The read-only history the export footer promises. */
+  rfiBatch: (setId: string, batchId: string) =>
+    get<{ set_id: string; batch_id: string; ref: string; sent_at: string; markdown: string;
+          items: RFIItem[] }>(`/rfi/${setId}/batch/${batchId}`),
+  /** Record the client's answer. `answeredBy` is the DOCUMENT that carried it (e.g. "Tender
+   *  Addendum No. 1") — attribution is the paper, not a person, and recording an answer changes
+   *  no document: an addendum still goes through /ingest/document and its gate. */
+  answerRfi: (setId: string, rfiId: string, answer: string, answeredBy = "") =>
+    post<{ set_id: string; rfi_id: string; status: string }>("/rfi/answer", {
+      set_id: setId,
+      rfi_id: rfiId,
+      answer,
+      answered_by: answeredBy,
     }),
 
   // --- documents & revisions ----------------------------------------------
