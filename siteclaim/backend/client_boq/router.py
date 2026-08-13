@@ -5385,12 +5385,19 @@ def _class_b_platform_total(groups, classes: dict) -> float:
     return total
 
 
-def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
-    """Run the whole engine for one tender. The single path everything else here goes through."""
+def _costing(conn, set_id: str, rev: Optional[int],
+             model_override: Optional["boq_model.CostingModel"] = None) -> dict:
+    """Run the whole engine for one tender. The single path everything else here goes through.
+
+    ``model_override`` prices the tender as if a model input had been changed WITHOUT changing it
+    — the whole of the what-if preview. It stays the single path deliberately: a preview computed
+    by a second, simpler routine would eventually disagree with the real one, and the number a
+    person accepted would not be the number they got.
+    """
     bill = _bill_or_404(conn, set_id, rev)
     library = store.load_library_model(conn)
     own = store.load_set_model(conn, set_id)
-    model = boq_model.effective(library, own)
+    model = model_override or boq_model.effective(library, own)
     state = store.load_costing_state(conn, set_id, bill.rev)
 
     mapping = boq_costing.propose_quantities(bill)
@@ -5453,6 +5460,118 @@ def _costing(conn, set_id: str, rev: Optional[int]) -> dict:
         "billed_standing_hours": billed_standing, "conservation": balance,
         "class_refs": class_refs, "class_counts": class_counts,
         "platform_cost_b": platform_b,
+    }
+
+
+class WhatIfRequest(BaseModel):
+    """Type the change you are considering. Nothing here writes anything."""
+    set_id: str
+    rev: Optional[int] = None
+    #: What you want to assume, in your own words — "assume 3 rigs", "the hillside needs a
+    #: platform". Mapped onto ONE model input by proposal, and refused if it maps onto nothing.
+    instruction: str = ""
+    #: Or name the input directly, skipping the model entirely. Both paths price identically.
+    path: str = ""
+    value: Optional[float] = None
+
+
+@router.post("/costing/what-if")
+def post_what_if(req: WhatIfRequest) -> dict:
+    """Price the tender as if something were different — and CHANGE NOTHING.
+
+    Type it, see the diff, then accept it: the model proposes WHICH input your sentence moves and
+    to what, and the deterministic engine computes what that does to the money. The split is the
+    product's whole rule restated — no model writes a number here; it writes a proposed INPUT, and
+    the engine everything else uses recalculates from it.
+
+    Both figures come from ``_costing``, the single path the real screens use, so the total you
+    accept is the total you get. Applying is a separate act on the ordinary propose-and-confirm
+    path: record the condition, confirm the mapping, and the confirm is the only writer.
+    """
+    from client_boq import llm as llm_mod
+
+    conn = store.get_conn()
+    try:
+        bill = _bill_or_404(conn, req.set_id, req.rev)
+        before = _costing(conn, req.set_id, bill.rev)
+        model = before["model"]
+
+        proposal = boq_conditions.ConditionProposal(path=req.path.strip(), value=req.value)
+        if req.instruction.strip() and not proposal.maps:
+            client = llm_mod.make_client()
+            try:
+                raw = client.complete_json(
+                    system=boq_conditions.SYSTEM,
+                    user=boq_conditions.prompt_for(req.instruction.strip(), model),
+                    target_model=boq_conditions.RawConditionMapping,
+                    demo_fixture=boq_conditions.DEMO_FIXTURE, purpose="client_boq-what-if")
+            except Exception as exc:
+                raise HTTPException(status_code=502,
+                                    detail=f"the mapping did not come back: {exc}") from exc
+            proposal = boq_conditions.validate(
+                raw.model_dump() if hasattr(raw, "model_dump") else (raw or {}), model)
+        elif proposal.maps and proposal.path not in boq_conditions.editable_paths(model):
+            # A path typed by hand gets the same refusal a proposed one does: naming an input
+            # this model does not have is worse than naming none.
+            proposal = boq_conditions.ConditionProposal(
+                cannot_map=f"{proposal.path!r} is not an input of this model.",
+                checked=[f"REFUSED: {proposal.path!r} is not an input of this model."])
+
+        if not proposal.maps:
+            return {
+                "set_id": req.set_id, "rev": bill.rev,
+                "proposal": proposal.model_dump(), "applies": False,
+                "waiting_on": proposal.cannot_map or (
+                    "nothing to price — say what you want to assume, or name an input directly"),
+            }
+
+        hypothetical = model.model_copy(deep=True)
+        was = _apply_model_path(hypothetical, proposal.path, float(proposal.value))
+        after = _costing(conn, req.set_id, bill.rev, model_override=hypothetical)
+    finally:
+        conn.close()
+
+    def figures(parts: dict) -> dict:
+        programme = parts["programme"]
+        return {
+            "total": parts["priced"].total,
+            "work_days": programme.work_days,
+            "rigs_required": programme.rigs_required,
+            "standing_hours": programme.standing_hours,
+            "rock_fraction": programme.rock_fraction,
+        }
+
+    a, b = figures(before), figures(after)
+    # WHICH RATES ACTUALLY MOVED. A total that changed by itself says nothing about where; this
+    # is the diff a person reads before accepting, so it names the lines rather than the sum.
+    before_rows = {r.full_ref: r for r in before["priced"].rows}
+    moved = []
+    for row in after["priced"].rows:
+        was_row = before_rows.get(row.full_ref)
+        if was_row is None or was_row.rate_to_submit is None or row.rate_to_submit is None:
+            continue
+        if abs(was_row.rate_to_submit - row.rate_to_submit) >= 0.01:
+            moved.append({
+                "full_ref": row.full_ref, "description": row.description,
+                "was": was_row.rate_to_submit, "now": row.rate_to_submit,
+                "amount_was": was_row.amount, "amount_now": row.amount,
+            })
+    moved.sort(key=lambda m: abs((m["amount_now"] or 0) - (m["amount_was"] or 0)), reverse=True)
+
+    return {
+        "set_id": req.set_id, "rev": bill.rev,
+        "proposal": proposal.model_dump(),
+        "applies": True,
+        "was": was,
+        "before": a, "after": b,
+        "delta": {k: round(b[k] - a[k], 4) for k in a},
+        "moved": moved[:25],
+        "moved_count": len(moved),
+        # Said plainly, because a preview that looked like a save would be the worst possible
+        # misreading of this screen.
+        "note": ("Nothing has been changed. Record it as a condition and confirm the mapping to "
+                 "apply it — the confirm is the only thing that writes."),
+        "waiting_on": "",
     }
 
 

@@ -13,7 +13,13 @@ import { BillPicker } from "../BillPicker";
 import { Ask } from "../costing/Ask";
 import { Conditions } from "../costing/Conditions";
 import { Outstanding } from "../Outstanding";
-import type { AssumptionRow, CostingCheck, CostingResponse, PricedRow } from "../types";
+import type {
+  AssumptionRow,
+  CostingCheck,
+  CostingResponse,
+  PricedRow,
+  WhatIfResponse,
+} from "../types";
 import { Button, SectionLabel, WaitingOn, cx, formatNorm, money } from "../ui";
 
 const VERDICTS = ["Accepted", "Revised", "Rejected"];
@@ -189,6 +195,8 @@ export function Costing({
         </section>
 
         <ClassSplit data={data} setId={setId} onChanged={load} onError={onError} />
+
+        <WhatIf setId={setId} onApplied={load} onError={onError} />
 
         {/* ---- the rates ---- */}
         <section className="mt-6">
@@ -716,6 +724,169 @@ function ClassSplit({
           )}
         </div>
       </div>
+    </section>
+  );
+}
+
+/** TYPE THE CHANGE, SEE THE DIFF, THEN ACCEPT IT.
+ *
+ *  Say what you want to assume in your own words. A model proposes WHICH input of the costing
+ *  model that moves and to what — it cannot name an input the model does not have, and it has no
+ *  field in which to say anything was decided. Then the DETERMINISTIC engine, the same one every
+ *  other screen prices through, recalculates and this shows the difference: the total, the
+ *  programme, and which rates actually moved.
+ *
+ *  Nothing is written until you accept, and accepting is the ordinary path — the change is
+ *  recorded as a condition and you confirm the mapping, which is the only thing that writes. */
+function WhatIf({
+  setId,
+  onApplied,
+  onError,
+}: {
+  setId: string;
+  onApplied: () => Promise<void> | void;
+  onError: (msg: string) => void;
+}) {
+  const [instruction, setInstruction] = useState("");
+  const [preview, setPreview] = useState<WhatIfResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [applied, setApplied] = useState(false);
+
+  const run = async () => {
+    if (!instruction.trim()) return;
+    setBusy(true);
+    setApplied(false);
+    try {
+      setPreview(await api.whatIf(setId, { instruction: instruction.trim() }));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!preview?.applies) return;
+    setBusy(true);
+    try {
+      // RECORD ONLY. It lands on the register below as a condition carrying the sentence that
+      // produced it, where the engine proposes the mapping and a person confirms — and that
+      // confirm is the only thing that writes. Confirming from here would make this box a second
+      // writer of the model, which is the one thing the whole propose-and-confirm path exists to
+      // prevent.
+      await api.addCondition(setId, instruction.trim(), preview.proposal.basis);
+      setApplied(true);
+      await onApplied();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-6">
+      <SectionLabel>WHAT IF — TYPE A CHANGE, SEE WHAT IT DOES</SectionLabel>
+      <p className="mt-1 max-w-[680px] font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
+        Say what you want to assume, in your own words. It works out which input of the costing
+        model that moves, then the engine re-prices the whole bill and shows you the difference
+        before anything is written.
+      </p>
+      <div className="mt-2 flex items-start gap-2">
+        <input
+          value={instruction}
+          onChange={(e) => setInstruction(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void run();
+          }}
+          placeholder="e.g. assume we run three rigs · the hillside needs a platform · margin goes to 12%"
+          className="flex-1 rounded-cb-btn border border-cb-border bg-cb-warm px-2.5 py-1.5 font-cb-sans text-[11.5px] text-cb-ink-text placeholder:text-cb-faint"
+        />
+        <Button variant="brass" disabled={busy || !instruction.trim()} onClick={() => void run()}>
+          {busy ? "Pricing…" : "Price it"}
+        </Button>
+      </div>
+
+      {preview && !preview.applies && (
+        <p className="mt-2 rounded-cb-chip bg-cb-panel px-2 py-1.5 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
+          {preview.proposal.cannot_map || preview.waiting_on}
+          {preview.proposal.checked.map((line) => (
+            <span key={line} className="mt-1 block text-cb-bad-dark">{line}</span>
+          ))}
+        </p>
+      )}
+
+      {preview?.applies && preview.before && preview.after && preview.delta && (
+        <div className="mt-2 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2.5">
+          <p className="font-cb-mono text-[9.5px] text-cb-ink-text">
+            {preview.proposal.path} : {preview.was} → {preview.proposal.value}
+            <span className="ml-2 text-cb-faint">({preview.proposal.confidence} confidence)</span>
+          </p>
+          {preview.proposal.basis && (
+            <p className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+              {preview.proposal.basis}
+            </p>
+          )}
+
+          <div className="mt-2 grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
+            {(["total", "work_days", "rigs_required", "standing_hours"] as const).map((key) => (
+              <div key={key} className="rounded-cb-chip bg-cb-panel px-2 py-1.5">
+                <div className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">
+                  {key.replace(/_/g, " ").toUpperCase()}
+                </div>
+                <div className="font-cb-mono text-[11px] text-cb-ink-text">
+                  {formatNorm(preview.before![key])} → {formatNorm(preview.after![key])}
+                </div>
+                <div
+                  className={cx(
+                    "font-cb-mono text-[9px] font-semibold",
+                    preview.delta![key] > 0 ? "text-cb-bad-dark" : preview.delta![key] < 0
+                      ? "text-cb-ok-dark" : "text-cb-faint",
+                  )}
+                >
+                  {preview.delta![key] > 0 ? "+" : ""}{formatNorm(preview.delta![key])}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {(preview.moved?.length ?? 0) > 0 && (
+            <div className="mt-2">
+              <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+                RATES THAT MOVE — {preview.moved_count} OF THEM
+              </div>
+              {preview.moved!.map((m) => (
+                <div key={m.full_ref} className="mt-0.5 flex items-baseline gap-2">
+                  <span className="w-[52px] flex-none font-cb-mono text-[9.5px] text-cb-ink-text">
+                    {m.full_ref}
+                  </span>
+                  <span className="flex-1 truncate font-cb-sans text-[9.5px] text-cb-muted">
+                    {m.description}
+                  </span>
+                  <span className="flex-none font-cb-mono text-[9.5px] text-cb-ink-text">
+                    {money(m.was)} → {money(m.now)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-cb-divider pt-2">
+            {applied ? (
+              <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                RECORDED ON THE REGISTER BELOW — CONFIRM THE MAPPING TO APPLY IT
+              </span>
+            ) : (
+              <Button disabled={busy} onClick={() => void apply()}>
+                Record this as a condition
+              </Button>
+            )}
+            <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
+              {preview.note}
+            </span>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

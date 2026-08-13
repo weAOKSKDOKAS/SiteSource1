@@ -94,6 +94,7 @@ import type {
   RoadsResponse,
   PositionsResponse,
   BriefingResponse,
+  WhatIfResponse,
   WorkingBill,
   BillChecksResponse,
   RateTraceResponse,
@@ -336,6 +337,10 @@ export const api = {
       full_ref: fullRef,
       ...keys,
     }),
+  /** Price the tender as if something were different. CHANGES NOTHING — say what you want to
+   *  assume and see the diff; applying is the ordinary record-then-confirm act. */
+  whatIf: (setId: string, body: { instruction?: string; path?: string; value?: number }) =>
+    post<WhatIfResponse>("/costing/what-if", { set_id: setId, ...body }),
   /** The deliverable: eight sheets with their formulas intact, so it still calculates in Excel. */
   costingWorkbookUrl: (setId: string) => `${ROOT}/costing/${setId}/workbook.xlsx`,
   /** Type a rate over the rounded proposal. `null` puts the proposal back. */

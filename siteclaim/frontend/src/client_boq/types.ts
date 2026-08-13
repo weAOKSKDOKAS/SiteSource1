@@ -442,6 +442,33 @@ export interface RoadsResponse {
   waiting_on: string;
 }
 
+/** Pricing the tender as if something were different. Writes NOTHING — the model proposes which
+ *  input a sentence moves; the deterministic engine computes what that does to the money. */
+export interface WhatIfResponse {
+  set_id: string;
+  rev: number;
+  proposal: {
+    path: string;
+    value: number | null;
+    basis: string;
+    confidence: string;
+    cannot_map: string;
+    checked: string[];
+  };
+  applies: boolean;
+  /** The input's current value, as it reads today. */
+  was?: string;
+  before?: Record<string, number>;
+  after?: Record<string, number>;
+  delta?: Record<string, number>;
+  /** Which RATES moved — a total that changed by itself says nothing about where. */
+  moved?: { full_ref: string; description: string; was: number; now: number;
+            amount_was: number; amount_now: number }[];
+  moved_count?: number;
+  note?: string;
+  waiting_on: string;
+}
+
 /** A person's click on the map: where the site is entered from. The judgement carries a name;
  *  every distance that follows is arithmetic. */
 export interface RoadPoint {
