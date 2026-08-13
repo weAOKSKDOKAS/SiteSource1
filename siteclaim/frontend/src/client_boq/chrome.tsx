@@ -9,6 +9,7 @@ import { Chip, cx } from "./ui";
 // Steps
 // ---------------------------------------------------------------------------
 export type TabId =
+  | "brain"
   | "documents"
   | "register"
   | "bid"
@@ -31,6 +32,9 @@ export type TabId =
 // level → recommend as internal steps rather than four more tabs, because they are already a
 // wizard with a stepper of their own.
 export const TABS: { id: TabId; label: string }[] = [
+  // First in the strip, not the landing tab: the brain is "where does this tender stand and
+  // what next" — an overview a person OPENS, while Documents stays where a new set lands.
+  { id: "brain", label: "Brain" },
   { id: "documents", label: "Documents" },
   { id: "register", label: "Register" },
   { id: "bid", label: "Bid" },
@@ -120,6 +124,9 @@ export function stepStates(
   const unassigned = has.unassignedHoles ?? 0;
   const takeOffUnread = Boolean(has.noTakeOff);
   const states = {
+    // The brain never waits, never blocks, and is never "done" — it is an overview you can open
+    // at any point, and a briefing is a reading of a moment, not a step a tender passes.
+    brain: { kind: "open" },
     documents: gates.manifest ? { kind: "done" } : has.parts ? { kind: "open" } : { kind: "open" },
     register: gates.review
       ? { kind: "done" }

@@ -1,0 +1,9 @@
+{
+  "findings": [
+    "The departure register is the tender's spine here: liquidated damages and payment-security clauses carry the highest commercial exposure, and several lines still await a human verdict — nothing downstream can rely on them until decided.",
+    "The review gate is not yet approved, which blocks the estimate scope; the register lines needing verdicts are the reason, not paperwork."
+  ],
+  "citations": [
+    {"source": "gate:review", "quote": "the departure register is NOT yet approved"}
+  ]
+}

@@ -978,6 +978,57 @@ def delete_road_point(conn: sqlite3.Connection, set_id: str, point_id: str) -> N
 
 
 # ---------------------------------------------------------------------------
+# The brain's briefings — what it understood, appended per run, never a verdict
+# ---------------------------------------------------------------------------
+def save_briefing(conn: sqlite3.Connection, set_id: str, briefing: dict, *,
+                  actor: str = "") -> int:
+    """Append one briefing; returns its 1-based seq. Append-only like the site log: a briefing is
+    a reading of the tender at a moment, and re-running does not erase what an earlier run said."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    row = conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM client_boq_briefings WHERE set_id = ?",
+        (set_id,),
+    ).fetchone()
+    seq = int(row["seq"])
+    conn.execute(
+        """
+        INSERT INTO client_boq_briefings (set_id, seq, briefing_json, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (set_id, seq, json.dumps(briefing), actor, now),
+    )
+    conn.commit()
+    return seq
+
+
+def load_briefing(conn: sqlite3.Connection, set_id: str) -> Optional[dict]:
+    """The latest briefing, with its seq/author/time folded in. None = the brain has not run."""
+    row = conn.execute(
+        """
+        SELECT seq, briefing_json, created_by, created_at FROM client_boq_briefings
+        WHERE set_id = ? ORDER BY seq DESC LIMIT 1
+        """,
+        (set_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        briefing = json.loads(row["briefing_json"] or "{}")
+    except ValueError:
+        return None  # a corrupt blob is a gap, not a crash
+    return {**briefing, "seq": row["seq"], "created_by": row["created_by"],
+            "created_at": row["created_at"]}
+
+
+def briefing_count(conn: sqlite3.Connection, set_id: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM client_boq_briefings WHERE set_id = ?", (set_id,),
+    ).fetchone()
+    return int(row["n"])
+
+
+# ---------------------------------------------------------------------------
 # The costing model — the library's, and a tender's own copy of it
 # ---------------------------------------------------------------------------
 LIBRARY_MODEL_ID = "default"

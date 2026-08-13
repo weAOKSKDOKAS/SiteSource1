@@ -1,0 +1,9 @@
+{
+  "findings": [
+    "The bill's pricing state is the money story: carried rates not looked at since the last revision, unpriced items, and any sweep cost with no route are each a place the tender total is quietly wrong until a person acts.",
+    "General Preambles ¶6 makes an unrouted sweep cost a promise to do that work for nothing — it is the app's only hard stop for a reason."
+  ],
+  "citations": [
+    {"source": "bill", "quote": "the bill's pricing state"}
+  ]
+}

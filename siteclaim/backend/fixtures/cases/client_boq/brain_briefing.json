@@ -1,0 +1,24 @@
+{
+  "understanding": "A ground-investigation tender priced from the client's own bill. The register carries the commercial risk (liquidated damages and payment terms lead), the take-off gives the drilling quantities the engine prices from, and the gates show where it stands: the review is the open one, and the estimate cannot move until its lines are decided [gate:review]. The bill's own state says what remains before a defensible total exists [bill].",
+  "disagreements": [
+    "Where the estimator's hole classification and the bill's Class A / Class B counts disagree, one of them is wrong — the reconciliation strip on Site is the place to look before pricing the rig moves."
+  ],
+  "proposed_actions": [
+    {
+      "action_id": "decide_register",
+      "reasoning": "Open register lines block the review gate, and everything after it. Deciding them is the highest-leverage human act on this tender right now.",
+      "citations": [{"source": "gate:review", "quote": "the departure register is NOT yet approved"}]
+    },
+    {
+      "action_id": "classify_holes",
+      "reasoning": "The class counts are the only external check the bill offers on access classification, and unclassed holes keep it open.",
+      "citations": []
+    },
+    {
+      "action_id": "settle_sweep",
+      "reasoning": "Any cost with no bill item and no route is a promise to do that work for nothing (General Preambles ¶6). The sweep is the only hard stop — clear it before the total is read as real.",
+      "citations": [{"source": "bill", "quote": "the bill's pricing state"}]
+    }
+  ],
+  "cannot_assess": ""
+}

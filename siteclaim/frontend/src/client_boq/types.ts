@@ -419,6 +419,40 @@ export interface RoadResponse {
   waiting_on: string;
 }
 
+/** One proposed next action from the brain. `tab` and `label` come from the backend's action
+ *  REGISTRY, never from the model — the button below it only navigates; the gated endpoint on
+ *  that screen still takes the person's click. */
+export interface BriefingAction {
+  action_id: string;
+  tab: string;
+  label: string;
+  reasoning: string;
+  citations: { source: string; quote: string }[];
+}
+
+/** The brain's validated briefing. Structurally unable to carry a verdict, a rate, a class or a
+ *  gate flag — its raw model has no field for one. */
+export interface Briefing {
+  understanding: string;
+  disagreements: string[];
+  actions: BriefingAction[];
+  cannot_assess: string;
+  /** What validation removed, named — an invented action or an ungrounded citation. */
+  stripped: string[];
+  /** Which ground families each focused read covered — the briefing's own receipts. */
+  reads: string[];
+  seq: number;
+  created_by: string;
+  created_at: string | null;
+}
+
+export interface BriefingResponse {
+  set_id: string;
+  briefing: Briefing | null;
+  count: number;
+  waiting_on: string;
+}
+
 export interface ClusterEvidence {
   label: string;
   stations: string[];

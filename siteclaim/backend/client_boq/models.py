@@ -1793,6 +1793,22 @@ _DDL = [
         PRIMARY KEY (set_id, point_id)
     )
     """,
+    # A BRIEFING — what the brain understood, where things disagree, and its proposed next
+    # actions. Append-only (seq, like the site log): a briefing is a reading of the tender at a
+    # moment, and the moment matters. THE LINE THAT MUST NOT MOVE: a briefing holds no verdict,
+    # no number and no gate flag — its raw model has no field for one (the same structural
+    # guarantee as DepartureProposal), and every proposed action is a REFERENCE to a screen a
+    # person clicks through, executed only by the existing gated endpoints.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_briefings (
+        set_id        TEXT NOT NULL,
+        seq           INTEGER NOT NULL,            -- per-set ordinal, 1-based
+        briefing_json TEXT NOT NULL DEFAULT '{}',  -- the VALIDATED briefing
+        created_by    TEXT NOT NULL DEFAULT '',
+        created_at    TEXT,
+        PRIMARY KEY (set_id, seq)
+    )
+    """,
     # The SWEEP — costs the contract makes yours that no bill item asks for.
     #
     # This is the app's only hard stop, and the table is why. General Preambles ¶6: "Items against

@@ -177,6 +177,7 @@ _WORKFLOW_STAGES: dict[str, list[str]] = {
     "archive": ["reading", "extracting", "recording", "ingested"],   # bridge/archive.py
     "review": ["ingesting", "summarising", "matching", "scope", "program", "cashflow",
                "assembling", "verifying", "locating"],
+    "brain": ["grounding", "reading", "proposing"],
 }
 # The review's last stage (`locating`) runs only when the set has parts to locate citations in, so
 # its length is 8 OR 9. Rather than print a total the run might contradict two stages later, these
@@ -1365,6 +1366,12 @@ class LLMSettings(BaseModel):
     # model setting is per provider.
     provider_drawing: str = ""
     model_drawing: str = ""
+    # THE BRAIN IS ITS OWN QUESTION for the same reason: it runs rarely, reads everything at
+    # once, and steers where a person looks next — "one strong model to understand it all" must
+    # not also change the model that classifies a document. Falls through to `provider`, not to
+    # ingest: the brain reasons over what was read; it reads no pages.
+    provider_brain: str = ""
+    model_brain: str = ""
     # Who reads the documents. Separate because reading the tender is a different job from the
     # stages that reason about what was read, and it decides what all of them are looking at.
     # "" falls through to EXTRACTION_PROVIDER, then to `provider`.
@@ -1448,6 +1455,15 @@ def get_settings() -> dict:
             "model_drawing": (cfg.get("model_drawing")
                               or cfg.get(llm_mod.MODEL_KEY.get(drawing_provider, ""))
                               or model_for_provider(drawing_provider)),
+            # WHO IS THE BRAIN, resolved the same way the run resolves it.
+            "brain_provider": (llm_mod.resolve_provider(cfg, llm_mod.STAGE_BRAIN)
+                               or text_provider),
+            "model_brain": (cfg.get("model_brain")
+                            or cfg.get(llm_mod.MODEL_KEY.get(
+                                llm_mod.resolve_provider(cfg, llm_mod.STAGE_BRAIN)
+                                or text_provider, ""))
+                            or model_for_provider(llm_mod.resolve_provider(
+                                cfg, llm_mod.STAGE_BRAIN) or text_provider)),
         },
         "rows": rows,
     }
@@ -1555,7 +1571,8 @@ def post_settings(req: LLMSettings, actor: str = Depends(_actor)) -> dict:
     affected: this setting is read only by ``client_boq/llm.py``."""
     from client_boq import llm as llm_mod
     for field, value in (("provider", req.provider), ("provider_ingest", req.provider_ingest),
-                         ("provider_drawing", req.provider_drawing)):
+                         ("provider_drawing", req.provider_drawing),
+                         ("provider_brain", req.provider_brain)):
         if value not in llm_mod.PROVIDERS:
             raise HTTPException(
                 status_code=422,
@@ -1570,6 +1587,8 @@ def post_settings(req: LLMSettings, actor: str = Depends(_actor)) -> dict:
         store.set_setting(conn, llm_mod.SETTING_MODEL_OPENAI, req.model_openai.strip(), actor)
         store.set_setting(conn, llm_mod.SETTING_PROVIDER_DRAWING, req.provider_drawing, actor)
         store.set_setting(conn, llm_mod.SETTING_MODEL_DRAWING, req.model_drawing.strip(), actor)
+        store.set_setting(conn, llm_mod.SETTING_PROVIDER_BRAIN, req.provider_brain, actor)
+        store.set_setting(conn, llm_mod.SETTING_MODEL_BRAIN, req.model_brain.strip(), actor)
     finally:
         conn.close()
     return get_settings()
@@ -6034,94 +6053,156 @@ def post_ask(req: AskRequest, actor: str = Depends(_actor)) -> dict:
 def _ground_for(conn, set_id: str) -> "boq_ask.Ground":
     """Assemble what an answer is allowed to rest on. Deterministic — no model call anywhere here.
 
-    Four kinds of ground, in the order they became available to this product: the review's clauses
-    and their citations, the costing model in force and what it derived, the access board's
-    location evidence, and the captions on any site photographs.
+    Now a delegation: the assembly lives in `client_boq/ground.py` (the whole-tender ground,
+    plan Phase 4 layer 1) so the chat and the brain read the SAME ground — a fact one can see is
+    never invisible to the other. The engine-derived block is injected because `_costing` is the
+    router's single whole-engine path and the ground module must not import the router.
     """
-    ground = boq_ask.Ground()
-
-    register = store.load_register(conn, set_id)
-    if register is not None and register.items:
-        for item in register.items[:60]:
-            # THE FIELDS ARE `DepartureItem`'s. This block used to read `item.title`,
-            # `item.finding`, `item.clause_ref` and `item.id` — four names the model does not have
-            # and never had, and `model_config` is `{}` so pydantic raises rather than returning
-            # None. `item.title` was evaluated unconditionally for EVERY register item, so
-            # `/costing/ask` returned a bare 500 on any tender with a review register, before a
-            # single token was sent. It was never an LLM defect; it was an AttributeError wearing
-            # one, and DEMO could not see it because the fixture short-circuit is downstream.
-            label = f"register:{item.criterion_id or item.clause or item.item}"
-            said = " ".join(part for part in (
-                item.clause_area,
-                f"({item.category})" if item.category else "",
-                item.extracted_value,
-                item.rationale,
-                item.proposed_position,
-                f"Cited: {item.cited_text}" if item.cited_text else "",
-            ) if part)
-            # `status` is excluded from the emptiness test on purpose: it always has a value, so
-            # including it would make a line with no substance look like ground worth citing.
-            body = said or f"register line {item.item} carries no text."
-            ground.sources[label] = f"{body[:1200]} Status: {item.status}."
+    from client_boq import ground as ground_mod
 
     try:
         bill = _bill_or_404(conn, set_id, None)
-        parts = _costing(conn, set_id, bill.rev)
-        programme = parts["programme"]
-        ground.figures.update({
-            "rock_fraction": f"rock fraction of the works: {programme.rock_fraction:.1%}",
-            "work_days": f"work-days at P50: {programme.work_days:,.0f}",
-            "rigs_required": f"rigs required: {programme.rigs_required}",
-            "standing_hours": f"standing time: {programme.standing_hours:,.0f} hours",
-            "total": f"the priced bill total: {parts['priced'].total:,.2f}",
-        })
-        ground.sources["programme"] = (
-            f"Derived from the bill: {programme.work_days:,.0f} work-days at P50 over "
-            f"{programme.rigs_required} rig(s); band "
-            f"{programme.band.label if programme.band else 'none selected'}.")
+        costing = _costing(conn, set_id, bill.rev)
     except HTTPException:
-        pass
+        costing = None
+    return ground_mod.assemble(conn, set_id, costing=costing)
 
-    schedule, _meta = store.load_station_schedule(conn, set_id)
-    if schedule is not None and schedule.stations:
-        board = boq_access.board(schedule, set_id=set_id,
-                                 classes={n: (r.get("access_class") or "")
-                                          for n, r in store.load_station_classes(conn,
-                                                                                 set_id).items()})
-        for item in board.clusters[:20]:
-            ground.sources[f"location:{item.label}"] = (
-                f"{item.holes} hole(s) at {item.lat:.5f}, {item.lon:.5f}, spread "
-                f"{item.spread_m:,.0f} m; {item.undecided} still unclassed. "
-                + " ".join(item.notes))
 
-    for photo in store.load_site_photos(conn, set_id)[:40]:
-        if photo["caption"] or photo["station"]:
-            ground.sources[f"photo:{photo['filename']}"] = (
-                f"{photo['caption']}" + (f" (station {photo['station']})" if photo["station"] else ""))
+# ---------------------------------------------------------------------------
+# The brain — reads everything, proposes, never disposes (plan Phase 4)
+# ---------------------------------------------------------------------------
+class BrainRunRequest(BaseModel):
+    set_id: str
 
-    # THE TENDER'S OWN MEMORY — the two sources that close the discussion loop. Without them a
-    # question asked on Tuesday could contradict what was decided on Monday and nobody would know:
-    # the answer could not see the recorded conditions OR the earlier discussions.
-    #
-    # A condition's STATUS travels with it, spelled out, because "confirmed" and "written down and
-    # rejected" are opposite facts that share a table. The log is condensed to the last entries and
-    # each is labelled a DISCUSSION — ground to reason from, never a clause to cite as authority.
-    # NEWEST 40, matching the site log's newest-12 window — `load_conditions` is oldest-first,
-    # and a memory that keeps the oldest entries while dropping the latest is backwards.
-    for row in store.load_conditions(conn, set_id)[-40:]:
-        status = {"confirmed": "CONFIRMED by " + (row.get("decided_by") or "someone"),
-                  "rejected": "REJECTED — do not rely on it"}.get(
-                      row.get("status") or "", "recorded, not yet decided")
-        ground.sources[f"condition:{row['condition_id']}"] = (
-            f"{row['text'][:400]} [{status}]"
-            + (f" (born of discussion #{row['born_of_seq']})" if row.get("born_of_seq") else ""))
-    for entry in store.load_site_log(conn, set_id, limit=12):
-        body = entry["answer"] or entry["cannot_answer"]
-        ground.sources[f"discussion:{entry['seq']}"] = (
-            f"{entry['asked_by'] or 'someone'} asked: {entry['question'][:300]} — the grounded "
-            f"answer was: {body[:600]}"
-            + (f" It suggested recording: {entry['proposes'][:200]}" if entry["proposes"] else ""))
-    return ground
+
+def _brain_grounds(set_id: str) -> tuple["boq_ask.Ground", dict]:
+    """The full ground and the per-read slices, on one connection, closed before any model call
+    (the post_ask pattern — a 17-minute run must not hold SQLite's single writer)."""
+    from client_boq import brain as brain_mod
+    from client_boq import ground as ground_mod
+
+    conn = store.get_conn()
+    try:
+        try:
+            bill = _bill_or_404(conn, set_id, None)
+            costing = _costing(conn, set_id, bill.rev)
+        except HTTPException:
+            costing = None
+        full = ground_mod.assemble(conn, set_id, costing=costing)
+        slices = {name: ground_mod.assemble(conn, set_id, costing=costing, families=fams)
+                  for name, fams in brain_mod.READ_SLICES.items()}
+    finally:
+        conn.close()
+    return full, slices
+
+
+def _run_brain(set_id: str, *, actor: str = "", progress=None) -> dict:
+    """The orchestration: focused reads over narrow slices, then one synthesis over everything.
+    Every model call carries a fixture (DEMO stays offline); the output is VALIDATED before it is
+    stored — an invented action or an ungrounded citation is stripped and named, never kept."""
+    from client_boq import brain as brain_mod
+    from client_boq import llm as llm_mod
+
+    tell = progress or (lambda stage: None)
+    full, slices = _brain_grounds(set_id)
+    if not full.sources:
+        raise ValueError("nothing has been read for this tender yet — no documents, no bill, "
+                         "no schedule — so there is nothing for the brain to understand")
+
+    client = llm_mod.make_client(stage=llm_mod.STAGE_BRAIN)
+    tell("reading")
+    findings: dict = {}
+    for name, slice_ground in slices.items():
+        if not slice_ground.sources:
+            continue  # an empty slice is not a read — nothing to find in nothing
+        findings[name] = client.complete_json(
+            system=brain_mod.READ_SYSTEM,
+            user=f"{slice_ground.as_prompt()}\n\nReport your findings.",
+            target_model=brain_mod.RawFindings,
+            demo_fixture=brain_mod.READ_FIXTURES[name],
+            purpose=f"client_boq-brain-read-{name}",
+        )
+
+    tell("proposing")
+    raw = client.complete_json(
+        system=brain_mod.SYNTH_SYSTEM,
+        user=brain_mod.synthesis_user(full, findings),
+        target_model=brain_mod.RawBriefing,
+        demo_fixture=brain_mod.SYNTH_FIXTURE,
+        purpose="client_boq-brain-briefing",
+    )
+    briefing = brain_mod.validate(
+        raw.model_dump() if hasattr(raw, "model_dump") else (raw or {}), full)
+    briefing.reads = [f"{name}: {len(f.findings)} finding(s)" for name, f in findings.items()]
+
+    conn = store.get_conn()
+    try:
+        seq = store.save_briefing(conn, set_id, briefing.model_dump(), actor=actor)
+    finally:
+        conn.close()
+    return {"set_id": set_id, "seq": seq, **briefing.model_dump()}
+
+
+def _run_brain_job(job_id: str, set_id: str, actor: str = "") -> None:
+    try:
+        _begin(job_id, "grounding")
+        result = _run_brain(set_id, actor=actor, progress=_stage_cb(job_id, "brain"))
+        jobs.JOBS.update(job_id, status="done", stage="proposing", result=result)
+    except jobs.JobCancelled as stop:
+        jobs.JOBS.update(job_id, status="cancelled", stage=f"stopped before {stop}")
+    except Exception as exc:
+        jobs.JOBS.update(job_id, status="error", error=str(exc))
+
+
+@router.post("/brain/run")
+def post_brain_run(req: BrainRunRequest, actor: str = Depends(_actor)) -> JobState:
+    """Run the brain over this tender. Propose-only by construction: the output's raw model has
+    no field for a verdict, a number or a gate flag, and every proposed action is a reference to
+    a screen — the gated endpoint behind it still takes a human click."""
+    full, _slices = _brain_grounds(req.set_id)
+    if not full.sources:
+        raise HTTPException(
+            status_code=409,
+            detail="nothing has been read for this tender yet — no documents, no bill, no "
+                   "schedule — so there is nothing for the brain to understand. Read something "
+                   "in first.")
+    live = jobs.JOBS.live_for("brain", req.set_id)
+    if live:
+        raise HTTPException(status_code=409,
+                            detail=f"a brain run is already in flight for this tender "
+                                   f"(job {live}). Adopt it rather than starting another.")
+    from pipeline.llm_client import demo_mode
+
+    if demo_mode():
+        result = _run_brain(req.set_id, actor=actor)
+        return JobState(kind="brain", status="done", stage="proposing", result=result)
+    job_id = jobs.JOBS.create("brain", set_id=req.set_id)
+    jobs.POOL.submit(_run_brain_job, job_id, req.set_id, actor)
+    return JobState(job_id=job_id, kind="brain", status="queued", stage="grounding")
+
+
+@router.get("/brain/status/{job_id}")
+def get_brain_status(job_id: str) -> JobState:
+    job = jobs.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired client_boq job.")
+    return _job_state(job_id, job)
+
+
+@router.get("/brain/{set_id}")
+def get_briefing(set_id: str) -> dict:
+    """The latest briefing, or what running one would need. A pure read — rendering a briefing
+    changes nothing, and the actions on it are navigation, not execution."""
+    conn = store.get_conn()
+    try:
+        briefing = store.load_briefing(conn, set_id)
+        count = store.briefing_count(conn, set_id)
+    finally:
+        conn.close()
+    if briefing is None:
+        return {"set_id": set_id, "briefing": None, "count": 0,
+                "waiting_on": "the brain has not run on this tender yet"}
+    return {"set_id": set_id, "briefing": briefing, "count": count, "waiting_on": ""}
 
 
 @router.get("/costing/{set_id}/workbook.xlsx")

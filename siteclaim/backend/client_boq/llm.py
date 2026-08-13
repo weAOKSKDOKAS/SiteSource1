@@ -53,6 +53,18 @@ SETTING_MODEL_OPENAI = "llm.model.openai"
 # drawing read resolves to, and nothing else.
 SETTING_PROVIDER_DRAWING = "llm.provider.drawing"
 SETTING_MODEL_DRAWING = "llm.model.drawing"
+
+# THE BRAIN IS ITS OWN QUESTION, for the same reason the drawing read is: it runs rarely, it
+# reads EVERYTHING the tender knows at once, and its output steers where a person looks next.
+# "One strong model to understand it all" is the owner's stated design — and that choice must
+# not also change the model that classifies a document. Same two-setting shape as the drawing:
+# a provider, and a per-question model that overrides whichever provider resolves.
+#
+# It falls through to the APP-WIDE default, not to ingest: the brain reasons over what was
+# already read — it reads no pages, so inheriting the document-reading provider would be a
+# category error dressed as a default.
+SETTING_PROVIDER_BRAIN = "llm.provider.brain"
+SETTING_MODEL_BRAIN = "llm.model.brain"
 PROVIDERS = ("", "anthropic", "deepseek", "openai")
 
 # Which stage is asking. Only ingest differs today; the constant exists so a call site says what it
@@ -62,6 +74,8 @@ STAGE_INGEST = "ingest"
 #: The station-schedule read. Falls through to ingest, then to the app-wide setting, so naming a
 #: reader is optional and an installation that names none behaves exactly as it did.
 STAGE_DRAWING = "drawing"
+#: The whole-tender orchestrator. Falls through to the app-wide setting (it reads no pages).
+STAGE_BRAIN = "brain"
 
 # provider name -> the key `current_settings()` returns that model under.
 #
@@ -87,6 +101,8 @@ def current_settings() -> dict:
             "model_openai": store.get_setting(conn, SETTING_MODEL_OPENAI, ""),
             "provider_drawing": store.get_setting(conn, SETTING_PROVIDER_DRAWING, ""),
             "model_drawing": store.get_setting(conn, SETTING_MODEL_DRAWING, ""),
+            "provider_brain": store.get_setting(conn, SETTING_PROVIDER_BRAIN, ""),
+            "model_brain": store.get_setting(conn, SETTING_MODEL_BRAIN, ""),
         }
     finally:
         conn.close()
@@ -107,6 +123,12 @@ def resolve_provider(cfg: dict, stage: str = STAGE_DEFAULT) -> Optional[str]:
         # installation that has named an ingest provider and not a drawing one gets the sensible
         # answer rather than the app-wide default.
         return resolve_provider(cfg, STAGE_INGEST)
+    if stage == STAGE_BRAIN:
+        stored = (cfg.get("provider_brain") or "").strip()
+        if stored:
+            return stored
+        # Falls through to the app-wide DEFAULT, not to ingest: the brain reasons over what was
+        # already read. Inheriting the document-reading provider would be a category error.
     if stage == STAGE_INGEST:
         stored = (cfg.get("provider_ingest") or "").strip()
         if stored:
@@ -137,4 +159,6 @@ def make_client(*, stage: str = STAGE_DEFAULT) -> LLMClient:
     # this question, not about Anthropic.
     if stage == STAGE_DRAWING and (cfg.get("model_drawing") or "").strip():
         model = cfg["model_drawing"].strip()
+    if stage == STAGE_BRAIN and (cfg.get("model_brain") or "").strip():
+        model = cfg["model_brain"].strip()
     return LLMClient(provider=provider, model=model)

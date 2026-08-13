@@ -125,7 +125,7 @@ added:
    platform total when the split is active, plus any sweep cost routed LOAD onto a rig-move ref
    (the guard's own suggested interim route). Quiet means the remainder is genuinely 0.00.
 
-### Phase 4 — the brain (propose-only, tender-side)
+### Phase 4 — the brain (propose-only, tender-side) *(built with this document; decisions below)*
 
 Two layers, built in order:
 
@@ -141,6 +141,28 @@ Two layers, built in order:
    executable only through an existing gated endpoint by a person. It cannot call an approve
    endpoint: the action queue stores *references to* endpoints, and the UI renders them as
    buttons a human clicks. In DEMO it replays fixtures per subagent call.
+
+**Decisions taken in the build (4):**
+
+1. **The ground lives in `client_boq/ground.py` and the engine block is injected.** `_costing`
+   stays the router's single whole-engine path; the ground module takes its output as a
+   parameter rather than importing the router. The chat's `_ground_for` now delegates, so the
+   chat and the brain read the SAME assembly — a fact one can see is never invisible to the
+   other. Labels are typed by kind (`gate:`, `part:`, `scope:`, `rfi:`, `discussion:`…).
+2. **Structural state rides along, never alone.** Gate states and the no-bill absence line are
+   true of a tender nobody has touched, so they join the ground only once real content exists —
+   otherwise the no-ground refusal would be defeated by its own scaffolding.
+3. **Propose-only is enforced by shape, not prompt.** `RawBriefing` has no field for a verdict,
+   a rate, a class or a gate flag; a proposed action is only an id into the fixed `ACTIONS`
+   registry (screen + label), and `validate` strips unknown ids and ungrounded citations
+   visibly. The Brain tab's buttons NAVIGATE; every consequential click stays on the screen
+   that owns it.
+4. **`STAGE_BRAIN` falls through to the app-wide default, not to ingest** — the brain reasons
+   over what was read; it reads no pages. Same two-setting shape as the drawing read
+   (provider + per-question model override).
+5. **Briefings are append-only memory** (`client_boq_briefings`, seq like the site log), and
+   the run is gated on a non-empty ground: a tender with nothing read is a 409, not a briefing
+   about nothing.
 
 ### Phase 5 — the dead-ends purge + the Derivation tree
 

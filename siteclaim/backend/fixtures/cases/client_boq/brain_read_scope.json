@@ -1,0 +1,8 @@
+{
+  "findings": [
+    "The scope of record carries machine fallbacks nobody has accepted; each is a guess sitting where a decision should be, and the freeze gate counts them before a number can be committed."
+  ],
+  "citations": [
+    {"source": "gate:scope", "quote": "the estimate scope is NOT yet approved"}
+  ]
+}

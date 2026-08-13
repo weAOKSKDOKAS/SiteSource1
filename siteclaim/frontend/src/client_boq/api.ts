@@ -92,6 +92,7 @@ import type {
   SheetRegistrationShape,
   RoadPoint,
   RoadResponse,
+  BriefingResponse,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -417,6 +418,13 @@ export const api = {
   deleteRoadPoint: (setId: string, pointId: string) =>
     del<{ set_id: string; point_id: string; deleted: boolean }>(
       `/site/${setId}/road-point/${pointId}`),
+
+  // --- the brain ------------------------------------------------------------
+  /** Run the brain. Propose-only by construction: the result carries screen references a person
+   *  clicks through — it cannot approve, decide, price or classify anything. */
+  brainRun: (setId: string) => post<JobState>("/brain/run", { set_id: setId }),
+  brainStatus: (jobId: string) => get<JobState>(`/brain/status/${jobId}`),
+  briefing: (setId: string) => get<BriefingResponse>(`/brain/${setId}`),
   /** Read a pasted table into a PROPOSED schedule. Saves nothing — see `saveStationSchedule`. */
   parseStationSchedule: (setId: string, text: string, sourceSheet = "") =>
     post<SchedulePasteResponse>("/site/schedule/parse", {

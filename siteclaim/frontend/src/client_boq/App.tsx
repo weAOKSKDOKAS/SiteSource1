@@ -35,6 +35,7 @@ import { Subcontractors } from "./screens/Subcontractors";
 import { Team } from "./screens/Team";
 import { DocumentsTab } from "./tabs/Documents";
 import { BidTab } from "./tabs/Bid";
+import { BrainTab } from "./tabs/Brain";
 import { CloseoutTab } from "./tabs/Closeout";
 import { OfferTab } from "./tabs/Offer";
 import { PriceTab } from "./tabs/Price";
@@ -964,9 +965,11 @@ function SetView({
           const status =
             state.kind === "review"
               ? api.reviewStatus
-              : state.kind === "ingest" || state.kind === "archive"
-                ? api.ingestStatus
-                : api.estimateStatus; // scope and estimate share the estimate poll endpoint
+              : state.kind === "brain"
+                ? api.brainStatus
+                : state.kind === "ingest" || state.kind === "archive"
+                  ? api.ingestStatus
+                  : api.estimateStatus; // scope and estimate share the estimate poll endpoint
           void pollJob(status, state.job_id as string, onJob)
             .catch(() => undefined) // the banner belongs to whoever STARTED the run, not a re-join
             .finally(() => {
@@ -1057,6 +1060,13 @@ function SetView({
           <WaitingOn title="This tender is not on the shelf">
             It may have been removed. Go back to the desk.
           </WaitingOn>
+        ) : tab === "brain" ? (
+          <BrainTab
+            data={data}
+            onError={onError}
+            onProgress={onJob}
+            onGo={(next) => go({ kind: "set", setId: data.setId, tab: next })}
+          />
         ) : tab === "documents" ? (
           <DocumentsTab
             data={data}
