@@ -146,6 +146,13 @@ function ConditionCard({
       <div className="mt-1 font-cb-mono text-[8.5px] text-cb-faint">
         {row.created_by ? `${row.created_by} · ` : ""}
         {row.created_at?.slice(0, 10)}
+        {/* The backward half of "why do we believe this?" — the discussion that concluded it.
+            0 = typed straight onto the register; no link is honest there. */}
+        {row.born_of_seq > 0 && (
+          <span className="ml-1.5 text-cb-brass-text">
+            · born of discussion #{row.born_of_seq}
+          </span>
+        )}
       </div>
 
       {mapped ? (

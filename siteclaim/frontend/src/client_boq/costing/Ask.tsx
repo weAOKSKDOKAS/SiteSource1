@@ -63,12 +63,16 @@ export function Ask({
     try {
       const r = await api.ask(setId, question.trim());
       setReply(r);
-      setLog((prev) => [...prev, {
-        seq: r.log_seq, question: r.question, answer: r.answer,
-        cannot_answer: r.cannot_answer, citations: r.citations, figures: r.figures,
-        proposes: r.proposes, stripped: r.stripped, asked_by: r.asked_by,
-        asked_at: null, became_condition: "",
-      }]);
+      // log_seq 0 = the server deliberately logged nothing (the no-ground refusal) — appending
+      // it would show a history entry the next refresh could not find.
+      if (r.log_seq > 0) {
+        setLog((prev) => [...prev, {
+          seq: r.log_seq, question: r.question, answer: r.answer,
+          cannot_answer: r.cannot_answer, citations: r.citations, figures: r.figures,
+          proposes: r.proposes, stripped: r.stripped, asked_by: r.asked_by,
+          asked_at: null, became_condition: "", became_status: "",
+        }]);
+      }
       setQuestion("");
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -101,9 +105,41 @@ export function Ask({
               <p className="mt-1 font-cb-serif text-[11.5px] leading-[1.55] text-cb-body">
                 {entry.answer || entry.cannot_answer}
               </p>
+              {/* The receipts survive into memory. A past answer without its figures and
+                  citations would read as prose to trust — exactly what this screen exists
+                  to avoid. */}
+              {Object.keys(entry.figures ?? {}).length > 0 && (
+                <p className="mt-0.5 font-cb-mono text-[8.5px] text-cb-ink-text">
+                  {Object.keys(entry.figures ?? {}).map((key) => (
+                    <span key={key} className="mr-2">
+                      <span className="text-cb-brass-text">{key}</span>
+                    </span>
+                  ))}
+                  <span className="text-cb-faint">— figures quoted, the engine's</span>
+                </p>
+              )}
+              {(entry.citations?.length ?? 0) > 0 && (
+                <p className="mt-0.5 font-cb-sans text-[9px] leading-[1.45] text-cb-muted">
+                  cited{" "}
+                  {entry.citations!.map((c) => (
+                    <span key={c.source} className="mr-1.5 font-cb-mono text-[8.5px] text-cb-brass-text">
+                      [{c.source}]
+                    </span>
+                  ))}
+                </p>
+              )}
               {entry.became_condition && (
-                <p className="mt-1 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
-                  ✓ BECAME CONDITION {entry.became_condition} — it is on the register below
+                <p
+                  className={cx(
+                    "mt-1 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+                    entry.became_status === "rejected"
+                      ? "text-cb-bad-dark"
+                      : "text-cb-ok-dark",
+                  )}
+                >
+                  {entry.became_status === "rejected"
+                    ? `✕ BECAME CONDITION ${entry.became_condition} — later REJECTED; do not rely on it`
+                    : `✓ BECAME CONDITION ${entry.became_condition} — it is on the register below`}
                 </p>
               )}
               {(entry.stripped?.length ?? 0) > 0 && (

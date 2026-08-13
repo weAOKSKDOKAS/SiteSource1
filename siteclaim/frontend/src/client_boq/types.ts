@@ -581,6 +581,10 @@ export interface ConditionRow {
   decided_by: string;
   decided_at: string | null;
   applied_value: number | null;
+  /** Which site-log discussion this condition was born of. 0 = none — typed straight onto the
+   *  register, or written before the log existed. The backward half of "why do we believe
+   *  this?"; the forward half is the log entry's `became_condition`. */
+  born_of_seq: number;
 }
 
 /** One site photograph. `caption` and `station` are the PHOTOGRAPHER's — neither is read off the
@@ -638,6 +642,9 @@ export interface SiteLogEntry {
   /** The condition this discussion went on to become, "" when it did not. Derived at read time
    *  from the condition's own provenance. */
   became_condition: string;
+  /** That condition's current status — a discussion whose condition was later rejected must not
+   *  keep wearing a green badge. "" when undecided or when no condition was born. */
+  became_status: "" | "confirmed" | "rejected";
 }
 
 export interface AskResponse {

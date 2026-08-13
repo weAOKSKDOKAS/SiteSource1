@@ -3691,6 +3691,11 @@ def get_bill_checks(set_id: str, rev: Optional[int] = None, margin_pct: float = 
     issued = {line.code: line.amount for line in bill.summary
               if line.client_inserted and line.code in {"B", "D", "E"} and line.amount is not None}
     flags = boq_checks.run_checks(priced, bill, issued_sums=issued, fee_pct=fee_pct)
+    # `loading_unapplied` is computed INSIDE `price_bill` — it needs the loadings map, which
+    # `run_checks` never sees, so it cannot re-derive the flag the way it re-derives
+    # `unpriced_item`. Merging just that kind keeps the two surfaces symmetric without
+    # double-counting the kinds both already emit.
+    flags += [f for f in priced.flags if f.kind == "loading_unapplied"]
     # The platform money typed on the Site groups, until the per-class rig-move basis carries it
     # (plan Phase 3). Computed here because the checks module is pure and the groups live in the
     # store — same split as every other flag with a data dependency.
@@ -5359,12 +5364,19 @@ def get_site_log(set_id: str) -> dict:
         conditions = store.load_conditions(conn, set_id)
     finally:
         conn.close()
-    born = {row["born_of_seq"]: row["condition_id"] for row in conditions
-            if row.get("born_of_seq")}
+    born: dict[int, dict] = {}
+    for row in conditions:
+        # First condition per discussion wins the link — rowid order, so it is the one recorded
+        # closest to the exchange. The STATUS travels with it: a discussion whose condition was
+        # later rejected must not keep wearing a green badge.
+        if row.get("born_of_seq") and row["born_of_seq"] not in born:
+            born[row["born_of_seq"]] = row
     for entry in entries:
         # The forward link: which discussion went on to become a recorded condition. Derived at
         # read time from the conditions' own provenance, never stored twice.
-        entry["became_condition"] = born.get(entry["seq"], "")
+        link = born.get(entry["seq"])
+        entry["became_condition"] = link["condition_id"] if link else ""
+        entry["became_status"] = (link.get("status") or "") if link else ""
     return {"set_id": set_id, "count": len(entries), "entries": entries}
 
 
@@ -5731,11 +5743,14 @@ def post_ask(req: AskRequest, actor: str = Depends(_actor)) -> dict:
     finally:
         conn.close()
     if not ground.sources:
+        # The SAME keys as the grounded path, so the response type is one shape, not two. The
+        # exchange is deliberately not logged (an exchange grounded on nothing is not a
+        # discussion worth remembering), and `log_seq: 0` says so — seq is 1-based on purpose.
         return {"set_id": req.set_id, "question": question, "answer": "",
                 "cannot_answer": "nothing has been read for this tender yet — no documents, no "
                                  "bill, no schedule — so there is nothing to ground an answer in",
-                "citations": [], "figures_used": [], "proposes": "", "stripped": [],
-                "grounded_in": []}
+                "citations": [], "figures_used": [], "figures": {}, "proposes": "",
+                "stripped": [], "log_seq": 0, "asked_by": actor, "grounded_in": []}
 
     client = llm_mod.make_client()
     try:
@@ -5844,7 +5859,9 @@ def _ground_for(conn, set_id: str) -> "boq_ask.Ground":
     # A condition's STATUS travels with it, spelled out, because "confirmed" and "written down and
     # rejected" are opposite facts that share a table. The log is condensed to the last entries and
     # each is labelled a DISCUSSION — ground to reason from, never a clause to cite as authority.
-    for row in store.load_conditions(conn, set_id)[:40]:
+    # NEWEST 40, matching the site log's newest-12 window — `load_conditions` is oldest-first,
+    # and a memory that keeps the oldest entries while dropping the latest is backwards.
+    for row in store.load_conditions(conn, set_id)[-40:]:
         status = {"confirmed": "CONFIRMED by " + (row.get("decided_by") or "someone"),
                   "rejected": "REJECTED — do not rely on it"}.get(
                       row.get("status") or "", "recorded, not yet decided")
