@@ -4911,6 +4911,31 @@ def post_coverage_tick(req: CoverageTickRequest, actor: str = Depends(_actor)) -
             "head_key": req.head_key, "ticked": req.ticked, "ticked_by": actor if req.ticked else ""}
 
 
+def _trace_terms(build, rate_rows) -> list[dict]:
+    """The stored build-up's resource lines as the tree's term children.
+
+    Pure display of the lines' own documented arithmetic (qty ÷ productivity = hours; hours ×
+    rate = amount — models.ResourceLine): nothing here re-prices anything. A line naming a rate
+    the book no longer carries keeps unit_cost 0.0 and shows as such rather than vanishing.
+    """
+    if build is None:
+        return []
+    by_id = {r.rate_id: r.rate for r in rate_rows}
+    terms = []
+    for line in build.lines:
+        rate = (line.inline_rate if line.inline_rate is not None
+                else by_id.get(line.resource_ref, 0.0))
+        units = (line.qty / line.productivity) if line.productivity else line.qty
+        terms.append({
+            "label": line.description or line.resource_ref or "(unnamed line)",
+            "key": line.resource_ref,
+            "units": round(units, 2),
+            "unit_cost": round(rate or 0.0, 2),
+            "value": round(units * (rate or 0.0), 2),
+        })
+    return terms
+
+
 @router.get("/price/{set_id}/trace/{full_ref}")
 def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
                    margin_pct: float = 0.0) -> dict:
@@ -4928,6 +4953,7 @@ def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
         groups = store.load_hole_groups(conn, set_id, bill.rev)
         sweep = store.load_sweep(conn, set_id, bill.rev)
         rate_rows = rates_store.load(conn)
+        own_model = store.load_set_model(conn, set_id)
     finally:
         conn.close()
     spread_share, loading = _pool_shares_of(bill, rates, rate_rows, sweep, full_ref)
@@ -4941,11 +4967,28 @@ def get_rate_trace(set_id: str, full_ref: str, rev: Optional[int] = None,
         rate=row["rate"] if row else None,
         cost=(row["amount"] or 0.0) if row else 0.0,
         divisor=qty, divisor_label=item.unit, lump=item.lump, markup_pct=margin_pct,
+        # THE TERMS WERE ALWAYS THERE. `load_bill_rates` parses the stored build-up
+        # (`buildup_json` → a ScheduleItem) and this endpoint dropped it on the floor — so the
+        # build-up node had no children, and the tree's own honesty check flagged it "a bare
+        # number with nothing behind it" on every response. The resource lines ARE what is
+        # behind it.
+        terms=_trace_terms(row.get("build_up") if row else None, rate_rows),
     )
     trace = boq_trace.trace_rate(
         breakdown, description=item.description, unit=item.unit, qty=qty,
         amount=row["amount"] if row else None, margin_pct=margin_pct,
-        margin_owner=(row.get("updated_by", "") if row else ""),
+        # Who the margin belongs to: the model in force, named by PROVENANCE — the app does not
+        # record which person set a model input, and the rate row's author (what used to sit
+        # here) is a different person's name on somebody else's decision.
+        margin_owner=("this tender's model" if own_model is not None else "the library model"),
+        # In THIS engine the divisor is the bill's own quantity, and the bill names its page.
+        # A synthetic part locator ("bq:rev") because the workbook is not a PDF part — the
+        # label carries the human-readable half.
+        divisor_cite=boq_trace.Citation(
+            part_id=f"bq:{bill.rev}", page=0,
+            label=(f"{item.page_ref} · the bill's own quantity: {qty:g} {item.unit}"
+                   if item.page_ref else
+                   f"the bill's own quantity: {qty:g} {item.unit}")),
         groups=groups, schedule=schedule,
         # `PricedItem.spread` IS this item's share — `_allocate` computes it pro rata on build-up
         # value, which `pricing.py` states is the only proxy the bill itself supplies. This was a

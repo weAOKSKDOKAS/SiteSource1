@@ -92,6 +92,11 @@ import type {
   RoadPoint,
   RoadResponse,
   BriefingResponse,
+  WorkingBill,
+  BillChecksResponse,
+  RateTraceResponse,
+  CoverageResponse,
+  SweepResponse,
   ScopeGateState,
   ScopeItem,
   ScopeItemsResponse,
@@ -449,6 +454,34 @@ export const api = {
            overtaken_queries: string[]; note: string }>("/ingest/changes/approve", {
       set_id: setId, doc_id: docId, mappings,
     }),
+
+  // --- the working (§10) — engine B, where the sweep and the loadings land -----
+  /** The bill priced from the STORED build-ups and rates — the engine the sweep's spread and
+   *  routed loadings actually reach. A different engine from `costing()`; §10 renders this one. */
+  workingBill: (setId: string, marginPct = 0) =>
+    get<WorkingBill>(`/boq/${setId}/priced?margin_pct=${marginPct}`),
+  billChecks: (setId: string, marginPct = 0) =>
+    get<BillChecksResponse>(`/boq/${setId}/checks?margin_pct=${marginPct}`),
+  rateTrace: (setId: string, fullRef: string, marginPct = 0) =>
+    get<RateTraceResponse>(
+      `/price/${setId}/trace/${encodeURIComponent(fullRef)}?margin_pct=${marginPct}`),
+  rateCoverage: (setId: string, fullRef: string) =>
+    get<CoverageResponse>(`/price/${setId}/coverage/${encodeURIComponent(fullRef)}`),
+  /** A person's tick: "my number carries this head". Never pre-ticked; `basisKey` names WHICH
+   *  cost carries it, which is what turns a belief into a checkable claim. */
+  coverageTick: (setId: string, fullRef: string, headKey: string, ticked: boolean, basisKey = "") =>
+    post<{ set_id: string }>("/price/coverage/tick", {
+      set_id: setId, full_ref: fullRef, head_key: headKey, ticked, basis_key: basisKey,
+    }),
+  sweep: (setId: string) => get<SweepResponse>(`/price/${setId}/sweep`),
+  routeSweepCost: (setId: string, cost: { key: string; label: string; amount: number | null;
+                   route: string; target_ref?: string; reason?: string; source?: string }) =>
+    post<{ set_id: string }>("/price/sweep", { set_id: setId, ...cost }),
+  /** The app's ONLY hard stop. Refuses (409) with the module's own sentences, unrewritten. */
+  settleSweep: (setId: string) =>
+    post<{ set_id: string; rev: number; settled: boolean; by: string; spread_total: number;
+           loadings: Record<string, number>; accepted_risk: number }>(
+      `/price/${setId}/sweep/settle`, {}),
 
   // --- the brain ------------------------------------------------------------
   /** Run the brain. Propose-only by construction: the result carries screen references a person

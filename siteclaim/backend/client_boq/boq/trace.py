@@ -73,6 +73,10 @@ class TraceNode(BaseModel):
     owner: str = ""             # the person, when origin is FROM_PERSON
     source: str = ""            # "book" | "yours" | "missing", when origin is FROM_LIBRARY
     note: str = ""
+    #: This node's OWN failure, set by `trace_rate` so a renderer can paint the failing LINE red
+    #: (the design's third authorship colour) instead of only printing a problems strip whose
+    #: reader must hunt for the line it means. "" = this node is supported.
+    problem: str = ""
     children: list["TraceNode"] = Field(default_factory=list)
 
     def leaves(self) -> list["TraceNode"]:
@@ -80,21 +84,26 @@ class TraceNode(BaseModel):
             return [self]
         return [leaf for child in self.children for leaf in child.leaves()]
 
+    def own_problem(self) -> str:
+        """Why THIS node cannot say where it came from — "" when it can. Leaf rules only; a
+        branch is the arithmetic over its children and answers through them."""
+        if self.children:
+            return ""
+        if self.origin == FROM_DOCUMENT and (self.cite is None or not self.cite.part_id):
+            return f"{self.label!r} claims a document but names no page"
+        if self.origin == FROM_PERSON and not self.owner:
+            return f"{self.label!r} was somebody's decision but nobody's name is on it"
+        if self.origin == FROM_COMPUTED and self.value is not None:
+            return f"{self.label!r} is a bare number with nothing behind it"
+        return ""
+
     def unsupported(self) -> list[str]:
         """Leaves that cannot say where they came from. Every one of these is a bug.
 
         The check exists because it is the only way to keep the promise the screen makes. A tree with
         one unattributed leaf still looks complete, and looking complete is exactly the failure.
         """
-        problems = []
-        for leaf in self.leaves():
-            if leaf.origin == FROM_DOCUMENT and (leaf.cite is None or not leaf.cite.part_id):
-                problems.append(f"{leaf.label!r} claims a document but names no page")
-            elif leaf.origin == FROM_PERSON and not leaf.owner:
-                problems.append(f"{leaf.label!r} was somebody's decision but nobody's name is on it")
-            elif leaf.origin == FROM_COMPUTED and leaf.value is not None:
-                problems.append(f"{leaf.label!r} is a bare number with nothing behind it")
-        return problems
+        return [reason for leaf in self.leaves() if (reason := leaf.own_problem())]
 
 
 TraceNode.model_rebuild()
@@ -188,6 +197,9 @@ def trace_rate(breakdown: RateBreakdown, *, description: str = "", unit: str = "
 
     trace.root = root
     trace.problems = root.unsupported()
+    # Annotate each failing node IN PLACE, so the renderer paints the line the problem is about.
+    for leaf in root.leaves():
+        leaf.problem = leaf.own_problem()
     if trace.extension_checks():
         trace.checks.append("extension checks — rate × quantity is the amount")
     elif trace.rate is not None and trace.amount is not None:

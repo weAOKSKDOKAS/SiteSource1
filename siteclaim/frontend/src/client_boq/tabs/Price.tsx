@@ -29,6 +29,7 @@ import type {
 } from "../types";
 import { Button, Chip, OpenTab, SectionLabel, Segmented, WaitingOn, cx, money } from "../ui";
 import { Costing } from "./Costing";
+import { WorkingView } from "../costing/Working";
 import { EMPTY_SCHEDULE, ScheduleEditor, useScheduleDraft } from "./ScheduleEditor";
 
 /** What each rule flag means for the number standing next to it. The backend sends `kind` and a
@@ -71,7 +72,7 @@ function flagCopy(kind: string) {
   );
 }
 
-type PriceView = "costing" | "estimate";
+type PriceView = "costing" | "working" | "estimate";
 
 /**
  * Two engines behind one step, while the older one is retired.
@@ -119,6 +120,7 @@ export function PriceTab(props: {
           value={view}
           options={[
             { value: "costing" as PriceView, label: "COSTING" },
+            { value: "working" as PriceView, label: "WORKING" },
             { value: "estimate" as PriceView, label: "EARLIER ESTIMATE" },
           ]}
           onChange={setView}
@@ -126,11 +128,15 @@ export function PriceTab(props: {
         <span className="font-cb-mono text-[9px] text-cb-faint">
           {view === "costing"
             ? "prices the client's bill · needs no gate"
-            : "the earlier resource-schedule engine, being retired"}
+            : view === "working"
+              ? "per-item build-ups, the derivation tree, coverage and the sweep — the hard stop"
+              : "the earlier resource-schedule engine, being retired"}
         </span>
       </div>
       {view === "costing" ? (
         <Costing setId={props.data.setId} onError={props.onError} />
+      ) : view === "working" ? (
+        <WorkingView setId={props.data.setId} onError={props.onError} />
       ) : (
         <EstimateView {...props} />
       )}

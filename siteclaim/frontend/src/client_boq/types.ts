@@ -453,6 +453,144 @@ export interface BriefingResponse {
   waiting_on: string;
 }
 
+// --- the working screen (§10) — engine B, the per-item build-up bill ---------
+
+/** One line of the derivation tree. `origin` encodes the affordance class (document → show me,
+ *  person/library → change, computed → a branch); `problem` is THIS node's own failure, set by
+ *  the backend so the failing LINE paints red rather than only a strip naming it. */
+export interface TraceNode {
+  label: string;
+  value: number | null;
+  unit: string;
+  op: string;
+  formula: string;
+  origin: "document" | "person" | "library" | "computed";
+  cite: { part_id: string; page: number; quote: string; label: string } | null;
+  owner: string;
+  source: string;
+  note: string;
+  problem: string;
+  children: TraceNode[];
+}
+
+export interface RateTraceResponse {
+  set_id: string;
+  rev: number;
+  full_ref: string;
+  trace: {
+    full_ref: string;
+    description: string;
+    rate: number | null;
+    unit: string;
+    qty: number;
+    amount: number | null;
+    root: TraceNode | null;
+    checks: string[];
+    problems: string[];
+  };
+  priced: boolean;
+  waiting_on: string;
+}
+
+/** One priced item from `price_bill` — the engine the sweep and the loadings actually reach. */
+export interface WorkingItem {
+  full_ref: string;
+  description: string;
+  qty: number | null;
+  unit: string;
+  lump: boolean;
+  build_up: number;
+  spread: number;
+  /** A cost routed "load onto this item" on the sweep. Its own field — a loading hidden inside
+   *  the resource cost is precisely what this screen exists to expose. */
+  loading: number;
+  cost: number;
+  unit_rate: number | null;
+  amount: number;
+  rate_source: string;
+  pre_priced: boolean;
+}
+
+export interface WorkingBill {
+  set_id: string;
+  rev: number;
+  items: WorkingItem[];
+  flags: { kind: string; item_id: string; message: string }[];
+  spread_total: number;
+  spread_residue_ref: string;
+  loading_total: number;
+  total_build_up: number;
+  margin_pct: number;
+  tendered_total: number;
+}
+
+export interface BillChecksResponse {
+  set_id: string;
+  rev: number;
+  tendered_total: number;
+  counts: Record<string, number>;
+  flags: { kind: string; item_id: string; message: string }[];
+  outstanding_review: { full_ref: string; reason: string }[];
+}
+
+export interface CoverageEntry {
+  key: string;
+  label: string;
+  clause_ref: string;
+  authored_by: string;
+  scope: string;
+  page: string;
+  document_hint: string;
+  unresolved: string;
+  provenance: string;
+  unverifiable: string;
+  ticked: boolean;
+  ticked_by: string;
+  ticked_at: string | null;
+  basis_key?: string;
+  accounting?: string;
+}
+
+export interface CoverageResponse {
+  set_id: string;
+  rev: number;
+  full_ref: string;
+  description: string;
+  summary: string;
+  entries: CoverageEntry[];
+  uncovered: string[];
+  settled: boolean;
+  note: string;
+  partial: boolean;
+  waiting_on: string;
+}
+
+export interface SweepCost {
+  key: string;
+  label: string;
+  source: string;
+  amount: number;
+  route: "" | "query" | "load" | "spread" | "accept";
+  target_ref: string;
+  reason: string;
+  decided_by: string;
+}
+
+export interface SweepResponse {
+  set_id: string;
+  rev: number;
+  costs: SweepCost[];
+  /** One sentence per unrouted cost — the SAME sentences the settle gate refuses with. */
+  outstanding: string[];
+  settled: boolean;
+  spread_total: number;
+  loadings: Record<string, number>;
+  queries: string[];
+  accepted_risk: number;
+  routes: string[];
+  route_meaning: Record<string, string>;
+}
+
 export interface ClusterEvidence {
   label: string;
   stations: string[];

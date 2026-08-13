@@ -164,7 +164,7 @@ Two layers, built in order:
    the run is gated on a non-empty ground: a tender with nothing read is a 409, not a briefing
    about nothing.
 
-### Phase 5 — the dead-ends purge + the Derivation tree
+### Phase 5 — the dead-ends purge + the Derivation tree *(built with this document)*
 
 RFI export/answer surfaces, register re-run control, unreadable-part upload buttons, group
 membership moves — each a verified curl-only workaround today. Then §10's Derivation tree, the
@@ -172,6 +172,27 @@ trust surface where an operator decides whether to believe a rate. The purge's f
 design's own governing rule: *if two good estimators would get the same answer it is clerical —
 purge the friction; if they would disagree it is judgement — keep it.* Deliberate friction
 (no pre-filled verdicts, the BASIS textarea, the sweep's hard stop) stays.
+
+**Decisions taken in the build (5):**
+
+1. **The Working screen renders ENGINE B** (`price_bill` over stored build-ups) as a third view
+   inside Price — the engine the sweep's spread and routed loadings actually reach, whose whole
+   surface was frontend-orphaned. The Costing view's engine is untouched; §10's open question 4
+   is resolved the way the backend already pinned it: the spread is INSIDE the rate, on its own
+   labelled line.
+2. **The design's per-group soil-share rows are deferred, deliberately.** The group-blend engine
+   has zero production callers, and a tree whose working does not reconcile with the price is
+   the exact failure §10 exists to prevent (open question 3 is "a backend decision" the spec
+   does not make). The tree shows the REAL derivation — the stored build-up's resource lines —
+   and the group rows come when the blend engine actually prices something.
+3. **Trace enrichment is display, never re-pricing:** the term children print the resource
+   lines' own documented arithmetic; the divisor cites the bill's own page (in this engine the
+   divisor IS the bill's quantity); the margin's owner is the model's PROVENANCE (this tender's
+   model / the library model), because the app does not record which person set a model input;
+   and each failing node carries its own `problem` in place so the failing line paints red.
+4. **The membership move is two writes** (source loses the hole, target gains it) because the
+   group's own station list is the membership authority — and the save endpoint now clears the
+   secondary station link for holes that LEFT, class untouched.
 
 ## 4. What must survive every phase
 
