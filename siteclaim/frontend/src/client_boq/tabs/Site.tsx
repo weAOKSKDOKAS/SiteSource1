@@ -27,7 +27,9 @@ import type {
   GroupPreview,
   GroupsResponse,
   HoleGroup,
+  NearestRoad,
   RoadResponse,
+  RoadsResponse,
   Station,
   StationScheduleResponse,
 } from "../types";
@@ -70,6 +72,9 @@ export function SiteTab({
   const [derived, setDerived] = useState<DerivedResponse | null>(null);
   const [georef, setGeoref] = useState<GeorefResponse | null>(null);
   const [road, setRoad] = useState<RoadResponse | null>(null);
+  /** The nearest MAPPED road to each hole, from OpenStreetMap. Evidence beside the class
+   *  decision — a hole 40 m from a road it cannot be reached from is ordinary on a hillside. */
+  const [osmRoads, setOsmRoads] = useState<RoadsResponse | null>(null);
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [partId, setPartId] = useState<string | null>(null);
@@ -101,6 +106,8 @@ export function SiteTab({
       setDerived(s.stations.length ? await optional("derived", api.derived(data.setId)) : null);
       setGeoref(s.stations.length ? await optional("georef", api.georef(data.setId)) : null);
       setRoad(s.stations.length ? await optional("road", api.road(data.setId)) : null);
+      setOsmRoads(
+        s.stations.length ? await optional("roads", api.nearestRoads(data.setId)) : null);
       setFailed(failures);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -266,6 +273,7 @@ export function SiteTab({
             georef={georef}
             georefFailed={failed.georef}
             roadM={road?.station_m ?? null}
+            osmRoads={osmRoads}
             classOf={classOf}
             onSetClass={(s, c) => void setClass(s, c)}
             selected={selected}
@@ -662,6 +670,7 @@ function HolesView({
   georef,
   georefFailed,
   roadM,
+  osmRoads,
   classOf,
   onSetClass,
   selected,
@@ -674,6 +683,8 @@ function HolesView({
   /** Station → straight-line metres to the nearest picked road-access point. Null = none picked
    *  (or the read failed) — the hint line simply does not render; never a guessed figure. */
   roadM: Record<string, number> | null;
+  /** The nearest MAPPED road per hole, measured from OpenStreetMap. */
+  osmRoads: RoadsResponse | null;
   classOf: (station: string) => string;
   onSetClass: (station: string, accessClass: string) => void;
   selected: string | null;
@@ -711,6 +722,7 @@ function HolesView({
             station={s}
             crop={georef?.crops[s.station] ?? null}
             roadM={roadM?.[s.station] ?? null}
+            osmRoad={osmRoads?.nearest.find((r) => r.station === s.station) ?? null}
             accessClass={classOf(s.station)}
             decidedBy={schedule.classes[s.station]?.decided_by ?? ""}
             selected={selected === s.station}
@@ -734,6 +746,7 @@ function HoleTile({
   station,
   crop,
   roadM,
+  osmRoad,
   accessClass,
   decidedBy,
   selected,
@@ -744,6 +757,7 @@ function HoleTile({
   station: Station;
   crop: GeorefCrop | null;
   roadM: number | null;
+  osmRoad: NearestRoad | null;
   accessClass: string;
   decidedBy: string;
   selected: boolean;
@@ -777,13 +791,20 @@ function HoleTile({
       {/* The design's brass hint line: "▪road 40 m". A hint, not a classification — the number
           is arithmetic from a person's picked access point, it is optional (absent point =
           absent line), and the tile is designed so you can classify from the picture alone. */}
-      {roadM !== null && (
+      {(roadM !== null || osmRoad) && (
         <div className="font-cb-sans text-[9px] font-semibold text-cb-brass-text">
           <span
             className="mr-1 inline-block h-[7px] w-[7px] rounded-[1px] align-middle"
             style={{ background: "var(--color-cb-brass)" }}
           />
-          road {formatNorm(roadM)} m
+          {roadM !== null && <>access {formatNorm(roadM)} m</>}
+          {roadM !== null && osmRoad && " · "}
+          {osmRoad && (
+            <span title={`nearest mapped road — OSM way ${osmRoad.way_id}${osmRoad.highway ? `, ${osmRoad.highway}` : ""}`}>
+              road {formatNorm(osmRoad.metres)} m
+              {osmRoad.name ? ` (${osmRoad.name})` : ""}
+            </span>
+          )}
         </div>
       )}
       <div className="flex items-center gap-1.5">

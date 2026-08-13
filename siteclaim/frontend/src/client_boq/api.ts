@@ -91,6 +91,7 @@ import type {
   SheetRegistrationShape,
   RoadPoint,
   RoadResponse,
+  RoadsResponse,
   PositionsResponse,
   BriefingResponse,
   WorkingBill,
@@ -421,6 +422,9 @@ export const api = {
   /** The picked road-access points and every located station's straight-line metres to the
    *  nearest — the number behind the Holes tiles' brass hint. Deterministic; no key. */
   road: (setId: string) => get<RoadResponse>(`/site/${setId}/road`),
+  /** The nearest MAPPED road to every hole, from OpenStreetMap. A measurement beside the class
+   *  decision, never the decision — and a live call, so demo mode says it did not run. */
+  nearestRoads: (setId: string) => get<RoadsResponse>(`/site/${setId}/roads`),
   pickRoadPoint: (setId: string, lat: number, lon: number, label = "", pointId = "") =>
     post<RoadPoint & { set_id: string }>("/site/road-point",
       { set_id: setId, point_id: pointId, label, lat, lon }),

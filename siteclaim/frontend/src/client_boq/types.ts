@@ -418,6 +418,30 @@ export interface PositionsResponse {
   waiting_on?: string;
 }
 
+/** The nearest MAPPED road to one hole. A measurement, with the OSM way it measured to so the
+ *  claim can be opened and checked — never a class of site. */
+export interface NearestRoad {
+  station: string;
+  metres: number;
+  way_id: number;
+  name: string;
+  highway: string;
+  lat: number;
+  lon: number;
+}
+
+export interface RoadsResponse {
+  set_id: string;
+  nearest: NearestRoad[];
+  /** Holes no mapped road came within reach of — named, never silently dropped. */
+  unreached: string[];
+  roads_seen: number;
+  source: string;
+  problems: string[];
+  /** "" when it ran. Otherwise why not: no schedule, demo mode, or the request failed. */
+  waiting_on: string;
+}
+
 /** A person's click on the map: where the site is entered from. The judgement carries a name;
  *  every distance that follows is arithmetic. */
 export interface RoadPoint {

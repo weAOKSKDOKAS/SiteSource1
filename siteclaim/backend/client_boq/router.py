@@ -48,6 +48,7 @@ from client_boq.boq import optimiser as boq_optimiser
 from client_boq.boq import docmap as boq_docmap
 from client_boq.boq import model as boq_model
 from client_boq.boq import georef as boq_georef
+from client_boq.boq import roads as boq_roads
 from client_boq.boq import groups as boq_groups
 from client_boq.boq import outputs as boq_outputs
 from client_boq.boq import photos as boq_photos
@@ -4655,6 +4656,62 @@ def delete_sheet_registration(set_id: str, sheet: str) -> dict:
     finally:
         conn.close()
     return {"set_id": set_id, "sheet": sheet, "deleted": True}
+
+
+@router.get("/site/{set_id}/roads")
+def get_nearest_roads(set_id: str) -> dict:
+    """The nearest MAPPED road to every located hole, measured from OpenStreetMap.
+
+    A MEASUREMENT, not a verdict. Given road geometry and a coordinate the distance is arithmetic
+    and two people get the same number — but a hole forty metres from a road it cannot be reached
+    from is an ordinary thing on a hillside, so this is evidence beside the class decision and
+    never the decision. Nothing here writes an access class; `proposed_class` stays empty.
+
+    One bounding-box query for the whole site, not one per hole: ninety-nine round trips on a
+    free volunteer-run endpoint is not a reasonable way to ask. The per-hole nearest is then
+    computed locally and exactly, to the road SEGMENT rather than to its nearest node.
+
+    DEMO does not run it. Overpass is a real outbound call and DEMO is offline by rule, so this
+    says it did not run rather than replaying a fixture that would read as a measurement of the
+    tender in front of you.
+    """
+    from pipeline.llm_client import demo_mode
+
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+    finally:
+        conn.close()
+    if schedule is None:
+        return {"set_id": set_id, **boq_roads.RoadReading(
+            waiting_on="the borehole details schedule has not been read yet").model_dump()}
+
+    located = {s.station: boq_hk1980.to_wgs84(s.easting, s.northing)
+               for s in schedule.stations
+               if s.easting is not None and s.northing is not None}
+    if not located:
+        return {"set_id": set_id, **boq_roads.RoadReading(
+            waiting_on="no station on the schedule carries an easting and a northing, so there "
+                       "is nothing to measure from").model_dump()}
+    if demo_mode():
+        return {"set_id": set_id, **boq_roads.RoadReading(
+            waiting_on="road distances are read from OpenStreetMap, which is a live call — demo "
+                       "mode is offline, so this has not run. Switch to live to measure them."
+        ).model_dump()}
+
+    bbox = boq_roads.bbox_for(list(located.values()))
+    try:
+        ways = boq_roads.fetch_ways(bbox)                              # type: ignore[arg-type]
+    except Exception as exc:                                    # network, DNS, timeout, rate limit
+        # A road measurement that did not happen must not read as "no roads near these holes".
+        return {"set_id": set_id, **boq_roads.RoadReading(
+            waiting_on=f"OpenStreetMap did not answer: {exc}. Nothing here is a measurement of "
+                       f"this site — it is a request that failed, and the holes are unchanged."
+        ).model_dump()}
+
+    reading = boq_roads.nearest_roads(located, ways)
+    reading.source = "OpenStreetMap contributors (ODbL), via Overpass"
+    return {"set_id": set_id, **reading.model_dump()}
 
 
 class RoadPointRequest(BaseModel):
