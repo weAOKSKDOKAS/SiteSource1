@@ -142,6 +142,61 @@ def platform_cost_unconsumed(total: float) -> list[EstimateFlag]:
     )]
 
 
+def portage_cost_unconsumed(total: float) -> list[EstimateFlag]:
+    """Money to carry the spread in by hand that no rate carries. The amount, named.
+
+    THE CASE THE BILL CANNOT SEE. PS 7.01B reads Class A as access "by road traffic **or** by
+    manual labour", so one bill item — one rate — pays for a rig the lorry delivered and for a rig
+    six people carried up a hillside. The class distinction the bill DOES draw (A against B) is
+    about platforms, not about how the rig arrived. So an estimator who prices manhandling has
+    nowhere obvious to put it, and General Preambles ¶6 makes "nowhere" expensive: an item with no
+    rate "shall be deemed to be covered by the other rates in the bill of quantities".
+
+    The engine carries it once the per-class split is on, inside that group's own move rate
+    (¶2.03 measures moves per hole and ¶2.06 splits them by class — carrying a rig to a hole is
+    moving it). Until then it is visible, which is the difference between a cost somebody will
+    carry and one nobody knows is missing.
+    """
+    if total <= 0:
+        return []
+    return [EstimateFlag(
+        kind="portage_cost_unconsumed", item_id="(groups)",
+        message=(f"{total:,.2f} of manual-portage cost is typed on the Site groups and no rate "
+                 f"carries it. Price the rig moves per class of site and it lands inside that "
+                 f"class's move rate — or route it as a cost on the sweep. PS 7.01B puts road "
+                 f"access and manual labour in the same class, so nothing in the bill prices the "
+                 f"difference for you."),
+    )]
+
+
+def air_lift_has_no_item(total: float, holes: int = 0) -> list[EstimateFlag]:
+    """A helicopter lift, which this bill has no item for at any class.
+
+    NOT AN UNCONSUMED-COST FLAG, and the difference matters. A platform or a portage cost is money
+    that HAS a home and has not reached it yet, so the guard goes quiet once the wiring carries it.
+    A lift has no home to reach: SMM S02 ¶2.08(h) puts access *scaffolding* in the moving-rigs item
+    coverage and a helicopter is not scaffolding, and PS 7.01B Class C — "access only by
+    helicopter" — is in the specification and **not** in the bill. So this flag never goes quiet by
+    engine wiring, and it should not: it is a decision for a person, and the four places it can go
+    are query, load onto a named item, spread, or accept as a stated risk.
+
+    Absorbing it into a rate would be this engine pricing an item the bill does not contain, which
+    is the one thing the unbilled gate exists to refuse.
+    """
+    if total <= 0:
+        return []
+    where = f" across {holes} hole(s)" if holes else ""
+    return [EstimateFlag(
+        kind="air_lift_unbilled", item_id="(groups)",
+        message=(f"{total:,.2f} of helicopter lift is typed on the Site groups{where}, and this "
+                 f"bill has no item for a lift at any class — PS 7.01B Class C is in the "
+                 f"specification and not in the bill. No rate will absorb it. Decide where it "
+                 f"goes: query it before the deadline (SCT 23, seven days before close), load it "
+                 f"onto a named item whose coverage reaches it, spread it across every rate, or "
+                 f"accept it as a stated risk. Leaving it is a promise to fly for nothing."),
+    )]
+
+
 def orphan_priced_items(priced: PricedBill, bill: ClientBill) -> list[EstimateFlag]:
     """Priced lines whose reference is in no item of the client's bill.
 

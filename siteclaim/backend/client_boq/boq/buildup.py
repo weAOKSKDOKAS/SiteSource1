@@ -196,11 +196,35 @@ class Buildup(BaseModel):
         return row.cost_per_unit if row else None
 
 
+class AccessCost(BaseModel):
+    """What it costs to get the spread to a class of site, kept in its two named parts.
+
+    They are separate because they are justified by different clauses and only one of them is
+    Class B's by construction. A merged number would price correctly and explain nothing, and on
+    this contract the explanation is what survives into a rate build-up somebody has to defend.
+    """
+
+    #: A temporary access platform. SMM S02 ¶2.08(h) puts access scaffolding in the moving-rigs
+    #: item coverage, so it belongs in the Class B move rate and nowhere else.
+    platform: float = 0.0
+    #: Carrying the spread in and out by hand. ¶2.03 measures moves per hole and ¶2.06 splits them
+    #: by class — carrying a rig to a hole is moving it — so this belongs to WHATEVER class the
+    #: group is, including Class A. PS 7.01B reads Class A as "road traffic or manual labour", so
+    #: the bill pays one rate for a rig the lorry delivered and a rig six people carried. This
+    #: line is the only place that difference can be priced.
+    portage: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.platform + self.portage
+
+
 def build(programme: Programme, model: CostingModel,
           spread: Optional[Spread] = None, *,
           active_keys: Optional[set[str]] = None,
           class_counts: Optional[dict[str, float]] = None,
-          platform_cost_b: float = 0.0) -> Buildup:
+          platform_cost_b: float = 0.0,
+          access_cost_by_class: Optional[dict[str, AccessCost]] = None) -> Buildup:
     """Sheet 04 — allocate the spread and the materials to each kind of bill item.
 
     ``active_keys`` is the set of basis keys the bill's items actually claim (after any human
@@ -212,13 +236,24 @@ def build(programme: Programme, model: CostingModel,
 
     ``class_counts`` are the BILLED per-class hole counts ({"A": 80, "B": 11} on the reference
     contract) — the bill's own numbers, because the divisor must match the claiming item's
-    quantity for conservation to balance. ``platform_cost_b`` joins the Class B row's cost
-    (SMM S02 ¶2.08(h)); it is ignored while the split is inactive, because folding it into the
+    quantity for conservation to balance.
+
+    ``access_cost_by_class`` is what getting there costs, per class — a platform and/or portage,
+    see :class:`AccessCost`. ``platform_cost_b`` is the older single-figure form of the same thing
+    and still works: absent the map, it is read as a Class B platform, which is exactly what it
+    was. Either way the money is ignored while the split is inactive, because folding it into the
     pooled row would price Class A moves as if they too needed platforms.
+
+    A helicopter lift is deliberately absent from both. ¶2.08(h) covers scaffolding, not a lift,
+    and Class C is not billed at all — so air money has no item to be absorbed into and belongs at
+    the unbilled gate, where a person queries it, loads it onto a named item, spreads it, or
+    accepts it as a risk.
     """
     spread = spread or build_spread(programme, model)
     result = Buildup()
     active = set(active_keys or ())
+    access = (access_cost_by_class if access_cost_by_class is not None
+              else {"B": AccessCost(platform=platform_cost_b)})
 
     for basis in model.basis_rows:
         variants = class_variants(basis)
@@ -226,7 +261,7 @@ def build(programme: Programme, model: CostingModel,
             for variant in variants:
                 result.rows.append(_row(variant, programme, model, spread,
                                         class_counts=class_counts,
-                                        platform_cost_b=platform_cost_b))
+                                        access=access.get(variant.site_class)))
             continue
         result.rows.append(_row(basis, programme, model, spread))
 
@@ -251,7 +286,7 @@ def build(programme: Programme, model: CostingModel,
 
 def _row(basis: ItemBasis, programme: Programme, model: CostingModel,
          spread: Spread, *, class_counts: Optional[dict[str, float]] = None,
-         platform_cost_b: float = 0.0) -> BuildupRow:
+         access: Optional[AccessCost] = None) -> BuildupRow:
     rig_day = spread.cost_per_rig_day
     quantities = programme.quantities
     row = BuildupRow(key=basis.key, label=basis.label, driver=basis.driver, note=basis.note)
@@ -278,13 +313,21 @@ def _row(basis: ItemBasis, programme: Programme, model: CostingModel,
                 f"the Class {basis.site_class} share — {counts.get(basis.site_class, 0.0):g} of "
                 f"{quantities.holes or sum(counts.values()):g} holes — of the set-up days: "
                 + row.derivation)
-        if basis.site_class == "B" and platform_cost_b:
-            row.total_cost += platform_cost_b
-            row.derivation += (
-                f" + {platform_cost_b:,.2f} platform builds, typed on the Site groups. They land "
-                f"HERE because SMM S02 ¶2.08(h) puts access scaffolding in the moving-rigs item "
-                f"coverage and ¶2.03 measures moves per hole — a Class A move must not carry a "
-                f"platform it does not need.")
+        if basis.site_class and access and access.total:
+            row.total_cost += access.total
+            if access.platform:
+                row.derivation += (
+                    f" + {access.platform:,.2f} platform builds, typed on the Site groups. They "
+                    f"land HERE because SMM S02 ¶2.08(h) puts access scaffolding in the "
+                    f"moving-rigs item coverage and ¶2.03 measures moves per hole — a Class A "
+                    f"move must not carry a platform it does not need.")
+            if access.portage:
+                row.derivation += (
+                    f" + {access.portage:,.2f} to carry the spread in and out by hand, typed on "
+                    f"the Site groups. ¶2.03 measures moves per hole and ¶2.06 splits them by "
+                    f"class, and carrying a rig to a hole is moving it. PS 7.01B reads Class A "
+                    f"as road traffic OR manual labour, so the bill pays one rate either way — "
+                    f"this line is where the difference is actually priced.")
 
     elif basis.driver == DRIVER_STANDING_DAYS:
         hours_per_day = model.value("hours_per_day", 8.0) or 8.0

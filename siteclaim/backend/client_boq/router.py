@@ -3739,6 +3739,20 @@ def get_bill_checks(set_id: str, rev: Optional[int] = None, margin_pct: float = 
     consumed = _class_b_platform_total(checks_groups, station_classes) if split_active else 0.0
     consumed += sum(v for k, v in sweep.loadings().items() if k in set(class_refs.values()))
     flags += boq_checks.platform_cost_unconsumed(max(0.0, round(platform_total - consumed, 2)))
+    # PORTAGE nets the same way and against the same two routes: the per-class move rate carries
+    # it once the split is on (at ANY class, unlike a platform), or the estimator loads it on the
+    # sweep. Counted separately from the platform because the clauses differ and a guard that
+    # netted one against the other would go quiet for the wrong reason.
+    portage_total = sum(g.access_labour_cost for g in checks_groups)
+    portage_carried = (
+        sum(e.portage for e in _access_cost_by_class(checks_groups, station_classes).values())
+        if split_active else 0.0)
+    flags += boq_checks.portage_cost_unconsumed(max(0.0, round(portage_total - portage_carried, 2)))
+    # A LIFT NEVER NETS. There is no item for it at any class, so no wiring can quiet this — it is
+    # a decision for a person at the unbilled gate, not a cost waiting for a rate.
+    flags += boq_checks.air_lift_has_no_item(
+        round(_air_lift_total(checks_groups), 2),
+        holes=sum(len(g.stations) for g in checks_groups if g.access_air_cost))
     return {
         "set_id": set_id, "rev": bill.rev,
         "tendered_total": priced.tendered_total,
@@ -4377,6 +4391,8 @@ def get_hole_groups(set_id: str, rev: Optional[int] = None) -> dict:
         classes = store.load_station_classes(conn, set_id)
         _criteria, class_refs = store.load_site_criteria(conn, set_id)
         book = store.load_output_book(conn)
+        costing_model = boq_model.effective(store.load_library_model(conn),
+                                            store.load_set_model(conn, set_id))
     finally:
         conn.close()
 
@@ -4411,6 +4427,11 @@ def get_hole_groups(set_id: str, rev: Optional[int] = None) -> dict:
         "billed_class_counts": plan.billed_class_counts,
         "reconcile": plan.reconcile(),
         "not_ready": plan.not_ready(),
+        # Whether the spread you said you were sending can reach the bottom of the holes you sent
+        # it to. A separate list from `reconcile` on purpose: that one is about counts disagreeing
+        # with the bill, this one is about a hole that cannot be drilled at all by a carried-in rig.
+        "reach": plan.reach(costing_model.value("portable_rig_max_depth_m", 0.0)),
+        "portable_rig_max_depth_m": costing_model.value("portable_rig_max_depth_m", 0.0),
         "class_refs": class_refs,
         # How many holes there are TO group, and whether that is even known. A screen showing
         # "0 unassigned" beside "no take-off has been read" is telling the truth; one showing it
@@ -4431,7 +4452,17 @@ def post_hole_group(req: HoleGroupRequest, actor: str = Depends(_actor)) -> dict
     Nothing in the client's documents draws these lines, which is why the group carries a ``basis``
     and stays "not ready" until it is written. A number nobody can explain is a number nobody can
     defend.
+
+    ``transport`` is refused rather than coerced if it is not one this engine knows. It decides
+    where three costs land and whether the portable-rig depth limit is checked, so a typo that
+    stored quietly would read on every screen as a judgement somebody made.
     """
+    if req.group.transport and req.group.transport not in boq_groups.TRANSPORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=(f"{req.group.transport!r} is not a way of reaching a hole. This engine knows "
+                    f"{', '.join(boq_groups.TRANSPORTS)} — or blank, which means nobody has "
+                    f"decided yet. Nothing was written."))
     conn = store.get_conn()
     try:
         bill = store.load_bill(conn, req.set_id, req.rev)
@@ -5366,23 +5397,61 @@ def _apply_model_path(model: boq_model.CostingModel, path: str, value: float) ->
     raise HTTPException(status_code=422, detail=f"{path!r} is not a path this model can be changed at.")
 
 
-def _class_b_platform_total(groups, classes: dict) -> float:
-    """The platform money that belongs in the Class B rig-move basis: builds typed on groups whose
-    EFFECTIVE class is B — stored, or inferred from a single shared station class, the same rule
-    ``GET /site/{set_id}/groups`` applies. A platform typed on a Class A group is NOT consumed
-    (a Class A move must not carry a platform it does not need) and stays flagged on the checks
-    surface rather than being absorbed."""
-    total = 0.0
+def _effective_class(group, classes: dict) -> str:
+    """A group's class: stored, or inferred from a single shared station class — the same rule
+    ``GET /site/{set_id}/groups`` applies. Blank when the stations disagree or nobody has said."""
+    cls = group.access_class
+    if not cls:
+        assigned = {classes.get(name, {}).get("access_class", "") for name in group.stations}
+        assigned.discard("")
+        if len(assigned) == 1:
+            cls = next(iter(assigned))
+    return cls
+
+
+def _access_cost_by_class(groups, classes: dict) -> dict[str, float]:
+    """The access money that belongs INSIDE a rig-move rate, per class of site.
+
+    Two kinds land here and one deliberately does not.
+
+    * A **platform** (``access_build_cost``) is Class B's by construction — SMM S02 ¶2.08(h) puts
+      access scaffolding in the moving-rigs item coverage. One typed on a Class A group is NOT
+      consumed: a Class A move must not carry a platform it does not need, so it stays flagged
+      rather than absorbed.
+    * **Portage** (``access_labour_cost``) belongs to whatever class the group is. ¶2.03 measures
+      moves per hole and ¶2.06 splits them by class, and carrying a rig to a hole IS moving it.
+      This is the case PS 7.01B cannot see — Class A reads "road traffic **or** manual labour", so
+      the bill pays one rate whether the lorry delivered the rig or six people carried it up a
+      hill. The class cannot express the difference; this is where the difference is paid.
+
+    A **lift** is not here at any class. ¶2.08(h) covers scaffolding, not helicopters, and Class C
+    is not billed at all — so air money has no item to be absorbed into and goes to the unbilled
+    gate to be queried, loaded by a person, spread, or accepted. Silently folding it into a rate
+    would be this engine pricing an item the bill does not contain.
+    """
+    totals: dict[str, boq_buildup.AccessCost] = {}
     for group in groups:
-        cls = group.access_class
+        cls = _effective_class(group, classes)
         if not cls:
-            assigned = {classes.get(name, {}).get("access_class", "") for name in group.stations}
-            assigned.discard("")
-            if len(assigned) == 1:
-                cls = next(iter(assigned))
+            continue                      # unclassed: nothing to put it in, and the gate says so
+        entry = totals.setdefault(cls, boq_buildup.AccessCost())
+        entry.portage += group.access_labour_cost
         if cls == "B":
-            total += group.access_build_cost
-    return total
+            entry.platform += group.access_build_cost
+    return totals
+
+
+def _air_lift_total(groups) -> float:
+    """Every helicopter lift typed on any group, at any class. Never absorbed — see above."""
+    return sum(group.access_air_cost for group in groups)
+
+
+def _class_b_platform_total(groups, classes: dict) -> float:
+    """Back-compatible view: the PLATFORM money the Class B rig-move basis carries. Kept because
+    the checks surface and the conservation netting both read exactly this figure, and portage is
+    a different clause that must not be netted against a platform guard."""
+    entry = _access_cost_by_class(groups, classes).get("B")
+    return entry.platform if entry else 0.0
 
 
 def _costing(conn, set_id: str, rev: Optional[int],
@@ -5432,10 +5501,13 @@ def _costing(conn, set_id: str, rev: Optional[int],
     active_keys = {entry.basis_key for entry in item_mappings if entry.basis_key}
     _criteria, class_refs = store.load_site_criteria(conn, set_id)
     class_counts = {k: float(v) for k, v in _billed_class_counts(bill, class_refs).items()}
-    platform_b = _class_b_platform_total(store.load_hole_groups(conn, set_id, bill.rev),
-                                         store.load_station_classes(conn, set_id))
+    hole_groups = store.load_hole_groups(conn, set_id, bill.rev)
+    station_classes = store.load_station_classes(conn, set_id)
+    access_by_class = _access_cost_by_class(hole_groups, station_classes)
+    platform_b = access_by_class.get("B", boq_buildup.AccessCost()).platform
     buildup = boq_buildup.build(programme, model, spread, active_keys=active_keys,
-                                class_counts=class_counts, platform_cost_b=platform_b)
+                                class_counts=class_counts,
+                                access_cost_by_class=access_by_class)
     priced = boq_costing.price(bill, model, programme, buildup, item_mappings,
                                submitted=state["submitted"])
 

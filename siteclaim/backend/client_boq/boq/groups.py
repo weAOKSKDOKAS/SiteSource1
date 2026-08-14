@@ -54,6 +54,27 @@ CLASS_MEANING = {
     CLASS_C: "reachable only by helicopter — and the bill has no item for it",
 }
 
+# HOW THE SPREAD GETS THERE, which the CLASS DOES NOT TELL YOU.
+# PS 7.01B Class A is "road traffic **or** manual labour", so one class covers both a rig the
+# lorry delivers and a rig six people carry up a hillside — and those are not the same money or
+# the same machine. The class is what the bill pays against; this is what actually happens, and
+# it is the estimator's judgement exactly as the class is. Blank until somebody decides.
+TRANSPORT_VEHICLE = "vehicle"     # driven or craned to the hole
+TRANSPORT_MANUAL = "manual"       # broken down and carried in — portage labour, a smaller rig
+TRANSPORT_AIR = "air"             # lifted in
+TRANSPORTS = (TRANSPORT_VEHICLE, TRANSPORT_MANUAL, TRANSPORT_AIR)
+
+TRANSPORT_MEANING = {
+    TRANSPORT_VEHICLE: "driven or craned to the hole",
+    TRANSPORT_MANUAL: "broken down and carried in by hand — portage labour, and a rig small "
+                      "enough to be carried",
+    TRANSPORT_AIR: "lifted in — and no bill item covers a lift",
+}
+
+#: Transport modes that put a rig on a person's back, so the rig is a portable one and its depth
+#: capability is the binding constraint rather than the programme.
+TRANSPORT_PORTABLE = (TRANSPORT_MANUAL, TRANSPORT_AIR)
+
 
 class HoleShape(BaseModel):
     """One hole's measured soil and rock lengths. Measured, never judged."""
@@ -90,7 +111,23 @@ class HoleGroup(BaseModel):
     #: driver and the band table already carries it. A non-zero value here is the estimator's
     #: deliberate padding, and it resets at every hole.
     decay: float = 0.0
+    #: How the spread reaches these holes. See TRANSPORT_MEANING — the class says what the bill
+    #: pays, this says what the work is. Blank until the estimator decides; never inferred.
+    transport: str = ""
+
+    # THE THREE COSTS OF GETTING THERE, kept apart because they are paid for differently and two
+    # of them are new money the pooled rate never carried.
     access_build_cost: float = 0.0          # a Class B platform; belongs on the rig-move item
+    #: Carrying the spread in and out by hand. Lands on the rig-move item OF THIS GROUP'S CLASS:
+    #: SMM S02 ¶2.03 measures moves per hole and ¶2.06 splits them by class, and carrying a rig
+    #: to a hole is moving it. A Class A group that is actually portaged is the case the bill's
+    #: two items cannot see, and this is where that money goes.
+    access_labour_cost: float = 0.0
+    #: A helicopter lift. NEVER absorbed into a rate by this engine, whatever the class — ¶2.08(h)
+    #: puts access *scaffolding* in the moving-rigs coverage and a lift is not scaffolding, and
+    #: Class C is not billed at all. It goes to the unbilled gate to be queried, loaded onto a
+    #: named item by a person, spread, or accepted as a risk. See :mod:`client_boq.boq.unbilled`.
+    access_air_cost: float = 0.0
 
     badge: str = "user"
     basis: str = ""                         # why he believes it
@@ -374,6 +411,44 @@ class GroupPlan(BaseModel):
 
     def not_ready(self) -> dict[str, list[str]]:
         return {g.label: g.ready() for g in self.groups if g.ready()}
+
+    def reach(self, portable_rig_max_depth_m: float = 0.0) -> list[str]:
+        """Holes a carried-in rig cannot reach the bottom of. Empty means nothing to say.
+
+        THIS IS NOT A SLOWER PROGRAMME, IT IS THE WRONG MACHINE. Every other constraint in this
+        module is about how long the work takes; a depth capability is about whether the work is
+        possible with the spread you said you were sending. A rig broken down into man-carriable
+        loads is a smaller rig, and if the schedule says 60 m and it reaches 30, no production
+        rate, no rig count and no programme fixes it — the hole needs a platform and a bigger
+        machine, a different access route, or a query.
+
+        The limit is not defaulted. A firm's rig fleet is not something this engine can know, and
+        a plausible-looking number here would decide a real question on a value nobody chose. So
+        zero means unset, and the LAST branch says so out loud rather than returning an empty list
+        that reads exactly like "checked, and fine".
+        """
+        carried = [g for g in self.groups if g.transport in TRANSPORT_PORTABLE]
+        if not carried:
+            return []
+        if portable_rig_max_depth_m <= 0:
+            return [f"{len(carried)} group(s) are reached by hand or by air and no depth limit is "
+                    f"set for a carried-in rig, so nothing has been checked. Set "
+                    f"'Deepest a carried-in rig will drill' on the costing model — until then a "
+                    f"hole scheduled deeper than the rig reaches will price as ordinary work"]
+        problems: list[str] = []
+        for group in carried:
+            over = [s for s in group.shapes
+                    if (s.soil_m + s.rock_m) > portable_rig_max_depth_m]
+            if not over:
+                continue
+            deepest = max(s.soil_m + s.rock_m for s in over)
+            names = ", ".join(s.station for s in over[:6]) + (" …" if len(over) > 6 else "")
+            problems.append(
+                f"{group.label}: {len(over)} hole(s) go deeper than the {portable_rig_max_depth_m:g} m "
+                f"a carried-in rig reaches — deepest {deepest:g} m ({names}). "
+                f"{TRANSPORT_MEANING.get(group.transport, group.transport)}, so this is the wrong "
+                f"machine for those holes, not a slower one")
+        return problems
 
 
 def blend(recipe: RateRecipe, sheets: list[ResourceSheet],

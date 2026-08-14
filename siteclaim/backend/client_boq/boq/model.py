@@ -620,6 +620,12 @@ INPUT_SPECS: tuple[InputSpec, ...] = (
 
     _spec("setup_days_per_hole", "Fixed set-up time per hole", _METHOD_B, "work-day",
           "Regression intercept. Used only for the cross-check."),
+    _spec("portable_rig_max_depth_m", "Deepest a carried-in rig will drill", _METHOD_B, "m",
+          "0 means you have not told the engine, and nothing is checked — a rig fleet's "
+          "capability is not something this engine may assume on your behalf. Set it and every "
+          "hole in a group you marked carried-in or lifted is checked against it, because a "
+          "portable rig that cannot reach the scheduled depth is not a slower programme, it is "
+          "the wrong machine."),
     _spec("soil_m_per_day", "Soil production rate", _METHOD_B, "m/work-day"),
     _spec("rock_m_per_day", "Rock production rate", _METHOD_B, "m/work-day"),
 
@@ -710,6 +716,12 @@ DEFAULT_INPUTS: dict[str, float] = {
     "setup_days_per_hole": 4.7,
     "soil_m_per_day": 7.3,
     "rock_m_per_day": 2.6,
+    # ZERO MEANS UNKNOWN, DELIBERATELY. Every other default here is a measured figure from the
+    # as-built corpus; this one has no corpus, because it is a fact about the rigs a firm owns.
+    # A plausible-looking 30 would be this engine claiming to know a fleet it has never seen, and
+    # the check would then pass or fail on a number nobody chose. So it starts unset and the
+    # check says out loud that it is not checking.
+    "portable_rig_max_depth_m": 0.0,
     # COMMERCIAL
     "margin": 0.10,
     "overhead_local": 0.07,
