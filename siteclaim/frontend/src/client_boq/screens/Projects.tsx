@@ -157,7 +157,7 @@ function DashboardView({ dash, onBack }: { dash: ProjectDashboard; onBack: () =>
                 {["Trade", "Recommended", "Decision", "Track"].map((h) => (
                   <th
                     key={h}
-                    className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint"
+                    className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint"
                   >
                     {h}
                   </th>

@@ -326,7 +326,7 @@ export function SlippyMap({
               onClick={() => onSelect?.(point.id)}
               style={{ left: at.left, top: at.top, background: TONE_FILL[point.tone] }}
               className={cx(
-                "absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 font-cb-mono text-[9px] font-semibold leading-none text-cb-on-brass shadow",
+                "absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 font-cb-mono text-[10px] font-semibold leading-none text-cb-on-brass shadow",
                 active ? "z-10 border-cb-ink-text" : "border-white",
                 point.count && point.count > 1 ? "h-[26px] w-[26px]" : "h-[13px] w-[13px]",
               )}
@@ -373,7 +373,7 @@ export function SlippyMap({
             type="button"
             title="Fit every hole back on screen"
             onClick={() => setView(fitView(points, size.w, size.h))}
-            className="cb-press h-6 w-6 rounded-cb-btn border border-cb-border bg-cb-page font-cb-mono text-[9px] font-semibold text-cb-ink-text"
+            className="cb-press h-6 w-6 rounded-cb-btn border border-cb-border bg-cb-page font-cb-mono text-[10px] font-semibold text-cb-ink-text"
           >
             FIT
           </button>
@@ -399,11 +399,11 @@ export function SlippyMap({
         )}
       </div>
       <div className="flex items-baseline gap-3 border-t border-cb-border px-3 py-1.5">
-        <span className="font-cb-mono text-[8.5px] text-cb-faint">
+        <span className="font-cb-mono text-[10px] text-cb-faint">
           z{centre.z} · {centre.lat.toFixed(5)}, {centre.lon.toFixed(5)}
         </span>
-        {caption && <span className="font-cb-sans text-[9.5px] text-cb-muted">{caption}</span>}
-        <span className="ml-auto font-cb-sans text-[8.5px] text-cb-faint">{attribution}</span>
+        {caption && <span className="font-cb-sans text-[10px] text-cb-muted">{caption}</span>}
+        <span className="ml-auto font-cb-sans text-[10px] text-cb-faint">{attribution}</span>
       </div>
     </div>
   );

@@ -190,7 +190,7 @@ export function ScheduleImport({
               <p className="font-cb-mono text-[10px] font-semibold text-cb-brass-text">
                 {progress || "reading…"}
               </p>
-              <p className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.5] text-cb-brass-text">
+              <p className="mt-0.5 font-cb-sans text-[10px] leading-[1.5] text-cb-brass-text">
                 A sheet is one vision call and can take several minutes — the sheets are flattened
                 raster, so the table is read cell by cell from the image. Leaving this screen does
                 not stop the read; the result is a proposal you look at before anything is saved.
@@ -256,7 +256,7 @@ export function ScheduleImport({
                 <p
                   key={s.sheet}
                   className={cx(
-                    "mt-1 font-cb-sans text-[9.5px] leading-[1.5]",
+                    "mt-1 font-cb-sans text-[10px] leading-[1.5]",
                     // A PARTLY-READ SHEET IS NOT A READ SHEET, and neither is one whose rows
                     // carry no numbers. `read` is true for all three, because rows did come
                     // back — so both failures have to be as loud as an outright one, or a
@@ -280,7 +280,7 @@ export function ScheduleImport({
             placeholder="60740338/GI/210"
             className="mt-1 w-full rounded-cb-btn border border-cb-border bg-cb-surface px-2 py-1.5 font-cb-mono text-[11px] text-cb-body outline-none focus:border-cb-brass-line"
           />
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             Recorded against every row, so a quantity can be traced back to the drawing it was read
             off. Optional, and worth typing.
           </p>
@@ -300,7 +300,7 @@ export function ScheduleImport({
             }
             className="mt-1 w-full rounded-cb-btn border border-cb-border bg-cb-surface p-2 font-cb-mono text-[10.5px] leading-[1.6] text-cb-body outline-none focus:border-cb-brass-line"
           />
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             A header row is read by name if you paste one. Without it the columns are taken in the
             order the sheet prints them — station, easting, northing, ground level, rockhead,
             tentative length, max boring, soil, hard, rock, standpipe, piezometer. Trial pits go to
@@ -340,7 +340,7 @@ export function ScheduleImport({
               )}
             >
               <p className="font-cb-sans text-[11px] leading-[1.6] text-cb-body">{read.headline}</p>
-              <p className="mt-1 font-cb-mono text-[9.5px] text-cb-faint">
+              <p className="mt-1 font-cb-mono text-[10px] text-cb-faint">
                 {read.header_found ? "header read by name" : "no header — columns taken by position"}
                 {" · "}separated by {read.delimiter}
                 {read.unmapped_columns.length > 0 &&
@@ -359,7 +359,7 @@ export function ScheduleImport({
                     {row}
                   </p>
                 ))}
-                <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+                <p className="mt-2 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
                   You can still save this. It will be stored exactly as read, with every one of
                   these named on the schedule — no cell is filled in on your behalf, and the take-off
                   reads as unusable until they are settled.
@@ -371,7 +371,7 @@ export function ScheduleImport({
               <div className="mt-3">
                 <SectionLabel>LINES THAT WERE NOT ROWS</SectionLabel>
                 {read.skipped_lines.map((line) => (
-                  <p key={line} className="mt-1 font-cb-mono text-[9.5px] text-cb-muted">
+                  <p key={line} className="mt-1 font-cb-mono text-[10px] text-cb-muted">
                     {line}
                   </p>
                 ))}
@@ -400,7 +400,7 @@ function Preview({
   stations: Station[];
   totals: Partial<Record<string, number>>;
 }) {
-  const head = "px-2 py-1.5 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint";
+  const head = "px-2 py-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint";
   const cell = "px-2 py-1 font-cb-mono text-[10px] text-cb-body";
 
   // Refuses to print a number for a cell nobody could read. This is the whole point of the preview:

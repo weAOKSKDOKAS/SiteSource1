@@ -96,7 +96,7 @@ export function Ask({
           {log.map((entry) => (
             <div key={entry.seq} className="border-b border-cb-divider px-3 py-2 last:border-b-0">
               <p className="font-cb-sans text-[10px] text-cb-muted">
-                <span className="font-cb-mono text-[9px] text-cb-faint">#{entry.seq}</span>{" "}
+                <span className="font-cb-mono text-[10px] text-cb-faint">#{entry.seq}</span>{" "}
                 <span className="font-semibold text-cb-ink-text">
                   {entry.asked_by || "someone"}
                 </span>{" "}
@@ -109,7 +109,7 @@ export function Ask({
                   citations would read as prose to trust — exactly what this screen exists
                   to avoid. */}
               {Object.keys(entry.figures ?? {}).length > 0 && (
-                <p className="mt-0.5 font-cb-mono text-[8.5px] text-cb-ink-text">
+                <p className="mt-0.5 font-cb-mono text-[10px] text-cb-ink-text">
                   {Object.keys(entry.figures ?? {}).map((key) => (
                     <span key={key} className="mr-2">
                       <span className="text-cb-brass-text">{key}</span>
@@ -119,10 +119,10 @@ export function Ask({
                 </p>
               )}
               {(entry.citations?.length ?? 0) > 0 && (
-                <p className="mt-0.5 font-cb-sans text-[9px] leading-[1.45] text-cb-muted">
+                <p className="mt-0.5 font-cb-sans text-[10px] leading-[1.45] text-cb-muted">
                   cited{" "}
                   {entry.citations!.map((c) => (
-                    <span key={c.source} className="mr-1.5 font-cb-mono text-[8.5px] text-cb-brass-text">
+                    <span key={c.source} className="mr-1.5 font-cb-mono text-[10px] text-cb-brass-text">
                       [{c.source}]
                     </span>
                   ))}
@@ -131,7 +131,7 @@ export function Ask({
               {entry.became_condition && (
                 <p
                   className={cx(
-                    "mt-1 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+                    "mt-1 font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                     entry.became_status === "rejected"
                       ? "text-cb-bad-dark"
                       : "text-cb-ok-dark",
@@ -143,7 +143,7 @@ export function Ask({
                 </p>
               )}
               {(entry.stripped?.length ?? 0) > 0 && (
-                <p className="mt-1 font-cb-sans text-[9px] text-cb-bad-dark">
+                <p className="mt-1 font-cb-sans text-[10px] text-cb-bad-dark">
                   {entry.stripped!.length} claim(s) were stripped from this answer for citing
                   nothing that was supplied.
                 </p>
@@ -190,11 +190,11 @@ export function Ask({
 
           {Object.keys(reply.figures).length > 0 && (
             <div className="mt-2">
-              <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+              <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
                 FIGURES QUOTED — THE ENGINE'S, NOT THE MODEL'S
               </div>
               {Object.entries(reply.figures).map(([key, described]) => (
-                <div key={key} className="font-cb-mono text-[9.5px] text-cb-ink-text">
+                <div key={key} className="font-cb-mono text-[10px] text-cb-ink-text">
                   <span className="text-cb-brass-text">{key}</span> · {described}
                 </div>
               ))}
@@ -203,12 +203,12 @@ export function Ask({
 
           {reply.citations.length > 0 && (
             <div className="mt-2">
-              <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+              <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
                 CITED
               </div>
               {reply.citations.map((citation, i) => (
-                <div key={i} className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.45] text-cb-muted">
-                  <span className="font-cb-mono text-[8.5px] text-cb-brass-text">
+                <div key={i} className="mt-0.5 font-cb-sans text-[10px] leading-[1.45] text-cb-muted">
+                  <span className="font-cb-mono text-[10px] text-cb-brass-text">
                     [{citation.source}]
                   </span>{" "}
                   {citation.quote}
@@ -219,11 +219,11 @@ export function Ask({
 
           {reply.stripped.length > 0 && (
             <div className="mt-2 rounded-cb-chip border border-cb-bad bg-cb-bad-tint px-2 py-1.5">
-              <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-bad-dark">
+              <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
                 REMOVED FROM THIS ANSWER
               </div>
               {reply.stripped.map((line) => (
-                <p key={line} className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.45] text-cb-bad-dark">
+                <p key={line} className="mt-0.5 font-cb-sans text-[10px] leading-[1.45] text-cb-bad-dark">
                   {line}
                 </p>
               ))}
@@ -236,7 +236,7 @@ export function Ask({
                 Suggests recording: <em>{reply.proposes}</em>
               </span>
               {recorded ? (
-                <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
                   RECORDED — CONFIRM THE MAPPING BELOW
                 </span>
               ) : (
@@ -257,7 +257,7 @@ export function Ask({
             </div>
           )}
 
-          <div className="mt-2 font-cb-mono text-[8px] text-cb-faint">
+          <div className="mt-2 font-cb-mono text-[10px] text-cb-faint">
             grounded in {reply.grounded_in.length} source(s)
           </div>
         </Card>

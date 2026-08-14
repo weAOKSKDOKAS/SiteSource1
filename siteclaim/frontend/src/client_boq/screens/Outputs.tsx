@@ -74,7 +74,7 @@ export function Outputs({
           </section>
         ))}
 
-        <p className="mt-6 max-w-[620px] border-t border-cb-divider pt-3 font-cb-sans text-[9.5px] leading-[1.65] text-cb-faint">
+        <p className="mt-6 max-w-[620px] border-t border-cb-divider pt-3 font-cb-sans text-[10px] leading-[1.65] text-cb-faint">
           Nothing here is a fact about a tender. It is what your company knows, and it is the thing
           worth arguing about once rather than every bid.
         </p>
@@ -91,7 +91,7 @@ function NormRow({ row, onEdit }: { row: OutputRow; onEdit: () => void }) {
         <span className="font-cb-sans text-[11.5px] text-cb-body">{row.label}</span>
         {row.source === "you" && row.updated_by && (
           <span
-            className="ml-2 font-cb-mono text-[8px] text-cb-faint"
+            className="ml-2 font-cb-mono text-[10px] text-cb-faint"
             title={row.updated_at ?? undefined}
           >
             set · {row.updated_by}
@@ -100,7 +100,7 @@ function NormRow({ row, onEdit }: { row: OutputRow; onEdit: () => void }) {
         {row.note && (
           // The `⌞` line. A norm that needs explaining says so here rather than in a tooltip
           // nobody opens — the reasoning is the useful half of the number.
-          <div className="mt-[1px] font-cb-sans text-[9.5px] leading-[1.5] text-cb-faint">
+          <div className="mt-[1px] font-cb-sans text-[10px] leading-[1.5] text-cb-faint">
             <span className="mr-1 font-cb-mono">⌞</span>
             {row.note}
           </div>
@@ -109,7 +109,7 @@ function NormRow({ row, onEdit }: { row: OutputRow; onEdit: () => void }) {
       <span className="w-[80px] flex-none text-right font-cb-mono text-[14px] font-semibold text-cb-ink-text">
         {formatNorm(row.value)}
       </span>
-      <span className="w-[54px] flex-none font-cb-mono text-[9.5px] text-cb-faint">{row.unit}</span>
+      <span className="w-[54px] flex-none font-cb-mono text-[10px] text-cb-faint">{row.unit}</span>
       <button
         type="button"
         onClick={onEdit}
@@ -167,7 +167,7 @@ function NormEditor({
             numeric ? "border-cb-border" : "border-[1.5px] border-cb-bad",
           )}
         />
-        <span className="w-[54px] flex-none font-cb-mono text-[9.5px] text-cb-faint">{row.unit}</span>
+        <span className="w-[54px] flex-none font-cb-mono text-[10px] text-cb-faint">{row.unit}</span>
       </div>
       <div className="mt-2 flex items-center gap-3">
         <Button

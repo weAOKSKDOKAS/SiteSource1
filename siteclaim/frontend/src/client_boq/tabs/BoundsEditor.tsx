@@ -134,7 +134,7 @@ export function BoundsEditor({
                 {["#", "Title", "First page", "Last page", "Pages", "From"].map((h) => (
                   <th
                     key={h}
-                    className="px-2.5 py-1.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint"
+                    className="px-2.5 py-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint"
                   >
                     {h}
                   </th>

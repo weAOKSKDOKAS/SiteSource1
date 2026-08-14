@@ -555,7 +555,7 @@ export function RegisterTab({
                   {/* Checks are the parents on purpose: a reviewer asks "how do the criteria
                       look?" before "who wrote this?", and the counts must add up inside a check. */}
                   <div className="ml-[10px] border-l border-dashed border-cb-border-strong pl-2">
-                    <div className="py-0.5 font-cb-mono text-[8.5px] tracking-cb-chip text-cb-faint">
+                    <div className="py-0.5 font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">
                       FROM:
                     </div>
                     {/* AUTHORS AND FAILURES ARE DIFFERENT AXES (F12). `authorOf` folds two
@@ -583,7 +583,7 @@ export function RegisterTab({
                           <span className="flex-1 truncate font-cb-sans text-[10.5px] font-medium text-cb-body">
                             {AUTHOR[author].label.toLowerCase()}
                           </span>
-                          <span className="flex-none font-cb-mono text-[9.5px] text-cb-muted">
+                          <span className="flex-none font-cb-mono text-[10px] text-cb-muted">
                             {n}
                           </span>
                         </button>
@@ -592,7 +592,7 @@ export function RegisterTab({
                         <>
                           {wrote.map(row)}
                           {flagged.length > 0 && (
-                            <div className="mt-0.5 py-0.5 font-cb-mono text-[8.5px] tracking-cb-chip text-cb-bad-dark">
+                            <div className="mt-0.5 py-0.5 font-cb-mono text-[10px] tracking-cb-chip text-cb-bad-dark">
                               FLAGGED:
                             </div>
                           )}
@@ -635,10 +635,10 @@ export function RegisterTab({
                   <span className="flex-1 truncate font-cb-sans text-[11px] font-semibold text-white">
                     Current build
                   </span>
-                  <span className="flex-none whitespace-nowrap font-cb-mono text-[9px] text-cb-dim">
+                  <span className="flex-none whitespace-nowrap font-cb-mono text-[10px] text-cb-dim">
                     ACTIVE
                   </span>
-                  <span className="flex-none rounded-cb-chip bg-cb-brass px-1.5 font-cb-mono text-[9px] font-semibold text-cb-on-brass">
+                  <span className="flex-none rounded-cb-chip bg-cb-brass px-1.5 font-cb-mono text-[10px] font-semibold text-cb-on-brass">
                     {rfis.filter((r) => r.status === "draft").length}
                   </span>
                 </button>
@@ -656,7 +656,7 @@ export function RegisterTab({
                     <span className="flex-1 truncate font-cb-sans text-[10.5px] font-medium text-cb-body">
                       {batch.ref || batch.batch_id}
                     </span>
-                    <span className="flex-none whitespace-nowrap font-cb-mono text-[9px] text-cb-faint">
+                    <span className="flex-none whitespace-nowrap font-cb-mono text-[10px] text-cb-faint">
                       {batch.sent_at?.slice(5, 10)} · {batch.items.length}
                     </span>
                   </button>
@@ -695,7 +695,7 @@ export function RegisterTab({
                     {i === 0 && !d.applied && (
                       <Chip className="bg-cb-blue text-white">NEW</Chip>
                     )}
-                    <span className="flex-none whitespace-nowrap font-cb-mono text-[9px] text-cb-faint">
+                    <span className="flex-none whitespace-nowrap font-cb-mono text-[10px] text-cb-faint">
                       {d.received_at.slice(5, 10)}
                     </span>
                   </button>
@@ -793,7 +793,7 @@ export function RegisterTab({
               <span className="flex-none font-cb-mono text-[11px] text-cb-brass-text">⚠</span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1 font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
+                  <div className="min-w-0 flex-1 font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-brass-text">
                     THESE FINDINGS ARE NOT ABOUT YOUR DOCUMENT
                   </div>
                   <button
@@ -826,7 +826,7 @@ export function RegisterTab({
                       ] as [string, string[]][]
                     ).map(([label, list]) => (
                       <div key={label}>
-                        <div className="font-cb-mono text-[8px] font-semibold tracking-cb-label text-cb-brass-text">
+                        <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-brass-text">
                           {label} · {list?.length ?? 0}
                         </div>
                         <div className="mt-1 max-h-[22vh] overflow-y-auto">
@@ -834,7 +834,7 @@ export function RegisterTab({
                             <div
                               key={name}
                               title={name}
-                              className="truncate font-cb-mono text-[9px] leading-[1.6] text-cb-brass-text"
+                              className="truncate font-cb-mono text-[10px] leading-[1.6] text-cb-brass-text"
                             >
                               {name}
                             </div>
@@ -857,7 +857,7 @@ export function RegisterTab({
             <div className="flex items-start gap-2">
               <span className="flex-none font-cb-mono text-[11px] text-cb-brass-text">◑</span>
               <div className="min-w-0 flex-1">
-                <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text">
+                <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-brass-text">
                   WHAT THIS RUN DID NOT READ
                 </div>
                 {runNotes.map((note) => (
@@ -882,7 +882,7 @@ export function RegisterTab({
 
         {(filterCheck || filterAuthor) && (
           <div className="flex flex-none items-center gap-2 border-b border-cb-border bg-cb-info/50 px-4 py-1.5">
-            <span className="font-cb-mono text-[9px] tracking-cb-chip text-cb-navy">
+            <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-navy">
               FILTERED · {shown.length} OF {items.length}
             </span>
             <button
@@ -1225,7 +1225,7 @@ function RegisterRow({
             {page != null && ` · p.${page}`} →
           </span>
         ) : (
-          <span className="ml-auto flex-none whitespace-nowrap font-cb-mono text-[9.5px] text-cb-faint">
+          <span className="ml-auto flex-none whitespace-nowrap font-cb-mono text-[10px] text-cb-faint">
             no clause
           </span>
         )}
@@ -1243,14 +1243,14 @@ function RegisterRow({
               onLocate();
             }}
             disabled={locating === "pending"}
-            className="cb-press rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-2 py-[3px] font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text disabled:opacity-60"
+            className="cb-press rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-2 py-[3px] font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text disabled:opacity-60"
           >
             {locating === "pending" ? "SEARCHING EVERY DOCUMENT…" : "SHOW ME ON THE PAGE"}
           </button>
           {locating && locating !== "pending" && (
             <span
               className={cx(
-                "font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+                "font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                 locating === "located" ? "text-cb-ok-dark" : "text-cb-bad-dark",
               )}
             >
@@ -1286,7 +1286,7 @@ function RegisterRow({
           <dl className="grid grid-cols-[74px_1fr] gap-x-2 gap-y-1">
             {criterion?.acceptable_position && (
               <>
-                <dt className="font-cb-mono text-[8.5px] tracking-cb-label text-cb-ok-dark">
+                <dt className="font-cb-mono text-[10px] tracking-cb-label text-cb-ok-dark">
                   WE ACCEPT
                 </dt>
                 <dd className="font-cb-sans text-[11px] leading-[1.45] text-cb-body">
@@ -1296,7 +1296,7 @@ function RegisterRow({
             )}
             {item.extracted_value && (
               <>
-                <dt className="font-cb-mono text-[8.5px] tracking-cb-label text-cb-bad-dark">
+                <dt className="font-cb-mono text-[10px] tracking-cb-label text-cb-bad-dark">
                   IT SAYS
                 </dt>
                 <dd className="font-cb-mono text-[10.5px] leading-[1.45] text-cb-ink-text">
@@ -1306,7 +1306,7 @@ function RegisterRow({
             )}
             {criterion?.red_flag && (
               <>
-                <dt className="font-cb-mono text-[8.5px] tracking-cb-label text-cb-faint">
+                <dt className="font-cb-mono text-[10px] tracking-cb-label text-cb-faint">
                   RED FLAG
                 </dt>
                 <dd className="font-cb-sans text-[10.5px] leading-[1.45] text-cb-muted">

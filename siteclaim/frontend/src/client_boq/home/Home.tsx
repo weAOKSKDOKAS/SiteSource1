@@ -179,7 +179,7 @@ export function Home({
 function Figure({ label, value, tone }: { label: string; value: number; tone?: "bad" | "warn" }) {
   return (
     <div>
-      <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
+      <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
         {label}
       </div>
       <div

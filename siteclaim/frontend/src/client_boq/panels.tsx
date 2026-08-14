@@ -38,7 +38,7 @@ export function Panel({
       <div className={cx("flex flex-none items-center gap-2 px-[18px] py-3", header)}>
         <span className={tone === "active" ? "text-cb-brass" : "text-cb-dim"}>{marker}</span>
         <span className="font-cb-sans text-[12.5px] font-semibold text-white">{title}</span>
-        <span className="font-cb-mono text-[9px] tracking-cb-chip text-cb-dim">{status}</span>
+        <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-dim">{status}</span>
         <button
           type="button"
           onClick={onClose}
@@ -97,7 +97,7 @@ function AnswerForm({
         className="mt-1 w-full rounded-cb-btn border border-cb-border-strong bg-white px-2 py-1.5 font-cb-serif text-[11.5px] leading-[1.5] text-cb-ink-text"
       />
       <label className="mt-1.5 flex items-center gap-2">
-        <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">CARRIED BY</span>
+        <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">CARRIED BY</span>
         <input
           value={answeredBy}
           onChange={(e) => setAnsweredBy(e.target.value)}
@@ -113,7 +113,7 @@ function AnswerForm({
         >
           Record it
         </Button>
-        <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
+        <span className="font-cb-sans text-[10px] leading-[1.4] text-cb-muted">
           Recording an answer changes no document. If it arrived as an addendum, upload the
           addendum on Documents — the change-mapping gate is what revises pages.
         </span>
@@ -284,7 +284,7 @@ export function RfiPanel({
               {letter}
             </pre>
           )}
-          <p className="mt-1.5 font-cb-sans text-[9.5px] leading-[1.45] text-cb-muted">
+          <p className="mt-1.5 font-cb-sans text-[10px] leading-[1.45] text-cb-muted">
             Nothing has been transmitted — this is the draft you send, on your own letterhead,
             by your own channel.
           </p>
@@ -350,7 +350,7 @@ export function RfiPanel({
                     {item.answer}
                   </p>
                   {item.answered_by && (
-                    <p className="mt-1 font-cb-mono text-[9px] text-cb-faint">
+                    <p className="mt-1 font-cb-mono text-[10px] text-cb-faint">
                       carried by {item.answered_by}
                     </p>
                   )}
@@ -384,7 +384,7 @@ function Tally({
   return (
     <div className="flex items-baseline gap-1.5">
       <span className={cx("font-cb-mono text-[13px] font-semibold", className)}>{value}</span>
-      <span className="font-cb-mono text-[8.5px] tracking-cb-chip text-cb-faint">{label}</span>
+      <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">{label}</span>
     </div>
   );
 }
@@ -457,7 +457,7 @@ export function AddendumPanel({
                     {rev.part_id}
                   </span>
                   <Chip className="bg-cb-brass-tint text-cb-brass-text">REV {rev.rev}</Chip>
-                  <span className="ml-auto font-cb-mono text-[9px] text-cb-faint">
+                  <span className="ml-auto font-cb-mono text-[10px] text-cb-faint">
                     {rev.applied_at.slice(0, 10)}
                   </span>
                 </div>
@@ -500,7 +500,7 @@ export function AddendumPanel({
               <span className="flex-1 truncate font-cb-sans text-[10.5px] text-cb-ink-text">
                 {d.ref || d.filename}
               </span>
-              <span className="flex-none font-cb-mono text-[9px] text-cb-faint">
+              <span className="flex-none font-cb-mono text-[10px] text-cb-faint">
                 {d.received_at.slice(0, 10)}
               </span>
             </div>

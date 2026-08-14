@@ -130,7 +130,7 @@ export function CommandSearch({
                   i === cursor && "bg-cb-selected",
                 )}
               >
-                <span className="w-[130px] flex-none font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-faint">
+                <span className="w-[130px] flex-none font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
                   {hit.group}
                 </span>
                 <span className="min-w-0 flex-1">

@@ -123,9 +123,9 @@ export function CriteriaLibrary({
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-cb-border">
-                  <th className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint">ID</th>
-                  <th className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint">RULE (FLAG WHEN TRUE)</th>
-                  <th className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint">EXTRACTED FIELD</th>
+                  <th className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">ID</th>
+                  <th className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">RULE (FLAG WHEN TRUE)</th>
+                  <th className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">EXTRACTED FIELD</th>
                 </tr>
               </thead>
               <tbody>
@@ -133,7 +133,7 @@ export function CriteriaLibrary({
                   <tr key={t.id} className="border-b border-cb-divider last:border-0">
                     <td className="px-3 py-1.5 font-cb-mono text-[10px] font-semibold text-cb-navy">{t.id}</td>
                     <td className="px-3 py-1.5 font-cb-sans text-[10.5px] text-cb-body">{t.rule}</td>
-                    <td className="px-3 py-1.5 font-cb-mono text-[9.5px] text-cb-muted">{t.extract_field}</td>
+                    <td className="px-3 py-1.5 font-cb-mono text-[10px] text-cb-muted">{t.extract_field}</td>
                   </tr>
                 ))}
               </tbody>
@@ -167,13 +167,13 @@ function CriterionCard({
           {row.clause_area}
         </span>
         {!row.enabled && (
-          <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+          <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
             DISABLED — NOT CHECKED IN NEW REVIEWS
           </span>
         )}
         {row.updated_by && (
           <span
-            className="font-cb-mono text-[8px] text-cb-faint"
+            className="font-cb-mono text-[10px] text-cb-faint"
             title={row.updated_at ?? undefined}
           >
             edited · {row.updated_by}
@@ -192,13 +192,13 @@ function CriterionCard({
         </p>
       ) : (
         <div className="mt-1.5 grid grid-cols-[92px_1fr] gap-x-3 gap-y-1">
-          <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-ok-dark">WE ACCEPT</span>
+          <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">WE ACCEPT</span>
           <span className="font-cb-serif text-[11.5px] leading-[1.5] text-cb-body">{row.acceptable_position}</span>
-          <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-bad-dark">RED FLAG</span>
+          <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">RED FLAG</span>
           <span className="font-cb-serif text-[11px] leading-[1.5] text-cb-muted">{row.red_flag}</span>
           {row.why_it_matters && (
             <>
-              <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">WHY</span>
+              <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">WHY</span>
               <span className="font-cb-sans text-[10.5px] leading-[1.5] text-cb-muted">{row.why_it_matters}</span>
             </>
           )}
@@ -272,13 +272,13 @@ function CriterionEditor({
         />
       </div>
       <div className="mt-2 grid grid-cols-[92px_1fr] items-start gap-x-3 gap-y-2">
-        <span className="pt-1.5 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-ok-dark">WE ACCEPT</span>
+        <span className="pt-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">WE ACCEPT</span>
         <textarea rows={2} value={acceptable} onChange={(e) => setAcceptable(e.target.value)} className={field}
           placeholder="The position we accept — this is the argument, written to be read." />
-        <span className="pt-1.5 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-bad-dark">RED FLAG</span>
+        <span className="pt-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">RED FLAG</span>
         <textarea rows={2} value={redFlag} onChange={(e) => setRedFlag(e.target.value)} className={field}
           placeholder="What in a contract makes this a departure." />
-        <span className="pt-1.5 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">WHY</span>
+        <span className="pt-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">WHY</span>
         <textarea rows={2} value={why} onChange={(e) => setWhy(e.target.value)} className={field}
           placeholder="Why it matters commercially (optional)." />
       </div>
@@ -289,7 +289,7 @@ function CriterionEditor({
         <button type="button" onClick={onCancel} className="cb-press font-cb-sans text-[10.5px] text-cb-muted underline underline-offset-2">
           Cancel
         </button>
-        <span className="ml-auto max-w-[260px] text-right font-cb-sans text-[9.5px] leading-[1.4] text-cb-faint">
+        <span className="ml-auto max-w-[260px] text-right font-cb-sans text-[10px] leading-[1.4] text-cb-faint">
           Applies to future reviews. Registers already on file keep the position they were
           measured against.
         </span>

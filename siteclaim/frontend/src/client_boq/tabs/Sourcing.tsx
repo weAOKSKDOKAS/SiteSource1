@@ -608,7 +608,7 @@ export function SourcingTab({
                 (pl.attachments ?? []).some((a) => (a.flags ?? []).includes("substituted_priced_return")),
               ) && (
                 <div className="mb-3 border border-cb-amber px-3 py-2">
-                  <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-amber">
+                  <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-amber">
                     PRICED-RETURN DOCUMENT SUBSTITUTED
                   </div>
                   {(plans ?? []).flatMap((pl) =>

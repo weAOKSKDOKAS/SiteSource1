@@ -65,7 +65,7 @@ function ProviderChoice({
           </span>
           <span className="font-cb-sans text-[10px] text-cb-muted">{opt.detail}</span>
           {opt.value && !visionCapable.includes(opt.value) && (
-            <span className="ml-auto flex-none font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-amber">
+            <span className="ml-auto flex-none font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-amber">
               TEXT ONLY
             </span>
           )}
@@ -256,7 +256,7 @@ export function Settings({
                 placeholder={fallback}
                 className={cx(field, "mt-1.5")}
               />
-              <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.4] text-cb-faint">
+              <p className="mt-1 font-cb-sans text-[10px] leading-[1.4] text-cb-faint">
                 Empty = the server default ({fallback}).
               </p>
             </div>
@@ -290,9 +290,9 @@ export function Settings({
           <Button variant="brass" onClick={() => void save()} disabled={busy}>
             Save
           </Button>
-          {saved && <span className="font-cb-mono text-[9px] font-semibold text-cb-ok-dark">SAVED — APPLIES FROM THE NEXT RUN</span>}
+          {saved && <span className="font-cb-mono text-[10px] font-semibold text-cb-ok-dark">SAVED — APPLIES FROM THE NEXT RUN</span>}
           {settings.rows.length > 0 && settings.rows[0].updated_by && (
-            <span className="ml-auto font-cb-mono text-[8.5px] text-cb-faint" title={settings.rows[0].updated_at ?? undefined}>
+            <span className="ml-auto font-cb-mono text-[10px] text-cb-faint" title={settings.rows[0].updated_at ?? undefined}>
               last changed · {settings.rows[0].updated_by}
             </span>
           )}
@@ -334,7 +334,7 @@ export function Settings({
               Save company details
             </Button>
             {companySaved && (
-              <span className="font-cb-mono text-[9px] font-semibold text-cb-ok-dark">SAVED</span>
+              <span className="font-cb-mono text-[10px] font-semibold text-cb-ok-dark">SAVED</span>
             )}
           </div>
         </section>
@@ -437,7 +437,7 @@ function ModeSwitch({ onError }: { onError: (msg: string) => void }) {
               >
                 Go live
               </Button>
-              <span className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+              <span className="font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
                 Calls {mode.providers_needed.join(" and ")}. Spends real credit.
               </span>
             </div>
@@ -448,7 +448,7 @@ function ModeSwitch({ onError }: { onError: (msg: string) => void }) {
           <Button variant="outline" disabled={busy} onClick={() => void switchTo(true)}>
             Switch to demo
           </Button>
-          <span className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+          <span className="font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
             Offline immediately. Your live tenders stay where they are — demo reads a different
             database.
           </span>
@@ -460,7 +460,7 @@ function ModeSwitch({ onError }: { onError: (msg: string) => void }) {
           type="button"
           disabled={busy}
           onClick={() => void switchTo(null)}
-          className="mt-2 font-cb-sans text-[9.5px] text-cb-muted underline underline-offset-2"
+          className="mt-2 font-cb-sans text-[10px] text-cb-muted underline underline-offset-2"
         >
           Use the server's own setting ({mode.env_default ? "DEMO" : "LIVE"}) instead
         </button>

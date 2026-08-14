@@ -566,7 +566,7 @@ export default function ClientBoqApp() {
           return (
             <span
               className={cx(
-                "rounded-cb-chip border border-cb-navy-line px-2 py-[3px] font-cb-mono text-[9.5px] font-semibold",
+                "rounded-cb-chip border border-cb-navy-line px-2 py-[3px] font-cb-mono text-[10px] font-semibold",
                 days <= 7 ? "text-[#E0A392]" : "text-cb-dim",
               )}
             >
@@ -1271,7 +1271,7 @@ function JobStrip({
       />
       <span
         className={cx(
-          "flex-none font-cb-mono text-[9px] font-semibold tracking-cb-label",
+          "flex-none font-cb-mono text-[10px] font-semibold tracking-cb-label",
           done ? "text-cb-ok-dark" : "text-cb-brass-text",
         )}
       >
@@ -1353,7 +1353,7 @@ function JobStrip({
           // same splice as the heading, one control further along.
           title={`Stop the ${(job.kind ?? "background").toUpperCase()} job after its current step `
             + `finishes.${alongside ? ` "${alongside}" is not a job and cannot be stopped here.` : ""}`}
-          className="cb-press ml-auto flex-none rounded-cb-btn border border-cb-brass-line px-2.5 py-[3px] font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-brass-text"
+          className="cb-press ml-auto flex-none rounded-cb-btn border border-cb-brass-line px-2.5 py-[3px] font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-brass-text"
         >
           STOP
         </button>

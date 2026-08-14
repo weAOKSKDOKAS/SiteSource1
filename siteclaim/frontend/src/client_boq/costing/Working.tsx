@@ -83,7 +83,7 @@ export function WorkingView({
             {money(bill.spread_total)} · loadings {money(bill.loading_total)}
           </span>
           {unpriced.length > 0 && (
-            <span className="font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-bad-dark">
+            <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
               {unpriced.length} UNPRICED — GP ¶6 DEEMS EACH COVERED BY THE OTHER RATES
             </span>
           )}
@@ -98,7 +98,7 @@ export function WorkingView({
               <span
                 key={kind}
                 title={checks.flags.find((f) => f.kind === kind)?.message ?? ""}
-                className="rounded-cb-chip bg-cb-bad-tint px-2 py-0.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-bad-dark"
+                className="rounded-cb-chip bg-cb-bad-tint px-2 py-0.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark"
               >
                 {kind.replace(/_/g, " ").toUpperCase()} · {n}
               </span>
@@ -116,7 +116,7 @@ export function WorkingView({
                     <th
                       key={h}
                       className={cx(
-                        "px-2.5 py-1.5 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint",
+                        "px-2.5 py-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint",
                         i >= 2 && "text-right",
                       )}
                     >
@@ -247,14 +247,14 @@ function ItemWorking({
   return (
     <div className="rounded-cb-card border border-cb-border bg-cb-page p-3">
       <div className="flex items-baseline gap-2 border-b border-cb-ink-text pb-1.5">
-        <span className="font-cb-mono text-[9px] tracking-cb-chip text-cb-faint">RATE</span>
+        <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">RATE</span>
         <span className="font-cb-mono text-[20px] font-semibold text-cb-ink-text">
           {t.rate === null ? "—" : money(t.rate)}
         </span>
         {t.unit && <span className="font-cb-sans text-[10px] text-cb-muted">/ {t.unit}</span>}
         <span className="ml-auto">
           {t.checks.length > 0 && (
-            <span className="rounded-cb-chip bg-cb-ok-tint px-1.5 py-0.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+            <span className="rounded-cb-chip bg-cb-ok-tint px-1.5 py-0.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
               ✓ EXTENSION CHECKS
             </span>
           )}
@@ -272,7 +272,7 @@ function ItemWorking({
       {t.problems.length > 0 && (
         <div className="mt-2 rounded-cb-chip border border-cb-bad bg-cb-bad-tint px-2 py-1.5">
           {t.problems.map((p) => (
-            <p key={p} className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark">
+            <p key={p} className="font-cb-sans text-[10px] leading-[1.5] text-cb-bad-dark">
               {p}
             </p>
           ))}
@@ -311,9 +311,9 @@ function TreeNode({ node, depth }: { node: TraceNode; depth: number }) {
             </span>
           )}
           {node.formula && (
-            <span className="font-cb-mono text-[9px] text-cb-muted">{node.formula}</span>
+            <span className="font-cb-mono text-[10px] text-cb-muted">{node.formula}</span>
           )}
-          <span className="ml-auto font-cb-sans text-[9px] font-medium text-cb-brass-text">
+          <span className="ml-auto font-cb-sans text-[10px] font-medium text-cb-brass-text">
             {node.origin === "document" && node.cite
               ? `▸ ${node.cite.label || "show me"}`
               : node.origin === "person"
@@ -324,12 +324,12 @@ function TreeNode({ node, depth }: { node: TraceNode; depth: number }) {
           </span>
         </div>
         {node.note && (
-          <p className="mt-0.5 max-w-[520px] font-cb-sans text-[9px] leading-[1.5] text-cb-muted">
+          <p className="mt-0.5 max-w-[520px] font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
             {node.note}
           </p>
         )}
         {node.problem && (
-          <p className="mt-0.5 font-cb-sans text-[9px] font-medium leading-[1.4] text-cb-bad-dark">
+          <p className="mt-0.5 font-cb-sans text-[10px] font-medium leading-[1.4] text-cb-bad-dark">
             ✕ {node.problem}
           </p>
         )}
@@ -374,21 +374,21 @@ function CoverageBlock({
     <div className="mt-3 border-t border-cb-border pt-2">
       <div className="flex items-baseline gap-2">
         <SectionLabel>WHAT THIS RATE MUST COVER</SectionLabel>
-        <span className="font-cb-mono text-[9px] text-cb-muted">
+        <span className="font-cb-mono text-[10px] text-cb-muted">
           {coverage.entries.length} heads
         </span>
         {unticked.length > 0 && (
-          <span className="rounded-cb-chip bg-cb-bad-tint px-1.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
+          <span className="rounded-cb-chip bg-cb-bad-tint px-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
             {unticked.length} NOT COVERED
           </span>
         )}
-        <span className="ml-auto font-cb-sans text-[8.5px] text-cb-faint">
+        <span className="ml-auto font-cb-sans text-[10px] text-cb-faint">
           the list is read from the SMM by a rule · the ticks are yours
         </span>
       </div>
 
       {coverage.waiting_on && (
-        <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+        <p className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
           {coverage.waiting_on}
         </p>
       )}
@@ -416,13 +416,13 @@ function CoverageBlock({
           <span className="flex-1 font-cb-sans text-[10px] leading-[1.5] text-cb-body">
             {entry.label}
             {entry.clause_ref && (
-              <span className="ml-1.5 font-cb-mono text-[8.5px] text-cb-muted">
+              <span className="ml-1.5 font-cb-mono text-[10px] text-cb-muted">
                 {entry.clause_ref}
               </span>
             )}
           </span>
           {entry.ticked && entry.ticked_by && (
-            <span className="flex-none font-cb-mono text-[8.5px] text-cb-faint">
+            <span className="flex-none font-cb-mono text-[10px] text-cb-faint">
               {entry.ticked_by} · {entry.ticked_at?.slice(5, 10)}
             </span>
           )}
@@ -430,12 +430,12 @@ function CoverageBlock({
       ))}
 
       {coverage.partial && (
-        <p className="mt-1.5 font-cb-sans text-[8.5px] leading-[1.5] text-cb-faint">
+        <p className="mt-1.5 font-cb-sans text-[10px] leading-[1.5] text-cb-faint">
           Partial by construction: the pack carries this contract's amendments to the SMM, not
           the SMM itself.
         </p>
       )}
-      <p className="mt-1 font-cb-sans text-[9px] leading-[1.5] text-cb-faint">
+      <p className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-faint">
         A machine cannot know what you put in your number. Unticked heads are not an error; each
         is a decision waiting.
       </p>
@@ -499,11 +499,11 @@ function SweepBlock({
     <section className="mt-6">
       <div className="flex items-baseline gap-3">
         <SectionLabel>THE SWEEP — COSTS WITH NO BILL ITEM</SectionLabel>
-        <span className="font-cb-mono text-[9px] text-cb-muted">
+        <span className="font-cb-mono text-[10px] text-cb-muted">
           spread pool {money(sweep.spread_total)} · accepted risk {money(sweep.accepted_risk)}
         </span>
         {sweep.settled ? (
-          <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+          <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
             ✓ SETTLED
           </span>
         ) : (
@@ -514,7 +514,7 @@ function SweepBlock({
           </span>
         )}
       </div>
-      <p className="mt-1 max-w-[720px] font-cb-sans text-[9.5px] leading-[1.55] text-cb-muted">
+      <p className="mt-1 max-w-[720px] font-cb-sans text-[10px] leading-[1.55] text-cb-muted">
         General Preambles ¶6: an item with no rate is deemed covered by the other rates — so an
         unrouted cost is a promise to do that work for nothing. This is the app's only hard stop.
       </p>
@@ -548,13 +548,13 @@ function SweepBlock({
             {money(cost.amount)}
           </span>
           {cost.route ? (
-            <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+            <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
               {cost.route.toUpperCase()}
               {cost.target_ref ? ` → ${cost.target_ref}` : ""}
               {cost.decided_by ? ` · ${cost.decided_by}` : ""}
             </span>
           ) : (
-            <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
+            <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
               UNROUTED
             </span>
           )}
@@ -576,7 +576,7 @@ function SweepBlock({
                   }
                 }}
                 className={cx(
-                  "cb-press rounded-cb-btn border px-2 py-0.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+                  "cb-press rounded-cb-btn border px-2 py-0.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                   cost.route === r
                     ? "border-cb-ink bg-cb-ink text-white"
                     : "border-cb-border bg-cb-page text-cb-body",
@@ -587,7 +587,7 @@ function SweepBlock({
             ))}
           </span>
           {cost.reason && (
-            <p className="basis-full font-cb-sans text-[9px] leading-[1.45] text-cb-muted">
+            <p className="basis-full font-cb-sans text-[10px] leading-[1.45] text-cb-muted">
               {cost.reason}
             </p>
           )}
@@ -597,7 +597,7 @@ function SweepBlock({
       {sweep.outstanding.length > 0 && (
         <div className="mt-2">
           {sweep.outstanding.map((line) => (
-            <p key={line} className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark">
+            <p key={line} className="font-cb-sans text-[10px] leading-[1.5] text-cb-bad-dark">
               {line}
             </p>
           ))}

@@ -39,7 +39,7 @@ export class Boundary extends Component<
     return (
       <div className="min-h-0 flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-[720px] rounded-cb-card border border-cb-bad bg-cb-bad-tint p-4">
-          <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-bad-dark">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
             THIS SCREEN STOPPED — {this.props.label.toUpperCase()}
           </div>
           <p className="mt-1.5 font-cb-serif text-[13px] leading-[1.6] text-cb-ink-text">
@@ -55,7 +55,7 @@ export class Boundary extends Component<
               <summary className="cursor-pointer font-cb-sans text-[10px] text-cb-muted">
                 where it happened (send this with a bug report)
               </summary>
-              <pre className="mt-1 max-h-[220px] overflow-auto whitespace-pre-wrap font-cb-mono text-[9px] leading-[1.45] text-cb-muted">
+              <pre className="mt-1 max-h-[220px] overflow-auto whitespace-pre-wrap font-cb-mono text-[10px] leading-[1.45] text-cb-muted">
                 {stack.trim()}
               </pre>
             </details>

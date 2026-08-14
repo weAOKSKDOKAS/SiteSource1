@@ -428,7 +428,7 @@ export function DocumentsTab({
             {isFolder && manifest.auto_approved && (
               // Not a green tick. The gate passed itself because there was nothing to confirm, and
               // saying so is the difference between "approved" and "somebody looked at this".
-              <p className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-faint">
+              <p className="font-cb-sans text-[10px] leading-[1.5] text-cb-faint">
                 Nothing was split, so there was no split to approve — this step passed
                 automatically and nobody reviewed it.
               </p>
@@ -449,7 +449,7 @@ export function DocumentsTab({
             <button
               type="button"
               onClick={() => setSortByPage((v) => !v)}
-              className="cb-press font-cb-mono text-[9px] text-cb-muted"
+              className="cb-press font-cb-mono text-[10px] text-cb-muted"
             >
               ⇅ by {sortByPage ? "page" : "title"} ▾
             </button>
@@ -492,7 +492,7 @@ export function DocumentsTab({
                   </div>
                   <div
                     className={cx(
-                      "font-cb-mono text-[9.5px] font-medium",
+                      "font-cb-mono text-[10px] font-medium",
                       isSelected ? "text-cb-brass-text-light" : "text-cb-faint",
                     )}
                   >
@@ -503,7 +503,7 @@ export function DocumentsTab({
             })}
           </div>
 
-          <div className="mt-auto border-t border-dashed border-cb-border-strong px-3 py-3 font-cb-mono text-[9.5px] leading-[1.7] text-cb-muted">
+          <div className="mt-auto border-t border-dashed border-cb-border-strong px-3 py-3 font-cb-mono text-[10px] leading-[1.7] text-cb-muted">
             <div>read as text · {stats.text}</div>
             <div>read by vision · {stats.vision}</div>
             <div className={stats.unread ? "text-cb-bad-dark" : ""}>not read · {stats.unread}</div>
@@ -688,13 +688,13 @@ export function DocumentsTab({
                   <Chip className="bg-cb-panel text-cb-faint">HELD</Chip>
                   <span
                     title={file.note}
-                    className="min-w-0 flex-1 truncate font-cb-mono text-[9.5px] text-cb-muted"
+                    className="min-w-0 flex-1 truncate font-cb-mono text-[10px] text-cb-muted"
                   >
                     {file.relative_path}
                   </span>
                 </div>
               ))}
-              <p className="mt-1.5 font-cb-sans text-[9.5px] leading-[1.5] text-cb-faint">
+              <p className="mt-1.5 font-cb-sans text-[10px] leading-[1.5] text-cb-faint">
                 Held files are stored and can be opened, but nothing in the app reads them.
               </p>
             </div>
@@ -857,22 +857,22 @@ function UploadReadableCopy({
 
       {proposal && (
         <span className="basis-full rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint p-2">
-          <span className="block font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-brass-text">
+          <span className="block font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
             PROPOSED MAPPING — NOTHING IS COMMITTED YET
           </span>
           {mappings.map((m, i) => (
             <span key={m.filename} className="mt-1 flex items-center gap-2">
-              <span className="truncate font-cb-mono text-[9.5px] text-cb-ink-text">
+              <span className="truncate font-cb-mono text-[10px] text-cb-ink-text">
                 {m.filename}
               </span>
-              <span className="font-cb-sans text-[9.5px] text-cb-muted">supersedes</span>
+              <span className="font-cb-sans text-[10px] text-cb-muted">supersedes</span>
               <select
                 value={m.part_id}
                 onChange={(e) =>
                   setMappings((prev) =>
                     prev.map((row, j) => (j === i ? { ...row, part_id: e.target.value } : row)))
                 }
-                className="rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 font-cb-sans text-[9.5px]"
+                className="rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 font-cb-sans text-[10px]"
               >
                 {allParts.map((p) => (
                   <option key={p.part_id} value={p.part_id}>
@@ -883,7 +883,7 @@ function UploadReadableCopy({
             </span>
           ))}
           {proposal.advisory && (
-            <span className="mt-1 block font-cb-sans text-[9px] leading-[1.45] text-cb-brass-text">
+            <span className="mt-1 block font-cb-sans text-[10px] leading-[1.45] text-cb-brass-text">
               {proposal.advisory}
             </span>
           )}
@@ -915,13 +915,13 @@ function UploadReadableCopy({
             {" "}Read the part again (⟳) so the new pages get a card.
           </span>
           {applied.reopened_register_items.length > 0 && (
-            <span className="mt-1 block font-cb-sans text-[9.5px] leading-[1.5] text-cb-amber">
+            <span className="mt-1 block font-cb-sans text-[10px] leading-[1.5] text-cb-amber">
               ⚠ Register line(s) {applied.reopened_register_items.join(", ")} cited the replaced
               pages and are back to undecided — re-decide them on the Register.
             </span>
           )}
           {applied.overtaken_queries.length > 0 && (
-            <span className="mt-1 block font-cb-sans text-[9.5px] leading-[1.5] text-cb-amber">
+            <span className="mt-1 block font-cb-sans text-[10px] leading-[1.5] text-cb-amber">
               ⚠ Open quer{applied.overtaken_queries.length === 1 ? "y" : "ies"} overtaken:{" "}
               {applied.overtaken_queries.join("; ")}
             </span>
@@ -930,7 +930,7 @@ function UploadReadableCopy({
       )}
 
       {problem && (
-        <span className="basis-full font-cb-sans text-[9.5px] leading-[1.45] text-cb-bad-dark">
+        <span className="basis-full font-cb-sans text-[10px] leading-[1.45] text-cb-bad-dark">
           {problem}
         </span>
       )}
@@ -1222,7 +1222,7 @@ function CardBadge({ badge }: { badge: "ai" | "user" }) {
           : "Your words. You corrected this card."
       }
       className={cx(
-        "inline-flex flex-none items-center rounded-cb-chip border px-1.5 py-0.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+        "inline-flex flex-none items-center rounded-cb-chip border px-1.5 py-0.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip",
         badge === "ai"
           ? "border-cb-disabled bg-cb-info text-cb-navy"
           : "border-cb-brass-line bg-cb-brass-tint text-cb-brass-text",
@@ -1251,7 +1251,7 @@ function FlagQuote({
     <div className="mt-1.5">
       <p className="font-cb-serif text-[11.5px] leading-[1.5] text-cb-body">
         “{flag.quote}”{" "}
-        <span className="font-cb-mono text-[9.5px] text-cb-brass-text">
+        <span className="font-cb-mono text-[10px] text-cb-brass-text">
           {flag.clause}
           {flag.page ? ` · printed p.${flag.page}` : ""}
         </span>
@@ -1261,14 +1261,14 @@ function FlagQuote({
           type="button"
           onClick={onLocate}
           disabled={located === "pending"}
-          className="cb-press flex-none rounded-cb-chip border border-cb-brass-line bg-white px-1.5 py-0.5 font-cb-sans text-[9.5px] font-medium text-cb-brass-text"
+          className="cb-press flex-none rounded-cb-chip border border-cb-brass-line bg-white px-1.5 py-0.5 font-cb-sans text-[10px] font-medium text-cb-brass-text"
         >
           {located === "pending" ? "looking…" : "Show me on the page"}
         </button>
         {located && located !== "pending" && (
           <span
             className={cx(
-              "font-cb-mono text-[9px] tracking-cb-chip",
+              "font-cb-mono text-[10px] tracking-cb-chip",
               located.verdict === "located" ? "text-cb-ok-dark" : "text-cb-bad-dark",
             )}
             title={located.note}

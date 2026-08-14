@@ -80,7 +80,7 @@ export function ProfilePicker({
                   )}
                 </span>
                 {m.member_id === currentId && (
-                  <span className="font-cb-mono text-[8.5px] font-semibold text-cb-brass-text">
+                  <span className="font-cb-mono text-[10px] font-semibold text-cb-brass-text">
                     THIS IS YOU
                   </span>
                 )}
@@ -90,7 +90,7 @@ export function ProfilePicker({
         )}
 
         <div className="mt-4 border-t border-cb-divider pt-3">
-          <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
             {team.length ? "OR ADD YOURSELF" : "ADD YOURSELF"}
           </div>
           <div className="mt-2 flex gap-2">
@@ -117,7 +117,7 @@ export function ProfilePicker({
           {failed && (
             <div className="mt-2 rounded-cb-card border border-cb-bad bg-cb-bad-tint px-2.5 py-2">
               {/* The backend's own sentence, unrewritten — a paraphrase hides which part failed. */}
-              <div className="font-cb-mono text-[9.5px] leading-[1.5] text-cb-bad-dark">
+              <div className="font-cb-mono text-[10px] leading-[1.5] text-cb-bad-dark">
                 {failed}
               </div>
               <div className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-body">

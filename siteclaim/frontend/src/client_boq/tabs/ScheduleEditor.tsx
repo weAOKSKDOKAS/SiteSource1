@@ -150,7 +150,7 @@ export function ScheduleEditor({
 
           <div className="ml-auto flex items-center gap-2">
             {savedAt && (
-              <span className="font-cb-mono text-[8.5px] text-cb-faint">
+              <span className="font-cb-mono text-[10px] text-cb-faint">
                 SAVED {savedAt.slice(0, 16).replace("T", " ")}
                 {savedBy ? ` · ${savedBy.toUpperCase()}` : ""}
               </span>
@@ -175,7 +175,7 @@ export function ScheduleEditor({
             saying why.
           </p>
         )}
-        <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.45] text-cb-faint">
+        <p className="mt-2 font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
           Nothing here is priced until you run it. The cost build-up is deterministic code on the
           server — this screen holds its input, so the two can never disagree.
         </p>
@@ -289,7 +289,7 @@ function DirectItem({
               <th
                 key={h || i}
                 className={cx(
-                  "px-2 pb-1 pt-1.5 font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-faint",
+                  "px-2 pb-1 pt-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint",
                   i >= 2 && i <= 5 && "text-right",
                 )}
               >
@@ -331,7 +331,7 @@ function DirectItem({
                       });
                     }}
                     className={cx(
-                      "w-full rounded-cb-btn border bg-white px-1.5 py-0.5 font-cb-mono text-[9.5px]",
+                      "w-full rounded-cb-btn border bg-white px-1.5 py-0.5 font-cb-mono text-[10px]",
                       missing ? "border-cb-bad text-cb-bad-dark" : "border-cb-border",
                     )}
                   />
@@ -348,7 +348,7 @@ function DirectItem({
                   <input
                     value={line.unit}
                     onChange={(e) => patchLine(i, { unit: e.target.value })}
-                    className="w-[46px] rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 text-right font-cb-mono text-[9.5px]"
+                    className="w-[46px] rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 text-right font-cb-mono text-[10px]"
                   />
                 </td>
                 <td className="px-2 py-1 text-right">
@@ -362,7 +362,7 @@ function DirectItem({
                         productivity: e.target.value === "" ? null : Number(e.target.value),
                       })
                     }
-                    className="w-[56px] rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 text-right font-cb-mono text-[9.5px]"
+                    className="w-[56px] rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 text-right font-cb-mono text-[10px]"
                   />
                 </td>
                 <td className="px-2 py-1 text-right">
@@ -370,10 +370,10 @@ function DirectItem({
                   {book ? (
                     <span className="font-cb-mono text-[10px] text-cb-body">
                       {money(book.rate)}
-                      <span className="ml-1 text-[8px] text-cb-faint">/{book.unit}</span>
+                      <span className="ml-1 text-[10px] text-cb-faint">/{book.unit}</span>
                     </span>
                   ) : missing ? (
-                    <Chip className="bg-cb-bad-tint font-cb-mono text-[7.5px] text-cb-bad-dark">
+                    <Chip className="bg-cb-bad-tint font-cb-mono text-[10px] text-cb-bad-dark">
                       NOT IN BOOK
                     </Chip>
                   ) : (
@@ -387,7 +387,7 @@ function DirectItem({
                           inline_rate: e.target.value === "" ? null : Number(e.target.value),
                         })
                       }
-                      className="w-[74px] rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 text-right font-cb-mono text-[9.5px]"
+                      className="w-[74px] rounded-cb-btn border border-cb-border bg-white px-1.5 py-0.5 text-right font-cb-mono text-[10px]"
                     />
                   )}
                 </td>
@@ -455,7 +455,7 @@ function IndirectItem({
         <select
           value={basis}
           onChange={(e) => onPatch({ basis: e.target.value as IndirectBasis })}
-          className="flex-none rounded-cb-btn border border-cb-border-strong bg-white px-2 py-1 font-cb-mono text-[9.5px] text-cb-body"
+          className="flex-none rounded-cb-btn border border-cb-border-strong bg-white px-2 py-1 font-cb-mono text-[10px] text-cb-body"
         >
           <option value="lump">lump</option>
           <option value="per_week">per_week</option>
@@ -493,7 +493,7 @@ function IndirectItem({
           ×
         </button>
       </div>
-      <p className="mt-1 font-cb-sans text-[9.5px] text-cb-faint">{BASIS_HELP[basis]}</p>
+      <p className="mt-1 font-cb-sans text-[10px] text-cb-faint">{BASIS_HELP[basis]}</p>
     </div>
   );
 }
@@ -509,7 +509,7 @@ function NumberField({
 }) {
   return (
     <label className="flex flex-none items-center gap-1">
-      <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">
+      <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">
         {label.toUpperCase()}
       </span>
       <input

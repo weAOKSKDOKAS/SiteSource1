@@ -127,14 +127,14 @@ export function Photos({
                 className="h-[110px] w-full rounded-t-cb-card object-cover"
               />
               <figcaption className="px-2 py-1.5">
-                <div className="truncate font-cb-mono text-[8.5px] text-cb-ink-text">
+                <div className="truncate font-cb-mono text-[10px] text-cb-ink-text">
                   {photo.filename}
                 </div>
                 {photo.station && (
-                  <div className="font-cb-mono text-[8px] text-cb-brass-text">{photo.station}</div>
+                  <div className="font-cb-mono text-[10px] text-cb-brass-text">{photo.station}</div>
                 )}
                 {photo.caption && (
-                  <div className="font-cb-sans text-[9px] leading-[1.4] text-cb-muted">
+                  <div className="font-cb-sans text-[10px] leading-[1.4] text-cb-muted">
                     {photo.caption}
                   </div>
                 )}
@@ -148,7 +148,7 @@ export function Photos({
                       onError(e instanceof Error ? e.message : String(e));
                     }
                   }}
-                  className="cb-press mt-0.5 font-cb-sans text-[9px] text-cb-faint underline underline-offset-2"
+                  className="cb-press mt-0.5 font-cb-sans text-[10px] text-cb-faint underline underline-offset-2"
                 >
                   remove
                 </button>
@@ -180,18 +180,18 @@ export function Photos({
             {observations.map((observation, index) => (
               <Card key={index} selected={kept.has(index)}>
                 <div className="flex flex-wrap items-baseline gap-2">
-                  <span className="rounded-cb-chip bg-cb-panel px-1.5 py-[1px] font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-muted">
+                  <span className="rounded-cb-chip bg-cb-panel px-1.5 py-[1px] font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-muted">
                     {TOPIC_LABEL[observation.topic] ?? observation.topic.toUpperCase()}
                   </span>
                   <span
                     className={cx(
-                      "font-cb-mono text-[8px] font-semibold tracking-cb-chip",
+                      "font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                       observation.confidence === "low" ? "text-cb-brass-text" : "text-cb-faint",
                     )}
                   >
                     {observation.confidence.toUpperCase()} CONFIDENCE
                   </span>
-                  <span className="ml-auto font-cb-mono text-[8px] text-cb-faint">
+                  <span className="ml-auto font-cb-mono text-[10px] text-cb-faint">
                     {observation.photo_refs.join(" · ")}
                   </span>
                 </div>
@@ -204,13 +204,13 @@ export function Photos({
                   </p>
                 )}
                 {observation.corroboration && (
-                  <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.45] text-cb-brass-text">
+                  <p className="mt-1 font-cb-sans text-[10px] leading-[1.45] text-cb-brass-text">
                     ⌞ {observation.corroboration}
                   </p>
                 )}
                 <div className="mt-2 flex items-center gap-3">
                   {kept.has(index) ? (
-                    <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                    <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
                       RECORDED AS A CONDITION — CONFIRM IT ON THE COSTING STEP
                     </span>
                   ) : (
@@ -218,7 +218,7 @@ export function Photos({
                       <Button onClick={() => void keep(index, observation)}>
                         Keep as a condition
                       </Button>
-                      <span className="font-cb-sans text-[9.5px] text-cb-faint">
+                      <span className="font-cb-sans text-[10px] text-cb-faint">
                         Recording it writes nothing. The Costing step proposes which input it
                         moves, and you confirm there.
                       </span>
@@ -230,7 +230,7 @@ export function Photos({
           </div>
           {couldNotSee && (
             <p className="mt-3 max-w-[720px] rounded-cb-card border border-dashed border-cb-border-strong px-3 py-2 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
-              <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip">
+              <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip">
                 WHAT THE PHOTOGRAPHS DO NOT SHOW ·{" "}
               </span>
               {couldNotSee}

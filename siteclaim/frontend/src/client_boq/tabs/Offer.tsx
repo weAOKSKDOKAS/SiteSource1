@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from "react";
 import type { SetData } from "../App";
+import { usePersisted } from "../chrome";
 import { api, isNotYet, readFailure } from "../api";
 import type {
   BridgeCombinedPricing,
@@ -41,7 +42,8 @@ export function OfferTab({
   const [letter, setLetter] = useState<LetterResponse | null>(null);
   const [letterFailed, setLetterFailed] = useState("");
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"structured" | "markdown">("structured");
+  const [view, setView] = usePersisted<"structured" | "markdown">(
+    `offerView.${data.setId}`, "structured");
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -162,7 +164,7 @@ export function OfferTab({
               )}
             </div>
             <div className="text-right">
-              <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
+              <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
                 THE PRICE
               </div>
               <div className="font-cb-mono text-[19px] font-semibold text-cb-ink-text">
@@ -235,7 +237,7 @@ export function OfferTab({
                     <tbody>
                       {doc.pricing_schedule.map((row) => (
                         <tr key={row.item_id} className="border-b border-cb-divider last:border-0">
-                          <td className="w-[56px] py-1.5 font-cb-mono text-[9.5px] text-cb-muted">
+                          <td className="w-[56px] py-1.5 font-cb-mono text-[10px] text-cb-muted">
                             {row.item_id}
                           </td>
                           <td className="py-1.5 font-cb-sans text-[11px] text-cb-body">
@@ -276,7 +278,7 @@ export function OfferTab({
               <Section label={`APPENDIX A · ${doc.appendix.length} conditions`} author="mixed">
                 {fromRegister.length > 0 && (
                   <>
-                    <div className="mb-1 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-navy">
+                    <div className="mb-1 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-navy">
                       FROM THE REGISTER · CONFIRMED, VERBATIM · {fromRegister.length}
                     </div>
                     <ul className="mb-3 flex flex-col gap-1.5">
@@ -288,7 +290,7 @@ export function OfferTab({
                 )}
                 {drafted.length > 0 && (
                   <>
-                    <div className="mb-1 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-brass-text">
+                    <div className="mb-1 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
                       DRAFTED FROM THE SCOPE · A PROPOSAL · {drafted.length}
                     </div>
                     <ul className="flex flex-col gap-1.5">
@@ -308,7 +310,7 @@ export function OfferTab({
           )}
 
           <div className="mt-5 rounded-cb-card border border-cb-border bg-cb-panel px-4 py-3">
-            <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
+            <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
               THIS IS A DRAFT
             </div>
             <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.55] text-cb-muted">
@@ -343,7 +345,7 @@ function Section({
     <section className="rounded-cb-card border border-cb-border bg-cb-page p-[14px]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <SectionLabel>{label}</SectionLabel>
-        <Chip className={cx("font-cb-mono text-[7.5px]", badge.cls)}>{badge.text}</Chip>
+        <Chip className={cx("font-cb-mono text-[10px]", badge.cls)}>{badge.text}</Chip>
       </div>
       {children}
     </section>
@@ -384,7 +386,7 @@ function CheckLine({ ok, label, detail }: { ok: boolean; label: string; detail: 
     <li className="flex items-start gap-2">
       <span
         className={cx(
-          "mt-[1px] flex h-4 w-4 flex-none items-center justify-center rounded-full font-cb-mono text-[9px] font-semibold",
+          "mt-[1px] flex h-4 w-4 flex-none items-center justify-center rounded-full font-cb-mono text-[10px] font-semibold",
           ok ? "bg-cb-info-fill text-cb-navy" : "bg-cb-bad-tint text-cb-bad-dark",
         )}
         aria-hidden
@@ -478,7 +480,7 @@ function SubmitPanel({
       <section className="rounded-cb-card border border-cb-ok bg-cb-ok-tint/40 p-[14px]">
         <div className="flex flex-wrap items-center gap-2">
           <SectionLabel>SUBMITTED</SectionLabel>
-          <Chip className={cx("font-cb-mono text-[8px]", onTime.cls)}>{onTime.text}</Chip>
+          <Chip className={cx("font-cb-mono text-[10px]", onTime.cls)}>{onTime.text}</Chip>
         </div>
         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-cb-sans text-[11px]">
           <dt className="text-cb-faint">Submitted</dt>
@@ -511,7 +513,7 @@ function SubmitPanel({
         <SectionLabel>FINAL APPROVAL &amp; SUBMISSION</SectionLabel>
         <Chip
           className={cx(
-            "font-cb-mono text-[8px]",
+            "font-cb-mono text-[10px]",
             isApproved ? "bg-cb-ok-tint text-cb-ok-dark" : "bg-cb-panel text-cb-muted",
           )}
         >
@@ -552,7 +554,7 @@ function SubmitPanel({
           an answer you can see. */}
       {data.failures.submission && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint px-2.5 py-1.5">
-          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
             NOT KNOWN — THE READ FAILED
           </div>
           <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-bad-dark">
@@ -564,7 +566,7 @@ function SubmitPanel({
       )}
       {!data.failures.submission && state?.conservation_clean === false && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-bad bg-cb-bad-tint px-2.5 py-1.5">
-          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
             THE COST DOES NOT COME OUT ONCE
           </div>
           <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-bad-dark">
@@ -574,7 +576,7 @@ function SubmitPanel({
       )}
       {!data.failures.submission && state?.conservation_clean === null && state?.conservation && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
-          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-amber">
             NOT CHECKED
           </div>
           <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-ink-text">
@@ -589,7 +591,7 @@ function SubmitPanel({
           read as "it was fine when they signed". It was not checked; that is what is said. */}
       {approval && !approval.conservation && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
-          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-amber">
             AT THE MOMENT OF APPROVAL
           </div>
           <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-ink-text">
@@ -600,7 +602,7 @@ function SubmitPanel({
       )}
       {approval?.conservation && approval.conservation !== state?.conservation && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
-          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-amber">
             AT THE MOMENT OF APPROVAL
           </div>
           <p className="font-cb-sans text-[11px] leading-[1.55] text-cb-ink-text">
@@ -611,7 +613,7 @@ function SubmitPanel({
 
       {approval?.verdict === "revise" && approval.rationale && (
         <div className="mt-2 rounded-cb-btn border-l-[3px] border-l-cb-amber bg-cb-negotiated/60 px-2.5 py-1.5">
-          <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-amber">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-amber">
             REVISE — WHAT TO CORRECT
           </div>
           <p className="font-cb-serif text-[11.5px] leading-[1.5] text-cb-ink-text">
@@ -654,7 +656,7 @@ function SubmitPanel({
         </div>
       ) : (
         <div className="mt-3 rounded-cb-card border border-cb-border bg-cb-page p-3">
-          <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
             SUBMIT — FREEZE THIS VERSION
           </div>
           <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.5] text-cb-muted">
@@ -715,7 +717,7 @@ function CombinedPanel({ setId }: { setId: string }) {
         <SectionLabel>THE WHOLE TENDER · BOTH ENGINES</SectionLabel>
         <Chip
           className={cx(
-            "font-cb-mono text-[8px]",
+            "font-cb-mono text-[10px]",
             healthy ? "bg-cb-info-fill text-cb-navy" : "bg-cb-bad-tint text-cb-bad-dark",
           )}
         >
@@ -760,7 +762,7 @@ function CombinedPanel({ setId }: { setId: string }) {
       ))}
 
       <div className="mt-2 rounded-cb-card border border-cb-brass-line bg-cb-brass-tint px-3 py-2">
-        <div className="font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-brass-text">
+        <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
           OPEN BEFORE THIS FIGURE GOES NEAR THE LETTER
         </div>
         <ul className="mt-1 flex flex-col gap-0.5">

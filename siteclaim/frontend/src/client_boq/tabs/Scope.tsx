@@ -194,7 +194,7 @@ export function ScopeTab({
                 <div className="flex items-center gap-2 px-1 pb-1">
                   <span
                     className={cx(
-                      "font-cb-mono text-[8.5px] font-semibold tracking-cb-label",
+                      "font-cb-mono text-[10px] font-semibold tracking-cb-label",
                       group.head,
                     )}
                   >
@@ -202,7 +202,7 @@ export function ScopeTab({
                   </span>
                   <span
                     className={cx(
-                      "ml-auto flex-none rounded-cb-chip px-1.5 font-cb-mono text-[9px] font-semibold",
+                      "ml-auto flex-none rounded-cb-chip px-1.5 font-cb-mono text-[10px] font-semibold",
                       group.badge,
                     )}
                   >
@@ -224,11 +224,11 @@ export function ScopeTab({
                         {source.label}
                       </p>
                       <div className="mt-1 flex items-center gap-2">
-                        <span className="flex-1 truncate font-cb-mono text-[9px] text-cb-faint">
+                        <span className="flex-1 truncate font-cb-mono text-[10px] text-cb-faint">
                           {source.meta}
                         </span>
                         {source.mapped ? (
-                          <span className="flex-none rounded-cb-chip border border-cb-border-strong px-1.5 py-0.5 font-cb-mono text-[8.5px] tracking-cb-chip text-cb-faint">
+                          <span className="flex-none rounded-cb-chip border border-cb-border-strong px-1.5 py-0.5 font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">
                             IN SCOPE
                           </span>
                         ) : (
@@ -236,7 +236,7 @@ export function ScopeTab({
                             type="button"
                             onClick={() => map(source)}
                             disabled={busy || locked}
-                            className="cb-press flex-none rounded-cb-chip bg-cb-brass px-2 py-0.5 font-cb-sans text-[9.5px] font-semibold text-cb-on-brass disabled:opacity-40"
+                            className="cb-press flex-none rounded-cb-chip bg-cb-brass px-2 py-0.5 font-cb-sans text-[10px] font-semibold text-cb-on-brass disabled:opacity-40"
                           >
                             + Map to scope
                           </button>
@@ -542,7 +542,7 @@ function AuthorshipBadge({ badge }: { badge: "ai" | "user" }) {
           : "Your words. You wrote or edited this line."
       }
       className={cx(
-        "inline-flex flex-none items-center rounded-cb-chip border px-1.5 py-0.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+        "inline-flex flex-none items-center rounded-cb-chip border px-1.5 py-0.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip",
         badge === "ai"
           ? "border-cb-disabled bg-cb-info text-cb-navy"
           : "border-cb-brass-line bg-cb-brass-tint text-cb-brass-text",

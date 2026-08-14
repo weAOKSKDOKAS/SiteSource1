@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { SetData } from "../App";
 import { api, isNotYet, readFailure } from "../api";
-import { Divider, DocTab, Rail, RailFolded, usePanes } from "../chrome";
+import { Divider, DocTab, Rail, RailFolded, usePanes, usePersisted } from "../chrome";
 import { PageView } from "../PageView";
 import { AccessMap } from "../site/AccessMap";
 import { Photos } from "../site/Photos";
@@ -84,7 +84,7 @@ export function SiteTab({
   railOpen: boolean;
   onError: (msg: string) => void;
 }) {
-  const [view, setView] = useState<View>("schedule");
+  const [view, setView] = usePersisted<View>(`siteView.${data.setId}`, "schedule");
   const [schedule, setSchedule] = useState<StationScheduleResponse | null>(null);
   const [groups, setGroups] = useState<GroupsResponse | null>(null);
   const [derived, setDerived] = useState<DerivedResponse | null>(null);
@@ -242,7 +242,7 @@ export function SiteTab({
             ]}
             onChange={setView}
           />
-          <span className="ml-auto font-cb-mono text-[9.5px] text-cb-faint">
+          <span className="ml-auto font-cb-mono text-[10px] text-cb-faint">
             {schedule.meta.source_sheet || "sheet not named"}
             {schedule.meta.confirmed_by
               ? ` · confirmed ${schedule.meta.confirmed_by}`
@@ -380,7 +380,7 @@ function ScheduleRail({
           tone={schedule.bad_rows.length ? "bad" : "ok"}
         />
         {schedule.bad_rows.map((row) => (
-          <p key={row} className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark">
+          <p key={row} className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-bad-dark">
             {row}
           </p>
         ))}
@@ -423,7 +423,7 @@ function ScheduleRail({
             (row) => (
               <p
                 key={row}
-                className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark"
+                className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-bad-dark"
               >
                 {row}
               </p>
@@ -441,7 +441,7 @@ function ScheduleRail({
               s.notes.map((note) => (
                 <p
                   key={`${s.station}-${note}`}
-                  className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted"
+                  className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-muted"
                 >
                   <span className="font-cb-mono font-semibold text-cb-body">{s.station}</span>{" "}
                   {note}
@@ -454,12 +454,12 @@ function ScheduleRail({
       <div className="border-b border-cb-border p-3">
         <SectionLabel>AGAINST THE BILL</SectionLabel>
         {failed ? (
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-bad-dark">
             NOT CHECKED — the derivation could not be read. {failed}. This panel is not saying the
             drawing and the bill agree, and it is not saying no bill was imported.
           </p>
         ) : !derived?.checked_against_a_bill ? (
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             No bill of quantities has been imported, so there is nothing to check this reading
             against. The quantities below are what the drawing implies.
           </p>
@@ -475,7 +475,7 @@ function ScheduleRail({
               />
             ))
         )}
-        <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+        <p className="mt-2 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
           The bill is the check on our reading. A disagreement is worth more than a match — it
           means one of the two documents is wrong, and finding out which is cheaper now than
           after the tender goes in.
@@ -502,7 +502,7 @@ function ScheduleView({
     () => new Set(schedule.bad_rows.map((row) => row.split(/[\s:]/)[0])),
     [schedule.bad_rows],
   );
-  const head = "px-2 py-1.5 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint";
+  const head = "px-2 py-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint";
   const cell = "px-2 py-1 font-cb-mono text-[10px] text-cb-body";
 
   /**
@@ -575,7 +575,7 @@ function ScheduleView({
               <td className={cx(cell, "font-semibold text-cb-ink-text")}>
                 {s.station}
                 {s.notes.length > 0 && (
-                  <span className="ml-1 font-cb-sans text-[9px] text-cb-brass-text">
+                  <span className="ml-1 font-cb-sans text-[10px] text-cb-brass-text">
                     ({s.notes.length} note{s.notes.length > 1 ? "s" : ""})
                   </span>
                 )}
@@ -595,7 +595,7 @@ function ScheduleView({
       {schedule.trial_pits.length > 0 && (
         <div className="border-t border-cb-border px-4 py-3">
           <SectionLabel>TRIAL PITS · {schedule.trial_pits.length}</SectionLabel>
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             Measured by volume, not by metre, and dug rather than drilled — so they are never part
             of a drilling group.
           </p>
@@ -630,7 +630,7 @@ function ClassRail({
       <div className="border-b border-cb-border p-3">
         <SectionLabel>THE CLIENT BILLS</SectionLabel>
         {Object.keys(billed).length === 0 ? (
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             No bill imported, so there is no count to check yours against.
           </p>
         ) : (
@@ -679,12 +679,12 @@ function ClassRail({
       <div className="p-3">
         <SectionLabel>WHAT THE CLASSES MEAN</SectionLabel>
         {CLASS_OPTIONS.map((o) => (
-          <p key={o.value} className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+          <p key={o.value} className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
             <span className="font-cb-mono font-semibold text-cb-ink-text">{o.label}</span> —{" "}
             {o.title}
           </p>
         ))}
-        <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+        <p className="mt-2 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
           No document says which eleven. Your count is the only check there is.
         </p>
       </div>
@@ -718,7 +718,7 @@ function HolesView({
   selected: string | null;
   onSelect: (station: string) => void;
 }) {
-  const [only, setOnly] = useState<"all" | "unassigned">("all");
+  const [only, setOnly] = usePersisted<"all" | "unassigned">(`holesOnly.${setId}`, "all");
   const shown = schedule.stations.filter(
     (s) => only === "all" || !classOf(s.station),
   );
@@ -735,7 +735,7 @@ function HolesView({
           onChange={setOnly}
         />
         {georefFailed && (
-          <span className="ml-auto font-cb-sans text-[9.5px] text-cb-bad-dark">
+          <span className="ml-auto font-cb-sans text-[10px] text-cb-bad-dark">
             The sheet registrations could not be read: {georefFailed}. The tiles below say "no
             grid marks" about a read that failed, not about the sheets.
           </span>
@@ -827,7 +827,7 @@ function HoleTile({
           printed length, and filling it with 0 would read as a hole with no depth; both are
           claims about a cell nobody saw. */}
       <div
-        className="font-cb-mono text-[9px] text-cb-muted"
+        className="font-cb-mono text-[10px] text-cb-muted"
         title={station.length_m === null
           ? "No tentative borehole length is printed for this hole on the drawing."
           : undefined}
@@ -839,7 +839,7 @@ function HoleTile({
           is arithmetic from a person's picked access point, it is optional (absent point =
           absent line), and the tile is designed so you can classify from the picture alone. */}
       {(roadM !== null || osmRoad) && (
-        <div className="font-cb-sans text-[9px] font-semibold text-cb-brass-text">
+        <div className="font-cb-sans text-[10px] font-semibold text-cb-brass-text">
           <span
             className="mr-1 inline-block h-[7px] w-[7px] rounded-[1px] align-middle"
             style={{ background: "var(--color-cb-brass)" }}
@@ -857,13 +857,13 @@ function HoleTile({
       <div className="flex items-center gap-1.5">
         <Segmented value={accessClass} options={CLASS_OPTIONS} onChange={onSetClass} />
         {accessClass === "C" && (
-          <span className="font-cb-mono text-[7.5px] font-semibold text-cb-amber">
+          <span className="font-cb-mono text-[10px] font-semibold text-cb-amber">
             → SWEEP
           </span>
         )}
       </div>
       {decidedBy && (
-        <div className="font-cb-mono text-[7.5px] text-cb-faint">{decidedBy}</div>
+        <div className="font-cb-mono text-[10px] text-cb-faint">{decidedBy}</div>
       )}
     </div>
   );
@@ -952,17 +952,17 @@ function SheetsView({
           className="mt-2 flex flex-wrap items-center gap-2 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2"
         >
           <span className="font-cb-mono text-[10px] font-semibold text-cb-ink-text">{row.sheet}</span>
-          <span className="font-cb-mono text-[9px] text-cb-muted">
+          <span className="font-cb-mono text-[10px] text-cb-muted">
             {row.part_id} · p{row.page}
           </span>
           {row.usable ? (
-            <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+            <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
               {row.stations_on} STATION(S) ON THIS SHEET
             </span>
           ) : (
-            <span className="font-cb-sans text-[9.5px] text-cb-bad-dark">{row.problems[0]}</span>
+            <span className="font-cb-sans text-[10px] text-cb-bad-dark">{row.problems[0]}</span>
           )}
-          <span className="font-cb-mono text-[8.5px] text-cb-faint">
+          <span className="font-cb-mono text-[10px] text-cb-faint">
             {row.confirmed_by ? `confirmed ${row.confirmed_by}` : "not confirmed"}
           </span>
           <span className="ml-auto flex gap-1.5">
@@ -984,7 +984,7 @@ function SheetsView({
       ))}
 
       {(georef?.unplaced ?? []).length > 0 && (
-        <p className="mt-2 max-w-[640px] font-cb-sans text-[9.5px] leading-[1.5] text-cb-amber">
+        <p className="mt-2 max-w-[640px] font-cb-sans text-[10px] leading-[1.5] text-cb-amber">
           {georef!.unplaced.length} located station(s) land on no registered sheet:{" "}
           {georef!.unplaced.slice(0, 8).join(", ")}
           {georef!.unplaced.length > 8 ? " …" : ""}. They keep their honest empty tiles rather
@@ -996,7 +996,7 @@ function SheetsView({
         <SectionLabel>REGISTER A SHEET</SectionLabel>
         <div className="mt-2 flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-0.5">
-            <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">SHEET NO.</span>
+            <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">SHEET NO.</span>
             <input
               value={sheet}
               onChange={(e) => setSheet(e.target.value)}
@@ -1005,7 +1005,7 @@ function SheetsView({
             />
           </label>
           <label className="flex flex-col gap-0.5">
-            <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">PART</span>
+            <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">PART</span>
             <select
               value={partId}
               onChange={(e) => setPartId(e.target.value)}
@@ -1019,7 +1019,7 @@ function SheetsView({
             </select>
           </label>
           <label className="flex flex-col gap-0.5">
-            <span className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">PAGE</span>
+            <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">PAGE</span>
             <input
               type="number"
               min={1}
@@ -1042,13 +1042,13 @@ function SheetsView({
               <button
                 type="button"
                 onClick={() => setArming(i)}
-                className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text"
+                className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text"
               >
                 MARK {i === 0 ? "A" : "B"} {arming === i ? "— NEXT CLICK PLACES IT" : "— click to arm"}
               </button>
               <div className="mt-1.5 flex gap-2">
                 <label className="flex flex-col gap-0.5">
-                  <span className="font-cb-mono text-[8px] text-cb-faint">EASTING</span>
+                  <span className="font-cb-mono text-[10px] text-cb-faint">EASTING</span>
                   <input
                     type="number"
                     value={marks[i].easting || ""}
@@ -1057,7 +1057,7 @@ function SheetsView({
                   />
                 </label>
                 <label className="flex flex-col gap-0.5">
-                  <span className="font-cb-mono text-[8px] text-cb-faint">NORTHING</span>
+                  <span className="font-cb-mono text-[10px] text-cb-faint">NORTHING</span>
                   <input
                     type="number"
                     value={marks[i].northing || ""}
@@ -1066,7 +1066,7 @@ function SheetsView({
                   />
                 </label>
               </div>
-              <div className="mt-1 font-cb-mono text-[8.5px] text-cb-muted">
+              <div className="mt-1 font-cb-mono text-[10px] text-cb-muted">
                 on page: {marks[i].x || marks[i].y ? `${marks[i].x}, ${marks[i].y}` : "click the sheet below"}
               </div>
             </div>
@@ -1100,12 +1100,12 @@ function SheetsView({
         {saved && (
           <div className="mt-2">
             {saved.usable ? (
-              <p className="font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-ok-dark">
+              <p className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
                 USABLE — the stations on this sheet now have tiles on HOLES
               </p>
             ) : (
               saved.problems.map((p) => (
-                <p key={p} className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark">
+                <p key={p} className="font-cb-sans text-[10px] leading-[1.5] text-cb-bad-dark">
                   {p}
                 </p>
               ))
@@ -1134,13 +1134,13 @@ function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?
           />
         ))}
         {failed ? (
-          <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-bad-dark">
             NOT KNOWN — the groups could not be read. {failed}. There may be groups on this tender;
             this panel is not saying there are none.
           </p>
         ) : (
           !groups?.groups.length && (
-            <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+            <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
               None yet. A group is a set of holes that drill alike — nothing in the client's
               documents draws these lines, so they are yours.
             </p>
@@ -1156,18 +1156,18 @@ function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?
         <div className="border-b border-cb-border p-3">
           <SectionLabel>AGAINST THE BILL</SectionLabel>
           {!groups.take_off_read ? (
-            <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark">
+            <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-bad-dark">
               NOT CHECKED — {groups.not_checked_because}
             </p>
           ) : groups.reconcile.length === 0 ? (
-            <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-ok-dark">
+            <p className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-ok-dark">
               ✓ Every hole is classed and your counts match what the client billed.
             </p>
           ) : (
             groups.reconcile.map((problem) => (
               <p
                 key={problem}
-                className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-brass-text"
+                className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-brass-text"
               >
                 {problem}
               </p>
@@ -1186,13 +1186,13 @@ function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?
           {groups.reach.map((problem) => (
             <p
               key={problem}
-              className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark"
+              className="mt-1 font-cb-sans text-[10px] leading-[1.55] text-cb-bad-dark"
             >
               {problem}
             </p>
           ))}
           {groups.portable_rig_max_depth_m > 0 && (
-            <p className="mt-1.5 font-cb-sans text-[9px] leading-[1.5] text-cb-muted">
+            <p className="mt-1.5 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
               This is not a programme to lengthen. A carried-in rig that cannot reach the
               scheduled depth is the wrong machine for that hole — it needs a platform and a
               bigger rig, a different route in, or a query.
@@ -1208,7 +1208,7 @@ function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?
             <div key={label} className="mt-1">
               <div className="font-cb-sans text-[10.5px] text-cb-body">{label}</div>
               {missing.map((m) => (
-                <div key={m} className="font-cb-mono text-[9px] text-cb-amber">
+                <div key={m} className="font-cb-mono text-[10px] text-cb-amber">
                   {m}
                 </div>
               ))}
@@ -1218,7 +1218,7 @@ function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?
       )}
 
       <div className="p-3">
-        <p className="font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+        <p className="font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
           One rate has to cover ninety-one unlike holes. Pricing each group separately and letting
           arithmetic average them is how that stays honest — averaging by eye is how a bid gets
           lost.
@@ -1474,7 +1474,7 @@ function GroupEditor({
           {draft.stations.map((station) => (
             <span
               key={station}
-              className="flex items-center gap-1.5 rounded-cb-pill border border-cb-border bg-cb-page px-2 py-0.5 font-cb-mono text-[9px] text-cb-ink-text"
+              className="flex items-center gap-1.5 rounded-cb-pill border border-cb-border bg-cb-page px-2 py-0.5 font-cb-mono text-[10px] text-cb-ink-text"
             >
               {station}
               <select
@@ -1486,7 +1486,7 @@ function GroupEditor({
                   if (target === "") return;
                   void moveStation(station, target === "·ungroup" ? null : target);
                 }}
-                className="rounded-cb-btn border-0 bg-transparent font-cb-sans text-[9px] text-cb-brass-text"
+                className="rounded-cb-btn border-0 bg-transparent font-cb-sans text-[10px] text-cb-brass-text"
               >
                 <option value="">move ▾</option>
                 {allGroups
@@ -1546,7 +1546,7 @@ function GroupEditor({
               onChange={(v) => edit("transport", v as HoleGroup["transport"])}
             />
           </div>
-          <p className="mt-1 font-cb-sans text-[9px] leading-[1.45] text-cb-faint">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
             {TRANSPORT_MEANING[draft.transport] ??
               "Nobody has said yet. The class is what the bill pays against; this is what actually happens."}
           </p>
@@ -1569,7 +1569,7 @@ function GroupEditor({
             unit="HK$"
             onChange={(v) => edit("access_air_cost", v)}
           />
-          <p className="mt-1 font-cb-sans text-[9px] leading-[1.5] text-cb-faint">
+          <p className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-faint">
             A platform lands in the Class B move rate (SMM S02 ¶2.08(h)). Carrying lands in this
             group's own class rate — including Class A, which is the only place that difference
             can be priced. A lift lands nowhere: no item covers one at any class, so it goes to
@@ -1598,14 +1598,14 @@ function GroupEditor({
                 tone={suspicious ? "bad" : undefined}
               />
               {suspicious && (
-                <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.5] text-cb-bad-dark">
+                <p className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-bad-dark">
                   Faster than the output you typed — depth decay can only slow a group down, so
                   something here is not what you meant.
                 </p>
               )}
             </>
           )}
-          <p className="mt-3 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-3 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             Days and the blend recompute as you type because they are exact and cheap. The rate
             does not: it needs the whole bill, and it comes from the Price step.
           </p>
@@ -1621,7 +1621,7 @@ function GroupEditor({
           placeholder="Why you believe these numbers."
           className="mt-1 w-full max-w-[560px] rounded-cb-card border border-cb-border bg-cb-warm p-2 font-cb-serif text-[12px] leading-[1.55] text-cb-body placeholder:text-cb-faint"
         />
-        <p className="mt-1 max-w-[560px] font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+        <p className="mt-1 max-w-[560px] font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
           The group stays "not ready" until you write this. A number nobody can explain is a number
           nobody can defend.
         </p>
@@ -1695,7 +1695,7 @@ function NumberField({
         }}
         className="w-[74px] flex-none rounded-cb-chip border border-cb-border bg-cb-warm px-2 py-1 text-right font-cb-mono text-[11px] text-cb-ink-text"
       />
-      {unit && <span className="w-[34px] flex-none font-cb-mono text-[9px] text-cb-faint">{unit}</span>}
+      {unit && <span className="w-[34px] flex-none font-cb-mono text-[10px] text-cb-faint">{unit}</span>}
       {source && <SourceChip source={source.source} bookValue={source.book_value} />}
     </div>
   );

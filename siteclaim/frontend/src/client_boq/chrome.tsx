@@ -251,11 +251,30 @@ export const TAB_FOR_JOB: Record<string, TabId> = {
   archive: "documents",
 };
 
-function chipFor(state: StepState, current: boolean) {
-  if (state.kind === "done") return { text: "✓ DONE", cls: "text-cb-ok" };
-  if (state.kind === "open")
-    return { text: current ? "OPEN · SHOWN" : "OPEN", cls: "text-cb-brass-text" };
-  return { text: state.label, cls: "text-cb-faint" };
+// THE FOUR THINGS AN ESTIMATOR ACTUALLY DOES, over the eleven steps in the order they happen.
+//
+// The order is untouched — it IS the reading order of a tender, and the comment on TABS defends
+// it. What changes is that eleven flat items with a sentence each did not fit on a 1440px screen:
+// the strip scrolled sideways, so Offer and Closeout were off the right edge, and once you opened
+// Price the auto-scroll put Brain and Documents off the LEFT. A navigation you cannot see the
+// ends of cannot tell you where you are in the job, which is the one thing it is for.
+//
+// So the status sentence comes out of the label and into the title, EXCEPT on the step you are
+// on — where the whole strip has room for it and the "NEXT" line underneath is about to say it
+// anyway. Everything else keeps a one-character mark. Eleven steps then fit at once.
+const PHASES: { name: string; steps: TabId[] }[] = [
+  { name: "Read the pack", steps: ["brain", "documents", "register"] },
+  { name: "Take it on", steps: ["bid", "scope", "site"] },
+  { name: "Sublet", steps: ["route", "sourcing"] },
+  { name: "Price & send", steps: ["price", "offer", "closeout"] },
+];
+
+/** A step's state as ONE character, plus the sentence for the title. Reserving the width for a
+ *  sentence eleven times over is what pushed the ends of the strip off the screen. */
+function markFor(state: StepState) {
+  if (state.kind === "done") return { mark: "\u2713", text: "done", cls: "text-cb-ok-dark" };
+  if (state.kind === "open") return { mark: "\u25cf", text: "open", cls: "text-cb-brass-text" };
+  return { mark: "\u00b7", text: state.label, cls: "text-cb-muted" };
 }
 
 export function StepStrip({
@@ -275,39 +294,65 @@ export function StepStrip({
     // the rail must not move them.
     <nav
       aria-label="Tender steps"
-      className="flex flex-none items-center overflow-x-auto border-b border-cb-border bg-cb-panel px-[18px]"
+      className="flex flex-none items-stretch border-b border-cb-border bg-cb-panel px-[18px]"
     >
-      {TABS.map((tab, i) => {
-        const state = states[tab.id];
-        const chip = chipFor(state, tab.id === current);
-        const isCurrent = tab.id === current;
-        const isOpen = !isCurrent && opened.has(tab.id);
+      {PHASES.map((phase, pi) => {
+        const here = phase.steps.includes(current);
         return (
-          <div key={tab.id} className="flex flex-none items-center">
-            {i > 0 && <span className="flex-none px-1 text-cb-border-strong">›</span>}
-            <button
-              type="button"
-              onClick={() => onSelect(tab.id)}
-              aria-current={isCurrent ? "step" : undefined}
+          <div
+            key={phase.name}
+            className={cx(
+              "flex min-w-0 flex-col justify-center py-1.5",
+              pi > 0 && "ml-3 border-l border-cb-border-strong pl-3",
+            )}
+          >
+            {/* WHERE YOU ARE IN THE JOB, which eleven equal items could never say. The phase you
+                are inside is the only one in ink; the rest stay quiet. */}
+            <div
               className={cx(
-                "cb-press flex flex-none items-center gap-2 whitespace-nowrap px-[14px] py-[9px] font-cb-sans text-[11px]",
-                isCurrent
-                  ? "font-semibold text-cb-ink-text shadow-[inset_0_-2px_0_var(--color-cb-brass)]"
-                  : isOpen
-                    ? "font-semibold text-cb-body shadow-[inset_0_-2px_0_var(--color-cb-brass-line)]"
-                    : "font-medium text-cb-muted",
+                "px-[9px] font-cb-mono text-[10px] font-semibold uppercase tracking-cb-chip",
+                here ? "text-cb-brass-text" : "text-cb-muted",
               )}
             >
-              <span>{tab.label}</span>
-              <span
-                className={cx(
-                  "flex-none whitespace-nowrap font-cb-mono text-[9px] font-medium",
-                  chip.cls,
-                )}
-              >
-                {chip.text}
-              </span>
-            </button>
+              {phase.name}
+            </div>
+            <div className="flex min-w-0 items-center">
+              {phase.steps.map((id) => {
+                const tab = TABS.find((t) => t.id === id)!;
+                const state = states[id];
+                const { mark, text, cls } = markFor(state);
+                const isCurrent = id === current;
+                const isOpen = !isCurrent && opened.has(id);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => onSelect(id)}
+                    aria-current={isCurrent ? "step" : undefined}
+                    title={`${tab.label} \u2014 ${text}`}
+                    className={cx(
+                      "cb-press flex flex-none items-baseline gap-1.5 whitespace-nowrap px-[9px] py-[5px] font-cb-sans text-[11.5px]",
+                      isCurrent
+                        ? "font-semibold text-cb-ink-text shadow-[inset_0_-2px_0_var(--color-cb-brass)]"
+                        : isOpen
+                          ? "font-medium text-cb-body shadow-[inset_0_-2px_0_var(--color-cb-brass-line)]"
+                          : "font-medium text-cb-muted",
+                    )}
+                  >
+                    <span>{tab.label}</span>
+                    <span aria-hidden className={cx("flex-none font-cb-mono text-[10px]", cls)}>
+                      {mark}
+                    </span>
+                    {/* The sentence, for the step you are on only. There is room for exactly one. */}
+                    {isCurrent && state.kind === "waiting" && (
+                      <span className="flex-none font-cb-mono text-[10px] font-medium text-cb-muted">
+                        {state.label}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         );
       })}
@@ -669,7 +714,7 @@ export function DocTab({ onOpen, label }: { onOpen: () => void; label: string })
     >
       <span className="font-cb-mono text-[11px] text-cb-brass">‹</span>
       <span
-        className="whitespace-nowrap font-cb-mono text-[9px] tracking-cb-chip text-cb-muted"
+        className="whitespace-nowrap font-cb-mono text-[10px] tracking-cb-chip text-cb-muted"
         style={{ writingMode: "vertical-rl" }}
       >
         {label}
@@ -688,7 +733,7 @@ export function RailFolded({ lines }: { lines: { value: string; label: string }[
           <span className="font-cb-mono text-[11px] font-semibold text-cb-ink-text">
             {line.value}
           </span>
-          <span className="font-cb-mono text-[7.5px] font-medium tracking-cb-chip text-cb-faint">
+          <span className="font-cb-mono text-[10px] font-medium tracking-cb-chip text-cb-faint">
             {line.label}
           </span>
         </div>

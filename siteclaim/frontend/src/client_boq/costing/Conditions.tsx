@@ -143,7 +143,7 @@ function ConditionCard({
   return (
     <Card selected={!row.status && mapped}>
       <p className="font-cb-serif text-[12px] leading-[1.5] text-cb-ink-text">{row.text}</p>
-      <div className="mt-1 font-cb-mono text-[8.5px] text-cb-faint">
+      <div className="mt-1 font-cb-mono text-[10px] text-cb-faint">
         {row.created_by ? `${row.created_by} · ` : ""}
         {row.created_at?.slice(0, 10)}
         {/* The backward half of "why do we believe this?" — the discussion that concluded it.
@@ -157,7 +157,7 @@ function ConditionCard({
 
       {mapped ? (
         <div className="mt-2 rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-2.5 py-2">
-          <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-brass-text">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
             {row.status === "confirmed" ? "APPLIED" : "PROPOSED — NOT APPLIED"}
           </div>
           <div className="mt-0.5 font-cb-mono text-[10.5px] font-semibold text-cb-ink-text">
@@ -174,14 +174,14 @@ function ConditionCard({
             </p>
           )}
           {row.proposal_source && (
-            <p className="mt-1 font-cb-mono text-[8px] leading-[1.4] text-cb-faint">
+            <p className="mt-1 font-cb-mono text-[10px] leading-[1.4] text-cb-faint">
               {row.proposal_source}
             </p>
           )}
         </div>
       ) : (
         <div className="mt-2 rounded-cb-chip border border-dashed border-cb-border-strong px-2.5 py-2">
-          <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-muted">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-muted">
             NOT MAPPED — AND THAT MAY BE CORRECT
           </div>
           <p className="mt-1 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
@@ -196,7 +196,7 @@ function ConditionCard({
           <>
             <span
               className={cx(
-                "rounded-cb-chip px-1.5 py-[1px] font-cb-mono text-[8px] font-semibold tracking-cb-chip",
+                "rounded-cb-chip px-1.5 py-[1px] font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                 row.status === "confirmed"
                   ? "bg-cb-ok-tint text-cb-ok-dark"
                   : "bg-cb-bad-tint text-cb-bad-dark",
@@ -224,7 +224,7 @@ function ConditionCard({
               onChange={(e) => setOverride(e.target.value)}
               placeholder="or your own number"
               className={cx(
-                "w-[128px] rounded-cb-chip border bg-cb-warm px-2 py-1 text-right font-cb-mono text-[10px] text-cb-ink-text placeholder:text-left placeholder:font-cb-sans placeholder:text-[9.5px] placeholder:text-cb-faint",
+                "w-[128px] rounded-cb-chip border bg-cb-warm px-2 py-1 text-right font-cb-mono text-[10px] text-cb-ink-text placeholder:text-left placeholder:font-cb-sans placeholder:text-[10px] placeholder:text-cb-faint",
                 override && !numeric ? "border-cb-bad" : "border-cb-border",
               )}
             />

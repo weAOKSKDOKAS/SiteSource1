@@ -91,7 +91,7 @@ export function NavSidebar({
                 title={item.label}
                 onClick={() => go(item.surface)}
                 className={cx(
-                  "cb-press flex h-7 w-7 items-center justify-center rounded-cb-btn font-cb-mono text-[8.5px] font-semibold",
+                  "cb-press flex h-7 w-7 items-center justify-center rounded-cb-btn font-cb-mono text-[10px] font-semibold",
                   active(item)
                     ? "border border-cb-border bg-cb-page text-cb-ink-text"
                     : "text-cb-muted",
@@ -133,7 +133,7 @@ export function NavSidebar({
           <div className="truncate font-cb-sans text-[11px] font-semibold text-cb-ink-text">
             {currentUser?.name ?? "Who are you?"}
           </div>
-          <div className="truncate font-cb-sans text-[9.5px] text-cb-muted">
+          <div className="truncate font-cb-sans text-[10px] text-cb-muted">
             {currentUser?.role || (currentUser ? "estimator" : "pick a profile")}
           </div>
         </div>
@@ -162,7 +162,7 @@ function NavBlock({
   return (
     <div className="border-t border-cb-border px-2.5 py-2">
       {heading && (
-        <div className="px-[9px] pb-1 font-cb-mono text-[8px] font-semibold tracking-cb-label text-cb-faint">
+        <div className="px-[9px] pb-1 font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
           {heading}
         </div>
       )}
@@ -182,7 +182,7 @@ function NavBlock({
           {item.count != null && item.count > 0 && (
             <span
               className={cx(
-                "font-cb-mono text-[9.5px] font-semibold",
+                "font-cb-mono text-[10px] font-semibold",
                 item.countTone === "warn" ? "text-cb-brass-text" : "text-cb-muted",
               )}
             >

@@ -73,7 +73,7 @@ export function BillPicker({
 
   return (
     <div className="rounded-cb-card border border-cb-border bg-cb-page px-3 py-2.5">
-      <div className="mb-1.5 font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-muted">
+      <div className="mb-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-muted">
         {title.toUpperCase()}
       </div>
       <div className="flex flex-col gap-1">
@@ -94,14 +94,14 @@ export function BillPicker({
             >
               {candidate.already_imported ? "✓ IN" : "BILL"}
             </Chip>
-            <span className="min-w-0 flex-1 truncate font-cb-mono text-[9.5px] text-cb-body">
+            <span className="min-w-0 flex-1 truncate font-cb-mono text-[10px] text-cb-body">
               {candidate.relative_path}
             </span>
-            <span className="flex-none font-cb-mono text-[9px] text-cb-muted">
+            <span className="flex-none font-cb-mono text-[10px] text-cb-muted">
               {candidate.priceable} priceable
             </span>
             {candidate.already_imported ? (
-              <span className="flex-none font-cb-mono text-[9px] text-cb-ok-dark">IMPORTED</span>
+              <span className="flex-none font-cb-mono text-[10px] text-cb-ok-dark">IMPORTED</span>
             ) : (
               <Button
                 variant={candidate.proposed ? "brass" : "ghost"}
@@ -114,7 +114,7 @@ export function BillPicker({
             {/* The reason the proposal is the proposal. Without it the mark is just an opinion the
                 screen is asserting, which is the thing this product does not do. */}
             {candidate.proposed && !candidate.already_imported && (
-              <span className="w-full font-cb-sans text-[9.5px] leading-[1.45] text-cb-brass-text">
+              <span className="w-full font-cb-sans text-[10px] leading-[1.45] text-cb-brass-text">
                 Looks like the one to price — {candidate.why}. The others are here if you disagree.
               </span>
             )}

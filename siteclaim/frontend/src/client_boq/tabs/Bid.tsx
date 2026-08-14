@@ -247,7 +247,7 @@ export function BidTab({
           <div className="mt-2 grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
             {FACTORS.map((factor) => (
               <label key={factor.key} className="block">
-                <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+                <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
                   {factor.label.toUpperCase()}
                 </span>
                 <input
@@ -325,11 +325,11 @@ export function BidTab({
                   {VERDICTS.find((v) => v.value === decision.verdict)?.label.toUpperCase() ??
                     decision.verdict}
                 </span>
-                <span className="font-cb-mono text-[9px] text-cb-faint">
+                <span className="font-cb-mono text-[10px] text-cb-faint">
                   {decision.decided_by} · {decision.decided_at?.slice(0, 16).replace("T", " ")}
                 </span>
                 {overridden && (
-                  <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text">
+                  <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
                     OVERRULES THE SUGGESTION
                   </span>
                 )}
@@ -376,7 +376,7 @@ function Signal({
         bad ? "border-cb-bad" : warn ? "border-cb-brass-line" : "border-cb-border",
       )}
     >
-      <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+      <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
         {label.toUpperCase()}
       </div>
       <div
@@ -388,9 +388,9 @@ function Signal({
         {value}
       </div>
       {detail && (
-        <div className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">{detail}</div>
+        <div className="mt-0.5 font-cb-sans text-[10px] leading-[1.4] text-cb-muted">{detail}</div>
       )}
-      <div className="mt-1 font-cb-mono text-[7.5px] leading-[1.35] text-cb-faint">{source}</div>
+      <div className="mt-1 font-cb-mono text-[10px] leading-[1.35] text-cb-faint">{source}</div>
     </div>
   );
 }

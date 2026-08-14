@@ -353,7 +353,7 @@ export function PageView({
             type="button"
             title="Fit the page to the pane"
             onClick={fitWidth}
-            className="cb-press ml-1 whitespace-nowrap rounded-cb-chip border border-cb-border-strong bg-white px-1.5 py-0.5 font-cb-sans text-[9.5px] font-medium"
+            className="cb-press ml-1 whitespace-nowrap rounded-cb-chip border border-cb-border-strong bg-white px-1.5 py-0.5 font-cb-sans text-[10px] font-medium"
           >
             Fit
           </button>
@@ -364,7 +364,7 @@ export function PageView({
               type="button"
               title="Hide the highlights (Esc). Choosing another citation brings them back."
               onClick={() => setDismissed(true)}
-              className="cb-press whitespace-nowrap rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-1.5 py-0.5 font-cb-sans text-[9.5px] font-medium text-cb-brass-text"
+              className="cb-press whitespace-nowrap rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-1.5 py-0.5 font-cb-sans text-[10px] font-medium text-cb-brass-text"
             >
               Clear
             </button>
@@ -436,7 +436,7 @@ export function PageView({
                 title={part.title}
               />
             ))}
-            <p className="pb-4 font-cb-mono text-[9px] text-cb-faint">
+            <p className="pb-4 font-cb-mono text-[10px] text-cb-faint">
               end of {part.part_id} · pp. {part.pages}
             </p>
           </div>
@@ -501,7 +501,7 @@ const PageImage = forwardRef<HTMLDivElement, PageImageProps>(
         style={{ width, height: near ? undefined : Math.round(width * ratio) }}
         className="relative w-full flex-none scroll-mt-4 bg-white shadow-cb-page ring-1 ring-cb-border-strong"
       >
-        <span className="pointer-events-none absolute -top-3.5 right-0 font-cb-mono text-[9px] text-cb-faint">
+        <span className="pointer-events-none absolute -top-3.5 right-0 font-cb-mono text-[10px] text-cb-faint">
           p. {page}
         </span>
 
@@ -576,7 +576,7 @@ function SearchResult({
       type="button"
       onClick={() => onGo(next.page)}
       title={`Pages ${hits.map((h) => h.page).join(", ")}`}
-      className="cb-press flex-none whitespace-nowrap rounded-cb-chip bg-cb-ok-tint px-[7px] py-[3px] font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-ok-dark"
+      className="cb-press flex-none whitespace-nowrap rounded-cb-chip bg-cb-ok-tint px-[7px] py-[3px] font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark"
     >
       {hits.length} PAGE{hits.length === 1 ? "" : "S"} · NEXT p.{next.page}
     </button>

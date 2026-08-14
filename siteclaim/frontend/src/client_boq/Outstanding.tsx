@@ -100,7 +100,7 @@ export function Outstanding({
       {/* ---- how much of this total nobody chose ---- */}
       {data.priced.provisional && (
         <div className="mt-2 rounded-cb-card border border-cb-bad bg-cb-bad-tint px-3 py-2">
-          <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-bad-dark">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-bad-dark">
             PROVISIONAL TOTAL — DO NOT SUBMIT
           </div>
           <p className="mt-1 font-cb-sans text-[11px] leading-[1.55] text-cb-bad-dark">
@@ -119,7 +119,7 @@ export function Outstanding({
             onClick={() =>
               void patchModel((m) => ({ ...m, use_placeholders: !m.use_placeholders }))
             }
-            className="cb-press mt-1.5 font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-bad-dark underline underline-offset-2"
+            className="cb-press mt-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark underline underline-offset-2"
           >
             SHOW IT WITHOUT PLACEHOLDERS
           </button>
@@ -129,7 +129,7 @@ export function Outstanding({
       {/* ---- 1 · the list that prices many lines at once ---- */}
       {prelims.length > 0 && (
         <div className="mt-3 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2.5">
-          <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-muted">
+          <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-muted">
             1 · WHAT IS STANDING ON SITE
           </div>
           <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.5] text-cb-muted">
@@ -164,7 +164,7 @@ export function Outstanding({
 
       {/* ---- 2 · the stand-ins ---- */}
       <div className="mt-3 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2.5">
-        <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-muted">
+        <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-muted">
           2 · THE PLACEHOLDERS
         </div>
         <p className="mt-1 font-cb-sans text-[10.5px] leading-[1.5] text-cb-muted">
@@ -197,7 +197,7 @@ export function Outstanding({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="cb-press mt-3 font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-brass-text"
+        className="cb-press mt-3 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text"
       >
         {open ? "▾" : "▸"} 3 · THE {needsWork.length} LINES, BIGGEST FIRST
       </button>
@@ -205,7 +205,7 @@ export function Outstanding({
       {open &&
         groups.map(([key, rows]) => (
           <div key={key} className="mt-2">
-            <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint">
+            <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
               {BEHAVIOUR[key]?.label ?? key} · {rows.length} · {BEHAVIOUR[key]?.how}
             </div>
             <div className="mt-1 flex flex-col">
@@ -214,22 +214,22 @@ export function Outstanding({
                   key={row.full_ref}
                   className="flex flex-wrap items-baseline gap-2 border-b border-cb-divider py-1 last:border-0"
                 >
-                  <span className="w-[46px] flex-none font-cb-mono text-[9.5px] font-semibold text-cb-ink-text">
+                  <span className="w-[46px] flex-none font-cb-mono text-[10px] font-semibold text-cb-ink-text">
                     {row.full_ref}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-cb-sans text-[10.5px] text-cb-body">
                     {row.description}
                   </span>
-                  <span className="flex-none font-cb-mono text-[9.5px] text-cb-muted">
+                  <span className="flex-none font-cb-mono text-[10px] text-cb-muted">
                     {row.lump ? "lump" : `${row.qty?.toLocaleString("en-US")} ${row.unit}`}
                   </span>
                   {row.source === "placeholder" && (
-                    <span className="flex-none font-cb-mono text-[8.5px] font-semibold text-cb-bad-dark">
+                    <span className="flex-none font-cb-mono text-[10px] font-semibold text-cb-bad-dark">
                       {money(row.amount ?? 0)} PROVISIONAL
                     </span>
                   )}
                   {row.note && (
-                    <span className="w-full font-cb-sans text-[9.5px] leading-[1.45] text-cb-faint">
+                    <span className="w-full font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
                       {row.note}
                     </span>
                   )}
@@ -239,7 +239,7 @@ export function Outstanding({
           </div>
         ))}
 
-      <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+      <p className="mt-2 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
         The third way to answer a line is on the table above: click its rate and type your own. A
         rate you type is a selling rate — it is not marked up again, because your margin is already
         in it.
@@ -275,7 +275,7 @@ function RateRow({
       <span className="min-w-0 flex-1 truncate font-cb-sans text-[10.5px] text-cb-body">
         {label}
       </span>
-      <span className="flex-none font-cb-mono text-[9px] text-cb-faint">{unit}</span>
+      <span className="flex-none font-cb-mono text-[10px] text-cb-faint">{unit}</span>
       <span
         className={cx(
           "w-[74px] flex-none text-right font-cb-mono text-[10px] font-semibold",

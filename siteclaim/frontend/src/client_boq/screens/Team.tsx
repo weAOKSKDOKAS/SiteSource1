@@ -68,13 +68,13 @@ export function Team({
                   <div className="truncate font-cb-sans text-[12px] font-semibold text-cb-ink-text">
                     {m.name}
                     {m.member_id === currentUserId && (
-                      <span className="ml-2 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-brass-text">
+                      <span className="ml-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
                         THIS IS YOU
                       </span>
                     )}
                   </div>
                   <div className="truncate font-cb-sans text-[10px] text-cb-muted">
-                    {m.role || "—"} · <span className="font-cb-mono text-[9px]">{m.member_id}</span>
+                    {m.role || "—"} · <span className="font-cb-mono text-[10px]">{m.member_id}</span>
                   </div>
                 </div>
                 {m.member_id !== currentUserId && (

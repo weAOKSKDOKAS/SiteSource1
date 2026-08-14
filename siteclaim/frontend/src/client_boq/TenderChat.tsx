@@ -125,7 +125,7 @@ export function TenderChat({
       className="fixed bottom-0 right-0 z-40 flex h-[min(680px,88vh)] w-[420px] flex-col rounded-tl-cb-card border-l border-t border-cb-border bg-cb-surface shadow-[0_-4px_24px_rgba(12,26,40,.16)]"
     >
       <header className="flex flex-none items-center gap-2 border-b border-cb-border bg-cb-panel px-3 py-2">
-        <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+        <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
           THIS TENDER
         </span>
         <span className="truncate font-cb-sans text-[11.5px] font-semibold text-cb-ink-text">
@@ -141,7 +141,7 @@ export function TenderChat({
         </button>
       </header>
 
-      <p className="flex-none border-b border-cb-divider px-3 py-1.5 font-cb-sans text-[9px] leading-[1.5] text-cb-muted">
+      <p className="flex-none border-b border-cb-divider px-3 py-1.5 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
         Answers come only from this tender&rsquo;s own ground, and this conversation stays with
         this folder. It can quote a figure the engine computed; it cannot invent one, and the one
         thing it may propose is recording a condition — which you then confirm.
@@ -183,12 +183,12 @@ export function TenderChat({
               </p>
 
               {Object.keys(entry.figures ?? {}).length > 0 && (
-                <p className="mt-1 font-cb-mono text-[8.5px] text-cb-brass-text">
+                <p className="mt-1 font-cb-mono text-[10px] text-cb-brass-text">
                   figures quoted — {Object.keys(entry.figures ?? {}).join(" · ")}
                 </p>
               )}
               {(entry.citations?.length ?? 0) > 0 && (
-                <p className="mt-0.5 font-cb-sans text-[8.5px] leading-[1.45] text-cb-muted">
+                <p className="mt-0.5 font-cb-sans text-[10px] leading-[1.45] text-cb-muted">
                   {entry.citations!.map((c) => (
                     <span key={c.source} className="mr-1.5 font-cb-mono text-cb-brass-text">
                       [{c.source}]
@@ -197,7 +197,7 @@ export function TenderChat({
                 </p>
               )}
               {(entry.stripped?.length ?? 0) > 0 && (
-                <p className="mt-1 font-cb-sans text-[9px] leading-[1.45] text-cb-bad-dark">
+                <p className="mt-1 font-cb-sans text-[10px] leading-[1.45] text-cb-bad-dark">
                   {entry.stripped!.length} claim(s) were removed for citing nothing that was
                   supplied.
                 </p>
@@ -206,7 +206,7 @@ export function TenderChat({
               {entry.became_condition ? (
                 <p
                   className={cx(
-                    "mt-1 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+                    "mt-1 font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                     entry.became_status === "rejected" ? "text-cb-bad-dark" : "text-cb-ok-dark",
                   )}
                 >
@@ -217,11 +217,11 @@ export function TenderChat({
               ) : (
                 entry.proposes && (
                   <div className="mt-1.5 rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-2 py-1.5">
-                    <p className="font-cb-sans text-[9.5px] leading-[1.45] text-cb-brass-text">
+                    <p className="font-cb-sans text-[10px] leading-[1.45] text-cb-brass-text">
                       Suggests recording: <em>{entry.proposes}</em>
                     </p>
                     {recorded[entry.seq] ? (
-                      <p className="mt-1 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                      <p className="mt-1 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
                         RECORDED — CONFIRM THE MAPPING ON PRICE
                       </p>
                     ) : (
@@ -240,7 +240,7 @@ export function TenderChat({
           <p className="font-cb-sans text-[10px] text-cb-muted">Reading this tender&rsquo;s ground…</p>
         )}
         {last && last.grounded_in.length > 0 && !busy && (
-          <p className="font-cb-mono text-[8px] text-cb-faint">
+          <p className="font-cb-mono text-[10px] text-cb-faint">
             last answer grounded in {last.grounded_in.length} source(s)
           </p>
         )}

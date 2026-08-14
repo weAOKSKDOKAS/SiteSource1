@@ -71,7 +71,7 @@ export function BrainTab({
             The tender's brain
           </h1>
           {briefing && (
-            <span className="font-cb-mono text-[9.5px] text-cb-faint">
+            <span className="font-cb-mono text-[10px] text-cb-faint">
               briefing #{briefing.seq} of {count} · {briefing.created_by || "someone"} ·{" "}
               {briefing.created_at?.slice(0, 16).replace("T", " ")}
             </span>
@@ -112,7 +112,7 @@ export function BrainTab({
                 </p>
               )}
               {briefing.reads.length > 0 && (
-                <p className="mt-2 font-cb-mono text-[8.5px] text-cb-faint">
+                <p className="mt-2 font-cb-mono text-[10px] text-cb-faint">
                   reads — {briefing.reads.join(" · ")}
                 </p>
               )}
@@ -148,7 +148,7 @@ export function BrainTab({
                     <span className="font-cb-sans text-[11.5px] font-semibold text-cb-ink-text">
                       {action.label}
                     </span>
-                    <span className="font-cb-mono text-[8.5px] tracking-cb-chip text-cb-faint">
+                    <span className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">
                       → {action.tab.toUpperCase()}
                     </span>
                     <span className="ml-auto">
@@ -159,10 +159,10 @@ export function BrainTab({
                     {action.reasoning}
                   </p>
                   {action.citations.length > 0 && (
-                    <p className="mt-1 font-cb-sans text-[9px] leading-[1.45] text-cb-muted">
+                    <p className="mt-1 font-cb-sans text-[10px] leading-[1.45] text-cb-muted">
                       leans on{" "}
                       {action.citations.map((c) => (
-                        <span key={c.source} className="mr-1.5 font-cb-mono text-[8.5px] text-cb-brass-text">
+                        <span key={c.source} className="mr-1.5 font-cb-mono text-[10px] text-cb-brass-text">
                           [{c.source}]
                         </span>
                       ))}
@@ -174,11 +174,11 @@ export function BrainTab({
 
             {briefing.stripped.length > 0 && (
               <section className="mt-5 rounded-cb-card border border-cb-bad bg-cb-bad-tint px-3 py-2">
-                <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-bad-dark">
+                <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
                   REMOVED FROM THIS BRIEFING
                 </div>
                 {briefing.stripped.map((line) => (
-                  <p key={line} className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.45] text-cb-bad-dark">
+                  <p key={line} className="mt-0.5 font-cb-sans text-[10px] leading-[1.45] text-cb-bad-dark">
                     {line}
                   </p>
                 ))}

@@ -97,7 +97,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
 
         {data.problems.length > 0 && (
           <div className="mt-3 rounded-cb-card border border-cb-bad bg-cb-bad-tint px-3 py-2">
-            <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-bad-dark">
+            <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
               THIS MODEL WILL NOT PRICE
             </div>
             {data.problems.map((p) => (
@@ -110,7 +110,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
 
         {data.retired.length > 0 && (
           <div className="mt-3 rounded-cb-card border border-cb-brass-line bg-cb-brass-tint px-3 py-2">
-            <div className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text">
+            <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
               INPUTS NOTHING READS ANY MORE
             </div>
             {data.retired.map((r) => (
@@ -143,7 +143,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
                   <span className="font-cb-mono text-[11px] font-semibold text-cb-ink-text">
                     {group.charge === "prelim" ? "—" : money(total)}
                     {group.charge !== "prelim" && (
-                      <span className="ml-1 text-[8.5px] font-medium text-cb-faint">/ day</span>
+                      <span className="ml-1 text-[10px] font-medium text-cb-faint">/ day</span>
                     )}
                   </span>
                 </div>
@@ -162,7 +162,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
                         {["RESOURCE", "MULTIPLIER", "RATE ($/day)", "COST ($/day)", "NOTE"].map((h) => (
                           <th
                             key={h}
-                            className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint"
+                            className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint"
                           >
                             {h}
                           </th>
@@ -174,7 +174,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
                         <tr key={line.key} className="cb-row border-b border-cb-divider last:border-0">
                           <td className="px-3 py-1.5">
                             <span className="font-cb-sans text-[11px] text-cb-body">{line.label}</span>
-                            <span className="ml-2 font-cb-mono text-[8px] text-cb-faint">{line.key}</span>
+                            <span className="ml-2 font-cb-mono text-[10px] text-cb-faint">{line.key}</span>
                           </td>
                           <td className="px-3 py-1.5">
                             <NumberCell
@@ -196,7 +196,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
                               maximumFractionDigits: 2,
                             })}
                           </td>
-                          <td className="max-w-[280px] px-3 py-1.5 font-cb-sans text-[9.5px] leading-[1.4] text-cb-faint">
+                          <td className="max-w-[280px] px-3 py-1.5 font-cb-sans text-[10px] leading-[1.4] text-cb-faint">
                             {line.note}
                           </td>
                         </tr>
@@ -226,7 +226,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
                   {["BAND", "FROM (rock %)", "m/WORK-DAY", "n HOLES", "CALIBRATION DEPTH"].map((h) => (
                     <th
                       key={h}
-                      className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint"
+                      className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint"
                     >
                       {h}
                     </th>
@@ -260,7 +260,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
                     <td className="px-3 py-1.5 font-cb-mono text-[10px] text-cb-muted">
                       {band.holes}
                       {band.holes < 10 && (
-                        <span className="ml-1.5 text-[8px] font-semibold tracking-cb-chip text-cb-brass-text">
+                        <span className="ml-1.5 text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
                           INDICATIVE
                         </span>
                       )}
@@ -297,7 +297,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
                       />
                     </div>
                     {spec.note && (
-                      <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.45] text-cb-faint">
+                      <p className="mt-1 font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
                         {spec.note}
                       </p>
                     )}
@@ -321,7 +321,7 @@ export function CostingModelScreen({ onError }: { onError: (msg: string) => void
             {draft.markup.map((step) => (
               <Card key={step.key} className="min-w-[190px]">
                 <div className="font-cb-sans text-[11px] font-medium text-cb-ink-text">{step.label}</div>
-                <div className="mt-0.5 font-cb-mono text-[9px] text-cb-faint">
+                <div className="mt-0.5 font-cb-mono text-[10px] text-cb-faint">
                   {step.kind === "on_selling" ? "margin — on selling price" : "loading — added to cost"}
                 </div>
                 <div className="mt-1 font-cb-mono text-[10px] text-cb-muted">
@@ -403,7 +403,7 @@ function NumberCell({
           !numeric ? "border-cb-bad" : flag ? "border-cb-brass-line" : "border-cb-border",
         )}
       />
-      {suffix && <span className="font-cb-mono text-[8.5px] text-cb-faint">{suffix}</span>}
+      {suffix && <span className="font-cb-mono text-[10px] text-cb-faint">{suffix}</span>}
     </span>
   );
 }

@@ -92,7 +92,7 @@ export function AuthorBadge({ author }: { author: Author }) {
     <span
       title={AUTHOR[author].long}
       className={cx(
-        "inline-flex flex-none items-center gap-1.5 whitespace-nowrap font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+        "inline-flex flex-none items-center gap-1.5 whitespace-nowrap font-cb-mono text-[10px] font-semibold tracking-cb-chip",
         AUTHOR[author].text,
       )}
     >
@@ -120,7 +120,7 @@ export function Chip({
       title={title}
       className={cx(
         "inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-cb-chip px-[7px] py-[3px]",
-        "font-cb-mono text-[9px] font-semibold tracking-cb-chip",
+        "font-cb-mono text-[10px] font-semibold tracking-cb-chip",
         className,
       )}
     >
@@ -207,7 +207,7 @@ export function SectionLabel({ children, className }: { children: ReactNode; cla
   return (
     <div
       className={cx(
-        "font-cb-mono text-[8.5px] font-semibold uppercase tracking-cb-label text-cb-faint",
+        "font-cb-mono text-[10px] font-semibold uppercase tracking-cb-label text-cb-faint",
         className,
       )}
     >
@@ -375,7 +375,7 @@ export function MapCrop({
         style={{ width: size, height: size }}
         title="This sheet has no grid marks yet — read the coordinates beside any two grid crosses and every station on it follows."
         className={cx(
-          "flex flex-none items-center justify-center rounded-cb-chip border border-dashed border-cb-border-strong bg-cb-panel p-1 text-center font-cb-mono text-[7.5px] leading-[1.35] text-cb-faint",
+          "flex flex-none items-center justify-center rounded-cb-chip border border-dashed border-cb-border-strong bg-cb-panel p-1 text-center font-cb-mono text-[10px] leading-[1.35] text-cb-faint",
           className,
         )}
       >
@@ -413,7 +413,7 @@ export function MapCrop({
       {box?.clipped && (
         <span
           title="This station is near the edge of the sheet, so part of the window is off the paper."
-          className="absolute bottom-0 right-0 bg-cb-amber px-1 font-cb-mono text-[7px] font-semibold text-cb-on-brass"
+          className="absolute bottom-0 right-0 bg-cb-amber px-1 font-cb-mono text-[10px] font-semibold text-cb-on-brass"
         >
           EDGE
         </span>

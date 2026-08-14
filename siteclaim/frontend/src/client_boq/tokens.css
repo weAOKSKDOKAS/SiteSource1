@@ -28,8 +28,8 @@
   --color-cb-navy-line: #20364a;    /* sent-panel header, borders on dark */
   --color-cb-body: #2c3a48;         /* body / clause text */
   --color-cb-blue: #2f6e8a;         /* AUTHORSHIP: uncovered clause · addenda */
-  --color-cb-muted: #61707e;        /* secondary text */
-  --color-cb-faint: #8a97a3;        /* labels, faint meta */
+  --color-cb-muted: #4f5d6a;        /* secondary text */
+  --color-cb-faint: #5a6874;        /* labels, faint meta */
   --color-cb-dim: #9fb4c6;          /* dim text on dark surfaces */
   --color-cb-disabled: #b4c6d6;     /* disabled control text */
   --color-cb-track: #dce4ea;        /* chart track */
@@ -48,23 +48,23 @@
 
   /* --- brass ------------------------------------------------------------ */
   --color-cb-brass: #bd9a5f;        /* AUTHORSHIP: the model · primary accent */
-  --color-cb-amber: #c28a2e;        /* negotiated · vision-OCR · warning */
+  --color-cb-amber: #8a5f16;        /* negotiated · vision-OCR · warning */
   --color-cb-brass-line: #dcc79a;
-  --color-cb-brass-tint: #f0e2c8;   /* accent tint AND the page highlight fill */
-  --color-cb-selected: #f8f0df;     /* selected row / card */
-  --color-cb-negotiated: #f6ebd0;   /* dismissed-to-negotiate row */
-  --color-cb-brass-text: #856636;
-  --color-cb-brass-text-light: #9e7c45;
+  --color-cb-brass-tint: #f7edda;   /* accent tint AND the page highlight fill */
+  --color-cb-selected: #faf3e6;     /* selected row / card */
+  --color-cb-negotiated: #f9f0dc;   /* dismissed-to-negotiate row */
+  --color-cb-brass-text: #7c5f32;
+  --color-cb-brass-text-light: #7b6035;
   --color-cb-on-brass: #221a0c;     /* text on a brass fill */
 
   /* --- semantics -------------------------------------------------------- */
   --color-cb-ok: #3c8a63;
   --color-cb-ok-dark: #235740;
-  --color-cb-ok-tint: #deebe2;
+  --color-cb-ok-tint: #e4efe8;
   --color-cb-bad: #c25539;          /* AUTHORSHIP: citation failed */
   --color-cb-bad-dark: #8a3826;
   --color-cb-bad-mid: #a8432b;
-  --color-cb-bad-tint: #f4e1d9;
+  --color-cb-bad-tint: #f8e8e1;
   /* The hairline for a bad-tint panel, paired with `--color-cb-bad-tint` exactly as
      `--color-cb-brass-line` is paired with `--color-cb-brass-tint`. It was USED in five places
      and never defined: an undefined token generates no utility in Tailwind v4 and no error

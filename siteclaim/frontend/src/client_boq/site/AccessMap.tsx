@@ -185,7 +185,7 @@ export function AccessMap({
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
       <div className="flex items-baseline gap-3">
         <SectionLabel>WHERE THE HOLES ARE</SectionLabel>
-        <span className="font-cb-mono text-[9.5px] text-cb-faint">
+        <span className="font-cb-mono text-[10px] text-cb-faint">
           {board.clusters.length} cluster(s) within {board.radius_m}m · {undecided} hole(s)
           unclassed
         </span>
@@ -257,7 +257,7 @@ export function AccessMap({
           ]}
           onChange={setPerHole}
         />
-        <span className="font-cb-mono text-[9px] text-cb-faint">
+        <span className="font-cb-mono text-[10px] text-cb-faint">
           {showHoles
             ? "one pin per borehole, from its own coordinates"
             : `one pin per proximity cluster · zoom ${zoom}${perHole === "auto" ? " — individual holes at 15+" : ""}`}
@@ -276,7 +276,7 @@ export function AccessMap({
         {(road?.points ?? []).map((p) => (
           <span
             key={p.point_id}
-            className="flex items-center gap-1.5 rounded-cb-pill border border-cb-border bg-cb-page px-2.5 py-1 font-cb-mono text-[9px] text-cb-ink-text"
+            className="flex items-center gap-1.5 rounded-cb-pill border border-cb-border bg-cb-page px-2.5 py-1 font-cb-mono text-[10px] text-cb-ink-text"
           >
             ● {p.label || p.point_id}
             <span className="text-cb-faint">{p.picked_by}</span>
@@ -298,7 +298,7 @@ export function AccessMap({
           </span>
         ))}
         {(road?.points ?? []).length === 0 && !picking && (
-          <span className="font-cb-sans text-[9.5px] text-cb-muted">
+          <span className="font-cb-sans text-[10px] text-cb-muted">
             None picked — the road-distance evidence stays dark until somebody says where the
             site is entered from.
           </span>
@@ -355,11 +355,11 @@ function AccessCard({
           <span className="font-cb-sans text-[12px] font-semibold text-cb-ink-text">
             {cluster.label}
           </span>
-          <span className="font-cb-mono text-[9.5px] text-cb-muted">
+          <span className="font-cb-mono text-[10px] text-cb-muted">
             {cluster.holes} hole{cluster.holes === 1 ? "" : "s"}
           </span>
         </div>
-        <div className="mt-0.5 font-cb-mono text-[9px] text-cb-faint">
+        <div className="mt-0.5 font-cb-mono text-[10px] text-cb-faint">
           {metres.toLocaleString("en-US", { maximumFractionDigits: 0 })} m · deepest{" "}
           {cluster.deepest_m.toFixed(1)} m · spread {cluster.spread_m.toFixed(0)} m ·{" "}
           {cluster.lat.toFixed(5)}, {cluster.lon.toFixed(5)}
@@ -372,7 +372,7 @@ function AccessCard({
             <span
               key={c}
               className={cx(
-                "rounded-cb-chip px-1.5 py-0.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip",
+                "rounded-cb-chip px-1.5 py-0.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                 c === "A" && "bg-cb-ok-tint text-cb-ok-dark",
                 c === "B" && "bg-cb-brass-tint text-cb-brass-text",
                 c === "C" && "bg-cb-bad-tint text-cb-bad-dark",
@@ -383,14 +383,14 @@ function AccessCard({
           ) : null,
         )}
         {undecided > 0 && (
-          <span className="rounded-cb-chip border border-dashed border-cb-brass-line px-1.5 py-0.5 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-brass-text">
+          <span className="rounded-cb-chip border border-dashed border-cb-brass-line px-1.5 py-0.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
             {undecided} UNCLASSED
           </span>
         )}
       </div>
 
       {cluster.notes.map((note) => (
-        <p key={note} className="font-cb-sans text-[9.5px] leading-[1.45] text-cb-muted">
+        <p key={note} className="font-cb-sans text-[10px] leading-[1.45] text-cb-muted">
           {note}
         </p>
       ))}
@@ -398,7 +398,7 @@ function AccessCard({
       {open && (
         <>
           <div className="border-t border-cb-divider pt-2">
-            <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+            <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
               EVIDENCE — WHAT CAN BE LOOKED AT
             </div>
             <div className="mt-1.5 flex flex-col gap-1.5">
@@ -408,7 +408,7 @@ function AccessCard({
             </div>
           </div>
           <div className="border-t border-cb-divider pt-2">
-            <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+            <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
               STATIONS
             </div>
             <div className="mt-1 flex flex-wrap gap-1">
@@ -418,7 +418,7 @@ function AccessCard({
                   type="button"
                   onClick={() => onFocusStation?.(station)}
                   title="Open this hole on the HOLES view, where the class is decided"
-                  className="cb-press rounded-cb-chip border border-cb-border px-1.5 py-0.5 font-cb-mono text-[8.5px] text-cb-body"
+                  className="cb-press rounded-cb-chip border border-cb-border px-1.5 py-0.5 font-cb-mono text-[10px] text-cb-body"
                 >
                   {station}
                 </button>
@@ -437,10 +437,10 @@ function EvidenceLine({ item }: { item: Evidence }) {
   if (!item.available) {
     return (
       <div className="flex gap-2">
-        <span className="w-[92px] flex-none font-cb-sans text-[9.5px] text-cb-disabled">
+        <span className="w-[92px] flex-none font-cb-sans text-[10px] text-cb-disabled">
           {item.label}
         </span>
-        <span className="flex-1 font-cb-sans text-[9px] leading-[1.4] text-cb-faint">
+        <span className="flex-1 font-cb-sans text-[10px] leading-[1.4] text-cb-faint">
           {item.unavailable_reason}
         </span>
       </div>
@@ -450,7 +450,7 @@ function EvidenceLine({ item }: { item: Evidence }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline gap-2">
-        <span className="w-[92px] flex-none font-cb-sans text-[9.5px] text-cb-body">
+        <span className="w-[92px] flex-none font-cb-sans text-[10px] text-cb-body">
           {item.label}
         </span>
         {item.external ? (
@@ -458,7 +458,7 @@ function EvidenceLine({ item }: { item: Evidence }) {
             href={item.url}
             target="_blank"
             rel="noreferrer"
-            className="cb-press font-cb-sans text-[9.5px] font-medium text-cb-brass-text underline underline-offset-2"
+            className="cb-press font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2"
           >
             open ↗
           </a>
@@ -466,16 +466,16 @@ function EvidenceLine({ item }: { item: Evidence }) {
           <button
             type="button"
             onClick={() => setStill((v) => !v)}
-            className="cb-press font-cb-sans text-[9.5px] font-medium text-cb-brass-text underline underline-offset-2"
+            className="cb-press font-cb-sans text-[10px] font-medium text-cb-brass-text underline underline-offset-2"
           >
             {still ? "hide" : "fetch"}
           </button>
         ) : item.note ? (
           // The evidence IS a number: the measured road distance. Mono, because a machine
           // computed it — from a point a person picked.
-          <span className="font-cb-mono text-[9.5px] text-cb-ink-text">{item.note}</span>
+          <span className="font-cb-mono text-[10px] text-cb-ink-text">{item.note}</span>
         ) : (
-          <span className="font-cb-sans text-[9px] text-cb-faint">on the map above</span>
+          <span className="font-cb-sans text-[10px] text-cb-faint">on the map above</span>
         )}
       </div>
       {still && item.url && (

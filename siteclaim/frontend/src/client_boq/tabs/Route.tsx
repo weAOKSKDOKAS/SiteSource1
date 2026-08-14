@@ -500,7 +500,7 @@ export function RouteTab({
               read after choosing a route it would be an epitaph rather than a warning. */}
           {routeNotes.length > 0 && (
             <div className="mb-3 border border-cb-amber px-3 py-2">
-              <div className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-amber">
+              <div className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-amber">
                 READ THIS BEFORE RELYING ON THE ROUTING
               </div>
               {routeNotes.map((n) => (

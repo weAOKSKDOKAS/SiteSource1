@@ -81,7 +81,7 @@ export function Rates({
                 <thead>
                   <tr className="border-b border-cb-border">
                     {["RATE ID", "DESCRIPTION", "UNIT", "RATE", "", ""].map((h, i) => (
-                      <th key={i} className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint">
+                      <th key={i} className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
                         {h}
                       </th>
                     ))}
@@ -106,12 +106,12 @@ export function Rates({
                         <td className="px-3 py-1.5">
                           <span className="font-cb-sans text-[11px] text-cb-body">{row.description}</span>
                           {row.source === "user" && row.updated_by && (
-                            <span className="ml-2 font-cb-mono text-[8px] text-cb-faint" title={row.updated_at ?? undefined}>
+                            <span className="ml-2 font-cb-mono text-[10px] text-cb-faint" title={row.updated_at ?? undefined}>
                               edited · {row.updated_by}
                             </span>
                           )}
                           {row.archived && (
-                            <span className="ml-2 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-bad-dark">
+                            <span className="ml-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
                               ARCHIVED — PRICES AS MISSING
                             </span>
                           )}
@@ -119,7 +119,7 @@ export function Rates({
                         <td className="px-3 py-1.5 font-cb-mono text-[10px] text-cb-muted">{row.unit}</td>
                         <td className="px-3 py-1.5 text-right font-cb-mono text-[11px] font-semibold text-cb-ink-text">
                           {row.rate.toLocaleString("en-US")}
-                          {row.currency && <span className="ml-1 text-[8.5px] font-medium text-cb-faint">{row.currency}</span>}
+                          {row.currency && <span className="ml-1 text-[10px] font-medium text-cb-faint">{row.currency}</span>}
                         </td>
                         <td className="px-2 py-1.5">
                           {!row.archived && (

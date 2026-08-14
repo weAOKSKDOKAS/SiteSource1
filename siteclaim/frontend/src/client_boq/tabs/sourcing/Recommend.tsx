@@ -326,7 +326,7 @@ function TradeRecommendation({
       </Card>
 
       <Card flush className="overflow-hidden">
-        <h4 className="border-b border-cb-divider px-3 py-2 font-cb-sans text-[9px] font-semibold uppercase tracking-cb-chip text-cb-muted">
+        <h4 className="border-b border-cb-divider px-3 py-2 font-cb-sans text-[10px] font-semibold uppercase tracking-cb-chip text-cb-muted">
           Ranked — clean firms first, flagged firms demoted
         </h4>
         <ol className="divide-y divide-cb-divider">

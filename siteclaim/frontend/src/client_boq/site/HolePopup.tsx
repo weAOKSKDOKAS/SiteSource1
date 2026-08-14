@@ -140,7 +140,7 @@ export function HolePopup({
 
       {/* MEASURED — what the schedule records. A column the drawing never printed prints blank,
           never zero: zero would be a claim that the hole has no depth. */}
-      <div className="font-cb-mono text-[9px] leading-[1.5] text-cb-muted">
+      <div className="font-cb-mono text-[10px] leading-[1.5] text-cb-muted">
         {station.kind || "BH"} ·{" "}
         {depth > 0 ? `${formatNorm(depth)} m` : "no depth on the schedule"}
         {station.rock_m ? ` · ${formatNorm(station.rock_m)} m rock` : " · soil only"}
@@ -152,7 +152,7 @@ export function HolePopup({
 
       {/* MEASURED, and correctable. */}
       <div className="rounded-cb-chip bg-cb-panel px-2 py-1.5">
-        <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+        <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
           HK1980 GRID — TYPE TO MOVE THE PIN
         </div>
         <div className="mt-1 flex items-center gap-1.5">
@@ -180,9 +180,9 @@ export function HolePopup({
           </Button>
         </div>
         {moved && (
-          <p className="mt-1 font-cb-mono text-[8.5px] text-cb-ok-dark">{moved}</p>
+          <p className="mt-1 font-cb-mono text-[10px] text-cb-ok-dark">{moved}</p>
         )}
-        <p className="mt-1 font-cb-sans text-[8.5px] leading-[1.45] text-cb-faint">
+        <p className="mt-1 font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
           The drawing's own reading is kept. "Back to the drawing" restores it — nothing here
           overwrites what was printed.
         </p>
@@ -190,7 +190,7 @@ export function HolePopup({
 
       {/* MEASURED — the road, with the OSM way so the claim can be opened. */}
       {road && (
-        <div className="font-cb-sans text-[9px] leading-[1.45] text-cb-brass-text">
+        <div className="font-cb-sans text-[10px] leading-[1.45] text-cb-brass-text">
           <span className="font-cb-mono font-semibold">
             {formatNorm(road.metres)} m
           </span>{" "}
@@ -201,7 +201,7 @@ export function HolePopup({
 
       {/* DECIDED — a person's, here or on Holes. Nothing on this card proposes one. */}
       <div className="flex items-center gap-1.5 border-t border-cb-divider pt-2">
-        <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+        <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
           CLASS
         </span>
         <Segmented value={accessClass} options={CLASS_OPTIONS} onChange={onSetClass} />
@@ -215,48 +215,48 @@ export function HolePopup({
           </Button>
         ) : (
           <div className="flex flex-col gap-1.5">
-            <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+            <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
               DRAFTED FROM THE ROAD DATA — NOT A SURVEY
             </div>
             {note.waiting_on && (
-              <p className="font-cb-sans text-[9px] leading-[1.45] text-cb-amber">
+              <p className="font-cb-sans text-[10px] leading-[1.45] text-cb-amber">
                 {note.waiting_on}
               </p>
             )}
             {note.summary && (
-              <p className="font-cb-sans text-[9.5px] leading-[1.5] text-cb-body">
+              <p className="font-cb-sans text-[10px] leading-[1.5] text-cb-body">
                 {note.summary}
               </p>
             )}
             {note.approach_road && (
-              <p className="font-cb-mono text-[9px] text-cb-brass-text">
+              <p className="font-cb-mono text-[10px] text-cb-brass-text">
                 in off {note.approach_road}
               </p>
             )}
             {note.steps.length > 0 && (
-              <ol className="ml-3 list-decimal font-cb-sans text-[9px] leading-[1.5] text-cb-muted">
+              <ol className="ml-3 list-decimal font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
                 {note.steps.map((step) => (
                   <li key={step}>{step}</li>
                 ))}
               </ol>
             )}
             {note.last_stretch && (
-              <p className="font-cb-sans text-[9px] leading-[1.5] text-cb-muted">
+              <p className="font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
                 {note.last_stretch}
               </p>
             )}
             <div>
-              <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-amber">
+              <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-amber">
                 WHAT IT CANNOT SEE
               </div>
-              <ul className="ml-3 list-disc font-cb-sans text-[9px] leading-[1.5] text-cb-muted">
+              <ul className="ml-3 list-disc font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
                 {note.uncertainties.map((u) => (
                   <li key={u}>{u}</li>
                 ))}
               </ul>
             </div>
             {note.checked.map((line) => (
-              <p key={line} className="font-cb-sans text-[8.5px] leading-[1.45] text-cb-bad-dark">
+              <p key={line} className="font-cb-sans text-[10px] leading-[1.45] text-cb-bad-dark">
                 {line}
               </p>
             ))}
@@ -268,7 +268,7 @@ export function HolePopup({
         type="button"
         onClick={onOpenHoles}
         className={cx(
-          "cb-press self-start font-cb-sans text-[9px] font-semibold text-cb-brass-text underline",
+          "cb-press self-start font-cb-sans text-[10px] font-semibold text-cb-brass-text underline",
         )}
       >
         open on the Holes view →

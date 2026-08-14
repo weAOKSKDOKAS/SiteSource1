@@ -361,7 +361,7 @@ function SubcontractorsView({ onError }: { onError: (message: string) => void })
             <div className="flex-none">
               <div className="mb-2 flex items-center justify-between gap-3.5">
                 <SectionLabel>Risk overlay</SectionLabel>
-                <div className="flex gap-3 font-cb-mono text-[9px] text-cb-faint">
+                <div className="flex gap-3 font-cb-mono text-[10px] text-cb-faint">
                   <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-cb-mark bg-cb-bad" />flagged</span>
                   <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-cb-mark bg-cb-track" />clear</span>
                 </div>
@@ -469,7 +469,7 @@ function SubcontractorsView({ onError }: { onError: (message: string) => void })
               <thead>
                 <tr className="border-b border-cb-border bg-cb-panel">
                   {["Company", "Registered trades", "Registration", "Enforcement"].map((h) => (
-                    <th key={h} className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold uppercase tracking-cb-label text-cb-faint">{h}</th>
+                    <th key={h} className="px-3 py-2 font-cb-mono text-[10px] font-semibold uppercase tracking-cb-label text-cb-faint">{h}</th>
                   ))}
                 </tr>
               </thead>

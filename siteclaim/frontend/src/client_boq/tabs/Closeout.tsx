@@ -104,14 +104,14 @@ export function CloseoutTab({
               {outcome && outcome.status !== "submitted" ? (
                 <Chip
                   className={cx(
-                    "font-cb-mono text-[8px]",
+                    "font-cb-mono text-[10px]",
                     OUTCOMES.find((o) => o.value === outcome.status)?.cls ?? "bg-cb-panel text-cb-muted",
                   )}
                 >
                   {outcome.status.toUpperCase()}
                 </Chip>
               ) : (
-                <Chip className="bg-cb-panel text-cb-muted font-cb-mono text-[8px]">AWAITING OUTCOME</Chip>
+                <Chip className="bg-cb-panel text-cb-muted font-cb-mono text-[10px]">AWAITING OUTCOME</Chip>
               )}
             </div>
             <p className="mt-1 font-cb-sans text-[10.5px] text-cb-muted">
@@ -186,7 +186,7 @@ export function CloseoutTab({
               <ul className="mt-2 flex flex-col gap-1">
                 {state.lessons.map((l) => (
                   <li key={l.id} className="flex gap-2 font-cb-sans text-[11px] leading-[1.5]">
-                    <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-brass-text">
+                    <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
                       {l.category.toUpperCase()}
                     </span>
                     <span className="text-cb-body">{l.lesson}</span>
@@ -237,7 +237,7 @@ export function CloseoutTab({
               <ul className="mt-2 flex flex-col gap-1">
                 {state.events.map((ev) => (
                   <li key={ev.id} className="flex gap-2 font-cb-sans text-[11px] leading-[1.5]">
-                    <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-navy">
+                    <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-navy">
                       {ev.kind.toUpperCase()}
                     </span>
                     <span className="text-cb-body">{ev.detail}</span>
@@ -259,9 +259,9 @@ export function CloseoutTab({
             <div className="flex flex-wrap items-center gap-2">
               <SectionLabel>HANDOVER PACKAGE</SectionLabel>
               {handover?.ready ? (
-                <Chip className="bg-cb-ok-tint text-cb-ok-dark font-cb-mono text-[8px]">READY</Chip>
+                <Chip className="bg-cb-ok-tint text-cb-ok-dark font-cb-mono text-[10px]">READY</Chip>
               ) : (
-                <Chip className="bg-cb-panel text-cb-muted font-cb-mono text-[8px]">PREVIEW</Chip>
+                <Chip className="bg-cb-panel text-cb-muted font-cb-mono text-[10px]">PREVIEW</Chip>
               )}
             </div>
             {handover?.pending && (
@@ -271,7 +271,7 @@ export function CloseoutTab({
             )}
             {handover?.missing?.length ? (
               <div className="mt-2">
-                <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-bad-dark">
+                <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
                   NOT YET AVAILABLE
                 </div>
                 <ul className="mt-1 flex flex-col gap-0.5">

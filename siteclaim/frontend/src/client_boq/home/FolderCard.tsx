@@ -73,7 +73,7 @@ function StateBadge({ row }: { row: SetRow }) {
           ? { text: "BLOCKED", cls: "bg-cb-bad-tint text-cb-bad-dark" }
           : { text: "ON TRACK", cls: "bg-cb-ok-tint text-cb-ok-dark" };
   return (
-    <span className={cx("rounded-cb-chip px-[6px] py-[2px] font-cb-mono text-[8px] font-semibold tracking-cb-chip", badge.cls)}>
+    <span className={cx("rounded-cb-chip px-[6px] py-[2px] font-cb-mono text-[10px] font-semibold tracking-cb-chip", badge.cls)}>
       {badge.text}
     </span>
   );
@@ -185,7 +185,7 @@ export function FolderCard({
             )}
           >
             {days != null ? `${days}d` : "—"}
-            <span className="ml-1.5 font-cb-sans text-[9px] font-medium text-cb-faint">
+            <span className="ml-1.5 font-cb-sans text-[10px] font-medium text-cb-faint">
               to close
             </span>
           </div>
@@ -206,11 +206,11 @@ export function FolderCard({
 
         <div className="flex items-center justify-between border-t border-cb-divider pt-2">
           {ingesting ? (
-            <span className="font-cb-mono text-[9px] text-cb-blue">READING THE BINDER…</span>
+            <span className="font-cb-mono text-[10px] text-cb-blue">READING THE BINDER…</span>
           ) : (
             <StateBadge row={row} />
           )}
-          <span className="truncate font-cb-sans text-[9.5px] text-cb-faint">
+          <span className="truncate font-cb-sans text-[10px] text-cb-faint">
             {row.meta.last_touched_at ? `${touchedBy} · ${relTime(row.meta.last_touched_at)}` : ""}
           </span>
         </div>
@@ -232,13 +232,13 @@ function CloseDateProvenance({
 }) {
   const meta = row.meta;
   if (meta.close_date_status === "reading") {
-    return <div className="mt-0.5 font-cb-mono text-[8.5px] text-cb-faint">READING THE DATE…</div>;
+    return <div className="mt-0.5 font-cb-mono text-[10px] text-cb-faint">READING THE DATE…</div>;
   }
   if (meta.close_date_status === "found" || meta.close_date_status === "confirmed") {
     const cite =
       meta.close_date_status === "found" && meta.close_date_part_id && meta.close_date_page != null;
     return (
-      <div className="mt-0.5 font-cb-mono text-[8.5px] text-cb-faint">
+      <div className="mt-0.5 font-cb-mono text-[10px] text-cb-faint">
         {cite ? (
           <button
             type="button"
@@ -273,18 +273,18 @@ function CloseDateProvenance({
         if (input.value) onConfirm(input.value);
       }}
     >
-      <span className="font-cb-mono text-[8.5px] font-semibold text-cb-brass-text">
+      <span className="font-cb-mono text-[10px] font-semibold text-cb-brass-text">
         DATE NOT FOUND —
       </span>
       <input
         name="date"
         type="date"
         required
-        className="rounded-cb-chip border border-cb-border bg-cb-warm px-1 py-0.5 font-cb-mono text-[9px] text-cb-ink-text"
+        className="rounded-cb-chip border border-cb-border bg-cb-warm px-1 py-0.5 font-cb-mono text-[10px] text-cb-ink-text"
       />
       <button
         type="submit"
-        className="cb-press rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-1.5 py-0.5 font-cb-mono text-[8px] font-semibold text-cb-brass-text"
+        className="cb-press rounded-cb-chip border border-cb-brass-line bg-cb-brass-tint px-1.5 py-0.5 font-cb-mono text-[10px] font-semibold text-cb-brass-text"
       >
         CONFIRM
       </button>

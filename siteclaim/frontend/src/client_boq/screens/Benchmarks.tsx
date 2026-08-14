@@ -647,7 +647,7 @@ function ProjectDetail({
                   (h) => (
                     <th
                       key={h}
-                      className="px-3 py-2 font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint"
+                      className="px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint"
                     >
                       {h}
                     </th>
@@ -674,7 +674,7 @@ function ProjectDetail({
                     >
                       {r.item_ref || "(coarse)"}
                     </button>
-                    <div className="font-cb-mono text-[9.5px] text-cb-faint">
+                    <div className="font-cb-mono text-[10px] text-cb-faint">
                       {r.granularity !== "item" ? r.granularity : `T${r.match_tier}`}
                     </div>
                   </td>

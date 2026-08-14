@@ -166,7 +166,7 @@ function TradeSection({
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]">
             <thead>
-              <tr className="border-b border-cb-divider text-left font-cb-sans text-[9px] uppercase tracking-cb-chip text-cb-faint">
+              <tr className="border-b border-cb-divider text-left font-cb-sans text-[10px] uppercase tracking-cb-chip text-cb-faint">
                 <th className="px-3 py-2 font-semibold">Firm</th>
                 <th className="px-3 py-2 text-right font-semibold">Claimed</th>
                 <th className="px-3 py-2 text-right font-semibold">Corrected</th>
@@ -242,7 +242,7 @@ function TradeSection({
         </h3>
         <table className="w-full min-w-[640px] text-[12px]">
           <thead>
-            <tr className="border-b border-cb-divider text-left font-cb-sans text-[9px] uppercase tracking-cb-chip text-cb-faint">
+            <tr className="border-b border-cb-divider text-left font-cb-sans text-[10px] uppercase tracking-cb-chip text-cb-faint">
               <th className="px-3 py-2 font-semibold">Item</th>
               {firms.map((f) => (
                 <th key={f} className="px-3 py-2 text-right font-cb-mono font-semibold">
@@ -283,7 +283,7 @@ function TradeSection({
               </tr>
             ))}
             <tr className="border-t-2 border-cb-border-strong bg-cb-panel">
-              <td className="px-3 py-2 font-cb-sans text-[9px] font-semibold uppercase tracking-cb-chip text-cb-muted">
+              <td className="px-3 py-2 font-cb-sans text-[10px] font-semibold uppercase tracking-cb-chip text-cb-muted">
                 Corrected total
               </td>
               {firms.map((f) => (
@@ -350,7 +350,7 @@ function CalloutCard({
     <Card flush className="overflow-hidden">
       <h4
         className={cx(
-          "border-b border-cb-divider px-3 py-2 font-cb-sans text-[9px] font-semibold uppercase tracking-cb-chip",
+          "border-b border-cb-divider px-3 py-2 font-cb-sans text-[10px] font-semibold uppercase tracking-cb-chip",
           accent,
         )}
       >
@@ -798,7 +798,7 @@ function LiveComparison({
     <Card flush className="overflow-x-auto">
       <table className="w-full text-[12px]">
         <thead>
-          <tr className="border-b border-cb-divider text-left font-cb-sans text-[9px] uppercase tracking-cb-chip text-cb-faint">
+          <tr className="border-b border-cb-divider text-left font-cb-sans text-[10px] uppercase tracking-cb-chip text-cb-faint">
             <th className="px-3 py-2 font-semibold">Firm</th>
             <th className="px-3 py-2 text-right font-semibold">Corrected</th>
             <th className="px-3 py-2 text-right font-semibold">Normalised</th>

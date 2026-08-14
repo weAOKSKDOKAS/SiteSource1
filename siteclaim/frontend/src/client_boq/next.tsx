@@ -201,7 +201,7 @@ export function NextLine({
       aria-label="Next action"
       className="flex flex-none items-center gap-2.5 border-b border-cb-border bg-cb-surface px-[18px] py-[7px]"
     >
-      <span className="flex-none font-cb-mono text-[8.5px] font-semibold tracking-cb-label text-cb-faint">
+      <span className="flex-none font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
         NEXT
       </span>
       <span className="min-w-0 truncate font-cb-sans text-[11.5px] text-cb-body" title={next.sentence}>

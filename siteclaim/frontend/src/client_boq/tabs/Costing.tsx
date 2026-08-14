@@ -206,7 +206,7 @@ export function Costing({
             {/* The total is the one number somebody reads and remembers, so if part of it was
                 invented that has to travel WITH it rather than sit in a panel further down. */}
             {priced.provisional && (
-              <span className="ml-2 font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-bad-dark">
+              <span className="ml-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-bad-dark">
                 PROVISIONAL — {money(priced.placeholder_total)} OF THIS WAS CHOSEN BY NOBODY
               </span>
             )}
@@ -221,7 +221,7 @@ export function Costing({
                       <th
                         key={head}
                         className={cx(
-                          "px-3 py-2 font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint",
+                          "px-3 py-2 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint",
                           i >= 2 && "text-right",
                         )}
                       >
@@ -249,7 +249,7 @@ export function Costing({
               </tbody>
             </table>
           </div>
-          <p className="mt-1.5 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-1.5 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             The rounded figure is a proposal. RATE TO SUBMIT is yours — type over it and the amount
             follows what you actually tender, not what the app suggested.
           </p>
@@ -284,7 +284,7 @@ export function Costing({
                 {problem}
               </p>
             ))}
-            <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+            <p className="mt-2 font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
               Nothing here is repaired for you. Whether a basis belongs in a preliminaries item, is
               spread across the rates, or is work this contract does not require are three different
               answers worth different money, and only you know which.
@@ -326,7 +326,7 @@ export function Costing({
               />
             ))}
           </div>
-          <p className="mt-1.5 max-w-[680px] font-cb-sans text-[9.5px] leading-[1.55] text-cb-faint">
+          <p className="mt-1.5 max-w-[680px] font-cb-sans text-[10px] leading-[1.55] text-cb-faint">
             The register warns; it does not block. But the workbook prints NOT CLEARED until every
             row has a verdict, so a model nobody has reviewed cannot pass for one that somebody has.
             A row whose number is underlined can be typed over — it writes the model input the row
@@ -355,7 +355,7 @@ function Figure({
 }) {
   return (
     <div className="rounded-cb-card border border-cb-border bg-cb-page px-3 py-2">
-      <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+      <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
         {label.toUpperCase()}
       </div>
       <div
@@ -366,7 +366,7 @@ function Figure({
       >
         {value}
       </div>
-      {note && <div className="font-cb-sans text-[9px] text-cb-muted">{note}</div>}
+      {note && <div className="font-cb-sans text-[10px] text-cb-muted">{note}</div>}
     </div>
   );
 }
@@ -380,7 +380,7 @@ function CheckLine({ check }: { check: CostingCheck }) {
         : "border-cb-border bg-cb-surface text-cb-muted";
   return (
     <div className={cx("rounded-cb-card border px-3 py-1.5", tone)}>
-      <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip">
+      <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip">
         {check.verdict === "stop" ? "DO NOT PRICE" : check.verdict.toUpperCase()}
       </span>
       <p className="font-cb-sans text-[10.5px] leading-[1.5]">{check.message}</p>
@@ -408,12 +408,12 @@ function PriceRow({ row, onSubmit }: { row: PricedRow; onSubmit: (rate: number |
       <td className="px-3 py-1.5">
         <span className="font-cb-sans text-[10.5px] text-cb-body">{row.description}</span>
         {row.note && (
-          <div className="font-cb-sans text-[9px] leading-[1.45] text-cb-bad-dark">{row.note}</div>
+          <div className="font-cb-sans text-[10px] leading-[1.45] text-cb-bad-dark">{row.note}</div>
         )}
         {/* The arithmetic behind a proposed rate. A number an estimator cannot check is a number
             they have to redo, which is the one thing this product cannot afford to make them do. */}
         {row.working && (
-          <div className="font-cb-mono text-[8.5px] leading-[1.5] text-cb-muted">{row.working}</div>
+          <div className="font-cb-mono text-[10px] leading-[1.5] text-cb-muted">{row.working}</div>
         )}
       </td>
       <td className={cx(cell, "text-right text-cb-muted")}>
@@ -487,7 +487,7 @@ function PriceRow({ row, onSubmit }: { row: PricedRow; onSubmit: (rate: number |
             type="button"
             onClick={() => onSubmit(null)}
             title="Put the proposal back"
-            className="cb-press ml-1 font-cb-mono text-[8px] text-cb-faint"
+            className="cb-press ml-1 font-cb-mono text-[10px] text-cb-faint"
           >
             ↺
           </button>
@@ -540,7 +540,7 @@ function AssumptionLine({
           {row.derived && (
             <span
               title="Read from the bill or worked out from it — shown so you can see what the model concluded, not so it can be adjusted."
-              className="ml-1.5 font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-navy"
+              className="ml-1.5 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-navy"
             >
               DERIVED
             </span>
@@ -561,12 +561,12 @@ function AssumptionLine({
                 numeric ? "border-cb-brass-line" : "border-cb-bad",
               )}
             />
-            {row.edit_percent && <span className="font-cb-mono text-[8px] text-cb-faint">%</span>}
+            {row.edit_percent && <span className="font-cb-mono text-[10px] text-cb-faint">%</span>}
             <button
               type="button"
               disabled={busy || !numeric}
               onClick={() => void commit()}
-              className="cb-press font-cb-mono text-[8px] font-semibold text-cb-brass-text disabled:text-cb-disabled"
+              className="cb-press font-cb-mono text-[10px] font-semibold text-cb-brass-text disabled:text-cb-disabled"
             >
               SET
             </button>
@@ -590,7 +590,7 @@ function AssumptionLine({
         )}
         <span
           className={cx(
-            "flex-none rounded-cb-chip px-1.5 py-[1px] font-cb-mono text-[7.5px] font-semibold tracking-cb-chip",
+            "flex-none rounded-cb-chip px-1.5 py-[1px] font-cb-mono text-[10px] font-semibold tracking-cb-chip",
             row.confidence === "Low"
               ? "bg-cb-brass-tint text-cb-brass-text"
               : "text-cb-faint",
@@ -605,7 +605,7 @@ function AssumptionLine({
               type="button"
               onClick={() => onVerdict(row.status === verdict ? "" : verdict)}
               className={cx(
-                "cb-press rounded-cb-chip border px-1.5 py-[1px] font-cb-mono text-[8px] font-semibold",
+                "cb-press rounded-cb-chip border px-1.5 py-[1px] font-cb-mono text-[10px] font-semibold",
                 row.status === verdict
                   ? "border-cb-ok bg-cb-ok-tint text-cb-ok-dark"
                   : "border-cb-border bg-white text-cb-muted",
@@ -620,12 +620,12 @@ function AssumptionLine({
         <p className="mt-1 max-w-[760px] font-cb-serif text-[11px] leading-[1.55] text-cb-body">
           {row.basis}
           {row.edit_path && (
-            <span className="ml-2 font-cb-mono text-[9px] text-cb-faint">
+            <span className="ml-2 font-cb-mono text-[10px] text-cb-faint">
               writes {row.edit_path} — the programme, the rig curve and every rate follow
             </span>
           )}
           {row.reviewed_by && (
-            <span className="ml-2 font-cb-mono text-[9px] text-cb-faint">
+            <span className="ml-2 font-cb-mono text-[10px] text-cb-faint">
               {row.status} · {row.reviewed_by}
             </span>
           )}
@@ -839,12 +839,12 @@ function WhatIf({
 
       {preview?.applies && preview.before && preview.after && preview.delta && (
         <div className="mt-2 rounded-cb-card border border-cb-border bg-cb-page px-3 py-2.5">
-          <p className="font-cb-mono text-[9.5px] text-cb-ink-text">
+          <p className="font-cb-mono text-[10px] text-cb-ink-text">
             {preview.proposal.path} : {preview.was} → {preview.proposal.value}
             <span className="ml-2 text-cb-faint">({preview.proposal.confidence} confidence)</span>
           </p>
           {preview.proposal.basis && (
-            <p className="mt-0.5 font-cb-sans text-[9.5px] leading-[1.5] text-cb-muted">
+            <p className="mt-0.5 font-cb-sans text-[10px] leading-[1.5] text-cb-muted">
               {preview.proposal.basis}
             </p>
           )}
@@ -852,7 +852,7 @@ function WhatIf({
           <div className="mt-2 grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
             {(["total", "work_days", "rigs_required", "standing_hours"] as const).map((key) => (
               <div key={key} className="rounded-cb-chip bg-cb-panel px-2 py-1.5">
-                <div className="font-cb-mono text-[8px] tracking-cb-chip text-cb-faint">
+                <div className="font-cb-mono text-[10px] tracking-cb-chip text-cb-faint">
                   {key.replace(/_/g, " ").toUpperCase()}
                 </div>
                 <div className="font-cb-mono text-[11px] text-cb-ink-text">
@@ -860,7 +860,7 @@ function WhatIf({
                 </div>
                 <div
                   className={cx(
-                    "font-cb-mono text-[9px] font-semibold",
+                    "font-cb-mono text-[10px] font-semibold",
                     preview.delta![key] > 0 ? "text-cb-bad-dark" : preview.delta![key] < 0
                       ? "text-cb-ok-dark" : "text-cb-faint",
                   )}
@@ -873,18 +873,18 @@ function WhatIf({
 
           {(preview.moved?.length ?? 0) > 0 && (
             <div className="mt-2">
-              <div className="font-cb-mono text-[8px] font-semibold tracking-cb-chip text-cb-faint">
+              <div className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
                 RATES THAT MOVE — {preview.moved_count} OF THEM
               </div>
               {preview.moved!.map((m) => (
                 <div key={m.full_ref} className="mt-0.5 flex items-baseline gap-2">
-                  <span className="w-[52px] flex-none font-cb-mono text-[9.5px] text-cb-ink-text">
+                  <span className="w-[52px] flex-none font-cb-mono text-[10px] text-cb-ink-text">
                     {m.full_ref}
                   </span>
-                  <span className="flex-1 truncate font-cb-sans text-[9.5px] text-cb-muted">
+                  <span className="flex-1 truncate font-cb-sans text-[10px] text-cb-muted">
                     {m.description}
                   </span>
-                  <span className="flex-none font-cb-mono text-[9.5px] text-cb-ink-text">
+                  <span className="flex-none font-cb-mono text-[10px] text-cb-ink-text">
                     {money(m.was)} → {money(m.now)}
                   </span>
                 </div>
@@ -895,13 +895,13 @@ function WhatIf({
           <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-cb-divider pt-2">
             {applied ? (
               <>
-                <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-ok-dark">
+                <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-ok-dark">
                   APPLIED · {applied.condition_id.toUpperCase()}
                 </span>
                 <Button disabled={busy} onClick={undo}>
                   {busy ? "Working…" : `Put it back to ${applied.was}`}
                 </Button>
-                <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
+                <span className="font-cb-sans text-[10px] leading-[1.4] text-cb-muted">
                   {applied.note}
                 </span>
               </>
@@ -910,7 +910,7 @@ function WhatIf({
                 <Button variant="brass" disabled={busy} onClick={apply}>
                   {busy ? "Applying…" : "Apply this"}
                 </Button>
-                <span className="font-cb-sans text-[9.5px] leading-[1.4] text-cb-muted">
+                <span className="font-cb-sans text-[10px] leading-[1.4] text-cb-muted">
                   {preview.note}
                 </span>
               </>

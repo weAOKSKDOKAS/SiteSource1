@@ -125,7 +125,7 @@ export function PriceTab(props: {
           ]}
           onChange={setView}
         />
-        <span className="font-cb-mono text-[9px] text-cb-faint">
+        <span className="font-cb-mono text-[10px] text-cb-faint">
           {view === "costing"
             ? "prices the client's bill · needs no gate"
             : view === "working"
@@ -188,7 +188,8 @@ function EstimateView({
   const [savedMeta, setSavedMeta] = useState<{ at: string | null; by: string }>({ at: null, by: "" });
   const [rates, setRates] = useState<RateRowFull[]>([]);
   const [company, setCompany] = useState<CompanySettings | null>(null);
-  const [mode, setMode] = useState<"estimate" | "schedule">("estimate");
+  const [mode, setMode] = usePersisted<"estimate" | "schedule">(
+    `priceMode.${data.setId}`, "estimate");
   const { draft, setDraft, margin, setMargin, dirty } = useScheduleDraft(loaded);
   const panes = usePanes("price", 236, 620, railOpen);
 
@@ -356,7 +357,7 @@ function EstimateView({
                 <div className="mt-1.5 font-cb-mono text-[21px] font-semibold leading-none text-cb-ink-text">
                   {money(totals.price)}
                 </div>
-                <div className="mt-1 font-cb-mono text-[9px] text-cb-faint">
+                <div className="mt-1 font-cb-mono text-[10px] text-cb-faint">
                   COST {money(totals.total_cost)} + {totals.margin_pct}% MARGIN
                 </div>
               </>
@@ -376,7 +377,7 @@ function EstimateView({
                 <Money label="Price" value={totals.price} strong />
               </dl>
               {/* The backend refuses to call a margin good or bad. So does this. */}
-              <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.45] text-cb-faint">
+              <p className="mt-2 font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
                 Margin is a readout — price less cost. Nothing here judges whether it is enough;
                 that is the estimator's call, not arithmetic's.
               </p>
@@ -407,7 +408,7 @@ function EstimateView({
                             copy.tone === "bad" ? "bg-cb-bad" : "bg-cb-amber",
                           )}
                         />
-                        <span className="font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-body">
+                        <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-body">
                           {copy.label}
                         </span>
                       </span>
@@ -418,7 +419,7 @@ function EstimateView({
                   );
                 })}
               </div>
-              <p className="mt-2 font-cb-sans text-[9.5px] leading-[1.45] text-cb-faint">
+              <p className="mt-2 font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
                 Flags never block a price. They mark the numbers a person should look at before
                 signing one.
               </p>
@@ -431,7 +432,7 @@ function EstimateView({
               <div className="mt-1 font-cb-mono text-[11px] text-cb-body">
                 {estimate.duration_weeks} weeks
               </div>
-              <p className="mt-1 font-cb-sans text-[9.5px] leading-[1.45] text-cb-faint">
+              <p className="mt-1 font-cb-sans text-[10px] leading-[1.45] text-cb-faint">
                 What the per-week indirects are multiplied by.
               </p>
             </div>
@@ -539,7 +540,7 @@ function EstimateView({
           <div className="min-h-0 flex-1 overflow-y-auto">
             {flagFilter && (
               <div className="flex items-center gap-2 border-b border-cb-brass-line bg-cb-brass-tint px-4 py-2">
-                <span className="font-cb-mono text-[9px] font-semibold tracking-cb-chip text-cb-brass-text">
+                <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-brass-text">
                   SHOWING {flagCopy(flagFilter).label} ONLY
                 </span>
                 <button
@@ -586,7 +587,7 @@ function EstimateView({
                     key={line.item_id || line.label}
                     className="flex items-baseline gap-3 border-b border-cb-divider px-4 py-2.5"
                   >
-                    <span className="w-[64px] flex-none font-cb-mono text-[8.5px] font-semibold tracking-cb-chip text-cb-faint">
+                    <span className="w-[64px] flex-none font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint">
                       {line.basis.toUpperCase().replace(/_/g, " ")}
                     </span>
                     <span className="min-w-0 flex-1">
@@ -594,7 +595,7 @@ function EstimateView({
                         {line.label}
                       </span>
                       {/* The backend writes this so the number can be recomputed by hand. */}
-                      <span className="block font-cb-mono text-[9.5px] text-cb-muted">
+                      <span className="block font-cb-mono text-[10px] text-cb-muted">
                         {line.detail}
                       </span>
                     </span>
@@ -616,7 +617,7 @@ function EstimateView({
                   <Money label={`Margin · ${totals.margin_pct}%`} value={totals.margin_amount} />
                 </dl>
                 <div className="mt-2 flex items-baseline justify-between border-t border-cb-border-strong pt-2">
-                  <span className="font-cb-mono text-[9px] font-semibold tracking-cb-label text-cb-faint">
+                  <span className="font-cb-mono text-[10px] font-semibold tracking-cb-label text-cb-faint">
                     PRICE
                   </span>
                   <span className="font-cb-mono text-[19px] font-semibold text-cb-ink-text">
@@ -691,7 +692,7 @@ function ActivityRow({
                     key={i}
                     title={f.message}
                     className={cx(
-                      "rounded-cb-chip px-1.5 py-[1px] font-cb-mono text-[8px] font-semibold tracking-cb-chip",
+                      "rounded-cb-chip px-1.5 py-[1px] font-cb-mono text-[10px] font-semibold tracking-cb-chip",
                       copy.tone === "bad"
                         ? "bg-cb-bad-tint text-cb-bad-dark"
                         : "bg-cb-brass-tint text-cb-brass-text",
@@ -727,7 +728,7 @@ function ActivityRow({
                       : "bg-cb-brass-tint text-cb-brass-text",
                   )}
                 >
-                  <span className="font-cb-mono text-[8px] font-semibold tracking-cb-chip">
+                  <span className="font-cb-mono text-[10px] font-semibold tracking-cb-chip">
                     {copy.label}
                   </span>{" "}
                   — {copy.consequence}
@@ -741,7 +742,7 @@ function ActivityRow({
                     <th
                       key={h}
                       className={cx(
-                        "pb-1 font-cb-mono text-[7.5px] font-semibold tracking-cb-chip text-cb-faint",
+                        "pb-1 font-cb-mono text-[10px] font-semibold tracking-cb-chip text-cb-faint",
                         i > 0 && "text-right",
                       )}
                     >
@@ -779,15 +780,15 @@ function LineRow({ line }: { line: CostLine }) {
       <td className="py-1.5">
         <span className="block font-cb-sans text-[10.5px] text-cb-body">{line.description}</span>
         {line.resource_ref && (
-          <span className="block font-cb-mono text-[8.5px] text-cb-faint">{line.resource_ref}</span>
+          <span className="block font-cb-mono text-[10px] text-cb-faint">{line.resource_ref}</span>
         )}
       </td>
       <td className="py-1.5 text-right font-cb-mono text-[10px] text-cb-body">
         {line.qty.toLocaleString("en-US")}
-        {line.unit && <span className="ml-1 text-[8.5px] text-cb-faint">{line.unit}</span>}
+        {line.unit && <span className="ml-1 text-[10px] text-cb-faint">{line.unit}</span>}
         {/* qty ÷ productivity = hours. Shown because the hours are what the rate multiplies. */}
         {line.hours != null && (
-          <span className="block text-[8.5px] text-cb-muted">
+          <span className="block text-[10px] text-cb-muted">
             ÷ {line.productivity} = {line.hours.toLocaleString("en-US")} hr
           </span>
         )}
@@ -798,7 +799,7 @@ function LineRow({ line }: { line: CostLine }) {
       <td className="py-1.5 text-right">
         <Chip
           className={cx(
-            "font-cb-mono text-[7.5px]",
+            "font-cb-mono text-[10px]",
             missing
               ? "bg-cb-bad-tint text-cb-bad-dark"
               : line.rate_source === "inline"
