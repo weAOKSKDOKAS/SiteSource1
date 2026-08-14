@@ -16,6 +16,7 @@ import time as _time
 
 import base64
 import io
+import math
 import os
 import re
 import zipfile
@@ -3801,6 +3802,16 @@ class StationPasteRequest(BaseModel):
     source_sheet: str = ""
 
 
+class StationCoordsRequest(BaseModel):
+    """Where a person says a hole actually is. ``restore`` puts the drawing's reading back."""
+    set_id: str
+    station: str
+    easting: Optional[float] = None
+    northing: Optional[float] = None
+    note: str = ""
+    restore: bool = False
+
+
 class StationClassRequest(BaseModel):
     set_id: str
     station: str
@@ -3997,6 +4008,77 @@ def get_access_still(set_id: str, lat: float, lon: float, kind: str = "satellite
                             detail=f"the imagery provider answered {reply.status_code}")
     return Response(content=reply.content,
                     media_type=reply.headers.get("content-type", "image/png"))
+
+
+@router.post("/site/station/coords")
+def post_station_coords(req: StationCoordsRequest, actor: str = Depends(_actor)) -> dict:
+    """Move one hole to where somebody says it really is.
+
+    WHY THIS IS A HUMAN'S JOB. A setting-out drawing mixes surveyed positions with indicative ones
+    and does not mark which is which. Forty metres is nothing on an A1 sheet and everything on a
+    hillside: it can be a different approach road, a different class of site, a platform that is or
+    is not needed. Nothing in the tender resolves it, so — like the class itself — it is the
+    estimator's, made with the map and the imagery in front of him, and it carries his name.
+
+    NOTHING IS DESTROYED. The drawing's reading stays in the schedule; this is a correction beside
+    it, stamped with what it moved from. ``restore: true`` deletes the correction, which brings
+    back the DRAWING rather than some second guess — the only honest way to undo a coordinate.
+
+    Applied at ``load_station_schedule``, so the map, the proximity clusters, the road distances
+    and the georeferenced crop all move together. A correction that reached some screens and not
+    others would leave them disagreeing about where a hole is, which is worse than the wrong
+    coordinate it was meant to fix.
+    """
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, req.set_id)
+        if schedule is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(f"no station schedule has been read for {req.set_id!r}, so there is no "
+                        f"hole to move. Read the borehole details drawing first."))
+        rows = {row.station: row for row in list(schedule.stations) + list(schedule.trial_pits)}
+        if req.station not in rows:
+            raise HTTPException(
+                status_code=404,
+                detail=(f"{req.station!r} is not a hole in this schedule. Nothing was written."))
+
+        if req.restore:
+            existed = store.clear_station_coords(conn, req.set_id, req.station)
+            store.touch_set(conn, req.set_id, actor)
+            fresh, meta = store.load_station_schedule(conn, req.set_id)
+            back = {r.station: r for r in list(fresh.stations) + list(fresh.trial_pits)}[req.station]
+            return {
+                "set_id": req.set_id, "station": req.station, "restored": existed,
+                "easting": back.easting, "northing": back.northing,
+                "corrected": False, "by": actor,
+                "note": ("the drawing's own reading is back" if existed else
+                         "this hole had not been moved, so nothing changed"),
+            }
+
+        # What it moved FROM is the drawing's value, not the currently-displayed one — otherwise a
+        # second correction would record "was" as the first correction and the drawing would be
+        # lost after two edits.
+        standing = store.load_station_coords(conn, req.set_id).get(req.station)
+        was_e = standing["was_easting"] if standing else rows[req.station].easting
+        was_n = standing["was_northing"] if standing else rows[req.station].northing
+        store.save_station_coords(
+            conn, req.set_id, req.station, easting=req.easting, northing=req.northing,
+            was_easting=was_e, was_northing=was_n, note=req.note.strip(), actor=actor)
+        store.touch_set(conn, req.set_id, actor)
+    finally:
+        conn.close()
+
+    moved_m = None
+    if None not in (req.easting, req.northing, was_e, was_n):
+        moved_m = round(math.hypot(req.easting - was_e, req.northing - was_n), 1)
+    return {
+        "set_id": req.set_id, "station": req.station, "corrected": True,
+        "easting": req.easting, "northing": req.northing,
+        "was_easting": was_e, "was_northing": was_n,
+        "moved_m": moved_m, "by": actor, "note": req.note.strip(),
+        "restored": False,
+    }
 
 
 @router.post("/site/schedule")

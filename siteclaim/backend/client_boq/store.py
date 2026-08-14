@@ -706,12 +706,63 @@ def load_item_assumptions(conn: sqlite3.Connection, set_id: str, rev: int) -> di
 # does not: where the holes are, what the specification says about them, which of them a rig can
 # reach, and which of them drill alike.
 # ---------------------------------------------------------------------------
+def load_station_coords(conn: sqlite3.Connection, set_id: str) -> dict[str, dict]:
+    """Every coordinate a person has corrected on this tender, keyed by station."""
+    rows = conn.execute(
+        """
+        SELECT station, easting, northing, was_easting, was_northing, note, moved_by, moved_at
+        FROM client_boq_station_coords WHERE set_id = ?
+        """,
+        (set_id,),
+    ).fetchall()
+    return {row["station"]: dict(row) for row in rows}
+
+
+def save_station_coords(conn: sqlite3.Connection, set_id: str, station: str, *,
+                        easting: Optional[float], northing: Optional[float],
+                        was_easting: Optional[float] = None,
+                        was_northing: Optional[float] = None,
+                        note: str = "", actor: str = "") -> None:
+    """Record where a person says a hole actually is. The drawing's reading is untouched."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO client_boq_station_coords
+            (set_id, station, easting, northing, was_easting, was_northing, note, moved_by, moved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(set_id, station) DO UPDATE SET
+            easting = excluded.easting, northing = excluded.northing,
+            was_easting = excluded.was_easting, was_northing = excluded.was_northing,
+            note = excluded.note, moved_by = excluded.moved_by, moved_at = excluded.moved_at
+        """,
+        (set_id, station, easting, northing, was_easting, was_northing, note, actor, now),
+    )
+    conn.commit()
+
+
+def clear_station_coords(conn: sqlite3.Connection, set_id: str, station: str) -> bool:
+    """Undo a correction — which restores the DRAWING, not a second guess. True if one was there."""
+    cursor = conn.execute(
+        "DELETE FROM client_boq_station_coords WHERE set_id = ? AND station = ?", (set_id, station))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
 def load_station_schedule(conn: sqlite3.Connection, set_id: str) -> tuple[Optional["StationSchedule"], dict]:
-    """The schedule read off the drawing, and who (if anyone) has confirmed that reading.
+    """The schedule as it now stands, and who (if anyone) has confirmed the reading.
 
     Returns the confirmation separately because it is not a property of the holes — it is a
     property of somebody having looked. An unconfirmed schedule is a machine's proposal and
     nothing prices from it.
+
+    HUMAN COORDINATE CORRECTIONS ARE APPLIED HERE, deliberately at the one door every consumer
+    already comes through. The map, the proximity clusters, the road distances and the
+    georeferenced drawing crop all read this function, and a correction that reached some of them
+    and not others would leave the screens disagreeing about where a hole is — which is a worse
+    failure than the wrong coordinate it was meant to fix. The drawing's own reading is not
+    overwritten: it stays in the schedule row, and ``meta["corrections"]`` says what moved, from
+    what, by whom.
     """
     from client_boq.boq.schedule import StationSchedule
     row = conn.execute(
@@ -722,13 +773,28 @@ def load_station_schedule(conn: sqlite3.Connection, set_id: str) -> tuple[Option
         (set_id,),
     ).fetchone()
     if row is None or not row["schedule_json"] or row["schedule_json"] == "{}":
-        return None, {"confirmed_by": "", "confirmed_at": None, "source_sheet": ""}
-    return StationSchedule.model_validate_json(row["schedule_json"]), {
+        return None, {"confirmed_by": "", "confirmed_at": None, "source_sheet": "",
+                      "corrections": {}}
+    schedule = StationSchedule.model_validate_json(row["schedule_json"])
+    corrections = load_station_coords(conn, set_id)
+    if corrections:
+        for station in schedule.stations:
+            fix = corrections.get(station.station)
+            if fix is not None:
+                station.easting = fix["easting"]
+                station.northing = fix["northing"]
+        for pit in schedule.trial_pits:
+            fix = corrections.get(pit.station)
+            if fix is not None:
+                pit.easting = fix["easting"]
+                pit.northing = fix["northing"]
+    return schedule, {
         "confirmed_by": row["confirmed_by"],
         "confirmed_at": row["confirmed_at"],
         "source_sheet": row["source_sheet"],
         "updated_by": row["updated_by"],
         "updated_at": row["updated_at"],
+        "corrections": corrections,
     }
 
 
@@ -738,8 +804,27 @@ def save_station_schedule(conn: sqlite3.Connection, set_id: str, schedule: "Stat
 
     Confirming is an act with a name on it and it is not sticky — a re-read lands unconfirmed again,
     because the thing somebody checked is no longer the thing on the screen.
+
+    A CORRECTED COORDINATE IS PUT BACK BEFORE WRITING, so this row keeps holding the DRAWING's
+    reading rather than slowly absorbing the corrections. ``load_station_schedule`` hands out the
+    corrected view, so without this an ordinary round trip — read the schedule, retype one soil
+    metre, save — would quietly write the human's coordinate into the drawing's own record and
+    there would be nothing left to say what the drawing had said.
+
+    Only an unchanged value is put back. A payload carrying something DIFFERENT from the standing
+    correction is a new reading or a deliberate retype, and taking that at face value is the whole
+    point of the endpoint — restoring it would make the schedule editor unable to move a hole.
     """
     from datetime import datetime, timezone
+    corrections = load_station_coords(conn, set_id)
+    if corrections:
+        rows = list(schedule.stations) + list(schedule.trial_pits)
+        for row in rows:
+            fix = corrections.get(row.station)
+            if fix is None:
+                continue
+            if row.easting == fix["easting"] and row.northing == fix["northing"]:
+                row.easting, row.northing = fix["was_easting"], fix["was_northing"]
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     conn.execute(
         """

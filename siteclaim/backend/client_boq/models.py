@@ -1715,6 +1715,34 @@ _DDL = [
         updated_at    TEXT
     )
     """,
+    # ONE STATION'S CORRECTED COORDINATES — a person's, over the drawing's.
+    #
+    # Some hole positions on a setting-out drawing are surveyed and some are indicative, and the
+    # drawing does not say which is which. A hole 40 m from where the plan puts it is a different
+    # hole for access: a different road, possibly a different class of site, possibly a platform.
+    # So a person has to be able to move it, and the number they type has to be the one the map,
+    # the clusters, the road distances and the georeferenced crop all use — or the screens disagree
+    # about where a hole is, which is worse than a wrong coordinate.
+    #
+    # ITS OWN TABLE, BECAUSE NOTHING IS EVER DESTROYED. The reading off the drawing stays in
+    # `client_boq_station_schedules` exactly as it was read; this holds the correction beside it.
+    # `was_easting`/`was_northing` are stamped at the moment of the edit so the row can say what it
+    # moved from even after a re-read replaces the schedule, and a correction that is later found
+    # wrong is undone by deleting the row, which restores the drawing rather than a second guess.
+    """
+    CREATE TABLE IF NOT EXISTS client_boq_station_coords (
+        set_id       TEXT NOT NULL,
+        station      TEXT NOT NULL,
+        easting      REAL,                        -- NULL = this correction clears the coordinate
+        northing     REAL,
+        was_easting  REAL,                        -- what the drawing said, at the time of the edit
+        was_northing REAL,
+        note         TEXT NOT NULL DEFAULT '',    -- why: "scaled off GI/201", "surveyed on the walk"
+        moved_by     TEXT NOT NULL DEFAULT '',
+        moved_at     TEXT,
+        PRIMARY KEY (set_id, station)
+    )
+    """,
     # One station's ACCESS CLASS — the judgement the client's documents do not contain.
     #
     # The bill prices 80 Class A and 11 Class B rig moves and no drawing says which holes are which,
