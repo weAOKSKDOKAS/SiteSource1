@@ -94,6 +94,8 @@ import type {
   RoadsResponse,
   PositionsResponse,
   BriefingResponse,
+  ApproachResponse,
+  StationCoordsResponse,
   WhatIfApplyResponse,
   WhatIfResponse,
   WorkingBill,
@@ -423,6 +425,20 @@ export const api = {
    *  proximity CLUSTER, so a site whose holes chain within the clustering radius drew a single
    *  circle reading "99" — the per-hole coordinates were never missing, nothing asked for them. */
   positions: (setId: string) => get<PositionsResponse>(`/site/${setId}/positions`),
+  /** Move one hole to where somebody says it really is. A setting-out drawing mixes surveyed
+   *  positions with indicative ones and does not mark which is which. Applied inside the schedule
+   *  loader, so the map, the clusters, the road distances and the drawing crop all move together.
+   *  Nothing is destroyed — `restore` deletes the correction and brings back the DRAWING. */
+  setStationCoords: (
+    setId: string,
+    station: string,
+    body: { easting?: number | null; northing?: number | null; note?: string; restore?: boolean },
+  ) => post<StationCoordsResponse>("/site/station/coords", { set_id: setId, station, ...body }),
+  /** How a crew would reach one hole: the prose is drafted, every metre is measured. The drafting
+   *  model has no field for a distance, a cost or a class, and a road it names that was not
+   *  measured is refused by name — an invented road reads exactly like local knowledge. */
+  approach: (setId: string, station: string) =>
+    get<ApproachResponse>(`/site/${setId}/approach/${encodeURIComponent(station)}`),
   /** Every registered sheet and one crop per located station — the Holes tiles' whole data need. */
   georef: (setId: string) => get<GeorefResponse>(`/site/${setId}/georef`),
   /** Save one sheet's two grid marks. The response names a mistyped coordinate immediately —

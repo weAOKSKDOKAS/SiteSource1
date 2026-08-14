@@ -23,11 +23,14 @@ import type {
   AccessBoardResponse,
   ClusterEvidence,
   Evidence,
+  NearestRoad,
   RoadResponse,
+  Station,
   StationPosition,
 } from "../types";
 import { usePersisted } from "../chrome";
 import { Button, Card, SectionLabel, Segmented, WaitingOn, cx } from "../ui";
+import { HolePopup } from "./HolePopup";
 import { SlippyMap } from "./SlippyMap";
 import type { MapPoint } from "./SlippyMap";
 
@@ -44,6 +47,10 @@ export function AccessMap({
   onError,
   onFocusStation,
   classOf,
+  stationOf,
+  roadOf,
+  onSetClass,
+  onMoved,
 }: {
   setId: string;
   onError: (msg: string) => void;
@@ -53,6 +60,16 @@ export function AccessMap({
    *  assembles evidence and proposes nothing, and a pin's colour is a person's decision
    *  rendered, never one the map made. */
   classOf?: (station: string) => string;
+  /** The schedule row for one hole, so the popup can show what was actually read about it. */
+  stationOf?: (station: string) => Station | undefined;
+  /** The measured nearest MAPPED road for one hole, when the roads have been read. Passed in
+   *  rather than fetched here: Site.tsx already holds one reading for the whole tender, and a
+   *  second fetch would be a second Overpass call for numbers it already has. */
+  roadOf?: (station: string) => NearestRoad | null;
+  /** Classing from the popup. Still a person's act — this screen never proposes one. */
+  onSetClass?: (station: string, accessClass: string) => void;
+  /** A coordinate was corrected: the schedule, the pins and the clusters all need re-reading. */
+  onMoved?: () => Promise<void> | void;
 }) {
   const [board, setBoard] = useState<AccessBoardResponse | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -187,10 +204,29 @@ export function AccessMap({
           labelTiles={basemap.label_tiles}
           attribution={basemap.attribution}
           selected={selected}
-          onSelect={(id) => {
-            // A per-hole pin sends you where the class is decided; a cluster opens its card.
-            if (showHoles && !id.startsWith("road:") && onFocusStation) onFocusStation(id);
-            else setSelected((s) => (s === id ? null : id));
+          onSelect={(id) => setSelected((s) => (s === id ? null : id))}
+          renderPopup={(id) => {
+            // A HOLE opens its card here, on the map, where you can see the ground around it —
+            // that is the point of clicking a pin. A cluster keeps its card in the list below,
+            // which is where the evidence rows live and where there is room for them.
+            const hole = showHoles && !id.startsWith("road:") ? stationOf?.(id) : undefined;
+            if (!hole) return null;
+            return (
+              <HolePopup
+                setId={setId}
+                station={hole}
+                accessClass={classOf?.(id) ?? ""}
+                road={roadOf?.(id) ?? null}
+                onSetClass={(c) => onSetClass?.(id, c)}
+                onMoved={async () => {
+                  await onMoved?.();
+                  await load();
+                }}
+                onOpenHoles={() => onFocusStation?.(id)}
+                onClose={() => setSelected(null)}
+                onError={onError}
+              />
+            );
           }}
           onPick={(lat, lon) => void pick(lat, lon)}
           picking={picking}

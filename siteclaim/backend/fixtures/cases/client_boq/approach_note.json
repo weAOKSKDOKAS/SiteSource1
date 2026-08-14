@@ -1,0 +1,17 @@
+{
+  "summary": "Come in off San Tin Tsuen Road, take the farm track east past the last house, and walk the final stretch up the spur on foot.",
+  "approach_road": "San Tin Tsuen Road",
+  "last_stretch": "The track ends at a hardstanding where a lorry could turn and stand. From there the hole is uphill through scrub with no mapped path, so the spread would have to be broken down and carried the last leg.",
+  "steps": [
+    "San Tin Tsuen Road to the junction with the unnamed track (OSM way 41552217)",
+    "East along the track past the houses to where it stops widening",
+    "Leave the vehicle on the hardstanding at the track head",
+    "On foot up the spur to the hole"
+  ],
+  "uncertainties": [
+    "The distance quoted is a straight line to the nearest mapped road, not a walk — the spur is not mapped and the real route on the ground will be longer.",
+    "Nothing in this data says whether the farm track is passable by a lorry or gated at the houses, and that single fact decides whether this hole is reached by vehicle or carried.",
+    "The land east of the houses is not identified here. A private access would need permission before it is a route at all.",
+    "Gradient and vegetation on the last stretch are not in the road data and are what would decide whether a platform is needed."
+  ]
+}

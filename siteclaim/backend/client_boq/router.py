@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from client_boq import criteria_loader, criteria_store, jobs, models, rates_store, store
 from client_boq.boq import access as boq_access
 from client_boq.boq import allocate as boq_allocate
+from client_boq.boq import approach as boq_approach
 from client_boq.boq import ask as boq_ask
 from client_boq.boq import assumptions as boq_assumptions
 from client_boq.boq import buildup as boq_buildup
@@ -4825,6 +4826,102 @@ def get_nearest_roads(set_id: str) -> dict:
     reading = boq_roads.nearest_roads(located, ways)
     reading.source = "OpenStreetMap contributors (ODbL), via Overpass"
     return {"set_id": set_id, **reading.model_dump()}
+
+
+@router.get("/site/{set_id}/approach/{station}")
+def get_approach(set_id: str, station: str) -> dict:
+    """How a crew would reach ONE hole — drafted from the road data, decided by nobody.
+
+    The map shows a hole and the nearest mapped road, and the gap between those two facts is where
+    the money is: forty metres from a track is a two-minute walk or a cliff. An estimator classing
+    ninety-nine holes does that reasoning ninety-nine times from the same evidence, which is
+    exactly the kind of work worth having drafted — and exactly the kind of confident-sounding text
+    that must not be allowed to decide anything.
+
+    So the split is enforced in the types, not the prompt. The engine measures every road near the
+    hole; the model describes the route and what it cannot see; and :class:`RawApproach` has no
+    field for a distance, a duration, a cost or an access class, so nothing it writes can compete
+    with a measurement or pre-empt the estimator's judgement. The metres on the response are the
+    engine's and are attached after the call.
+
+    DEMO returns the fixture for the prose but still measures nothing, because Overpass is a live
+    call — so it reports honestly that the roads were not read rather than showing a fixture's
+    distances as if they were this tender's.
+    """
+    from client_boq import llm as llm_mod
+    from pipeline.llm_client import demo_mode
+
+    conn = store.get_conn()
+    try:
+        schedule, _meta = store.load_station_schedule(conn, set_id)
+    finally:
+        conn.close()
+    if schedule is None:
+        return boq_approach.Approach(
+            station=station,
+            waiting_on="the borehole details schedule has not been read yet, so there is no hole "
+                       "to describe the way to").model_dump()
+
+    rows = {row.station: row for row in list(schedule.stations) + list(schedule.trial_pits)}
+    hole = rows.get(station)
+    if hole is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{station!r} is not a hole in this schedule.")
+    if hole.easting is None or hole.northing is None:
+        return boq_approach.Approach(
+            station=station,
+            waiting_on=f"{station} carries no easting and northing, so there is nowhere to "
+                       f"measure a route to. Correct its coordinates on the map first.").model_dump()
+
+    point = boq_hk1980.to_wgs84(hole.easting, hole.northing)
+    context: list[boq_approach.RoadContext] = []
+    waiting = ""
+    if demo_mode():
+        waiting = ("the roads around this hole are read from OpenStreetMap, which is a live call "
+                   "— demo mode is offline, so no distance below has been measured for this "
+                   "tender")
+    else:
+        try:
+            ways = boq_roads.fetch_ways(boq_roads.bbox_for([point]))
+            context = boq_approach.context_for(station, boq_roads.roads_near(station, point, ways))
+        except Exception as exc:                          # network, DNS, timeout, rate limit
+            waiting = (f"OpenStreetMap did not answer: {exc}. The note below, if any, was written "
+                       f"without road data — it is not a measurement of this hole.")
+
+    described = _describe_hole(hole)
+    client = llm_mod.make_client()
+    raw = client.complete_json(
+        system=boq_approach.SYSTEM,
+        user=boq_approach.prompt_for(station, context, hole=described),
+        target_model=boq_approach.RawApproach,
+        demo_fixture=boq_approach.DEMO_FIXTURE,
+        purpose="client_boq-approach")
+    note = boq_approach.validate(raw, station, context)
+    note.waiting_on = waiting
+    return note.model_dump()
+
+
+def _describe_hole(hole) -> str:
+    """What the schedule records about one hole, as plain lines for the prompt.
+
+    Only what was actually read. A field the drawing did not print is left out rather than sent as
+    a zero — a prompt that says "rock 0 m" about a column nobody read is the same fabrication the
+    reader refuses to make on screen.
+    """
+    bits: list[str] = [f"kind: {getattr(hole, 'kind', '') or 'BH'}"]
+    for label, value in (("tentative length", getattr(hole, "length_m", None)),
+                         ("soil", getattr(hole, "soil_m", None)),
+                         ("rock", getattr(hole, "rock_m", None)),
+                         ("ground level (mPD)", getattr(hole, "ground_level_mpd", None))):
+        if value not in (None, ""):
+            bits.append(f"{label}: {value:g}")
+    if getattr(hole, "sheet", ""):
+        bits.append(f"read from drawing {hole.sheet}")
+    notes = [n for n in (getattr(hole, "notes", None) or []) if n]
+    if notes:
+        bits.append("schedule notes: " + "; ".join(notes))
+    return "\n".join(f"- {b}" for b in bits)
 
 
 class RoadPointRequest(BaseModel):

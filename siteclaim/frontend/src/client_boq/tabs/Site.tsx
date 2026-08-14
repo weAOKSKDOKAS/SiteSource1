@@ -46,6 +46,24 @@ import {
 
 type View = "schedule" | "map" | "photos" | "holes" | "groups" | "sheets" | "import";
 
+// HOW THE SPREAD REACHES A GROUP. Deliberately NOT derived from the access class: PS 7.01B puts
+// road access and manual labour in the same Class A, so the class cannot express the difference
+// and inferring one from the other would invent a judgement nobody made.
+const TRANSPORT_OPTIONS = [
+  { value: "", label: "—" },
+  { value: "vehicle", label: "DRIVEN" },
+  { value: "manual", label: "CARRIED" },
+  { value: "air", label: "LIFTED" },
+];
+
+const TRANSPORT_MEANING: Record<string, string> = {
+  vehicle: "Driven or craned to the hole.",
+  manual:
+    "Broken down and carried in by hand — portage labour, and a rig small enough to be carried, " +
+    "which is a depth limit as well as a cost.",
+  air: "Lifted in. No bill item covers a lift at any class, so that money goes to the checks screen.",
+};
+
 const CLASS_OPTIONS = [
   { value: "A", label: "A", title: "Reachable by road, or by hand without a temporary platform." },
   { value: "B", label: "B", title: "Needs a temporary access platform built before a rig can stand." },
@@ -251,9 +269,19 @@ export function SiteTab({
             setId={data.setId}
             onError={onError}
             classOf={classOf}
+            // A pin now opens a card ON the map — where it is, how deep, the nearest mapped road,
+            // the drafted approach, and the class control. Everything the decision needs, beside
+            // the ground it is about. The jump to HOLES is still there as a link for the grid
+            // view, but it is no longer the only thing a click can do.
+            stationOf={(station) =>
+              schedule?.stations.find((s) => s.station === station)}
+            roadOf={(station) =>
+              osmRoads?.nearest.find((r) => r.station === station) ?? null}
+            onSetClass={(station, accessClass) => void setClass(station, accessClass)}
+            // A moved hole changes the schedule, the pins, the clusters and the road distances,
+            // so the whole tab re-reads rather than patching one number in place.
+            onMoved={load}
             onFocusStation={(station) => {
-              // The map assembles evidence; the class is decided on HOLES. Sending the reader
-              // there with the hole already picked is the whole handoff.
               setSelected(station);
               setView("holes");
             }}
@@ -1148,6 +1176,31 @@ function GroupsRail({ groups, failed }: { groups: GroupsResponse | null; failed?
         </div>
       )}
 
+      {/* CAN THE RIG REACH THE BOTTOM. A separate block from the reconciliation above because it
+          is a different kind of wrong: that one is counts disagreeing with the bill, this one is
+          a hole that cannot be drilled at all by the spread you said you were sending. A rig
+          broken into man-carriable loads is a smaller rig. */}
+      {groups && groups.reach.length > 0 && (
+        <div className="border-b border-cb-border bg-cb-bad-tint p-3">
+          <SectionLabel>CAN THE RIG REACH THE BOTTOM</SectionLabel>
+          {groups.reach.map((problem) => (
+            <p
+              key={problem}
+              className="mt-1 font-cb-sans text-[9.5px] leading-[1.55] text-cb-bad-dark"
+            >
+              {problem}
+            </p>
+          ))}
+          {groups.portable_rig_max_depth_m > 0 && (
+            <p className="mt-1.5 font-cb-sans text-[9px] leading-[1.5] text-cb-muted">
+              This is not a programme to lengthen. A carried-in rig that cannot reach the
+              scheduled depth is the wrong machine for that hole — it needs a platform and a
+              bigger rig, a different route in, or a query.
+            </p>
+          )}
+        </div>
+      )}
+
       {groups && Object.keys(groups.not_ready).length > 0 && (
         <div className="border-b border-cb-border p-3">
           <SectionLabel>NOT READY</SectionLabel>
@@ -1308,7 +1361,9 @@ function GroupEditor({
     };
   }, [setId, draft]);
 
-  const edit = (field: keyof HoleGroup, value: number) =>
+  // `transport` is a choice rather than a number, and it is recorded as an override exactly like
+  // one: what matters is that somebody decided, not what the digits or the word turned out to be.
+  const edit = (field: keyof HoleGroup, value: number | string) =>
     setDraft((d) => ({
       ...d,
       [field]: value,
@@ -1477,12 +1532,49 @@ function GroupEditor({
             source={sources.decay}
             onChange={(v) => edit("decay", v / 100)}
           />
+          {/* HOW THE SPREAD GETS THERE, which the CLASS does not tell you. PS 7.01B reads Class A
+              as "road traffic OR manual labour", so the bill pays one rate whether the lorry
+              delivered the rig or six people carried it up a hill. This is where that difference
+              is recorded, and the three costs below are where it is priced. */}
+          <div className="mt-3 flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 font-cb-sans text-[10.5px] text-cb-muted">
+              how it gets there
+            </span>
+            <Segmented
+              value={draft.transport}
+              options={TRANSPORT_OPTIONS}
+              onChange={(v) => edit("transport", v as HoleGroup["transport"])}
+            />
+          </div>
+          <p className="mt-1 font-cb-sans text-[9px] leading-[1.45] text-cb-faint">
+            {TRANSPORT_MEANING[draft.transport] ??
+              "Nobody has said yet. The class is what the bill pays against; this is what actually happens."}
+          </p>
+
           <NumberField
             label="platform build"
             value={draft.access_build_cost}
             unit="HK$"
             onChange={(v) => edit("access_build_cost", v)}
           />
+          <NumberField
+            label="carry it in (labour)"
+            value={draft.access_labour_cost}
+            unit="HK$"
+            onChange={(v) => edit("access_labour_cost", v)}
+          />
+          <NumberField
+            label="lift it in (air)"
+            value={draft.access_air_cost}
+            unit="HK$"
+            onChange={(v) => edit("access_air_cost", v)}
+          />
+          <p className="mt-1 font-cb-sans text-[9px] leading-[1.5] text-cb-faint">
+            A platform lands in the Class B move rate (SMM S02 ¶2.08(h)). Carrying lands in this
+            group's own class rate — including Class A, which is the only place that difference
+            can be priced. A lift lands nowhere: no item covers one at any class, so it goes to
+            the checks screen to be queried, loaded, spread or accepted.
+          </p>
         </div>
 
         <div>

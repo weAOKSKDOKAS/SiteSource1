@@ -367,7 +367,18 @@ export interface HoleGroup {
    *  drilling-days, and rock fraction — which the band table already carries — is the driver.
    *  Above zero it is deliberate padding, and it resets at every hole. */
   decay: number;
+  /** HOW THE SPREAD REACHES THESE HOLES, which the class does not tell you: PS 7.01B Class A is
+   *  "road traffic OR manual labour", so one class covers a rig the lorry delivered and a rig six
+   *  people carried up a hill. "" until the estimator decides; never inferred from the class. */
+  transport: "" | "vehicle" | "manual" | "air";
+  /** A Class B platform. Lands in the Class B move rate — SMM S02 ¶2.08(h). */
   access_build_cost: number;
+  /** Carrying the spread in by hand. Lands in the move rate of THIS group's class, including
+   *  Class A — the only place the road-or-manual difference can be priced. */
+  access_labour_cost: number;
+  /** A helicopter lift. NEVER absorbed into a rate at any class: ¶2.08(h) covers scaffolding, and
+   *  Class C is in the specification and not in the bill. It goes to the unbilled gate. */
+  access_air_cost: number;
   badge: string;
   basis: string;
   /** Which fields the estimator typed. Recorded as an act — `decay` defaults to 0, so the
@@ -743,6 +754,13 @@ export interface GroupsResponse {
    *  checkable — with no billed counts to compare against it now says so instead of going quiet. */
   reconcile: string[];
   not_ready: Record<string, string[]>;
+  /** Holes a carried-in rig cannot reach the bottom of — the wrong machine, not a slower one.
+   *  With carried-in groups and no limit set it says it is NOT checking, rather than going
+   *  quiet in a way that reads as "checked, and fine". */
+  reach: string[];
+  /** 0 means nobody has told the engine what a carried-in rig reaches. Never defaulted to a
+   *  plausible number: a rig fleet is not something the engine may assume. */
+  portable_rig_max_depth_m: number;
   class_refs: Record<string, string>;
   /** How many holes there are to class, or null when no schedule has been read. */
   total_holes: number | null;
@@ -2848,4 +2866,55 @@ export interface ScheduleReadResponse {
   problems: string[];
   usable: boolean;
   totals: Partial<ScheduleTotals>;
+}
+
+/** Where a person says a hole actually is, over what the drawing said. A drawing mixes surveyed
+ *  positions with indicative ones and does not mark which is which; forty metres is nothing on an
+ *  A1 sheet and everything on a hillside. `restore` brings back the DRAWING, never a third guess. */
+export interface StationCoordsResponse {
+  set_id: string;
+  station: string;
+  corrected: boolean;
+  restored: boolean;
+  easting: number | null;
+  northing: number | null;
+  was_easting?: number | null;
+  was_northing?: number | null;
+  /** How far it moved, or null when either position is blank. */
+  moved_m?: number | null;
+  by?: string;
+  note?: string;
+}
+
+/** One road near a hole, as the ENGINE measured it — never a figure the model produced. */
+export interface RoadContext {
+  way_id: number;
+  name: string;
+  highway: string;
+  metres: number;
+}
+
+/** How a crew would reach one hole. The prose is drafted; every metre is measured. The drafting
+ *  model has no field for a distance, a cost or an access class, so nothing here can compete with
+ *  a measurement or pre-empt the estimator's decision. */
+export interface ApproachResponse {
+  station: string;
+  summary: string;
+  approach_road: string;
+  last_stretch: string;
+  steps: string[];
+  /** Never empty. A route read off a map cannot see a gate, a gradient or a water crossing, and
+   *  those are what decide the class — so a blank list is replaced with a line saying so. */
+  uncertainties: string[];
+  nearest_road_m: number | null;
+  nearest_road_name: string;
+  nearest_road_way_id: number;
+  nearest_road_highway: string;
+  roads_considered: RoadContext[];
+  /** "" when it ran. Otherwise why not — no schedule, no coordinates, demo mode, or a road read
+   *  that failed. Never confused with "there is no route". */
+  waiting_on: string;
+  /** What was stripped before this was shown, and why. An invented road reads as local knowledge
+   *  and is refused by name. */
+  checked: string[];
 }

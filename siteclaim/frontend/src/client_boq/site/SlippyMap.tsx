@@ -16,6 +16,7 @@
 // which is the honest picture. Pretending is the failure mode this whole product is built against.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { cx } from "../ui";
 
 const TILE = 256;
@@ -97,6 +98,7 @@ export function SlippyMap({
   onFullscreen,
   height = 420,
   caption,
+  renderPopup,
 }: {
   points: MapPoint[];
   tiles: string;
@@ -115,6 +117,10 @@ export function SlippyMap({
   onFullscreen?: (next: boolean) => void;
   height?: number;
   caption?: string;
+  /** A card pinned to the SELECTED point, drawn inside the map so it stays put while you pan.
+   *  A separate prop rather than children because it has to know where the pin ended up, and
+   *  because a popup that scrolled away from its own pin would be worse than no popup. */
+  renderPopup?: (id: string) => ReactNode;
 }) {
   const box = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 640, h: height });
@@ -329,6 +335,28 @@ export function SlippyMap({
             </button>
           );
         })}
+
+        {/* THE CARD FOR THE SELECTED PIN, drawn inside the map so it travels with the point when
+            you pan. It flips to the other side of the pin near an edge rather than being clipped
+            by the map's own overflow, because a card you cannot read is the same as no card. */}
+        {(() => {
+          const point = renderPopup && selected
+            ? points.find((p) => p.id === selected)
+            : undefined;
+          if (!point || !renderPopup) return null;
+          const at = toScreen(point.lat, point.lon);
+          const left = at.left > size.w - 300 ? at.left - 288 : at.left + 18;
+          const top = Math.max(6, Math.min(at.top - 20, Math.max(6, size.h - 300)));
+          return (
+            <div
+              style={{ left: Math.max(6, left), top }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="absolute z-20 w-[272px] max-h-[calc(100%-16px)] overflow-y-auto rounded-cb-card border border-cb-border-strong bg-cb-surface p-2.5 shadow-lg"
+            >
+              {renderPopup(point.id)}
+            </div>
+          );
+        })()}
 
         <div className="absolute right-2 top-2 flex flex-col gap-1">
           {[1, -1].map((d) => (

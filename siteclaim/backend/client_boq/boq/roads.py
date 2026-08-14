@@ -173,6 +173,39 @@ def nearest_roads(stations: dict[str, tuple[float, float]], ways: list[dict]) ->
     return reading
 
 
+def roads_near(station: str, point: tuple[float, float], ways: list[dict]) -> list[NearestRoad]:
+    """PURE: every mapped road near ONE hole, nearest first — one row per way, not per segment.
+
+    :func:`nearest_roads` answers "which road is closest to each hole", which is the measurement
+    the map draws. This answers "what roads are around this hole", which is the context a route
+    description needs: the closest way is often not the one you drive in on, and a note written
+    from the single nearest road cannot say "come in off the named road and take the track".
+
+    Still only arithmetic, and still no verdict — the caller decides how many of these are worth
+    showing and to whom.
+    """
+    out: list[NearestRoad] = []
+    for way in ways:
+        geometry = way.get("geometry") or []
+        best: Optional[NearestRoad] = None
+        for i in range(len(geometry) - 1):
+            a = (geometry[i]["lat"], geometry[i]["lon"])
+            b = (geometry[i + 1]["lat"], geometry[i + 1]["lon"])
+            metres, on = _nearest_on_segment(point, a, b)
+            if best is None or metres < best.metres:
+                tags = way.get("tags") or {}
+                best = NearestRoad(
+                    station=station, metres=round(metres, 1),
+                    way_id=int(way.get("id") or 0),
+                    name=tags.get("name") or tags.get("name:en") or "",
+                    highway=tags.get("highway") or "",
+                    lat=round(on[0], 7), lon=round(on[1], 7))
+        if best is not None:
+            out.append(best)
+    out.sort(key=lambda r: r.metres)
+    return out
+
+
 def fetch_ways(bbox: tuple[float, float, float, float], *,
                endpoint: str = DEFAULT_ENDPOINT, timeout: float = 60.0) -> list[dict]:
     """One bounding-box query to Overpass. Raises on anything that is not a usable answer."""
