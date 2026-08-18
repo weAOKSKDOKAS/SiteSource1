@@ -432,6 +432,30 @@ directly. The 5 skips are the `requires_tesseract` tests and are the expected gr
    The fix is always to make the TYPE honest and let `tsc` find the call sites — **never `?? 0`**:
    a length that was never printed is a blank, and zero is a claim that the hole has no depth.
 
+16. **A LIST WHERE A STRING WAS ASKED FOR THROWS AWAY EVERY OTHER FIELD — TRAP 12'S THIRD VISIT.**
+   Same defect, three times, and each fix was narrower than the defect. (1) 2026-08-11, a `null`
+   on a `str` discarded 47 boreholes — fixed by `NullTolerant`. (2) The first live GPT run:
+   `PartContext.notes` is `str` while its neighbours are `list[str]`, the model picked the
+   shape next door, and **93 of 203 parts** were stored "not readable" plus 120 retries — fixed
+   with a field validator **on that one type**. (3) 2026-08-18, on switching provider to OpenAI:
+   `RawBriefing.cannot_assess  Input should be a valid string  [input_value=['A bid submission
+   deadline ...']]`. A complete briefing — the understanding, the disagreements, every proposed
+   action — binned because one field arrived in brackets.
+   **Fix 2 is why fix 3 happened**: it protected the type that failed rather than the class of
+   failure, so one model of thirty was covered. And the null sweep's coverage list is
+   HAND-WRITTEN, so the brain's types were never in it. The repair now lives on `NullTolerant`
+   itself (`str` ← list joins with a space, the separator `PartContext` already used, so there is
+   one convention; `list` ← bare string wraps), and
+   `test_a_shape_the_model_chose_is_not_a_rejection.py` **derives** its type list from
+   `NullTolerant.__subclasses__` so a new model-facing type is swept the day it is written. It
+   found `_RawPhotoRead.observations` on the first run — correctly refusing, because it is
+   `list[dict]` and wrapping a bare string there would invent the keys. That is the boundary:
+   **a repair may join or wrap, never invent.** Numbers and booleans still refuse.
+   **And the prompt is half the contract.** The failing payload was produced because
+   `SYNTH_SYSTEM` had just been edited to print `"cannot_assess": ["…"]` beside a field declared
+   `str` — the model did exactly as instructed. Nothing checked that a prompt's printed shape
+   matches the annotation it is parsed into; `TestThePromptAndTheTypeAgree` now does.
+
 ## 9. Working agreements on this branch
 
 - Develop on **`from-client-to-tender-BOQ`**; **PR #4** is already open for it

@@ -155,7 +155,7 @@ SYNTH_SYSTEM = (
     "list of destinations. An action_id not in the registry will be discarded.\n\n"
     "Answer with JSON only, exactly these keys:\n"
     '{"understanding": "<plain prose>", "disagreements": ["<one per string>"], '
-    '"cannot_assess": ["<what you could not judge, and why>"], '
+    '"cannot_assess": "<what you could not judge, and why — prose, not a list>", '
     '"proposed_actions": [{"action_id": "<from the registry>", "reasoning": "<why now>", '
     '"citations": [{"source": "<label>", "quote": "<what it said>"}]}]}\n\n'
     "THE REGISTRY:\n"

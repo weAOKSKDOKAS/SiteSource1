@@ -67,6 +67,32 @@ class NullTolerant(BaseModel):
 
     ``Optional[str]`` fields are untouched — they already accept ``None`` and mean it.
 
+    A LIST WHERE A STRING WAS ASKED FOR IS THE SAME DEFECT IN A DIFFERENT SHAPE, and it was
+    measured on 2026-08-18 the first time a provider was switched to OpenAI:
+
+        1 validation error for RawBriefing
+        cannot_assess  Input should be a valid string
+        [input_value=['A bid submission deadline ... in the current set [register:14].']]
+
+    The model had read the whole tender and written a complete briefing. One field arrived as a
+    one-element array instead of a string and **every sibling went in the bin** — the
+    understanding, the disagreements, and every proposed action. Exactly the borehole failure,
+    re-run on a different provider's habits, and the honest lesson is that a model-facing type
+    cannot assume one provider's shape:
+
+    * ``str`` field, value ``["a", "b"]``  ->  ``"a b"``   (nothing is lost; it is the same text)
+    * ``list`` field, value ``"a"``        ->  ``["a"]``    (the mirror case, equally ordinary)
+
+    Neither invents anything, which is the test that lets them in. Numbers and booleans stay out
+    for the same reason as above: coercing ``["3"]`` to a number is a guess about which element
+    was meant, and a guess is a claim.
+
+    THE SEPARATOR IS A SPACE, matching the repair `PartContext` has carried since the first live
+    GPT run cost **93 of 203 parts** the same way. That one is now a special case of this general
+    rule rather than the only place protected — which is the point: the defect was never about
+    part cards, it was about every model-facing type on the module, and it took a change of
+    provider to show it somewhere else.
+
     SIX FIELDS ACROSS THE MODULE STILL REJECT A NULL, and each is deliberate rather than missed —
     swept 2026-08-12 by validating ``{field: None}`` against every model-facing type:
 
@@ -83,24 +109,46 @@ class NullTolerant(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _an_explicit_null_is_an_absence(cls, data):
+    def _a_shape_the_model_chose_is_not_a_rejection(cls, data):
+        """Absences and text/list shape variances are absorbed. Everything else still raises.
+
+        One pass over the declared fields, so a payload with neither problem is returned
+        untouched and pays nothing.
+        """
         if not isinstance(data, dict):
             return data
         patched: Optional[dict] = None
-        for name, info in cls.model_fields.items():
-            if data.get(name, _PRESENT) is not None:
-                continue
-            annotation = info.annotation
-            blank: object
-            if annotation is str:
-                blank = ""
-            elif getattr(annotation, "__origin__", None) is list:
-                blank = []
-            else:
-                continue        # numeric, boolean, nested model: a null there is still an error
+
+        def fix(name: str, value: object) -> None:
+            nonlocal patched
             if patched is None:
                 patched = dict(data)
-            patched[name] = blank
+            patched[name] = value
+
+        for name, info in cls.model_fields.items():
+            value = data.get(name, _PRESENT)
+            if value is _PRESENT:
+                continue                     # omitted: the default already covers it
+            annotation = info.annotation
+            is_str = annotation is str
+            is_list = getattr(annotation, "__origin__", None) is list
+
+            if value is None:
+                # An explicit null means "there is none" — the borehole case.
+                if is_str:
+                    fix(name, "")
+                elif is_list:
+                    fix(name, [])
+                continue                     # numeric, boolean, nested: a null is still an error
+
+            # A string asked for, a list given. Join it: every element is content the model
+            # wrote, and dropping the payload to punish the brackets is the expensive mistake.
+            if is_str and isinstance(value, list):
+                fix(name, " ".join(str(v).strip() for v in value if str(v).strip()))
+            # A list asked for, one bare string given. Wrap it — one item is still a list.
+            elif is_list and isinstance(value, str):
+                fix(name, [value] if value else [])
+
         return patched if patched is not None else data
 
 
