@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, health, isNotYet, pollJob, readFailure, runJob, setActor } from "./api";
 import { GlobalBar, StepStrip, TAB_FOR_JOB, TAB_FOR_READ, stepStates, usePersisted } from "./chrome";
+import { landingTab } from "./chrome";
 import type { TabId } from "./chrome";
 import { Home } from "./home/Home";
 import { NavSidebar } from "./nav/NavSidebar";
@@ -384,7 +385,7 @@ export default function ClientBoqApp() {
             `Nothing has been extracted yet — check the shape and approve the split, and the pack ` +
             `is unpacked as a job you can watch and stop.`,
         );
-        go({ kind: "set", setId: report.set_id, tab: "documents" });
+        go({ kind: "set", setId: report.set_id, tab: "documents" /* a fresh split: the manifest is what you came to check */ });
       } catch (e) {
         setJob(null);
         setError(e instanceof Error ? e.message : String(e));
@@ -426,7 +427,7 @@ export default function ClientBoqApp() {
         for (const note of done.warnings ?? []) setError(note);
         await loadSets();
         const result = done.result as { set_id?: string } | undefined;
-        if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" });
+        if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" /* a fresh split: the manifest is what you came to check */ });
       } catch (e) {
         setJob(null);
         setError(e instanceof Error ? e.message : String(e));
@@ -466,7 +467,7 @@ export default function ClientBoqApp() {
         for (const note of done.warnings ?? []) setError(note);
         await loadSets();
         const result = done.result as { set_id?: string } | undefined;
-        if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" });
+        if (result?.set_id) go({ kind: "set", setId: result.set_id, tab: "documents" /* a fresh split: the manifest is what you came to check */ });
       } catch (e) {
         setJob(null);
         setError(e instanceof Error ? e.message : String(e));
@@ -633,7 +634,12 @@ export default function ClientBoqApp() {
               team={team}
               currentUserId={currentUserId}
               navOpen={navOpen}
-              onOpenSet={(setId) => go({ kind: "set", setId, tab: "documents" })}
+              onOpenSet={(setId) =>
+                go({
+                  kind: "set",
+                  setId,
+                  tab: landingTab(sets.find((r) => r.set_id === setId) ?? {}),
+                })}
               onOpenCitation={openCitation}
               onConfirmCloseDate={(setId, date) => void confirmCloseDate(setId, date)}
               onBrowse={() => fileInput.current?.click()}

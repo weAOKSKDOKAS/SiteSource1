@@ -25,7 +25,7 @@ fully offline, per the plan's fourth decision.
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from client_boq.boq.ask import Citation, Ground
 from client_boq.models import NullTolerant
@@ -70,7 +70,17 @@ class RawAction(NullTolerant):
 
 class RawBriefing(NullTolerant):
     """What the model is asked for. Deliberately has no field for a verdict, a rate, a class,
-    or a gate flag — there is nowhere to put the kind of output the brain must not produce."""
+    or a gate flag — there is nowhere to put the kind of output the brain must not produce.
+
+    ``extra="allow"`` IS THE OPPOSITE OF LOOSENING IT. Pydantic's default is to IGNORE an unknown
+    key, so a reply carrying its actions under `actions` instead of `proposed_actions` validated
+    perfectly into empty lists — with an empty ``stripped`` list, no error, and a screen reading
+    "It proposed nothing", which is exactly what an honestly empty tender looks like. That is the
+    one failure mode indistinguishable from the honest one, and it defeated this module's own
+    stated defence. Keeping the extras lets :func:`validate` NAME them; the fields the model may
+    legitimately fill are unchanged, so it still has nowhere to put a verdict."""
+
+    model_config = ConfigDict(extra="allow")
 
     understanding: str = ""
     disagreements: list[str] = Field(default_factory=list)
@@ -104,7 +114,11 @@ class Briefing(NullTolerant):
 
 
 class RawFindings(NullTolerant):
-    """One focused read's return: findings, each citing the slice it was given."""
+    """One focused read's return: findings, each citing the slice it was given.
+
+    Same reason as :class:`RawBriefing` — an unknown key must be reportable, not silently gone."""
+
+    model_config = ConfigDict(extra="allow")
 
     findings: list[str] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
@@ -113,12 +127,21 @@ class RawFindings(NullTolerant):
 # ---------------------------------------------------------------------------
 # Prompts + fixtures
 # ---------------------------------------------------------------------------
+# THE KEYS ARE PRINTED, and that is not decoration. Neither prompt named a key or asked for JSON
+# at all, while the reply was parsed with `RawFindings.model_validate_json`. Prose fails validation
+# and burns the corrective retry at double cost; well-formed JSON under a DIFFERENT key name was
+# worse — see `validate` below. `boq/ask.py` has always spelled its object out; these now do too.
 READ_SYSTEM = (
     "You are reading ONE slice of a construction tender's assembled ground for a Hong Kong "
     "contractor's estimating team. Report findings a person should weigh: risks, gaps, "
     "disagreements between sources, and things already decided that later work must respect. "
     "Quote figures only from the ground; cite by the source label in brackets. You have no "
-    "authority: no verdicts, no rates, no classifications — findings only."
+    "authority: no verdicts, no rates, no classifications — findings only.\n\n"
+    "Answer with JSON only, exactly these keys:\n"
+    '{"findings": ["<one finding per string>"], '
+    '"citations": [{"source": "<the source label in brackets>", "quote": "<what it said>"}]}\n'
+    "If the slice you were given contains nothing worth reporting, return empty lists. That is a "
+    "correct answer, and it is different from being unable to read what you were given."
 )
 
 SYNTH_SYSTEM = (
@@ -130,6 +153,11 @@ SYNTH_SYSTEM = (
     "below, with your reasoning and citations. You cannot approve, decide, price or classify "
     "anything — every action is a screen a person will open, and the registry is the complete "
     "list of destinations. An action_id not in the registry will be discarded.\n\n"
+    "Answer with JSON only, exactly these keys:\n"
+    '{"understanding": "<plain prose>", "disagreements": ["<one per string>"], '
+    '"cannot_assess": ["<what you could not judge, and why>"], '
+    '"proposed_actions": [{"action_id": "<from the registry>", "reasoning": "<why now>", '
+    '"citations": [{"source": "<label>", "quote": "<what it said>"}]}]}\n\n'
     "THE REGISTRY:\n"
     + "\n".join(f"  {action_id} — {label}" for action_id, (_tab, label) in ACTIONS.items())
 )
@@ -151,6 +179,28 @@ READ_SLICES = {
     "site": {"meta", "site", "photos", "conditions", "log"},
     "costing": {"meta", "gates", "costing", "bill", "sweep", "conditions"},
 }
+
+#: Source labels that every slice carries whatever state the tender is in — the tender's own name
+#: and the gate sentences. They are context, not content: a read handed only these has been given
+#: the project title and told which gates are shut, and asking a strong model to find risks in
+#: that costs a full call to produce nothing. `substantive_sources` is what decides whether a read
+#: is worth making, and what the receipt counts.
+STRUCTURAL_PREFIXES = ("tender", "gate:")
+
+#: What each slice is waiting for, in words, so a skipped read says WHY rather than reporting
+#: zero findings — which is what an unread tender and a clean one looked like alike.
+SLICE_NEEDS = {
+    "legals": "reviewed against your positions",
+    "scope": "drafted as a scope of works",
+    "site": "read off the drawings or walked",
+    "costing": "priced from a bill of quantities",
+}
+
+
+def substantive_sources(ground: Ground) -> list[str]:
+    """The source labels in this slice that are actual content rather than scaffolding."""
+    return [label for label in ground.sources
+            if not any(label.startswith(p) for p in STRUCTURAL_PREFIXES)]
 
 
 def synthesis_user(ground: Ground, findings: dict[str, "RawFindings"]) -> str:
@@ -190,6 +240,17 @@ def validate(raw: dict, ground: Ground) -> Briefing:
         briefing.actions.append(Action(
             action_id=action_id, tab=tab, label=label,
             reasoning=str(entry.get("reasoning") or ""), citations=citations))
+
+    # A KEY THIS BRIEFING HAS NO PLACE FOR IS REPORTED, NOT DISCARDED IN SILENCE. Pydantic used to
+    # drop it before this function ever ran, so a reply that put its actions under `actions` came
+    # out as "It proposed nothing" with an empty `stripped` — indistinguishable from a tender with
+    # genuinely nothing to propose. It is now visible, which is this module's whole contract:
+    # something removed has to be said out loud, whatever the reason it was removed.
+    for key in sorted(set(raw) - set(RawBriefing.model_fields)):
+        briefing.stripped.append(
+            f"the reply carried a {key!r} key, which this briefing has no place for — nothing in "
+            f"it was used. If it held the answer, the model answered in the wrong shape rather "
+            f"than finding nothing.")
     return briefing
 
 

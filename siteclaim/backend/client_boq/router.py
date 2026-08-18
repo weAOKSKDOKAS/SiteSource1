@@ -6699,9 +6699,17 @@ def _run_brain(set_id: str, *, actor: str = "", progress=None) -> dict:
     client = llm_mod.make_client(stage=llm_mod.STAGE_BRAIN)
     tell("reading")
     findings: dict = {}
+    # WHAT A SLICE ACTUALLY HELD, so the receipt can tell "read it, found nothing" apart from
+    # "there was nothing to read". The old guard tested `sources` at all, which is never empty:
+    # every slice carries the tender's name and most carry the gate sentences, so five model
+    # calls always fired — the `site` read routinely got ONE line, the project title, and cost a
+    # full call to come back with nothing. Structural sources are not content.
+    skipped: dict[str, int] = {}
     for name, slice_ground in slices.items():
-        if not slice_ground.sources:
-            continue  # an empty slice is not a read — nothing to find in nothing
+        substantive = brain_mod.substantive_sources(slice_ground)
+        if not substantive:
+            skipped[name] = len(slice_ground.sources)
+            continue
         findings[name] = client.complete_json(
             system=brain_mod.READ_SYSTEM,
             user=f"{slice_ground.as_prompt()}\n\nReport your findings.",
@@ -6720,7 +6728,16 @@ def _run_brain(set_id: str, *, actor: str = "", progress=None) -> dict:
     )
     briefing = brain_mod.validate(
         raw.model_dump() if hasattr(raw, "model_dump") else (raw or {}), full)
-    briefing.reads = [f"{name}: {len(f.findings)} finding(s)" for name, f in findings.items()]
+    # THE RECEIPT SAYS WHAT WENT IN, not only what came out. "legals: 0 finding(s)" reads as "the
+    # legal read ran and the contract is clean"; it also used to be what an unread tender and a
+    # mis-shaped reply looked like. Naming the source count separates those.
+    briefing.reads = [
+        f"{name}: {len(brain_mod.substantive_sources(slices[name]))} source(s) → "
+        f"{len(f.findings)} finding(s)"
+        for name, f in findings.items()]
+    briefing.reads += [
+        f"{name}: not read — nothing on this tender has been {brain_mod.SLICE_NEEDS[name]} yet"
+        for name in sorted(skipped)]
 
     conn = store.get_conn()
     try:

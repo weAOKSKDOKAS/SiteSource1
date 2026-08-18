@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CriteriaResponse, PartsResponse, SetRow, TeamMember } from "../types";
 import type { Surface } from "../nav/routes";
 import { go } from "../nav/routes";
+import { landingTab } from "../chrome";
 import { cx } from "../ui";
 
 interface Hit {
@@ -48,7 +49,7 @@ export function CommandSearch({
           group: s.meta.archived ? "ARCHIVED" : "TENDERS",
           title: s.name,
           detail: [s.meta.client, s.meta.package].filter(Boolean).join(" · ") || `${s.parts} parts`,
-          surface: { kind: "set", setId: s.set_id, tab: "documents" },
+          surface: { kind: "set", setId: s.set_id, tab: landingTab(s) },
         });
     }
     for (const m of team) {
@@ -76,7 +77,7 @@ export function CommandSearch({
             group: "PARTS OF THE OPEN SET",
             title: `${p.part_id} · ${p.title}`,
             detail: `pp. ${p.pages}`,
-            surface: { kind: "set", setId: openSetId, tab: "documents" },
+            surface: { kind: "set", setId: openSetId, tab: landingTab(sets.find((r) => r.set_id === openSetId) ?? {}) },
           });
       }
     }

@@ -16,6 +16,7 @@ import type { SetData } from "../App";
 import { api, isNotYet, runJob } from "../api";
 import type { TabId } from "../chrome";
 import type { Briefing, JobState } from "../types";
+import { Standing } from "../Standing";
 import { Button, SectionLabel, WaitingOn } from "../ui";
 
 export function BrainTab({
@@ -82,19 +83,33 @@ export function BrainTab({
             </Button>
           </span>
         </header>
-        <p className="mt-1 max-w-[680px] font-cb-sans text-[10.5px] leading-[1.6] text-cb-muted">
-          One strong model reads everything this tender knows — the register, the parts, the
-          take-off, the bill's state, the discussions — and reports what it understands, where
-          sources disagree, and which screens deserve your next click. It proposes and never
-          disposes: every approval, verdict and number on this product stays yours, on the screen
-          that owns it.
-        </p>
+
+        {/* THE FLOOR, ALWAYS THERE. Everything below the standing needs a model run; the standing
+            itself is state the shell has already loaded, so it costs nothing and cannot be empty.
+            Before this, a tender with 206 parts, an approved manifest, a register and a bill
+            opened on the words "No briefing yet" — the one screen whose job is orientation was
+            the one screen that could not orient you. */}
+        <div className="mt-5">
+          <Standing data={data} onGo={onGo} />
+        </div>
+
+        <div className="mt-8 border-t border-cb-border pt-5">
+          <SectionLabel>WHAT A MODEL MADE OF IT — READING, NOT STATE</SectionLabel>
+          <p className="mt-1 max-w-[62ch] font-cb-sans text-[11px] leading-[1.6] text-cb-muted">
+            One strong model reads everything above and everything under it — the register, the
+            parts, the take-off, the bill's state, the discussions — and reports what it
+            understands, where sources disagree, and which screens deserve your next click. It
+            proposes and never disposes: every approval, verdict and number stays yours, on the
+            screen that owns it.
+          </p>
+        </div>
 
         {!briefing && (
-          <div className="mt-6">
-            <WaitingOn title="No briefing yet">
-              {waitingOn || "the brain has not run on this tender yet"}. Running it reads what is
-              already here; it changes nothing and decides nothing.
+          <div className="mt-4">
+            <WaitingOn title="No reading yet">
+              {waitingOn || "the brain has not run on this tender yet"}. The standing above is
+              already complete without it — running the brain adds judgement on top, and still
+              changes nothing and decides nothing.
             </WaitingOn>
           </div>
         )}

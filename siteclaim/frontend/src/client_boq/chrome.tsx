@@ -31,6 +31,24 @@ export type TabId =
 // `route` and `sourcing` split at the routing decision. `sourcing` holds shortlist → dispatch →
 // level → recommend as internal steps rather than four more tabs, because they are already a
 // wizard with a stepper of their own.
+/** WHERE OPENING A TENDER SHOULD PUT YOU.
+ *
+ *  Every route into a set used to hard-code Documents. On a 206-part binder that is a wall of
+ *  parts beside a column of page-render errors, and it answers none of the questions somebody
+ *  opening a tender actually has — where is this job, and what do I do next.
+ *
+ *  So: the Brain, which now opens on a deterministic standing. EXCEPT while the split is still
+ *  unapproved, because then the split IS the thing you came to look at, and routing you to a
+ *  screen whose only advice is "go and approve the split" is a wasted click. A tender with no
+ *  parts at all is the same case.
+ *
+ *  A deep link to a page — a citation, a search hit inside a document — is not covered by this
+ *  and must still go where it points.
+ */
+export function landingTab(where: { gates?: { manifest?: boolean }; parts?: number }): TabId {
+  return where.gates?.manifest && (where.parts ?? 0) > 0 ? "brain" : "documents";
+}
+
 export const TABS: { id: TabId; label: string }[] = [
   // First in the strip, not the landing tab: the brain is "where does this tender stand and
   // what next" — an overview a person OPENS, while Documents stays where a new set lands.
